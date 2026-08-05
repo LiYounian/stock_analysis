@@ -1,49 +1,40 @@
 """Prompt 模板集中管理(可版本化)。
 
-每个 LLM 触点一个模板函数。写法遵循约法第 3 条:描述性一般约束,不塞具体 case,
-给定严格输出 schema。外包 qwen 的模板额外堵反问陷阱。
-schema 与触点对应见 docs/大模型调用设计.md 第 1 节。
+每个 LLM 触点一个模板,schema 与 docs/计划/P2C_新闻情绪LLM.md §2 一一对应。
+写法:描述性约束(只抄原文、禁编造、拿不准留空/中性),强制 JSON,给全字段 schema。
 """
 
-# —— L1:新闻/公告关键信息提取 ——
+# —— L1:新闻关键信息提取 ——
 NEWS_EXTRACT_SCHEMA = {
-    "event_type": "str",       # 事件类型:业绩/增减持/回购/合同/诉讼/政策/其他
-    "subjects": "list[str]",   # 涉及主体(公司/机构/人)
-    "figures": "list[str]",    # 关键数字(金额/比例/数量)
-    "time": "str",             # 事件时间
-    "impact_direction": "str", # 利好/利空/中性
+    "事件类型": "业绩/政策/合作/诉讼/产品/人事/市场传闻/其他 之一",
+    "涉及主体": "list[str],涉及的公司/机构/人",
+    "关键数字": "list[str],如 '营收+30%'、'中标5亿';无则空列表",
+    "时间": "事件时间(YYYY-MM-DD 或相对词);无则空串",
+    "影响方向": "利好/利空/中性 之一(对目标股票而言)",
+    "影响强度": "1~5 整数(1弱5强)",
+    "与本股关系": "直接/间接/无关 之一(新闻是否真的关于目标股票,防蹭词)",
+    "摘要": "一句话中文摘要",
 }
 
 
-def news_extract_instruction() -> str:
-    """L1 抽取指令。只抄原文事实、禁止推断编造;拿不准的字段留空不硬凑。"""
-    raise NotImplementedError("P2 阶段填写")
+def news_extract_instruction(name: str, code: str) -> str:
+    """L1 抽取指令。只抄原文事实、禁推断编造;拿不准的字段留空/中性。"""
+    return (
+        f"你是金融信息抽取助手。下面是一条与股票【{name}({code})】可能相关的新闻,"
+        f"请抽取结构化信息。要求:\n"
+        f"- 只依据原文,禁止编造或外部推断;拿不准的字段留空或填'中性'。\n"
+        f"- '影响方向'是这条新闻对【{name}】股价的方向(利好/利空/中性)。\n"
+        f"- '与本股关系':若新闻只是顺带提及代码/名称、主体并非{name},填'无关';"
+        f"直接讲{name}自身填'直接';讲行业/同板块间接影响填'间接'。\n"
+        f"- '影响强度'按对{name}的实质影响给 1~5。")
 
 
-# —— L2:情感打分 ——
-SENTIMENT_SCHEMA = {"score": "float(-1~1)", "label": "利好/中性/利空", "reason": "str"}
-
-
-def sentiment_instruction() -> str:
-    """L2 情感指令(批量,走 qwen)。堵反问陷阱 + 严格 JSON schema。"""
-    raise NotImplementedError("P4 阶段填写")
-
-
-# —— L3:政策解读 ——
-POLICY_SCHEMA = {
-    "affected_industries": "list[str]",
-    "direction": "利好/利空/中性",
-    "strength": "1~5",
-    "basis": "str",
+# —— 事件类型 → 情绪三层(代码映射,不再调 LLM)——
+TYPE_TO_LAYER = {
+    "政策": "政策", "业绩": "公司行为", "合作": "公司行为", "诉讼": "公司行为",
+    "产品": "公司行为", "人事": "公司行为", "市场传闻": "舆情", "其他": "舆情",
 }
 
 
-def policy_instruction(industries: list[str]) -> str:
-    """L3 政策影响解读指令。给定本票池行业列表,只在其中命中。"""
-    raise NotImplementedError("P4 阶段填写")
-
-
-# —— L4:舆情观点归纳 ——
-def opinion_summary_instruction() -> str:
-    """L4 UGC 观点归纳指令。输出主流观点/多空比/争议点。"""
-    raise NotImplementedError("P4 阶段填写")
+def type_to_layer(event_type: str) -> str:
+    return TYPE_TO_LAYER.get(event_type, "舆情")
