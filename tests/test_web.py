@@ -13,7 +13,7 @@ from web.app import app
 client = TestClient(app)
 
 _HAS_DATA = len([f for f in glob.glob(str(settings.PROJECT_ROOT / "data/analysis/*.json"))
-                 if not f.endswith("panel.json")]) > 0
+                 if not f.endswith(("panel.json", "screen.json"))]) > 0
 skip_no_data = pytest.mark.skipif(not _HAS_DATA, reason="无 data/analysis 缓存,先 run.py")
 
 
@@ -29,7 +29,7 @@ def test_dashboard_ok():
 def test_stock_page_ok():
     code = [f.rsplit("/", 1)[-1][:-5]
             for f in glob.glob(str(settings.PROJECT_ROOT / "data/analysis/*.json"))
-            if not f.endswith("panel.json")][0]
+            if not f.endswith(("panel.json", "screen.json"))][0]
     r = client.get(f"/stock/{code}")
     assert r.status_code == 200
     assert "K线走势" in r.text
@@ -45,7 +45,7 @@ def test_stock_404():
 def test_api_stock_json():
     code = [f.rsplit("/", 1)[-1][:-5]
             for f in glob.glob(str(settings.PROJECT_ROOT / "data/analysis/*.json"))
-            if not f.endswith("panel.json")][0]
+            if not f.endswith(("panel.json", "screen.json"))][0]
     r = client.get(f"/api/stock/{code}")
     assert r.status_code == 200
     body = r.json()

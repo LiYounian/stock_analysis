@@ -20,7 +20,7 @@ def _load_all() -> dict[str, dict]:
     out = {}
     for f in glob.glob(str(_ANALYSIS / "*.json")):
         p = f.rsplit("/", 1)[-1]
-        if p == "panel.json":
+        if p in ("panel.json", "screen.json"):     # 非个股记录,跳过
             continue
         code = p[:-5]
         try:

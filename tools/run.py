@@ -121,16 +121,36 @@ def cmd_panel() -> None:
     logger.info("横向总表 → %s", out["csv"])
 
 
+def cmd_screen() -> None:
+    """组合聚合 + 预设选股,落 data/analysis/screen.json(供 Web 选股页)。"""
+    import json
+    from tools.analysis import portfolio, serialize
+    from tools.screener import screen as sc
+    recs = {}
+    for code in stock_pool.get_codes():
+        try:
+            recs[code] = serialize.load_record(code)
+        except FileNotFoundError:
+            pass
+    agg = portfolio.aggregate(recs)
+    presets = sc.run_presets(recs)
+    out = serialize._OUT_DIR / "screen.json"
+    out.write_text(json.dumps({"aggregate": agg, "presets": presets},
+                              ensure_ascii=False, indent=2), encoding="utf-8")
+    logger.info("选股结果 → %s(主线 %s,预设 %d 组)", out, agg.get("hot_theme"), len(presets))
+
+
 def cmd_all() -> None:
     cmd_collect()
     cmd_serialize()
     cmd_panel()
+    cmd_screen()
     cmd_report()
 
 
 _CMDS = {"collect": cmd_collect, "analyze": cmd_analyze,
          "report": cmd_report, "serialize": cmd_serialize,
-         "panel": cmd_panel, "all": cmd_all}
+         "panel": cmd_panel, "screen": cmd_screen, "all": cmd_all}
 
 
 def main(argv: list[str]) -> int:
