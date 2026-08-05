@@ -10,8 +10,10 @@
 <body>
   <header class="topbar">
     <div class="brand"><a href="/">📈 A股策略辅助工具</a></div>
-    <nav><a href="/">今日概览</a></nav>
-    <div class="asof">数据日期 {{ (d.as_of if d else r.meta.as_of) or '-' }}</div>
+    <nav><a href="/">今日概览</a><a href="/screen">选股</a><a href="/news">新闻</a></nav>
+    <div class="asof">数据日期
+      {%- if d is defined %} {{ d.as_of }}{% elif s is defined %} {{ s.as_of }}
+      {%- elif r is defined %} {{ r.meta.as_of }}{% else %} -{% endif %}</div>
   </header>
   <div class="disclaimer">⚠️ 本工具仅供参考,所有信号/预测基于历史数据的概率化推算,<b>非投资建议</b>,据此交易风险自负。</div>
   <main>{% block content %}{% endblock %}</main>

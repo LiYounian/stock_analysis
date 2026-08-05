@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block title %}新闻 · A股策略辅助工具{% endblock %}
+{% block content %}
+<h1>每日信息流 <small>公司行为公告 · 利好/利空</small></h1>
+<p class="muted">当前展示公司公告(巨潮,规则打标)。政策/研报/舆情的新闻正文级利好利空判定待接入大模型(Q7)。</p>
+
+<section class="card wide">
+  <table>
+    <tr><th>日期</th><th>股票</th><th>板块</th><th>类型</th><th>方向</th><th>标题</th></tr>
+    {% for a in news %}
+    <tr>
+      <td>{{ a.date }}</td>
+      <td><a href="/stock/{{ a.code }}">{{ a.name }}</a></td>
+      <td>{{ a.sector }}</td>
+      <td>{{ a.type }}</td>
+      <td class="{{ 'pos' if a.impact=='利好' else ('neg' if a.impact=='利空' else '') }}">{{ a.impact }}</td>
+      <td class="title">{{ a.title }}</td>
+    </tr>
+    {% else %}<tr><td colspan="6">无公告数据</td></tr>{% endfor %}
+  </table>
+</section>
+{% endblock %}

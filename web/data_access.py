@@ -68,6 +68,47 @@ def get_kline(code: str, limit: int = 120) -> dict:
     }
 
 
+def _name(recs, code):
+    r = recs.get(code)
+    return r["meta"]["name"] if r else code
+
+
+def screen_page() -> dict:
+    """选股页数据:读 screen.json(run.py screen 产出)+ 补每票关键字段。"""
+    recs = _load_all()
+    sp = _ANALYSIS / "screen.json"
+    if not sp.exists():
+        return {"presets": {}, "aggregate": {}, "meta": {}, "as_of": as_of()}
+    data = json.loads(sp.read_text(encoding="utf-8"))
+    # 给每组的代码补名称/板块/评级/买卖倾向,便于表格展示
+    detail = {}
+    for name, codes in data.get("presets", {}).items():
+        rows = []
+        for c in codes:
+            r = recs.get(c, {})
+            rows.append({
+                "code": c, "name": _name(recs, c),
+                "sector": (r.get("meta") or {}).get("sector"),
+                "trend": ((r.get("signals") or {}).get("trend") or {}).get("评级"),
+                "tendency": ((r.get("prediction") or {}).get("买卖倾向") or {}).get("结论"),
+                "flow": (r.get("fundflow") or {}).get("今日主力净流入"),
+            })
+        detail[name] = rows
+    return {"presets": detail, "aggregate": data.get("aggregate", {}), "as_of": as_of()}
+
+
+def news_page() -> list[dict]:
+    """新闻页数据:全池公司行为公告(利好/利空),按日期倒序。新闻正文待 LLM。"""
+    recs = _load_all()
+    out = []
+    for r in recs.values():
+        for e in r.get("events", []):
+            out.append({"code": r["meta"]["code"], "name": r["meta"]["name"],
+                        "sector": r["meta"]["sector"], **e})
+    out.sort(key=lambda x: x.get("date", ""), reverse=True)
+    return out
+
+
 def dashboard() -> dict:
     """首页聚合:板块强弱、超买超卖、拐点榜、资金流榜、买卖倾向汇总、重要公告。"""
     recs = [r for r in _load_all().values() if r.get("signals")]
