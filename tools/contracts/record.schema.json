@@ -1,0 +1,91 @@
+{
+  "enums": {
+    "影响方向": [
+      "利好",
+      "利空",
+      "中性"
+    ],
+    "公告方向": [
+      "利好",
+      "利空",
+      "待判"
+    ],
+    "趋势评级": [
+      "偏多",
+      "中性",
+      "偏空"
+    ],
+    "超买超卖": [
+      "超买",
+      "超卖",
+      "中性"
+    ],
+    "拐点标签": [
+      "反弹启动",
+      "超跌待反弹",
+      "无"
+    ],
+    "买卖倾向": [
+      "偏买入",
+      "偏卖出",
+      "观望"
+    ],
+    "情绪三层": [
+      "政策",
+      "公司行为",
+      "舆情"
+    ],
+    "与本股关系": [
+      "直接",
+      "间接",
+      "无关"
+    ]
+  },
+  "hold_periods": [
+    "1日",
+    "5日",
+    "10日"
+  ],
+  "conventions": {
+    "代码": "6 位字符串(如 '000021'),非 int",
+    "日期": "YYYY-MM-DD 字符串",
+    "金额": "默认单位元;字段名以 _yi / 含'亿'结尾时为亿",
+    "百分比": "数值(如 5.88 表示 5.88%),非字符串",
+    "缺失": "统一用 null(数据不可用),不用空串/0 冒充",
+    "命名不一致(待规范)": "signals.ob_os 用英文键 verdict,而 trend.评级 / 买卖倾向.结论 用中文;本契约按现状固化,建议后续阶段统一(改动涉及多模块,单独排期)"
+  },
+  "top_level_keys": [
+    "schema_version",
+    "meta",
+    "snapshot",
+    "valuation",
+    "fundamental",
+    "signals",
+    "prediction",
+    "sentiment",
+    "fundflow",
+    "events",
+    "timeseries_refs",
+    "provenance"
+  ],
+  "record_schema": {
+    "schema_version": "str,如 '1.0'",
+    "meta": {
+      "code": "str(6)",
+      "name": "str",
+      "sector": "str|null",
+      "industry": "str|null",
+      "as_of": "date(YYYY-MM-DD)"
+    },
+    "snapshot": "null | {close, pct_chg, ma{ma5,ma10,ma20,ma60,排列}, macd{dif,dea,macd,状态}, kdj{k,d,j,状态}, rsi{rsi6,rsi12,rsi24}, bias20, vol_ratio, vol_state}",
+    "valuation": "null | {pe_ttm, pb, mktcap_yi(亿), 报告期, pe_valid:bool, ...}",
+    "fundamental": "null | {营收, 净利, 营收增速, 净利增速, ROE, 毛利率, 净利率, 负债率}",
+    "signals": "null | {trend{评级∈趋势评级,得分,依据[]}, reversal{拐点标签∈拐点标签,拐点评分,...}, ob_os{verdict∈超买超卖,resonance,per_indicator}}",
+    "prediction": "null | {现价, atr, atr_pct, 近三次放量[], 支撑位[], 压力位[], 持有期建议{1日/5日/10日:{止损位,最大亏损%,止盈位,目标盈利%,风险收益比}}, 情景预测{1日/5日/10日:{上涨概率%,...}}, 买卖倾向{结论∈买卖倾向,得分,依据[]}, 免责}",
+    "sentiment": "null | {净情绪分:-1~1, 利好数, 利空数, 样本数, events[]{影响方向∈影响方向,影响强度:1~5,与本股关系∈与本股关系,层∈情绪三层,标题,time}}",
+    "fundflow": "null | {今日主力净流入(元), 今日主力净占比, 近5日主力合计(元), 主力连续净流入天数}",
+    "events": "list[{date, type, impact∈公告方向, title}](公告)",
+    "timeseries_refs": "{kline, fundflow, announcements}(文件路径指针)",
+    "provenance": "{tech:bool, fundamental:bool, announcements:int, fundflow:bool}"
+  }
+}
