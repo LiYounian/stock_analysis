@@ -1,16 +1,22 @@
 # 核心数据源(基座)
-akshare>=1.14.0
+akshare>=1.18
 pandas>=2.0
 numpy>=1.24
 pyarrow>=14.0          # parquet 缓存
 
-# 缺口备选(可选,按需装)
-# tushare>=1.4.0        # 需 token
-# baostock>=0.8.9       # 免费历史行情
-
-# 技术指标(可选,或本地自算)
-# ta>=0.11.0
-
 # 采集辅助
 requests>=2.31
 lxml>=4.9              # akshare 部分接口解析依赖
+curl_cffi>=0.16        # 伪装浏览器 TLS 指纹,解锁东财(资金流等),绕过 JA3 反爬
+
+# Web 展示(FastAPI + Jinja2,uvicorn 起服务)
+fastapi>=0.110
+uvicorn[standard]>=0.27
+jinja2>=3.1
+
+# 缺口备选(可选,按需装)
+# tushare>=1.4.0        # 需 token
+# baostock>=0.8.9       # 免费历史行情
+# scikit-learn / scipy  # P3-E ML 预测阶段再装
+
+# 精确版本见 requirements-lock.txt(conda 环境 stock_analysis 冻结)
