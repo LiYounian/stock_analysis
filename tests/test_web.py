@@ -42,6 +42,20 @@ def test_stock_404():
 
 
 @skip_no_data
+def test_screen_ok():
+    r = client.get("/screen")
+    assert r.status_code == 200
+    assert "选股筛选" in r.text
+
+
+@skip_no_data
+def test_news_ok():
+    r = client.get("/news")
+    assert r.status_code == 200
+    assert "每日信息流" in r.text
+
+
+@skip_no_data
 def test_api_stock_json():
     code = [f.rsplit("/", 1)[-1][:-5]
             for f in glob.glob(str(settings.PROJECT_ROOT / "data/analysis/*.json"))

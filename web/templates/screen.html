@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+{% block title %}选股 · A股策略辅助工具{% endblock %}
+{% block content %}
+<h1>选股筛选 <small>预设规则(默认可调,待细化 N1)</small></h1>
+
+{% set agg = s.aggregate %}
+{% if agg %}
+<section class="card wide">
+  <h2>组合概览</h2>
+  <p>主线板块:<b>{{ agg.hot_theme }}</b> ·
+     市场宽度:偏多 {{ agg.breadth.偏多 }} / 中性 {{ agg.breadth.中性 }} / 偏空 {{ agg.breadth.偏空 }} ·
+     情绪温度(公告利好-利空):<b class="{{ 'pos' if agg.sentiment_temp>0 else 'neg' }}">{{ agg.sentiment_temp }}</b></p>
+</section>
+{% endif %}
+
+<div class="grid">
+{% for name, rows in s.presets.items() %}
+  <section class="card">
+    <h2>{{ name }} <small>{{ rows|length }} 只</small></h2>
+    {% if rows %}
+    <table>
+      <tr><th>股票</th><th>板块</th><th>趋势</th><th>买卖倾向</th><th>主力(亿)</th></tr>
+      {% for x in rows %}
+      <tr><td><a href="/stock/{{ x.code }}">{{ x.name }}</a></td>
+          <td>{{ x.sector }}</td><td>{{ x.trend }}</td>
+          <td>{{ x.tendency or '-' }}</td>
+          <td class="{{ 'pos' if x.flow and x.flow>0 else 'neg' }}">
+            {% if x.flow is not none %}{{ '%.2f'|format(x.flow/1e8) }}{% else %}-{% endif %}</td></tr>
+      {% endfor %}
+    </table>
+    {% else %}<p class="muted">无匹配</p>{% endif %}
+  </section>
+{% endfor %}
+</div>
+
+<p class="muted">筛选规则见 tools/screener/screen.py,阈值在 config/strategy.py['选股']。具体规则待与业务方细化(N1)。</p>
+{% endblock %}

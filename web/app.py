@@ -32,6 +32,19 @@ def dashboard(request: Request):
         context={"d": da.dashboard(), "records": da.list_records()})
 
 
+@app.get("/screen", response_class=HTMLResponse)
+def screen(request: Request):
+    return templates.TemplateResponse(
+        request=request, name="screen.html", context={"s": da.screen_page()})
+
+
+@app.get("/news", response_class=HTMLResponse)
+def news(request: Request):
+    return templates.TemplateResponse(
+        request=request, name="news.html",
+        context={"news": da.news_page(), "s": {"as_of": da.as_of()}})
+
+
 @app.get("/stock/{code}", response_class=HTMLResponse)
 def stock(request: Request, code: str):
     rec = da.get_record(code)
