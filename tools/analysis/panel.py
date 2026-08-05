@@ -29,6 +29,12 @@ def _row(rec: dict) -> dict:
     val = rec.get("valuation") or {}
     fund = rec.get("fundamental") or {}
     flow = rec.get("fundflow") or {}
+    pred = rec.get("prediction") or {}
+    bias_tend = pred.get("买卖倾向") or {}
+    scen = pred.get("情景预测") or {}
+    hold = pred.get("持有期建议") or {}
+    sup = pred.get("支撑位") or []
+    res = pred.get("压力位") or []
     trend = sig.get("trend") or {}
     rev = sig.get("reversal") or {}
     obos = sig.get("ob_os") or {}
@@ -57,6 +63,14 @@ def _row(rec: dict) -> dict:
         # 资金流
         "主力净流入亿": _yi(flow.get("今日主力净流入")), "主力净占比%": flow.get("今日主力净占比"),
         "近5日主力亿": _yi(flow.get("近5日主力合计")), "连续净流入天": flow.get("主力连续净流入天数"),
+        # 预测/推荐(P3.2,全百分比)
+        "买卖倾向": bias_tend.get("结论"), "买卖分": bias_tend.get("得分"),
+        "ATR%": pred.get("atr_pct"),
+        "1日涨概率%": (scen.get("1日") or {}).get("上涨概率%"),
+        "5日涨概率%": (scen.get("5日") or {}).get("上涨概率%"),
+        "5日止盈%": (hold.get("5日") or {}).get("目标盈利%"),
+        "5日止损%": (hold.get("5日") or {}).get("最大亏损%"),
+        "近支撑": sup[0] if sup else None, "近压力": res[0] if res else None,
         # 事件
         "公告数": len(rec.get("events") or []),
     }

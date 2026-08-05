@@ -87,6 +87,10 @@ def test_panel_row_flatten():
                     "ob_os": {"verdict": "超卖", "resonance": 2}},
         "fundflow": {"今日主力净流入": 2.07e8, "今日主力净占比": 3.35,
                      "近5日主力合计": -4.05e8, "主力连续净流入天数": 2},
+        "prediction": {"atr_pct": 5.5, "支撑位": [30.0, 28.0], "压力位": [40.0, 42.0],
+                       "买卖倾向": {"结论": "观望", "得分": 1},
+                       "情景预测": {"1日": {"上涨概率%": 51.2}, "5日": {"上涨概率%": 55.2}},
+                       "持有期建议": {"5日": {"目标盈利%": 12.0, "最大亏损%": 7.5}}},
         "events": [{"date": "2026-08-01"}],
     }
     row = panel._row(rec)
@@ -94,6 +98,10 @@ def test_panel_row_flatten():
     assert row["拐点标签"] == "超跌待反弹" and row["PE有效"] is True
     assert row["主力净流入亿"] == 2.07        # 元→亿
     assert row["公告数"] == 1
+    # 预测列
+    assert row["买卖倾向"] == "观望" and row["买卖分"] == 1
+    assert row["5日涨概率%"] == 55.2 and row["5日止盈%"] == 12.0
+    assert row["近支撑"] == 30.0 and row["近压力"] == 40.0
 
 
 def _kline(closes):
