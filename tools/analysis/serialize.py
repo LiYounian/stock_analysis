@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import logging
 
+from tools.analysis import predict as pr
 from tools.analysis import technical as ta
 from tools.analysis import valuation
 from tools.collectors import announcement as an
@@ -32,7 +33,8 @@ def _safe(fn, default=None):
 def build_record(code: str, as_of: str) -> dict:
     """组装单票结构化记录。缺失的数据块降级为 None / 空,不抛错。"""
     s = stock_pool.get(code)
-    tech = _safe(lambda: ta.compute(market.load_kline(code)), {})
+    kdf = _safe(lambda: market.load_kline(code))          # 加载一次,tech/predict 复用
+    tech = _safe(lambda: ta.compute(kdf), {}) if kdf is not None else {}
     fund = _safe(lambda: fd.load_fundamental(code), {}) or {}
     anns = _safe(lambda: an.load_announcements(code), []) or []
 
@@ -56,6 +58,11 @@ def build_record(code: str, as_of: str) -> dict:
         }
         signals = {"trend": tech["signal"], "reversal": tech["reversal"], "ob_os": tech["ob_os"]}
 
+    # 预测/推荐(P3.2):止盈止损%/情景/买卖倾向。需 tech + kline。
+    prediction = None
+    if has_tech and kdf is not None:
+        prediction = _safe(lambda: pr.predict(kdf, tech, flow))
+
     valuation_block = None
     if fund:
         sw = valuation.pe_switch(fund)
@@ -78,6 +85,7 @@ def build_record(code: str, as_of: str) -> dict:
         "valuation": valuation_block,
         "fundamental": fundamental_block,
         "signals": signals,
+        "prediction": prediction,
         "fundflow": flow,
         "events": events,
         "timeseries_refs": {
