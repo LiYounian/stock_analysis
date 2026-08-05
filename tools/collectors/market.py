@@ -1,22 +1,144 @@
-"""行情采集:日/周 K线、量价。
+"""行情采集:日 K线、量价。
 
-主数据源:akshare `stock_zh_a_hist`(前复权)。
-备选:东财隐藏接口 push2his.eastmoney.com/api/qt/stock/kline/get。
+多源 fallback:腾讯 → 新浪 → 东财。
+  - 主源腾讯 `stock_zh_a_hist_tx`:本机实测可用,返回 OHLCV+成交额+换手率。
+  - 东财 `stock_zh_a_hist`:本机被其 TLS 指纹反爬(python-requests 被 RST),留作其他环境备选。
+    详见 docs/问题/问题台账.md R4。
 落盘:data/raw/kline/{code}.parquet
+契约见 docs/计划/P1_技术面打通.md Step 1。
 """
+from __future__ import annotations
+
+import logging
+import time
+
 import pandas as pd
+
+from tools.config import settings
+
+logger = logging.getLogger("collectors.market")
+
+# 统一输出列
+_STD_COLS = ["date", "open", "high", "low", "close", "volume", "amount", "turnover", "pct_chg"]
+# 东财中文列 → 标准列
+_EM_COL_MAP = {
+    "日期": "date", "开盘": "open", "收盘": "close", "最高": "high", "最低": "low",
+    "成交量": "volume", "成交额": "amount", "涨跌幅": "pct_chg", "换手率": "turnover",
+}
+_KLINE_DIR = settings.DATA_RAW / "kline"
+# 源优先级(本机腾讯可用;东财被指纹墙,置末)
+DEFAULT_SOURCES = ("tencent", "sina", "eastmoney")
+
+
+def market_prefix(code: str) -> str:
+    """6 位代码 → 带交易所前缀(sh/sz/bj)。腾讯/新浪接口需带前缀。"""
+    if code[0] in ("6", "9"):
+        return f"sh{code}"
+    if code[0] in ("0", "2", "3"):
+        return f"sz{code}"
+    if code[0] in ("8", "4"):
+        return f"bj{code}"
+    return code
+
+
+def _kline_path(code: str):
+    return _KLINE_DIR / f"{code}.parquet"
+
+
+def _normalize(df: pd.DataFrame) -> pd.DataFrame:
+    """统一列名/类型/排序,补算 pct_chg。"""
+    df = df.rename(columns=_EM_COL_MAP)
+    df["date"] = pd.to_datetime(df["date"])
+    df = df.sort_values("date").reset_index(drop=True)
+    for c in ("open", "high", "low", "close", "volume", "amount", "turnover"):
+        if c in df.columns:
+            df[c] = pd.to_numeric(df[c], errors="coerce")
+    if "pct_chg" not in df.columns or df["pct_chg"].isna().all():
+        df["pct_chg"] = df["close"].pct_change() * 100  # 首行 NaN,正常
+    for c in _STD_COLS:
+        if c not in df.columns:
+            df[c] = pd.NA
+    return df[_STD_COLS]
+
+
+def _fetch_tencent(code, start, end, adjust) -> pd.DataFrame:
+    import akshare as ak
+    return ak.stock_zh_a_hist_tx(symbol=market_prefix(code),
+                                 start_date=start, end_date=end, adjust=adjust)
+
+
+def _fetch_sina(code, start, end, adjust) -> pd.DataFrame:
+    import akshare as ak
+    df = ak.stock_zh_a_daily(symbol=market_prefix(code),
+                             start_date=start, end_date=end, adjust=adjust)
+    return df
+
+
+def _fetch_eastmoney(code, start, end, adjust) -> pd.DataFrame:
+    import akshare as ak
+    return ak.stock_zh_a_hist(symbol=code, period="daily",
+                              start_date=start, end_date=end, adjust=adjust)
+
+
+_FETCHERS = {"tencent": _fetch_tencent, "sina": _fetch_sina, "eastmoney": _fetch_eastmoney}
+
+
+def fetch_one(code: str, start: str, end: str, adjust: str,
+              sources: tuple[str, ...] = DEFAULT_SOURCES) -> pd.DataFrame:
+    """拉单票日 K线(多源 fallback,不落盘)。
+
+    依次尝试 sources 各源;全失败抛 ConnectionError(不返回空 df 伪装成功)。
+    """
+    errors = []
+    for src in sources:
+        try:
+            df = _FETCHERS[src](code, start, end, adjust)
+            if df is None or len(df) == 0:
+                raise ValueError("空数据")
+            out = _normalize(df)
+            logger.debug("K线 %s 命中源 %s", code, src)
+            return out
+        except Exception as e:  # 换下一个源
+            errors.append(f"{src}: {type(e).__name__} {str(e)[:40]}")
+    raise ConnectionError(f"{code} 所有源均失败: {errors}")
 
 
 def fetch_kline(codes: list[str], start: str | None = None,
-                end: str | None = None, adjust: str = "qfq") -> dict[str, pd.DataFrame]:
-    """拉取 K线并落盘。
+                end: str | None = None, adjust: str = settings.KLINE_ADJUST
+                ) -> dict[str, pd.DataFrame]:
+    """拉取多票 K线并落盘 parquet。
 
-    输入:codes 代码列表;start/end 日期(YYYYMMDD,None=用 settings 默认);adjust 复权方式。
-    输出:{code: DataFrame[date, open, high, low, close, volume, amount, ...]},同时落盘 parquet。
+    start/end 为 None 时:end=今天,start≈今天往前 KLINE_DAYS×2 自然日(覆盖非交易日)。
+    单票失败记 logger 并跳过,不中断整批;返回成功票的 {code: DataFrame}。
     """
-    raise NotImplementedError("P1 阶段实现")
+    settings.ensure_dirs()
+    _KLINE_DIR.mkdir(parents=True, exist_ok=True)
+    if start is None:
+        start = (pd.Timestamp.today() - pd.Timedelta(days=settings.KLINE_DAYS * 2)
+                 ).strftime("%Y%m%d")
+    if end is None:
+        end = pd.Timestamp.today().strftime("%Y%m%d")
+
+    out: dict[str, pd.DataFrame] = {}
+    failed: list[str] = []
+    for code in codes:
+        try:
+            df = fetch_one(code, start, end, adjust)
+            df.to_parquet(_kline_path(code), index=False)
+            out[code] = df
+            logger.info("K线 %s 落盘 %d 根", code, len(df))
+        except Exception as e:
+            failed.append(code)
+            logger.error("K线 %s 失败: %s", code, e)
+        time.sleep(settings.FETCH_SLEEP_SEC)
+    if failed:
+        logger.warning("拉取失败票(%d): %s", len(failed), failed)
+    return out
 
 
 def load_kline(code: str) -> pd.DataFrame:
-    """从本地缓存读单票 K线(分析层用,不触网)。"""
-    raise NotImplementedError("P1 阶段实现")
+    """从本地缓存读单票 K线(分析层用,不触网)。缓存缺失抛错。"""
+    p = _kline_path(code)
+    if not p.exists():
+        raise FileNotFoundError(f"{code} 无 K线缓存,请先 fetch_kline: {p}")
+    return pd.read_parquet(p)
