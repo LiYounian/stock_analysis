@@ -1,0 +1,19 @@
+# 采集缓存(数据不进版本库)
+data/raw/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+
+# 系统
+.DS_Store
+
+# 报告产出(默认不进库,避免每次跑污染仓库;待拍板)
+docs/报告/
+
+# 密钥/本地配置
+.env
+*.token

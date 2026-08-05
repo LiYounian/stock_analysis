@@ -1,0 +1,16 @@
+# 核心数据源(基座)
+akshare>=1.14.0
+pandas>=2.0
+numpy>=1.24
+pyarrow>=14.0          # parquet 缓存
+
+# 缺口备选(可选,按需装)
+# tushare>=1.4.0        # 需 token
+# baostock>=0.8.9       # 免费历史行情
+
+# 技术指标(可选,或本地自算)
+# ta>=0.11.0
+
+# 采集辅助
+requests>=2.31
+lxml>=4.9              # akshare 部分接口解析依赖
