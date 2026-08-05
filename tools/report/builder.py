@@ -81,11 +81,25 @@ def build_portfolio_tech_report(results: dict[str, dict],
     overbought = [c for c, r in valid.items() if r["kdj"]["状态"] == "超买"]
     heavy = [c for c, r in valid.items()
              if isinstance(r["vol"]["量比"], (int, float)) and r["vol"]["量比"] > 1.5]
-    lines += ["", "## 三、技术异动清单", ""]
+    lines += ["", "## 三、技术异动与超跌反弹", ""]
     for label, codes in [("MACD 金叉", golden), ("KDJ 超卖", oversold),
                          ("KDJ 超买", overbought), ("放量(量比>1.5)", heavy)]:
         names = "、".join(f"{_name(c)}({c})" for c in codes) if codes else "无"
         lines.append(f"- **{label}**:{names}")
+
+    # 超跌反弹拐点榜(独立于趋势评级,捕捉主升启动)
+    rev_rows = [(c, r["reversal"]) for c, r in valid.items()
+                if r.get("reversal", {}).get("拐点标签", "无") != "无"]
+    rev_rows.sort(key=lambda x: x[1]["拐点评分"], reverse=True)
+    lines += ["", "### 超跌反弹拐点榜(趋势评级之外的独立维度)", ""]
+    if rev_rows:
+        lines += ["| 名称 | 代码 | 拐点标签 | 拐点评分 | 趋势评级 | 依据 |",
+                  "|---|---|---|---|---|---|"]
+        for c, rev in rev_rows:
+            lines.append(f"| {_name(c)} | {c} | {rev['拐点标签']} | {rev['拐点评分']} | "
+                         f"{valid[c]['signal']['评级']} | {'、'.join(rev['依据'])} |")
+    else:
+        lines.append("当前无超跌反弹信号。")
 
     if skipped:
         lines += ["", f"> 数据不足未纳入:{'、'.join(skipped)}"]
@@ -186,8 +200,13 @@ def build_stock_tech_report(code: str, result: dict, fundamental: dict | None = 
         f"- RSI6/12/24:{rs['rsi6']} / {rs['rsi12']} / {rs['rsi24']}", "",
         "## 量价",
         f"- 量比 {vol['量比']} → **{vol['状态']}**", "",
-        "## 评级依据",
     ]
+    rev = result.get("reversal")
+    if rev:
+        lines += ["## 拐点信号(独立于趋势)",
+                  f"- **{rev['拐点标签']}**(拐点评分 {rev['拐点评分']})"
+                  + (f":{'、'.join(rev['依据'])}" if rev['依据'] else ""), ""]
+    lines += ["## 评级依据"]
     lines += [f"- {r}" for r in s["依据"]] or ["- (无)"]
     lines += ["", "---"] + _fundamental_section(fundamental)
     lines += ["---"] + _announcement_section(announcements)

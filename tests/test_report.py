@@ -13,6 +13,8 @@ def _fake_result(score, close=10.0):
         "rsi": {"rsi6": 40, "rsi12": 45, "rsi24": 50},
         "vol": {"量比": 1.8, "状态": "放量"},
         "signal": {"评级": "偏多" if score >= 30 else "中性", "得分": score, "依据": ["测试+" + str(score)]},
+        "reversal": {"超跌": True, "放量反包": True, "低位金叉": False, "底背离": False,
+                     "拐点评分": 55, "拐点标签": "反弹启动", "依据": ["超跌+25", "放量反包+30"]},
     }
 
 
@@ -27,6 +29,8 @@ def test_portfolio_report_created_and_sorted(tmp_path, monkeypatch):
     assert content.index("002156") < content.index("000021")
     assert "数据不足 1" in content            # 无效票计数
     assert "MACD 金叉" in content              # 异动清单章节
+    assert "超跌反弹拐点榜" in content         # 拐点榜章节
+    assert "反弹启动" in content
 
 
 def _fake_fund():
@@ -67,6 +71,7 @@ def test_stock_card_created(tmp_path, monkeypatch):
     assert "综合评级:偏多" in content
     assert "多头排列" in content
     assert "PE(TTM) 47.98" in content          # 基本面章节
+    assert "拐点信号" in content and "反弹启动" in content   # 拐点信号行
     assert "近期公告" in content and "回购" in content   # 公告章节
     assert "P2-C 补" in content                # 情绪面占位
 
