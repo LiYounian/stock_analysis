@@ -72,6 +72,9 @@
 
 ```bash
 PY=~/.conda/envs/stock_analysis/bin/python
-$PY -m tools.run all      # 采集(行情+基本面+公告)→ 分析 → 出报告到 docs/报告/
-$PY -m pytest tests/ -q   # 跑测试
+$PY -m tools.run all                       # 采集→分析→结构化JSON→总表→报告
+$PY -m pytest tests/ -q                     # 跑测试(55)
+$PY -m uvicorn web.app:app --port 8000      # 起 Web:http://localhost:8000
 ```
+
+**Web**:`/` 今日概览(板块强弱/买卖倾向/超买超卖/拐点/资金流/公告),`/stock/{code}` 个股评估(K线+止盈止损+情景预测+基本面+资金流)。全站标注非投资建议。

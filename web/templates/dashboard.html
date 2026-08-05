@@ -1,0 +1,98 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>今日概览 <small>{{ d.total }} 只自选</small></h1>
+
+<div class="grid">
+  <section class="card">
+    <h2>板块强弱(趋势均分)</h2>
+    <table>
+      <tr><th>板块</th><th>均分</th><th>只数</th></tr>
+      {% for s in d.sectors %}
+      <tr><td>{{ s.板块 }}</td>
+          <td class="{{ 'pos' if s.均分>0 else 'neg' }}">{{ s.均分 }}</td>
+          <td>{{ s.只数 }}</td></tr>
+      {% endfor %}
+    </table>
+  </section>
+
+  <section class="card">
+    <h2>买卖倾向汇总</h2>
+    <div class="tend">
+      <div><span class="tag buy">偏买入 {{ d.tendency.偏买入|length }}</span>
+        {% for x in d.tendency.偏买入 %}<a href="/stock/{{ x.code }}">{{ x.name }}</a>{% endfor %}</div>
+      <div><span class="tag sell">偏卖出 {{ d.tendency.偏卖出|length }}</span>
+        {% for x in d.tendency.偏卖出 %}<a href="/stock/{{ x.code }}">{{ x.name }}</a>{% endfor %}</div>
+      <div><span class="tag wait">观望 {{ d.tendency.观望|length }}</span></div>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>超买超卖(≥2 指标共振)</h2>
+    <div class="chips"><b class="neg">超卖:</b>
+      {% for x in d.oversold %}<a class="chip os" href="/stock/{{ x.code }}">{{ x.name }}</a>{% else %}无{% endfor %}</div>
+    <div class="chips"><b class="pos">超买:</b>
+      {% for x in d.overbought %}<a class="chip ob" href="/stock/{{ x.code }}">{{ x.name }}</a>{% else %}无{% endfor %}</div>
+  </section>
+
+  <section class="card">
+    <h2>超跌反弹拐点榜</h2>
+    <table>
+      <tr><th>股票</th><th>拐点</th><th>评分</th></tr>
+      {% for x in d.reversal %}
+      <tr><td><a href="/stock/{{ x.code }}">{{ x.name }}</a></td>
+          <td>{{ x.标签 }}</td><td>{{ x.评分 }}</td></tr>
+      {% else %}<tr><td colspan="3">无</td></tr>{% endfor %}
+    </table>
+  </section>
+
+  <section class="card">
+    <h2>资金流 · 主力净流入 Top</h2>
+    <table>
+      <tr><th>股票</th><th>今日主力(亿)</th><th>连续天</th></tr>
+      {% for x in d.flow %}
+      <tr><td><a href="/stock/{{ x.code }}">{{ x.name }}</a></td>
+          <td class="{{ 'pos' if x.主力净流入>0 else 'neg' }}">{{ '%.2f'|format(x.主力净流入/1e8) }}</td>
+          <td>{{ x.连续天数 }}</td></tr>
+      {% endfor %}
+    </table>
+  </section>
+
+  <section class="card wide">
+    <h2>重要公告(公司行为)</h2>
+    <table>
+      <tr><th>日期</th><th>股票</th><th>类型</th><th>方向</th><th>标题</th></tr>
+      {% for a in d.announcements %}
+      <tr><td>{{ a.date }}</td>
+          <td><a href="/stock/{{ a.code }}">{{ a.name }}</a></td>
+          <td>{{ a.type }}</td>
+          <td class="{{ 'pos' if a.impact=='利好' else ('neg' if a.impact=='利空' else '') }}">{{ a.impact }}</td>
+          <td class="title">{{ a.title }}</td></tr>
+      {% endfor %}
+    </table>
+  </section>
+</div>
+
+<section class="card">
+  <h2>全池速览(按趋势得分)</h2>
+  <table class="pool">
+    <tr><th>股票</th><th>代码</th><th>板块</th><th>现价</th><th>涨跌%</th>
+        <th>趋势</th><th>超买超卖</th><th>拐点</th><th>买卖倾向</th><th>主力(亿)</th></tr>
+    {% for r in records %}
+    {% set sig = r.signals %}
+    <tr>
+      <td><a href="/stock/{{ r.meta.code }}">{{ r.meta.name }}</a></td>
+      <td>{{ r.meta.code }}</td><td>{{ r.meta.sector }}</td>
+      <td>{{ r.snapshot.close if r.snapshot else '-' }}</td>
+      <td class="{{ 'pos' if r.snapshot and r.snapshot.pct_chg>0 else 'neg' }}">
+        {{ r.snapshot.pct_chg if r.snapshot else '-' }}</td>
+      <td>{{ sig.trend.评级 if sig else '-' }}</td>
+      <td>{{ sig.ob_os.结论 if sig else '-' }}</td>
+      <td>{{ sig.reversal.拐点标签 if sig else '-' }}</td>
+      <td>{% if r.prediction %}{{ r.prediction.买卖倾向.结论 }}{% else %}-{% endif %}</td>
+      <td>{% if r.fundflow and r.fundflow.今日主力净流入 is not none %}
+        {{ '%.2f'|format(r.fundflow.今日主力净流入/1e8) }}{% else %}-{% endif %}</td>
+    </tr>
+    {% endfor %}
+  </table>
+</section>
+{% endblock %}

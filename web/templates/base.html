@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{% block title %}A股策略辅助工具{% endblock %}</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand"><a href="/">📈 A股策略辅助工具</a></div>
+    <nav><a href="/">今日概览</a></nav>
+    <div class="asof">数据日期 {{ (d.as_of if d else r.meta.as_of) or '-' }}</div>
+  </header>
+  <div class="disclaimer">⚠️ 本工具仅供参考,所有信号/预测基于历史数据的概率化推算,<b>非投资建议</b>,据此交易风险自负。</div>
+  <main>{% block content %}{% endblock %}</main>
+  <footer>A股策略辅助工具 · 数据源:腾讯/新浪/同花顺/百度/巨潮/东财 · 仅供研究</footer>
+  {% block scripts %}{% endblock %}
+</body>
+</html>

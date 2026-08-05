@@ -1,0 +1,130 @@
+{% extends "base.html" %}
+{% block title %}{{ r.meta.name }}({{ r.meta.code }}){% endblock %}
+{% block content %}
+{% set snap = r.snapshot %}{% set sig = r.signals %}{% set p = r.prediction %}
+{% set val = r.valuation %}{% set fund = r.fundamental %}{% set flow = r.fundflow %}
+
+<div class="stock-head">
+  <h1>{{ r.meta.name }} <span class="code">{{ r.meta.code }}</span>
+    <small>{{ r.meta.sector }} · {{ r.meta.industry }}</small></h1>
+  {% if snap %}
+  <div class="price">{{ snap.close }}
+    <span class="{{ 'pos' if snap.pct_chg>0 else 'neg' }}">{{ snap.pct_chg }}%</span></div>
+  {% endif %}
+  <div class="badges">
+    {% if sig %}<span class="badge">趋势 {{ sig.trend.评级 }}({{ sig.trend.得分 }})</span>
+    <span class="badge">超买超卖 {{ sig.ob_os.结论 }}</span>
+    <span class="badge">拐点 {{ sig.reversal.拐点标签 }}</span>{% endif %}
+    {% if p %}<span class="badge big {{ 'buy' if p.买卖倾向.结论=='偏买入' else ('sell' if p.买卖倾向.结论=='偏卖出' else 'wait') }}">
+      {{ p.买卖倾向.结论 }}</span>{% endif %}
+  </div>
+</div>
+
+<div class="grid">
+  <section class="card wide">
+    <h2>K线走势(近120日,收盘+均线,叠加支撑/压力/止盈止损)</h2>
+    <div class="chart-wrap"><canvas id="priceChart"></canvas></div>
+    <div class="chart-wrap vol"><canvas id="volChart"></canvas></div>
+  </section>
+
+  {% if p %}
+  <section class="card">
+    <h2>止盈止损(百分比,按持有期)</h2>
+    <table>
+      <tr><th>持有期</th><th>止损位</th><th>最大亏损%</th><th>止盈位</th><th>目标盈利%</th><th>盈亏比</th></tr>
+      {% for hold, v in p.持有期建议.items() %}
+      <tr><td>{{ hold }}</td><td class="neg">{{ v.止损位 }}</td><td class="neg">-{{ v['最大亏损%'] }}%</td>
+          <td class="pos">{{ v.止盈位 }}</td><td class="pos">+{{ v['目标盈利%'] }}%</td>
+          <td>{{ v.风险收益比 }}</td></tr>
+      {% endfor %}
+    </table>
+    <p class="muted">ATR%={{ p.atr_pct }} · 现价 {{ p.现价 }} · 支撑 {{ p.支撑位 }} · 压力 {{ p.压力位 }}</p>
+  </section>
+
+  <section class="card">
+    <h2>情景预测(历史频率,非预言)</h2>
+    <table>
+      <tr><th>持有期</th><th>上涨概率</th><th>悲观</th><th>中位</th><th>乐观</th><th>样本</th></tr>
+      {% for hold, v in p.情景预测.items() %}
+      <tr><td>{{ hold }}</td>
+        <td>{{ v['上涨概率%'] }}%</td>
+        {% for k in v.keys() if '悲观' in k %}<td class="neg">{{ v[k] }}%</td>{% endfor %}
+        {% for k in v.keys() if '中位' in k %}<td>{{ v[k] }}%</td>{% endfor %}
+        {% for k in v.keys() if '乐观' in k %}<td class="pos">{{ v[k] }}%</td>{% endfor %}
+        <td>{{ v.样本数 }}</td></tr>
+      {% endfor %}
+    </table>
+    <p class="muted">买卖倾向依据:{{ p.买卖倾向.依据|join('、') }}</p>
+  </section>
+
+  <section class="card">
+    <h2>近三次放量</h2>
+    <table><tr><th>日期</th><th>收盘</th><th>量比</th></tr>
+      {% for x in p.近三次放量 %}<tr><td>{{ x.date }}</td><td>{{ x.close }}</td><td>{{ x.量比 }}</td></tr>
+      {% else %}<tr><td colspan="3">无</td></tr>{% endfor %}
+    </table>
+  </section>
+  {% endif %}
+
+  {% if snap %}
+  <section class="card">
+    <h2>技术指标</h2>
+    <table>
+      <tr><td>均线排列</td><td>{{ snap.ma.排列 }}</td><td>MA5/20/60</td>
+          <td>{{ snap.ma.ma5 }}/{{ snap.ma.ma20 }}/{{ snap.ma.ma60 }}</td></tr>
+      <tr><td>MACD</td><td>{{ snap.macd.状态 }}</td><td>KDJ</td>
+          <td>{{ snap.kdj.状态 }}(K{{ snap.kdj.k }}/J{{ snap.kdj.j }})</td></tr>
+      <tr><td>RSI6/12/24</td><td>{{ snap.rsi.rsi6 }}/{{ snap.rsi.rsi12 }}/{{ snap.rsi.rsi24 }}</td>
+          <td>BIAS20</td><td>{{ snap.bias20 }}</td></tr>
+      <tr><td>量比</td><td>{{ snap.vol_ratio }}({{ snap.vol_state }})</td>
+          <td>趋势依据</td><td class="muted">{{ sig.trend.依据|join('、') }}</td></tr>
+    </table>
+  </section>
+  {% endif %}
+
+  {% if fund %}
+  <section class="card">
+    <h2>基本面 {% if val %}<small>{{ val.报告期 }}</small>{% endif %}</h2>
+    <table>
+      <tr><td>营收</td><td>{{ fund.营收 }}</td><td>净利</td><td>{{ fund.净利 }}</td></tr>
+      <tr><td>营收增速%</td><td>{{ fund.营收增速 }}</td><td>净利增速%</td><td>{{ fund.净利增速 }}</td></tr>
+      <tr><td>ROE</td><td>{{ fund.ROE }}</td><td>毛利率</td><td>{{ fund.毛利率 }}</td></tr>
+      {% if val %}<tr><td>PE(TTM)</td><td>{{ val.pe_ttm }}</td><td>PB</td><td>{{ val.pb }}</td></tr>
+      <tr><td>总市值(亿)</td><td>{{ val.mktcap_yi }}</td><td>PE有效</td><td>{{ val.pe_valid }}</td></tr>{% endif %}
+    </table>
+  </section>
+  {% endif %}
+
+  {% if flow %}
+  <section class="card">
+    <h2>资金流向</h2>
+    <table>
+      <tr><td>今日主力净流入</td>
+          <td class="{{ 'pos' if flow.今日主力净流入 and flow.今日主力净流入>0 else 'neg' }}">
+          {% if flow.今日主力净流入 is not none %}{{ '%.2f'|format(flow.今日主力净流入/1e8) }}亿{% else %}-{% endif %}</td></tr>
+      <tr><td>主力净占比</td><td>{{ flow.今日主力净占比 }}%</td></tr>
+      <tr><td>近5日主力合计</td><td>{% if flow.近5日主力合计 is not none %}{{ '%.2f'|format(flow.近5日主力合计/1e8) }}亿{% endif %}</td></tr>
+      <tr><td>主力连续净流入</td><td>{{ flow.主力连续净流入天数 }} 天</td></tr>
+    </table>
+  </section>
+  {% endif %}
+
+  <section class="card wide">
+    <h2>近期公告(公司行为)</h2>
+    <table><tr><th>日期</th><th>类型</th><th>方向</th><th>标题</th></tr>
+      {% for e in r.events[:12] %}
+      <tr><td>{{ e.date }}</td><td>{{ e.type }}</td>
+          <td class="{{ 'pos' if e.impact=='利好' else ('neg' if e.impact=='利空' else '') }}">{{ e.impact }}</td>
+          <td class="title">{{ e.title }}</td></tr>
+      {% else %}<tr><td colspan="4">无</td></tr>{% endfor %}
+    </table>
+  </section>
+</div>
+
+<script id="klineData" type="application/json">{{ kline|tojson }}</script>
+{% if p %}<script id="predData" type="application/json">{{ {"支撑位": p.支撑位, "压力位": p.压力位, "止损": p.持有期建议['5日'].止损位, "止盈": p.持有期建议['5日'].止盈位}|tojson }}</script>{% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/stock.js"></script>
+{% endblock %}
