@@ -1,37 +1,173 @@
 """技术指标分析(纯本地计算,不触网)。
 
-输入 K线 DataFrame,输出均线/MACD/KDJ/RSI/量价信号。
+口径对齐国内看盘软件(通达信):KDJ/RSI 用 SMA(X,N,M) 递推,MACD 用 EMA。
+输入 K线 DataFrame,输出均线/MACD/KDJ/RSI/量价 + 综合评级。
+契约见 docs/计划/P1_技术面打通.md Step 2。
 """
+from __future__ import annotations
+
+import numpy as np
 import pandas as pd
 
 
-def compute(kline: pd.DataFrame) -> dict:
-    """对单票 K线算全套技术指标。
-
-    输入:kline DataFrame[date, open, high, low, close, volume]。
-    输出:{
-        ma:   {ma5, ma10, ma20, ma60, 多空排列},
-        macd: {dif, dea, macd, 金叉/死叉},
-        kdj:  {k, d, j, 超买/超卖},
-        rsi:  {rsi6, rsi12, rsi24},
-        vol:  {量比, 放量/缩量},
-        signal: 综合技术评级(偏多/中性/偏空),
-    }
-    """
-    raise NotImplementedError("P1 阶段实现")
+# ---------- 基础算子 ----------
+def _sma_cn(x: pd.Series, n: int, m: int = 1) -> pd.Series:
+    """通达信 SMA(X,N,M):y_t = (m*x_t + (n-m)*y_{t-1}) / n。首个有效值自身作种子。"""
+    arr = x.to_numpy(dtype=float)
+    out = np.full_like(arr, np.nan)
+    prev = None
+    for i, v in enumerate(arr):
+        if np.isnan(v):
+            out[i] = prev if prev is not None else np.nan
+            continue
+        out[i] = v if prev is None else (m * v + (n - m) * prev) / n
+        prev = out[i]
+    return pd.Series(out, index=x.index)
 
 
 def ma(close: pd.Series, window: int) -> pd.Series:
-    raise NotImplementedError("P1 阶段实现")
+    """简单移动均线。"""
+    return close.rolling(window).mean()
 
 
-def macd(close: pd.Series) -> pd.DataFrame:
-    raise NotImplementedError("P1 阶段实现")
+def macd(close: pd.Series, fast: int = 12, slow: int = 26, signal: int = 9) -> pd.DataFrame:
+    """MACD(EMA 口径)。返回 dif / dea / macd(柱=2*(dif-dea))。"""
+    dif = close.ewm(span=fast, adjust=False).mean() - close.ewm(span=slow, adjust=False).mean()
+    dea = dif.ewm(span=signal, adjust=False).mean()
+    return pd.DataFrame({"dif": dif, "dea": dea, "macd": (dif - dea) * 2})
 
 
-def kdj(kline: pd.DataFrame) -> pd.DataFrame:
-    raise NotImplementedError("P1 阶段实现")
+def kdj(kline: pd.DataFrame, n: int = 9, m1: int = 3, m2: int = 3) -> pd.DataFrame:
+    """KDJ(通达信口径)。K=SMA(RSV,m1,1),D=SMA(K,m2,1),J=3K-2D。"""
+    low_n = kline["low"].rolling(n).min()
+    high_n = kline["high"].rolling(n).max()
+    rng = (high_n - low_n).replace(0, np.nan)
+    rsv = ((kline["close"] - low_n) / rng * 100).clip(0, 100)
+    k = _sma_cn(rsv, m1, 1)
+    d = _sma_cn(k, m2, 1)
+    return pd.DataFrame({"k": k, "d": d, "j": 3 * k - 2 * d})
 
 
 def rsi(close: pd.Series, window: int) -> pd.Series:
-    raise NotImplementedError("P1 阶段实现")
+    """RSI(通达信口径,SMA 平滑)。"""
+    diff = close.diff()
+    up = _sma_cn(diff.clip(lower=0), window, 1)
+    down = _sma_cn((-diff).clip(lower=0), window, 1)
+    denom = up + down
+    out = 100 * up / denom
+    out[denom == 0] = 50.0
+    return out
+
+
+# ---------- 汇总画像 ----------
+def _ma_arrangement(ma5, ma10, ma20, ma60) -> str:
+    vals = [ma5, ma10, ma20, ma60]
+    if any(pd.isna(v) for v in vals):
+        return "数据不足"
+    if ma5 >= ma10 >= ma20 >= ma60:
+        return "多头排列"
+    if ma5 <= ma10 <= ma20 <= ma60:
+        return "空头排列"
+    return "纠缠"
+
+
+def compute(kline: pd.DataFrame) -> dict:
+    """对单票 K线算全套技术指标 + 综合评级。K线不足时相关字段标 '数据不足',不报错。"""
+    if kline is None or len(kline) < 2:
+        return {"error": "数据不足", "n": 0 if kline is None else len(kline)}
+    close = kline["close"]
+    n = len(kline)
+
+    ma5, ma10, ma20, ma60 = (ma(close, w).iloc[-1] for w in (5, 10, 20, 60))
+    arr = _ma_arrangement(ma5, ma10, ma20, ma60)
+
+    md = macd(close)
+    dif, dea, bar = md.iloc[-1]["dif"], md.iloc[-1]["dea"], md.iloc[-1]["macd"]
+    prev_bar = md.iloc[-2]["macd"] if n >= 2 else np.nan
+    if prev_bar <= 0 < bar:
+        macd_state = "金叉"
+    elif prev_bar >= 0 > bar:
+        macd_state = "死叉"
+    else:
+        macd_state = "多头" if bar > 0 else "空头"
+
+    kd = kdj(kline)
+    k, d, j = kd.iloc[-1]["k"], kd.iloc[-1]["d"], kd.iloc[-1]["j"]
+    if pd.isna(k):
+        kdj_state = "数据不足"
+    elif k > 80:
+        kdj_state = "超买"
+    elif k < 20:
+        kdj_state = "超卖"
+    else:
+        kdj_state = "-"
+
+    rsi6, rsi12, rsi24 = (rsi(close, w).iloc[-1] for w in (6, 12, 24))
+
+    vol = kline["volume"]
+    vol_ma5_prev = vol.iloc[-6:-1].mean() if n >= 6 else np.nan
+    vol_ratio = vol.iloc[-1] / vol_ma5_prev if vol_ma5_prev and not pd.isna(vol_ma5_prev) else np.nan
+    if pd.isna(vol_ratio):
+        vol_state = "数据不足"
+    elif vol_ratio > 1.5:
+        vol_state = "放量"
+    elif vol_ratio < 0.7:
+        vol_state = "缩量"
+    else:
+        vol_state = "平量"
+
+    signal = _score(arr, macd_state, dif, dea, close.iloc[-1], ma20, rsi12, kdj_state)
+
+    def _f(x, nd=2):
+        return None if pd.isna(x) else round(float(x), nd)
+
+    return {
+        "n": n,
+        "last": {"close": _f(close.iloc[-1]), "pct_chg": _f(kline["pct_chg"].iloc[-1])},
+        "ma": {"ma5": _f(ma5), "ma10": _f(ma10), "ma20": _f(ma20), "ma60": _f(ma60), "排列": arr},
+        "macd": {"dif": _f(dif, 3), "dea": _f(dea, 3), "macd": _f(bar, 3), "状态": macd_state},
+        "kdj": {"k": _f(k), "d": _f(d), "j": _f(j), "状态": kdj_state},
+        "rsi": {"rsi6": _f(rsi6), "rsi12": _f(rsi12), "rsi24": _f(rsi24)},
+        "vol": {"量比": _f(vol_ratio), "状态": vol_state},
+        "signal": signal,
+    }
+
+
+def _score(arr, macd_state, dif, dea, last_close, ma20, rsi12, kdj_state) -> dict:
+    """综合评级:各子信号规则打分求和(透明可测)。得分 -100~100 → 偏多/中性/偏空。"""
+    score = 0
+    reasons = []
+    if arr == "多头排列":
+        score += 30; reasons.append("均线多头+30")
+    elif arr == "空头排列":
+        score -= 30; reasons.append("均线空头-30")
+
+    if macd_state == "金叉":
+        score += 25; reasons.append("MACD金叉+25")
+    elif macd_state == "死叉":
+        score -= 25; reasons.append("MACD死叉-25")
+    elif not pd.isna(dif) and not pd.isna(dea):
+        if dif > dea:
+            score += 10; reasons.append("DIF在DEA上+10")
+        else:
+            score -= 10; reasons.append("DIF在DEA下-10")
+
+    if not pd.isna(ma20):
+        if last_close > ma20:
+            score += 10; reasons.append("价在MA20上+10")
+        else:
+            score -= 10; reasons.append("价在MA20下-10")
+
+    if not pd.isna(rsi12):
+        if rsi12 > 80:
+            score -= 10; reasons.append("RSI过热-10")
+        elif rsi12 > 55:
+            score += 10; reasons.append("RSI偏强+10")
+        elif rsi12 < 20:
+            score += 10; reasons.append("RSI超跌反弹+10")
+        elif rsi12 < 45:
+            score -= 10; reasons.append("RSI偏弱-10")
+
+    score = max(-100, min(100, score))
+    rating = "偏多" if score >= 30 else ("偏空" if score <= -30 else "中性")
+    return {"评级": rating, "得分": score, "依据": reasons}
