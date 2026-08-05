@@ -108,10 +108,12 @@ def cmd_report() -> None:
 
 
 def cmd_serialize() -> None:
-    """组装每票结构化 JSON 到 data/analysis/{code}.json(程序/DB/Web 可消费)。"""
-    from tools.analysis import serialize
+    """组装每票结构化 JSON + K线图表视图到 data/analysis/(程序/DB/Web 可消费)。"""
+    from tools.analysis import chart, serialize
     out = serialize.serialize_all()
     logger.info("结构化 JSON 完成:%d 只 → data/analysis/", len(out))
+    n = chart.write_charts()                    # K线图表视图(供 web 只读,§9.3)
+    logger.info("K线图表视图完成:%d 只 → data/analysis/chart/", n)
 
 
 def cmd_panel() -> None:

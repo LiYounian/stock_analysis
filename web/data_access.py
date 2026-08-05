@@ -6,12 +6,8 @@ from __future__ import annotations
 
 import glob
 import json
-from functools import lru_cache
 
-import pandas as pd
-
-from tools.analysis import technical as ta
-from tools.config import settings
+from tools.config import settings   # 展示层只依赖 config + 读数据文件,不 import 分析器
 
 _ANALYSIS = settings.PROJECT_ROOT / "data" / "analysis"
 
@@ -47,25 +43,12 @@ def as_of() -> str:
     return recs[0]["meta"]["as_of"] if recs else "-"
 
 
-def get_kline(code: str, limit: int = 120) -> dict:
-    """读 K线 parquet,加 MA,返回给 Chart.js 的序列(最近 limit 根)。"""
-    path = settings.DATA_RAW / "kline" / f"{code}.parquet"
-    if not path.exists():
+def get_kline(code: str) -> dict:
+    """读预生成的 K线图表视图(analysis/chart 产出)。展示层只读、不算(§9.3)。"""
+    p = _ANALYSIS / "chart" / f"{code}.json"
+    if not p.exists():
         return {"dates": [], "close": [], "ma5": [], "ma20": [], "ma60": [], "volume": []}
-    df = pd.read_parquet(path)
-    df["ma5"] = ta.ma(df["close"], 5)
-    df["ma20"] = ta.ma(df["close"], 20)
-    df["ma60"] = ta.ma(df["close"], 60)
-    df = df.tail(limit)
-
-    def col(c):
-        return [None if pd.isna(v) else round(float(v), 2) for v in df[c]]
-
-    return {
-        "dates": [str(d)[:10] for d in df["date"]],
-        "close": col("close"), "ma5": col("ma5"), "ma20": col("ma20"),
-        "ma60": col("ma60"), "volume": [float(v) for v in df["volume"]],
-    }
+    return json.loads(p.read_text(encoding="utf-8"))
 
 
 def _name(recs, code):
