@@ -75,3 +75,28 @@ def test_compute_insufficient_data():
     """K线过短 → 标数据不足,不报错。"""
     res = ta.compute(_kline([10.0]))
     assert res.get("error") == "数据不足"
+
+
+def test_reversal_oversold_bounce():
+    """深跌后末日放量反包 → 拐点标签=反弹启动,且趋势仍偏空(两维度并列不互掩)。"""
+    closes = list(np.linspace(20, 10, 40))          # 长期下跌
+    closes[-1] = closes[-2] * 1.09                  # 末日大涨反包
+    highs = [c * 1.01 for c in closes]
+    lows = [c * 0.99 for c in closes]
+    vols = [1000.0] * 40
+    vols[-1] = 3000.0                               # 末日放量
+    res = ta.compute(_kline(closes, highs, lows, vols))
+    rev = res["reversal"]
+    assert rev["放量反包"] is True
+    assert rev["拐点标签"] == "反弹启动"
+    assert rev["拐点评分"] >= 50
+    # 拐点在非多头趋势下照样触发 → 证明两维度独立,拐点没搭多头顺风车
+    assert res["signal"]["评级"] != "偏多"
+
+
+def test_reversal_none_on_uptrend():
+    """稳定上涨(不超跌、不放量反包)→ 拐点标签=无,不误报。"""
+    closes = list(np.linspace(10, 20, 70))
+    res = ta.compute(_kline(closes))
+    assert res["reversal"]["拐点标签"] == "无"
+    assert res["reversal"]["超跌"] is False

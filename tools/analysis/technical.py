@@ -117,6 +117,7 @@ def compute(kline: pd.DataFrame) -> dict:
         vol_state = "平量"
 
     signal = _score(arr, macd_state, dif, dea, close.iloc[-1], ma20, rsi12, kdj_state)
+    reversal = _reversal(kline, kd, md, rsi(close, 6), ma(close, 5), vol_ratio)
 
     def _f(x, nd=2):
         return None if pd.isna(x) else round(float(x), nd)
@@ -130,6 +131,7 @@ def compute(kline: pd.DataFrame) -> dict:
         "rsi": {"rsi6": _f(rsi6), "rsi12": _f(rsi12), "rsi24": _f(rsi24)},
         "vol": {"量比": _f(vol_ratio), "状态": vol_state},
         "signal": signal,
+        "reversal": reversal,
     }
 
 
@@ -171,3 +173,54 @@ def _score(arr, macd_state, dif, dea, last_close, ma20, rsi12, kdj_state) -> dic
     score = max(-100, min(100, score))
     rating = "偏多" if score >= 30 else ("偏空" if score <= -30 else "中性")
     return {"评级": rating, "得分": score, "依据": reasons}
+
+
+def _bottom_divergence(close: pd.Series, hist: pd.Series) -> bool:
+    """简化底背离:价创近低但 MACD 柱未创新低(近段 vs 前段波谷比较)。"""
+    if len(close) < 30:
+        return False
+    recent, prior = close.iloc[-10:], close.iloc[-30:-10]
+    ri, pi = recent.idxmin(), prior.idxmin()
+    price_lower_low = close[ri] < close[pi]
+    macd_higher_low = hist[ri] > hist[pi]
+    return bool(price_lower_low and macd_higher_low)
+
+
+def _reversal(kline: pd.DataFrame, kd: pd.DataFrame, md: pd.DataFrame,
+              rsi6: pd.Series, ma5: pd.Series, vol_ratio) -> dict:
+    """拐点信号:超跌反弹/启动。与趋势评级并列,独立打分(不并进趋势得分)。"""
+    close, low, open_ = kline["close"], kline["low"], kline["open"]
+    n = len(kline)
+    k, d, j = kd.iloc[-1]["k"], kd.iloc[-1]["d"], kd.iloc[-1]["j"]
+    pk, pd_ = (kd.iloc[-2]["k"], kd.iloc[-2]["d"]) if n >= 2 else (k, d)
+
+    low20 = low.iloc[-20:].min() if n >= 1 else low.min()
+    near_low = bool(low20 and (close.iloc[-1] - low20) / low20 <= 0.03)
+    oversold = bool((not pd.isna(k) and k < 20) or (not pd.isna(j) and j < 0)
+                    or (not pd.isna(rsi6.iloc[-1]) and rsi6.iloc[-1] < 20) or near_low)
+
+    ma5_last = ma5.iloc[-1]
+    up_today = (close.iloc[-1] > close.iloc[-2]) if n >= 2 else (close.iloc[-1] > open_.iloc[-1])
+    vol_reclaim = bool(not pd.isna(vol_ratio) and vol_ratio > 1.5
+                       and up_today
+                       and not pd.isna(ma5_last) and close.iloc[-1] > ma5_last)
+
+    low_golden = bool(not pd.isna(pk) and not pd.isna(k)
+                      and pk <= pd_ and k > d and k < 50)
+
+    divergence = _bottom_divergence(close, md["macd"])
+
+    score = (25 * oversold + 30 * vol_reclaim + 25 * low_golden + 20 * divergence)
+    reasons = []
+    if oversold:
+        reasons.append("超跌区(KDJ/RSI/近低点)+25")
+    if vol_reclaim:
+        reasons.append("放量反包站上MA5+30")
+    if low_golden:
+        reasons.append("KDJ低位金叉+25")
+    if divergence:
+        reasons.append("MACD底背离+20")
+    label = "反弹启动" if score >= 50 else ("超跌待反弹" if score >= 25 else "无")
+    return {"超跌": oversold, "放量反包": vol_reclaim, "低位金叉": low_golden,
+            "底背离": divergence, "拐点评分": min(100, score), "拐点标签": label,
+            "依据": reasons}
