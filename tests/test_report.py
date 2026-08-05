@@ -29,12 +29,29 @@ def test_portfolio_report_created_and_sorted(tmp_path, monkeypatch):
     assert "MACD 金叉" in content              # 异动清单章节
 
 
+def _fake_fund():
+    return {"报告期": "20260331", "营收": 3.7e9, "净利": 2.4e8, "营收增速": 12.5,
+            "净利增速": 30.1, "ROE": 8.8, "毛利率": 15.2, "净利率": 6.5,
+            "负债率": 41.68, "PE_TTM": 47.98, "PB": 4.31, "总市值": 575.27}
+
+
+def test_portfolio_report_with_fundamentals(tmp_path, monkeypatch):
+    monkeypatch.setattr(settings, "REPORT_DIR", tmp_path)
+    results = {"002156": _fake_result(60), "000021": _fake_result(-40)}
+    funds = {"002156": _fake_fund(), "000021": _fake_fund()}
+    content = open(builder.build_portfolio_tech_report(results, funds), encoding="utf-8").read()
+    assert "板块基本面对比" in content
+    assert "PE(TTM)" in content
+    assert "五、情绪面" in content              # 有基本面时情绪面顺延为第五节
+
+
 def test_stock_card_created(tmp_path, monkeypatch):
     monkeypatch.setattr(settings, "REPORT_DIR", tmp_path)
-    path = builder.build_stock_tech_report("002156", _fake_result(60))
+    path = builder.build_stock_tech_report("002156", _fake_result(60), _fake_fund())
     content = open(path, encoding="utf-8").read()
     assert "综合评级:偏多" in content
     assert "多头排列" in content
+    assert "PE(TTM) 47.98" in content          # 基本面章节
     assert "P2 补" in content                  # 情绪面占位
 
 

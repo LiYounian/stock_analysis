@@ -10,6 +10,7 @@ import logging
 import sys
 
 from tools.analysis import technical as ta
+from tools.collectors import fundamental as fd
 from tools.collectors import market
 from tools.config import stock_pool
 from tools.report import builder
@@ -23,8 +24,21 @@ TOPN = 5   # 单票报告出技术评级 Top/Bottom 各 N(用户拍板)
 def cmd_collect() -> None:
     codes = stock_pool.get_codes()
     logger.info("采集全池 %d 只 K线...", len(codes))
-    out = market.fetch_kline(codes)
-    logger.info("采集完成:成功 %d / %d", len(out), len(codes))
+    kl = market.fetch_kline(codes)
+    logger.info("K线采集:成功 %d / %d", len(kl), len(codes))
+    logger.info("采集全池基本面...")
+    fund = fd.fetch_fundamental(codes)
+    logger.info("基本面采集:成功 %d / %d", len(fund), len(codes))
+
+
+def _load_fundamentals() -> dict[str, dict]:
+    out: dict[str, dict] = {}
+    for code in stock_pool.get_codes():
+        try:
+            out[code] = fd.load_fundamental(code)
+        except FileNotFoundError:
+            pass
+    return out
 
 
 def _analyze_all() -> dict[str, dict]:
@@ -52,13 +66,14 @@ def cmd_analyze() -> dict[str, dict]:
 
 def cmd_report() -> None:
     results = _analyze_all()
-    p = builder.build_portfolio_tech_report(results)
+    funds = _load_fundamentals()
+    p = builder.build_portfolio_tech_report(results, funds)
     logger.info("组合技术概览 → %s", p)
     valid = [(c, r) for c, r in results.items() if "signal" in r]
     valid.sort(key=lambda kv: kv[1]["signal"]["得分"], reverse=True)
     focus = valid[:TOPN] + valid[-TOPN:]           # Top/Bottom 各 N
     for code, r in focus:
-        sp = builder.build_stock_tech_report(code, r)
+        sp = builder.build_stock_tech_report(code, r, funds.get(code))
         logger.info("单票卡 %s → %s", code, sp)
 
 

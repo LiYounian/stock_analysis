@@ -7,9 +7,16 @@
 """
 from __future__ import annotations
 
+from statistics import median
+
 import pandas as pd
 
 from tools.config import settings, stock_pool
+
+
+def _median_or_none(vals):
+    nums = [v for v in vals if isinstance(v, (int, float))]
+    return round(median(nums), 2) if nums else None
 
 
 def _today() -> str:
@@ -33,8 +40,9 @@ def _write(path, text: str) -> str:
 
 
 # ---------- 组合技术概览 ----------
-def build_portfolio_tech_report(results: dict[str, dict]) -> str:
-    """输入 {code: technical.compute 输出};产出 docs/报告/组合技术_{date}.md。"""
+def build_portfolio_tech_report(results: dict[str, dict],
+                                fundamentals: dict[str, dict] | None = None) -> str:
+    """输入 {code: technical.compute 输出}(可选基本面);产出 docs/报告/组合技术_{date}.md。"""
     date = _today()
     valid = {c: r for c, r in results.items() if "signal" in r}
     skipped = [c for c in results if c not in valid]
@@ -80,14 +88,46 @@ def build_portfolio_tech_report(results: dict[str, dict]) -> str:
 
     if skipped:
         lines += ["", f"> 数据不足未纳入:{'、'.join(skipped)}"]
-    lines += ["", "---", "## 四、情绪面", "*(P2 补:政策 / 公司行为 / 舆情三层)*", ""]
+
+    # 4. 板块基本面对比(有基本面数据时)
+    if fundamentals:
+        sec_fund: dict[str, dict[str, list]] = {}
+        for code, f in fundamentals.items():
+            d = sec_fund.setdefault(_sector(code), {"PE": [], "ROE": [], "净利增速": []})
+            d["PE"].append(f.get("PE_TTM"))
+            d["ROE"].append(f.get("ROE"))
+            d["净利增速"].append(f.get("净利增速"))
+        lines += ["", "## 四、板块基本面对比(板块内中位数)", "",
+                  "| 板块 | PE(TTM) | ROE | 净利增速% | 只数 |", "|---|---|---|---|---|"]
+        # 板块顺序沿用技术强弱排名
+        for sec, _avg, cnt in sec_rank:
+            d = sec_fund.get(sec, {})
+            lines.append(f"| {sec} | {_median_or_none(d.get('PE', []))} | "
+                         f"{_median_or_none(d.get('ROE', []))} | "
+                         f"{_median_or_none(d.get('净利增速', []))} | {cnt} |")
+
+    sec_idx = "五" if fundamentals else "四"
+    lines += ["", "---", f"## {sec_idx}、情绪面", "*(P2 补:政策 / 公司行为 / 舆情三层)*", ""]
 
     return _write(settings.REPORT_DIR / f"组合技术_{date}.md", "\n".join(lines))
 
 
 # ---------- 单票技术卡 ----------
-def build_stock_tech_report(code: str, result: dict) -> str:
-    """输入单票 compute 输出;产出 docs/报告/个股_{code}_{date}.md。"""
+def _fundamental_section(f: dict | None) -> list[str]:
+    if not f:
+        return ["## 基本面", "*(未采集)*", ""]
+    def g(k):
+        return f.get(k) if f.get(k) is not None else "-"
+    return [
+        "## 基本面", f"报告期 {f.get('报告期', '-')}",
+        f"- 营收 {g('营收')} / 净利 {g('净利')}(增速 营收{g('营收增速')}% 净利{g('净利增速')}%)",
+        f"- ROE {g('ROE')} / 毛利率 {g('毛利率')} / 净利率 {g('净利率')} / 负债率 {g('负债率')}",
+        f"- 估值:PE(TTM) {g('PE_TTM')} / PB {g('PB')} / 总市值 {g('总市值')}亿", "",
+    ]
+
+
+def build_stock_tech_report(code: str, result: dict, fundamental: dict | None = None) -> str:
+    """输入单票 compute 输出(可选基本面);产出 docs/报告/个股_{code}_{date}.md。"""
     date = _today()
     name = _name(code)
     if "signal" not in result:
@@ -114,5 +154,6 @@ def build_stock_tech_report(code: str, result: dict) -> str:
         "## 评级依据",
     ]
     lines += [f"- {r}" for r in s["依据"]] or ["- (无)"]
-    lines += ["", "---", "## 情绪面", "*(P2 补:政策 / 公司行为 / 舆情)*", ""]
+    lines += ["", "---"] + _fundamental_section(fundamental)
+    lines += ["---", "## 情绪面", "*(P2 补:政策 / 公司行为 / 舆情)*", ""]
     return _write(settings.REPORT_DIR / f"个股_{code}_{date}.md", "\n".join(lines))
