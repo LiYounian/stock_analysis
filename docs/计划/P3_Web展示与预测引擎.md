@@ -81,7 +81,7 @@ web/
 ## 3. 落地节奏(分步 commit)
 | 步 | 内容 |
 |---|---|
-| P3.1 | fundflow.py 资金流采集(curl_cffi)+ 单测 |
+| P3.1 | fundflow.py 资金流采集(curl_cffi)+ 单测 ✅ 已落地 |
 | P3.2 | predict.py 统计预测(支撑压力/止盈止损/情景区间)+ 单测 |
 | P3.3 | portfolio.py 聚合与筛选 + 单测 |
 | P3.4 | web 骨架 + Dashboard + 个股页(读数据渲染)|

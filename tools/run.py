@@ -12,6 +12,7 @@ import sys
 from tools.analysis import technical as ta
 from tools.collectors import announcement as an
 from tools.collectors import fundamental as fd
+from tools.collectors import fundflow as ff
 from tools.collectors import market
 from tools.config import stock_pool
 from tools.report import builder
@@ -33,6 +34,9 @@ def cmd_collect() -> None:
     logger.info("采集全池公告...")
     ann = an.fetch_announcements(codes)
     logger.info("公告采集:成功 %d / %d", len(ann), len(codes))
+    logger.info("采集全池资金流...")
+    fflow = ff.fetch_fundflow(codes)
+    logger.info("资金流采集:成功 %d / %d", len(fflow), len(codes))
 
 
 def _load_fundamentals() -> dict[str, dict]:
@@ -50,6 +54,17 @@ def _load_announcements() -> dict[str, list]:
     for code in stock_pool.get_codes():
         try:
             out[code] = an.load_announcements(code)
+        except FileNotFoundError:
+            pass
+    return out
+
+
+def _load_fundflows() -> dict[str, dict]:
+    """读资金流缓存并派生摘要,供聚合/报告用。"""
+    out: dict[str, dict] = {}
+    for code in stock_pool.get_codes():
+        try:
+            out[code] = ff.summarize(ff.load_fundflow(code))
         except FileNotFoundError:
             pass
     return out
