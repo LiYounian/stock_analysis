@@ -1,34 +1,69 @@
-"""编排入口:串起 采集 → 分析 → 组合聚合 → 筛重点票 → 深挖 → 出报告。
+"""编排入口:采集 → 分析 → 报告(P1 技术面闭环)。
 
 用法:
-    python -m tools.run collect     # 只采集
-    python -m tools.run analyze     # 只分析(读缓存)
-    python -m tools.run report      # 只出报告
-    python -m tools.run all         # 全流程
-
-方案2 流程:先出组合层报告 → 根据 watchlist 对重点票深挖 → 出个股报告。
+    python -m tools.run collect     # 拉全池 K线到缓存
+    python -m tools.run analyze     # 读缓存算技术指标,打印排行
+    python -m tools.run report      # 出组合概览 + Top/Bottom 各5 单票卡
+    python -m tools.run all         # 采集 → 报告
 """
+import logging
 import sys
+
+from tools.analysis import technical as ta
+from tools.collectors import market
+from tools.config import stock_pool
+from tools.report import builder
+
+logging.basicConfig(level=logging.INFO, format="%(name)s %(levelname)s %(message)s")
+logger = logging.getLogger("run")
+
+TOPN = 5   # 单票报告出技术评级 Top/Bottom 各 N(用户拍板)
 
 
 def cmd_collect() -> None:
-    """采集全池数据到 data/raw/。"""
-    raise NotImplementedError("按 P1~P4 逐阶段接入")
+    codes = stock_pool.get_codes()
+    logger.info("采集全池 %d 只 K线...", len(codes))
+    out = market.fetch_kline(codes)
+    logger.info("采集完成:成功 %d / %d", len(out), len(codes))
 
 
-def cmd_analyze() -> None:
-    """读缓存做技术+情绪分析,组合聚合。"""
-    raise NotImplementedError("按 P1~P4 逐阶段接入")
+def _analyze_all() -> dict[str, dict]:
+    """读缓存算全池技术指标(不触网)。缓存缺失的票跳过。"""
+    results: dict[str, dict] = {}
+    for code in stock_pool.get_codes():
+        try:
+            results[code] = ta.compute(market.load_kline(code))
+        except FileNotFoundError:
+            logger.warning("%s 无缓存,跳过(先 collect)", code)
+    return results
+
+
+def cmd_analyze() -> dict[str, dict]:
+    results = _analyze_all()
+    ranked = sorted((r for r in results.items() if "signal" in r[1]),
+                    key=lambda kv: kv[1]["signal"]["得分"], reverse=True)
+    logger.info("技术评级排行:")
+    for code, r in ranked:
+        s = r["signal"]
+        logger.info("  %s %s 评级=%s(%d)", code, stock_pool.get(code).name,
+                    s["评级"], s["得分"])
+    return results
 
 
 def cmd_report() -> None:
-    """出组合层 + 重点票报告。"""
-    raise NotImplementedError("按 P3~P4 逐阶段接入")
+    results = _analyze_all()
+    p = builder.build_portfolio_tech_report(results)
+    logger.info("组合技术概览 → %s", p)
+    valid = [(c, r) for c, r in results.items() if "signal" in r]
+    valid.sort(key=lambda kv: kv[1]["signal"]["得分"], reverse=True)
+    focus = valid[:TOPN] + valid[-TOPN:]           # Top/Bottom 各 N
+    for code, r in focus:
+        sp = builder.build_stock_tech_report(code, r)
+        logger.info("单票卡 %s → %s", code, sp)
 
 
 def cmd_all() -> None:
     cmd_collect()
-    cmd_analyze()
     cmd_report()
 
 
