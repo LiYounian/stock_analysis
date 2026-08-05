@@ -58,6 +58,18 @@ def build_record(code: str, as_of: str) -> dict:
         }
         signals = {"trend": tech["signal"], "reversal": tech["reversal"], "ob_os": tech["ob_os"]}
 
+    # 情绪面(P2-C,LLM;需先 run.py sentiment 生成,否则 None)
+    sentiment = None
+    try:
+        from tools.analysis import event
+        srec = _safe(lambda: event.load_sentiment(code))
+        if srec:
+            sentiment = {**srec.get("sentiment", {}),
+                         "events": [e for e in srec.get("events", [])
+                                    if e.get("与本股关系") in ("直接", "间接")][:8]}
+    except Exception:
+        sentiment = None
+
     # 预测/推荐(P3.2):止盈止损%/情景/买卖倾向。需 tech + kline。
     prediction = None
     if has_tech and kdf is not None:
@@ -86,6 +98,7 @@ def build_record(code: str, as_of: str) -> dict:
         "fundamental": fundamental_block,
         "signals": signals,
         "prediction": prediction,
+        "sentiment": sentiment,
         "fundflow": flow,
         "events": events,
         "timeseries_refs": {
