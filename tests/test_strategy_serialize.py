@@ -71,6 +71,31 @@ def test_serialize_record_schema():
     assert rec["meta"]["code"] == "000021"
 
 
+def test_panel_row_flatten():
+    """panel._row 拍平结构化记录为一行,关键列齐全 + 金额转亿。"""
+    from tools.analysis import panel
+    rec = {
+        "meta": {"code": "000021", "name": "深科技", "sector": "半导体"},
+        "snapshot": {"close": 36.5, "pct_chg": 5.8, "bias20": -15.3, "vol_ratio": 0.8,
+                     "vol_state": "缩量", "ma": {"排列": "空头排列"}, "macd": {"状态": "空头"},
+                     "kdj": {"k": 16, "j": 12}, "rsi": {"rsi12": 40}},
+        "valuation": {"pe_ttm": 47.98, "pb": 4.31, "mktcap_yi": 575.27,
+                      "pe_valid": True, "mode": "PE适用"},
+        "fundamental": {"营收增速": 12, "净利增速": 35, "ROE": 1.8, "毛利率": 17, "负债率": 41},
+        "signals": {"trend": {"评级": "偏空", "得分": -30},
+                    "reversal": {"拐点标签": "超跌待反弹", "拐点评分": 45},
+                    "ob_os": {"verdict": "超卖", "resonance": 2}},
+        "fundflow": {"今日主力净流入": 2.07e8, "今日主力净占比": 3.35,
+                     "近5日主力合计": -4.05e8, "主力连续净流入天数": 2},
+        "events": [{"date": "2026-08-01"}],
+    }
+    row = panel._row(rec)
+    assert row["名称"] == "深科技" and row["超买超卖"] == "超卖" and row["共振数"] == 2
+    assert row["拐点标签"] == "超跌待反弹" and row["PE有效"] is True
+    assert row["主力净流入亿"] == 2.07        # 元→亿
+    assert row["公告数"] == 1
+
+
 def _kline(closes):
     import pandas as pd
     n = len(closes)

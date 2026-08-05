@@ -114,14 +114,23 @@ def cmd_serialize() -> None:
     logger.info("结构化 JSON 完成:%d 只 → data/analysis/", len(out))
 
 
+def cmd_panel() -> None:
+    """拍平全池结构化 JSON 成横向总表(CSV/JSON/markdown)。"""
+    from tools.analysis import panel
+    out = panel.write_panel()
+    logger.info("横向总表 → %s", out["csv"])
+
+
 def cmd_all() -> None:
     cmd_collect()
     cmd_serialize()
+    cmd_panel()
     cmd_report()
 
 
 _CMDS = {"collect": cmd_collect, "analyze": cmd_analyze,
-         "report": cmd_report, "serialize": cmd_serialize, "all": cmd_all}
+         "report": cmd_report, "serialize": cmd_serialize,
+         "panel": cmd_panel, "all": cmd_all}
 
 
 def main(argv: list[str]) -> int:
