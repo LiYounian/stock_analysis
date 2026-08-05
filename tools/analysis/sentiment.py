@@ -1,7 +1,8 @@
 """情感打分:对新闻/研报/UGC 文本判断情感倾向。
 
-高耗 token 的批量任务,默认外包 qwen(qwen-delegate),不烧主额度。
-见 settings.USE_QWEN_SENTIMENT / QWEN_BATCH_SIZE。
+高耗 token 的批量任务,默认外包 qwen,不烧主额度。
+统一走 tools.llm.client.get_client("sentiment"),prompt 见 tools.llm.prompts。
+见 settings.USE_QWEN_SENTIMENT / QWEN_BATCH_SIZE / LLM_ROUTE。
 """
 
 
