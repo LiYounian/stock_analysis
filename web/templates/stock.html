@@ -109,6 +109,25 @@
   </section>
   {% endif %}
 
+  {% if r.sentiment %}
+  <section class="card wide">
+    <h2>新闻情绪(LLM 抽取)
+      <small>净情绪 <b class="{{ 'pos' if r.sentiment.净情绪分>0 else ('neg' if r.sentiment.净情绪分<0 else '') }}">
+        {{ r.sentiment.净情绪分 }}</b> · 利好 {{ r.sentiment.利好数 }} / 利空 {{ r.sentiment.利空数 }} / 样本 {{ r.sentiment.样本数 }}</small>
+    </h2>
+    {% if r.sentiment.events %}
+    <table><tr><th>时间</th><th>层</th><th>方向</th><th>强度</th><th>关系</th><th>标题</th></tr>
+      {% for e in r.sentiment.events %}
+      <tr><td>{{ (e.time or '')[:10] }}</td><td>{{ e.层 }}</td>
+          <td class="{{ 'pos' if e.影响方向=='利好' else ('neg' if e.影响方向=='利空' else '') }}">{{ e.影响方向 }}</td>
+          <td>{{ e.影响强度 }}</td><td>{{ e.与本股关系 }}</td>
+          <td class="title">{{ e.标题 }}</td></tr>
+      {% endfor %}
+    </table>
+    {% else %}<p class="muted">近期相关新闻均为板块/无关噪声,无有效情绪信号。</p>{% endif %}
+  </section>
+  {% endif %}
+
   <section class="card wide">
     <h2>近期公告(公司行为)</h2>
     <table><tr><th>日期</th><th>类型</th><th>方向</th><th>标题</th></tr>

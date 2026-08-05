@@ -1,27 +1,82 @@
-"""新闻/研报采集。
+"""新闻采集(个股新闻)。
 
-主数据源:akshare 个股新闻 `stock_news_em`、研报 `stock_research_report_em`。
-落盘:data/raw/news/{code}.json
+数据源:akshare `stock_news_em`(东财)。pandas 3.0 默认 pyarrow 字符串会触发
+akshare 内部正则报错,调用前关掉 `future.infer_string`(实测可绕过)。
+落盘:data/raw/news/{code}.json(原始新闻,中间过程保留,供 L1 抽取)。
+契约见 docs/计划/P2C_新闻情绪LLM.md。
 """
+from __future__ import annotations
+
+import json
+import logging
+import time
+
+import pandas as pd
+
+from tools.config import settings
+
+logger = logging.getLogger("collectors.news")
+
+_NEWS_DIR = settings.DATA_RAW / "news"
+_COL_MAP = {"新闻标题": "title", "新闻内容": "content", "发布时间": "time",
+            "文章来源": "source", "新闻链接": "url"}
 
 
-def fetch_news(codes: list[str], days: int = 7) -> dict[str, list[dict]]:
-    """拉取近 days 天个股新闻并落盘。
+def _news_path(code: str):
+    return _NEWS_DIR / f"{code}.json"
 
-    输出:{code: [{date, title, source, url, content}, ...]}。
+
+def _fetch_em(code: str) -> pd.DataFrame:
+    """东财个股新闻。关掉 pyarrow 字符串推断以绕过 akshare 正则不兼容。"""
+    pd.set_option("future.infer_string", False)
+    import akshare as ak
+    return ak.stock_news_em(symbol=code)
+
+
+def fetch_news(codes: list[str], days: int | None = None) -> dict[str, list[dict]]:
+    """拉取每票近 days 天新闻并落盘。
+
+    输出:{code: [{title, content, time, source, url}, ...]}(按时间倒序)。
+    单票失败记 logger 跳过,不中断整批。
     """
-    raise NotImplementedError("P2 阶段实现")
+    settings.ensure_dirs()
+    _NEWS_DIR.mkdir(parents=True, exist_ok=True)
+    days = days or settings.NEWS_LOOKBACK_DAYS
+    cutoff = (pd.Timestamp.today() - pd.Timedelta(days=days)).strftime("%Y-%m-%d")
 
-
-def fetch_research_reports(codes: list[str]) -> dict[str, list[dict]]:
-    """拉取券商研报(含评级)。
-
-    输出:{code: [{date, org, rating, target_price, title}, ...]}。
-    rating 用于情绪层「研报评级」信号。
-    """
-    raise NotImplementedError("P2 阶段实现")
+    out: dict[str, list[dict]] = {}
+    failed: list[str] = []
+    for code in codes:
+        try:
+            df = _fetch_em(code)
+            items = []
+            if df is not None and len(df):
+                df = df.rename(columns=_COL_MAP)
+                for _, r in df.iterrows():
+                    t = str(r.get("time", ""))
+                    if t[:10] < cutoff:      # 超窗丢弃
+                        continue
+                    items.append({"title": str(r.get("title", "")),
+                                  "content": str(r.get("content", ""))[:2000],
+                                  "time": t, "source": str(r.get("source", "")),
+                                  "url": str(r.get("url", ""))})
+                items.sort(key=lambda x: x["time"], reverse=True)
+            _news_path(code).write_text(
+                json.dumps(items, ensure_ascii=False, indent=2), encoding="utf-8")
+            out[code] = items
+            logger.info("新闻 %s:%d 条", code, len(items))
+        except Exception as e:
+            failed.append(code)
+            logger.error("新闻 %s 失败: %s", code, e)
+        time.sleep(settings.FETCH_SLEEP_SEC)
+    if failed:
+        logger.warning("新闻拉取失败(%d): %s", len(failed), failed)
+    return out
 
 
 def load_news(code: str) -> list[dict]:
-    """从本地缓存读单票新闻。"""
-    raise NotImplementedError("P2 阶段实现")
+    """从本地缓存读单票新闻。缓存缺失抛错。"""
+    p = _news_path(code)
+    if not p.exists():
+        raise FileNotFoundError(f"{code} 无新闻缓存,请先 fetch_news: {p}")
+    return json.loads(p.read_text(encoding="utf-8"))

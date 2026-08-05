@@ -140,6 +140,30 @@ def cmd_screen() -> None:
     logger.info("选股结果 → %s(主线 %s,预设 %d 组)", out, agg.get("hot_theme"), len(presets))
 
 
+def cmd_sentiment() -> None:
+    """情绪面(LLM):采集新闻 + 逐票抽取/归类/聚合。opt-in(有 LLM 成本,不进 all)。"""
+    from tools.analysis import event
+    from tools.collectors import news
+    from tools.llm import client as lc
+    if not lc.is_configured():
+        logger.error("LLM 未配置(需环境变量 LLM_BASE_URL+LLM_API_KEY),跳过")
+        return
+    codes = stock_pool.get_codes()
+    logger.info("采集全池新闻...")
+    news.fetch_news(codes)
+    logger.info("LLM 情绪分析(每票新闻抽取,缓存命中免重复)...")
+    ok = 0
+    for code in codes:
+        try:
+            rec = event.analyze_stock(code)
+            ok += 1
+            logger.info("  %s 净情绪 %s(样本 %d)", code,
+                        rec["sentiment"]["净情绪分"], rec["sentiment"]["样本数"])
+        except FileNotFoundError:
+            pass
+    logger.info("情绪分析完成:%d 只 → data/analysis/sentiment/", ok)
+
+
 def cmd_all() -> None:
     cmd_collect()
     cmd_serialize()
@@ -150,7 +174,8 @@ def cmd_all() -> None:
 
 _CMDS = {"collect": cmd_collect, "analyze": cmd_analyze,
          "report": cmd_report, "serialize": cmd_serialize,
-         "panel": cmd_panel, "screen": cmd_screen, "all": cmd_all}
+         "panel": cmd_panel, "screen": cmd_screen,
+         "sentiment": cmd_sentiment, "all": cmd_all}
 
 
 def main(argv: list[str]) -> int:
