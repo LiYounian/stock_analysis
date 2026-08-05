@@ -1,0 +1,116 @@
+{
+  "schema_version": "1.0",
+  "meta": {
+    "code": "002156",
+    "name": "通富微电",
+    "sector": "半导体",
+    "industry": "半导体封测",
+    "as_of": "2026-08-05"
+  },
+  "snapshot": {
+    "close": 55.6,
+    "pct_chg": 8.3,
+    "ma": {
+      "ma5": 56.33,
+      "ma10": 64.87,
+      "ma20": 68.21,
+      "ma60": 66.76,
+      "排列": "纠缠"
+    },
+    "macd": {
+      "dif": -3.194,
+      "dea": -0.809,
+      "macd": -4.769,
+      "状态": "空头"
+    },
+    "kdj": {
+      "k": 15.61,
+      "d": 25.15,
+      "j": -3.46,
+      "状态": "超卖"
+    },
+    "rsi": {
+      "rsi6": 35.42,
+      "rsi12": 39.38,
+      "rsi24": 44.28
+    },
+    "bias20": -18.49,
+    "vol_ratio": 0.8,
+    "vol_state": "平量"
+  },
+  "valuation": {
+    "pe_ttm": 58.34,
+    "pb": 5.39,
+    "mktcap_yi": 843.78,
+    "报告期": "20260331",
+    "pe_valid": true,
+    "mode": "PE适用",
+    "basis": "PE(TTM) 可作横向对比,结合增速看 PEG"
+  },
+  "fundamental": {
+    "营收": 7481674677.05,
+    "净利": 329057400.55,
+    "营收增速": 22.802709,
+    "净利增速": 224.548669,
+    "ROE": 2.1,
+    "毛利率": 13.324737,
+    "净利率": 4.681351,
+    "负债率": 64.921966
+  },
+  "signals": {
+    "trend": {
+      "评级": "偏空",
+      "得分": -30,
+      "依据": [
+        "DIF在DEA下-10",
+        "价在MA20下-10",
+        "RSI偏弱-10"
+      ]
+    },
+    "reversal": {
+      "超跌": true,
+      "放量反包": false,
+      "低位金叉": false,
+      "底背离": false,
+      "拐点评分": 25,
+      "拐点标签": "超跌待反弹",
+      "依据": [
+        "超跌区(KDJ/RSI/近低点)+25"
+      ]
+    },
+    "ob_os": {
+      "verdict": "超卖",
+      "resonance": 2,
+      "per_indicator": {
+        "kdj": "超卖",
+        "rsi": "-",
+        "bias": "-18.49(超卖)"
+      }
+    }
+  },
+  "fundflow": {
+    "今日主力净流入": -107913840.0,
+    "今日主力净占比": -1.14,
+    "近5日主力合计": -1747086416.0,
+    "主力连续净流入天数": 0
+  },
+  "events": [
+    {
+      "date": "2026-07-31",
+      "type": "交易异动",
+      "impact": "待判",
+      "title": "股票交易异常波动公告"
+    }
+  ],
+  "timeseries_refs": {
+    "kline": "data/raw/kline/002156.parquet",
+    "fundflow": "data/raw/fundflow/002156.parquet",
+    "announcements": "data/raw/announcement/002156.json"
+  },
+  "provenance": {
+    "tech": true,
+    "fundamental": true,
+    "announcements": 1,
+    "fundflow": true
+  }
+}

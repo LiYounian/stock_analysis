@@ -1,0 +1,109 @@
+{
+  "schema_version": "1.0",
+  "meta": {
+    "code": "000021",
+    "name": "深科技",
+    "sector": "半导体",
+    "industry": "存储封测/电子制造",
+    "as_of": "2026-08-05"
+  },
+  "snapshot": {
+    "close": 36.54,
+    "pct_chg": 5.88,
+    "ma": {
+      "ma5": 36.97,
+      "ma10": 38.97,
+      "ma20": 43.15,
+      "ma60": 43.14,
+      "排列": "纠缠"
+    },
+    "macd": {
+      "dif": -2.959,
+      "dea": -2.017,
+      "macd": -1.883,
+      "状态": "空头"
+    },
+    "kdj": {
+      "k": 27.89,
+      "d": 35.01,
+      "j": 13.65,
+      "状态": "-"
+    },
+    "rsi": {
+      "rsi6": 39.25,
+      "rsi12": 40.23,
+      "rsi24": 44.65
+    },
+    "bias20": -15.32,
+    "vol_ratio": 0.81,
+    "vol_state": "平量"
+  },
+  "valuation": {
+    "pe_ttm": 47.98,
+    "pb": 4.31,
+    "mktcap_yi": 575.27,
+    "报告期": "20260331",
+    "pe_valid": true,
+    "mode": "PE适用",
+    "basis": "PE(TTM) 可作横向对比,结合增速看 PEG"
+  },
+  "fundamental": {
+    "营收": 3723775220.39,
+    "净利": 242178267.01,
+    "营收增速": 10.673866,
+    "净利增速": 35.348678,
+    "ROE": 1.83,
+    "毛利率": 17.06618,
+    "净利率": 7.734021,
+    "负债率": 41.682891
+  },
+  "signals": {
+    "trend": {
+      "评级": "偏空",
+      "得分": -30,
+      "依据": [
+        "DIF在DEA下-10",
+        "价在MA20下-10",
+        "RSI偏弱-10"
+      ]
+    },
+    "reversal": {
+      "超跌": false,
+      "放量反包": false,
+      "低位金叉": false,
+      "底背离": true,
+      "拐点评分": 20,
+      "拐点标签": "无",
+      "依据": [
+        "MACD底背离+20"
+      ]
+    },
+    "ob_os": {
+      "verdict": "中性",
+      "resonance": 1,
+      "per_indicator": {
+        "kdj": "-",
+        "rsi": "-",
+        "bias": "-15.32(超卖)"
+      }
+    }
+  },
+  "fundflow": {
+    "今日主力净流入": 207063856.0,
+    "今日主力净占比": 3.35,
+    "近5日主力合计": -405881008.0,
+    "主力连续净流入天数": 2
+  },
+  "events": [],
+  "timeseries_refs": {
+    "kline": "data/raw/kline/000021.parquet",
+    "fundflow": "data/raw/fundflow/000021.parquet",
+    "announcements": "data/raw/announcement/000021.json"
+  },
+  "provenance": {
+    "tech": true,
+    "fundamental": true,
+    "announcements": 0,
+    "fundflow": true
+  }
+}

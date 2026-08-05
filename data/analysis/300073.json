@@ -1,0 +1,101 @@
+{
+  "schema_version": "1.0",
+  "meta": {
+    "code": "300073",
+    "name": "当升科技",
+    "sector": "新能源材料",
+    "industry": "锂电正极材料",
+    "as_of": "2026-08-05"
+  },
+  "snapshot": {
+    "close": 42.08,
+    "pct_chg": 0.79,
+    "ma": {
+      "ma5": 41.74,
+      "ma10": 41.06,
+      "ma20": 41.2,
+      "ma60": 49.06,
+      "排列": "纠缠"
+    },
+    "macd": {
+      "dif": -1.6,
+      "dea": -2.205,
+      "macd": 1.21,
+      "状态": "多头"
+    },
+    "kdj": {
+      "k": 80.72,
+      "d": 72.56,
+      "j": 97.03,
+      "状态": "超买"
+    },
+    "rsi": {
+      "rsi6": 59.38,
+      "rsi12": 46.82,
+      "rsi24": 41.9
+    },
+    "bias20": 2.15,
+    "vol_ratio": 0.86,
+    "vol_state": "平量"
+  },
+  "valuation": {
+    "pe_ttm": 28.68,
+    "pb": 1.53,
+    "mktcap_yi": 229.04,
+    "报告期": "20260331",
+    "pe_valid": true,
+    "mode": "PE适用",
+    "basis": "PE(TTM) 可作横向对比,结合增速看 PEG"
+  },
+  "fundamental": {
+    "营收": 4525620637.92,
+    "净利": 276837460.03,
+    "营收增速": 137.190672,
+    "净利增速": 150.250075,
+    "ROE": 1.87,
+    "毛利率": 15.463813,
+    "净利率": 6.630558,
+    "负债率": 36.102403
+  },
+  "signals": {
+    "trend": {
+      "评级": "中性",
+      "得分": 20,
+      "依据": [
+        "DIF在DEA上+10",
+        "价在MA20上+10"
+      ]
+    },
+    "reversal": {
+      "超跌": false,
+      "放量反包": false,
+      "低位金叉": false,
+      "底背离": false,
+      "拐点评分": 0,
+      "拐点标签": "无",
+      "依据": []
+    },
+    "ob_os": {
+      "verdict": "中性",
+      "resonance": 1,
+      "per_indicator": {
+        "kdj": "超买",
+        "rsi": "-",
+        "bias": "2.15(中性)"
+      }
+    }
+  },
+  "fundflow": null,
+  "events": [],
+  "timeseries_refs": {
+    "kline": "data/raw/kline/300073.parquet",
+    "fundflow": "data/raw/fundflow/300073.parquet",
+    "announcements": "data/raw/announcement/300073.json"
+  },
+  "provenance": {
+    "tech": true,
+    "fundamental": true,
+    "announcements": 0,
+    "fundflow": false
+  }
+}

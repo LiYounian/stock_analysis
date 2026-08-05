@@ -1,0 +1,105 @@
+{
+  "schema_version": "1.0",
+  "meta": {
+    "code": "600487",
+    "name": "亨通光电",
+    "sector": "光通信",
+    "industry": "光纤光缆/通信",
+    "as_of": "2026-08-05"
+  },
+  "snapshot": {
+    "close": 50.27,
+    "pct_chg": 6.12,
+    "ma": {
+      "ma5": 48.44,
+      "ma10": 51.1,
+      "ma20": 60.05,
+      "ma60": 80.83,
+      "排列": "空头排列"
+    },
+    "macd": {
+      "dif": -10.59,
+      "dea": -10.327,
+      "macd": -0.526,
+      "状态": "空头"
+    },
+    "kdj": {
+      "k": 20.4,
+      "d": 14.42,
+      "j": 32.36,
+      "状态": "-"
+    },
+    "rsi": {
+      "rsi6": 37.76,
+      "rsi12": 31.75,
+      "rsi24": 36.98
+    },
+    "bias20": -16.29,
+    "vol_ratio": 1.27,
+    "vol_state": "平量"
+  },
+  "valuation": {
+    "pe_ttm": 38.4,
+    "pb": 3.83,
+    "mktcap_yi": 1239.86,
+    "报告期": "20260331",
+    "pe_valid": true,
+    "mode": "PE适用",
+    "basis": "PE(TTM) 可作横向对比,结合增速看 PEG"
+  },
+  "fundamental": {
+    "营收": 17790560069.79,
+    "净利": 1105364232.68,
+    "营收增速": 34.08671,
+    "净利增速": 98.526807,
+    "ROE": 3.44,
+    "毛利率": 15.979461,
+    "净利率": 6.643617,
+    "负债率": 51.875626
+  },
+  "signals": {
+    "trend": {
+      "评级": "偏空",
+      "得分": -60,
+      "依据": [
+        "均线空头-30",
+        "DIF在DEA下-10",
+        "价在MA20下-10",
+        "RSI偏弱-10"
+      ]
+    },
+    "reversal": {
+      "超跌": false,
+      "放量反包": false,
+      "低位金叉": false,
+      "底背离": true,
+      "拐点评分": 20,
+      "拐点标签": "无",
+      "依据": [
+        "MACD底背离+20"
+      ]
+    },
+    "ob_os": {
+      "verdict": "中性",
+      "resonance": 1,
+      "per_indicator": {
+        "kdj": "-",
+        "rsi": "-",
+        "bias": "-16.29(超卖)"
+      }
+    }
+  },
+  "fundflow": null,
+  "events": [],
+  "timeseries_refs": {
+    "kline": "data/raw/kline/600487.parquet",
+    "fundflow": "data/raw/fundflow/600487.parquet",
+    "announcements": "data/raw/announcement/600487.json"
+  },
+  "provenance": {
+    "tech": true,
+    "fundamental": true,
+    "announcements": 0,
+    "fundflow": false
+  }
+}

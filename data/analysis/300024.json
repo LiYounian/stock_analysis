@@ -1,0 +1,103 @@
+{
+  "schema_version": "1.0",
+  "meta": {
+    "code": "300024",
+    "name": "机器人",
+    "sector": "机器人/自动化",
+    "industry": "工业机器人(新松)",
+    "as_of": "2026-08-05"
+  },
+  "snapshot": {
+    "close": 15.77,
+    "pct_chg": 1.09,
+    "ma": {
+      "ma5": 15.38,
+      "ma10": 15.17,
+      "ma20": 15.38,
+      "ma60": 16.04,
+      "排列": "纠缠"
+    },
+    "macd": {
+      "dif": -0.259,
+      "dea": -0.329,
+      "macd": 0.14,
+      "状态": "多头"
+    },
+    "kdj": {
+      "k": 68.72,
+      "d": 51.47,
+      "j": 103.23,
+      "状态": "-"
+    },
+    "rsi": {
+      "rsi6": 63.59,
+      "rsi12": 51.96,
+      "rsi24": 49.74
+    },
+    "bias20": 2.51,
+    "vol_ratio": 1.06,
+    "vol_state": "平量"
+  },
+  "valuation": {
+    "pe_ttm": -56.1,
+    "pb": 6.1,
+    "mktcap_yi": 246.9,
+    "报告期": "20260331",
+    "pe_valid": false,
+    "mode": "亏损/PE失效",
+    "basis": "改用 PB + PS(市销率)+ 在手订单 + 扭亏进度"
+  },
+  "fundamental": {
+    "营收": 630344972.44,
+    "净利": -92501585.14,
+    "营收增速": -8.419267,
+    "净利增速": -84.022754,
+    "ROE": -2.26,
+    "毛利率": 14.135944,
+    "净利率": -15.170975,
+    "负债率": 63.465235
+  },
+  "signals": {
+    "trend": {
+      "评级": "中性",
+      "得分": 20,
+      "依据": [
+        "DIF在DEA上+10",
+        "价在MA20上+10"
+      ]
+    },
+    "reversal": {
+      "超跌": false,
+      "放量反包": false,
+      "低位金叉": false,
+      "底背离": true,
+      "拐点评分": 20,
+      "拐点标签": "无",
+      "依据": [
+        "MACD底背离+20"
+      ]
+    },
+    "ob_os": {
+      "verdict": "中性",
+      "resonance": 1,
+      "per_indicator": {
+        "kdj": "超买",
+        "rsi": "-",
+        "bias": "2.51(中性)"
+      }
+    }
+  },
+  "fundflow": null,
+  "events": [],
+  "timeseries_refs": {
+    "kline": "data/raw/kline/300024.parquet",
+    "fundflow": "data/raw/fundflow/300024.parquet",
+    "announcements": "data/raw/announcement/300024.json"
+  },
+  "provenance": {
+    "tech": true,
+    "fundamental": true,
+    "announcements": 0,
+    "fundflow": false
+  }
+}

@@ -1,0 +1,122 @@
+{
+  "schema_version": "1.0",
+  "meta": {
+    "code": "688187",
+    "name": "时代电气",
+    "sector": "半导体",
+    "industry": "功率半导体/轨交装备",
+    "as_of": "2026-08-05"
+  },
+  "snapshot": {
+    "close": 49.9,
+    "pct_chg": 0.2,
+    "ma": {
+      "ma5": 48.24,
+      "ma10": 47.29,
+      "ma20": 48.36,
+      "ma60": 54.72,
+      "排列": "纠缠"
+    },
+    "macd": {
+      "dif": -1.932,
+      "dea": -2.456,
+      "macd": 1.048,
+      "状态": "多头"
+    },
+    "kdj": {
+      "k": 72.19,
+      "d": 54.45,
+      "j": 107.66,
+      "状态": "-"
+    },
+    "rsi": {
+      "rsi6": 64.45,
+      "rsi12": 50.03,
+      "rsi24": 47.0
+    },
+    "bias20": 3.17,
+    "vol_ratio": 0.82,
+    "vol_state": "平量"
+  },
+  "valuation": {
+    "pe_ttm": 16.16,
+    "pb": 1.54,
+    "mktcap_yi": 664.02,
+    "报告期": "20260331",
+    "pe_valid": true,
+    "mode": "PE适用",
+    "basis": "PE(TTM) 可作横向对比,结合增速看 PEG"
+  },
+  "fundamental": {
+    "营收": 5101755441.0,
+    "净利": 643344143.0,
+    "营收增速": 12.454492,
+    "净利增速": 1.913178,
+    "ROE": 1.5,
+    "毛利率": 33.308782,
+    "净利率": 13.179611,
+    "负债率": 35.287636
+  },
+  "signals": {
+    "trend": {
+      "评级": "中性",
+      "得分": 20,
+      "依据": [
+        "DIF在DEA上+10",
+        "价在MA20上+10"
+      ]
+    },
+    "reversal": {
+      "超跌": false,
+      "放量反包": false,
+      "低位金叉": false,
+      "底背离": true,
+      "拐点评分": 20,
+      "拐点标签": "无",
+      "依据": [
+        "MACD底背离+20"
+      ]
+    },
+    "ob_os": {
+      "verdict": "中性",
+      "resonance": 1,
+      "per_indicator": {
+        "kdj": "超买",
+        "rsi": "-",
+        "bias": "3.17(中性)"
+      }
+    }
+  },
+  "fundflow": null,
+  "events": [
+    {
+      "date": "2026-08-01",
+      "type": "其他",
+      "impact": "待判",
+      "title": "株洲中车时代电气股份有限公司关于自愿披露对外投资设立合资公司的公告"
+    },
+    {
+      "date": "2026-08-01",
+      "type": "其他",
+      "impact": "待判",
+      "title": "H股公告"
+    },
+    {
+      "date": "2026-07-31",
+      "type": "其他",
+      "impact": "待判",
+      "title": "株洲中车时代电气股份有限公司2025年年度权益分派实施公告"
+    }
+  ],
+  "timeseries_refs": {
+    "kline": "data/raw/kline/688187.parquet",
+    "fundflow": "data/raw/fundflow/688187.parquet",
+    "announcements": "data/raw/announcement/688187.json"
+  },
+  "provenance": {
+    "tech": true,
+    "fundamental": true,
+    "announcements": 3,
+    "fundflow": false
+  }
+}

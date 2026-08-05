@@ -1,0 +1,106 @@
+{
+  "schema_version": "1.0",
+  "meta": {
+    "code": "688249",
+    "name": "晶合集成",
+    "sector": "半导体",
+    "industry": "晶圆代工",
+    "as_of": "2026-08-05"
+  },
+  "snapshot": {
+    "close": 36.62,
+    "pct_chg": 5.87,
+    "ma": {
+      "ma5": 36.81,
+      "ma10": 41.02,
+      "ma20": 46.39,
+      "ma60": 46.51,
+      "排列": "空头排列"
+    },
+    "macd": {
+      "dif": -3.948,
+      "dea": -2.366,
+      "macd": -3.162,
+      "状态": "空头"
+    },
+    "kdj": {
+      "k": 11.42,
+      "d": 13.86,
+      "j": 6.54,
+      "状态": "超卖"
+    },
+    "rsi": {
+      "rsi6": 32.71,
+      "rsi12": 34.78,
+      "rsi24": 41.22
+    },
+    "bias20": -21.06,
+    "vol_ratio": 0.66,
+    "vol_state": "缩量"
+  },
+  "valuation": {
+    "pe_ttm": 131.47,
+    "pb": 3.71,
+    "mktcap_yi": 814.34,
+    "报告期": "20260331",
+    "pe_valid": false,
+    "mode": "高PE_折旧/周期底扰动",
+    "basis": "PE 被压制,参考 PB + 毛利率趋势/稼动率 + 周期位置"
+  },
+  "fundamental": {
+    "营收": 2911975311.11,
+    "净利": 50658636.53,
+    "营收增速": 13.408676,
+    "净利增速": -62.605876,
+    "ROE": 0.23,
+    "毛利率": 21.264082,
+    "净利率": 0.979281,
+    "负债率": 45.601508
+  },
+  "signals": {
+    "trend": {
+      "评级": "偏空",
+      "得分": -60,
+      "依据": [
+        "均线空头-30",
+        "DIF在DEA下-10",
+        "价在MA20下-10",
+        "RSI偏弱-10"
+      ]
+    },
+    "reversal": {
+      "超跌": true,
+      "放量反包": false,
+      "低位金叉": false,
+      "底背离": true,
+      "拐点评分": 45,
+      "拐点标签": "超跌待反弹",
+      "依据": [
+        "超跌区(KDJ/RSI/近低点)+25",
+        "MACD底背离+20"
+      ]
+    },
+    "ob_os": {
+      "verdict": "超卖",
+      "resonance": 2,
+      "per_indicator": {
+        "kdj": "超卖",
+        "rsi": "-",
+        "bias": "-21.06(超卖)极端"
+      }
+    }
+  },
+  "fundflow": null,
+  "events": [],
+  "timeseries_refs": {
+    "kline": "data/raw/kline/688249.parquet",
+    "fundflow": "data/raw/fundflow/688249.parquet",
+    "announcements": "data/raw/announcement/688249.json"
+  },
+  "provenance": {
+    "tech": true,
+    "fundamental": true,
+    "announcements": 0,
+    "fundflow": false
+  }
+}

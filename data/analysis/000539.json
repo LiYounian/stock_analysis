@@ -1,0 +1,101 @@
+{
+  "schema_version": "1.0",
+  "meta": {
+    "code": "000539",
+    "name": "粤电力A",
+    "sector": "公用事业",
+    "industry": "火电/电力",
+    "as_of": "2026-08-05"
+  },
+  "snapshot": {
+    "close": 5.88,
+    "pct_chg": 1.38,
+    "ma": {
+      "ma5": 5.67,
+      "ma10": 5.8,
+      "ma20": 5.76,
+      "ma60": 6.84,
+      "排列": "纠缠"
+    },
+    "macd": {
+      "dif": -0.252,
+      "dea": -0.308,
+      "macd": 0.112,
+      "状态": "多头"
+    },
+    "kdj": {
+      "k": 29.49,
+      "d": 30.52,
+      "j": 27.43,
+      "状态": "-"
+    },
+    "rsi": {
+      "rsi6": 55.99,
+      "rsi12": 48.17,
+      "rsi24": 46.45
+    },
+    "bias20": 1.99,
+    "vol_ratio": 1.0,
+    "vol_state": "平量"
+  },
+  "valuation": {
+    "pe_ttm": 37.14,
+    "pb": 1.32,
+    "mktcap_yi": 308.72,
+    "报告期": "20260331",
+    "pe_valid": false,
+    "mode": "亏损/PE失效",
+    "basis": "改用 PB + PS(市销率)+ 在手订单 + 扭亏进度"
+  },
+  "fundamental": {
+    "营收": 11352789773.0,
+    "净利": -151650238.0,
+    "营收增速": 7.375272,
+    "净利增速": 60.393655,
+    "ROE": -0.65,
+    "毛利率": 6.945695,
+    "净利率": -1.587803,
+    "负债率": 76.964768
+  },
+  "signals": {
+    "trend": {
+      "评级": "中性",
+      "得分": 20,
+      "依据": [
+        "DIF在DEA上+10",
+        "价在MA20上+10"
+      ]
+    },
+    "reversal": {
+      "超跌": false,
+      "放量反包": false,
+      "低位金叉": false,
+      "底背离": false,
+      "拐点评分": 0,
+      "拐点标签": "无",
+      "依据": []
+    },
+    "ob_os": {
+      "verdict": "中性",
+      "resonance": 0,
+      "per_indicator": {
+        "kdj": "-",
+        "rsi": "-",
+        "bias": "1.99(中性)"
+      }
+    }
+  },
+  "fundflow": null,
+  "events": [],
+  "timeseries_refs": {
+    "kline": "data/raw/kline/000539.parquet",
+    "fundflow": "data/raw/fundflow/000539.parquet",
+    "announcements": "data/raw/announcement/000539.json"
+  },
+  "provenance": {
+    "tech": true,
+    "fundamental": true,
+    "announcements": 0,
+    "fundflow": false
+  }
+}

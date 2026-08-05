@@ -1,0 +1,106 @@
+{
+  "schema_version": "1.0",
+  "meta": {
+    "code": "600498",
+    "name": "烽火通信",
+    "sector": "光通信",
+    "industry": "通信设备",
+    "as_of": "2026-08-05"
+  },
+  "snapshot": {
+    "close": 34.46,
+    "pct_chg": 4.74,
+    "ma": {
+      "ma5": 33.41,
+      "ma10": 35.34,
+      "ma20": 41.47,
+      "ma60": 55.14,
+      "排列": "空头排列"
+    },
+    "macd": {
+      "dif": -7.114,
+      "dea": -6.925,
+      "macd": -0.378,
+      "状态": "空头"
+    },
+    "kdj": {
+      "k": 22.03,
+      "d": 17.81,
+      "j": 30.47,
+      "状态": "-"
+    },
+    "rsi": {
+      "rsi6": 36.2,
+      "rsi12": 30.63,
+      "rsi24": 36.16
+    },
+    "bias20": -16.91,
+    "vol_ratio": 1.18,
+    "vol_state": "平量"
+  },
+  "valuation": {
+    "pe_ttm": 111.69,
+    "pb": 2.66,
+    "mktcap_yi": 468.02,
+    "报告期": "20260331",
+    "pe_valid": false,
+    "mode": "高PE_折旧/周期底扰动",
+    "basis": "PE 被压制,参考 PB + 毛利率趋势/稼动率 + 周期位置"
+  },
+  "fundamental": {
+    "营收": 4510177423.78,
+    "净利": 38392482.56,
+    "营收增速": 11.402561,
+    "净利增速": -30.444494,
+    "ROE": 0.22,
+    "毛利率": 26.444498,
+    "净利率": 0.818136,
+    "负债率": 58.677396
+  },
+  "signals": {
+    "trend": {
+      "评级": "偏空",
+      "得分": -60,
+      "依据": [
+        "均线空头-30",
+        "DIF在DEA下-10",
+        "价在MA20下-10",
+        "RSI偏弱-10"
+      ]
+    },
+    "reversal": {
+      "超跌": false,
+      "放量反包": false,
+      "低位金叉": true,
+      "底背离": true,
+      "拐点评分": 45,
+      "拐点标签": "超跌待反弹",
+      "依据": [
+        "KDJ低位金叉+25",
+        "MACD底背离+20"
+      ]
+    },
+    "ob_os": {
+      "verdict": "中性",
+      "resonance": 1,
+      "per_indicator": {
+        "kdj": "-",
+        "rsi": "-",
+        "bias": "-16.91(超卖)"
+      }
+    }
+  },
+  "fundflow": null,
+  "events": [],
+  "timeseries_refs": {
+    "kline": "data/raw/kline/600498.parquet",
+    "fundflow": "data/raw/fundflow/600498.parquet",
+    "announcements": "data/raw/announcement/600498.json"
+  },
+  "provenance": {
+    "tech": true,
+    "fundamental": true,
+    "announcements": 0,
+    "fundflow": false
+  }
+}

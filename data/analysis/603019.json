@@ -1,0 +1,111 @@
+{
+  "schema_version": "1.0",
+  "meta": {
+    "code": "603019",
+    "name": "中科曙光",
+    "sector": "AI算力",
+    "industry": "服务器/算力",
+    "as_of": "2026-08-05"
+  },
+  "snapshot": {
+    "close": 85.55,
+    "pct_chg": 2.22,
+    "ma": {
+      "ma5": 84.07,
+      "ma10": 90.66,
+      "ma20": 94.78,
+      "ma60": 92.4,
+      "排列": "纠缠"
+    },
+    "macd": {
+      "dif": -2.589,
+      "dea": -0.799,
+      "macd": -3.58,
+      "状态": "空头"
+    },
+    "kdj": {
+      "k": 18.19,
+      "d": 22.67,
+      "j": 9.23,
+      "状态": "超卖"
+    },
+    "rsi": {
+      "rsi6": 38.27,
+      "rsi12": 41.41,
+      "rsi24": 45.36
+    },
+    "bias20": -9.74,
+    "vol_ratio": 0.78,
+    "vol_state": "平量"
+  },
+  "valuation": {
+    "pe_ttm": 56.44,
+    "pb": 5.55,
+    "mktcap_yi": 1251.7,
+    "报告期": "20260331",
+    "pe_valid": true,
+    "mode": "PE适用",
+    "basis": "PE(TTM) 可作横向对比,结合增速看 PEG"
+  },
+  "fundamental": {
+    "营收": 3199430492.82,
+    "净利": 227843919.03,
+    "营收增速": 23.710049,
+    "净利增速": 22.186116,
+    "ROE": 1.02,
+    "毛利率": 26.557524,
+    "净利率": 5.999754,
+    "负债率": 41.135335
+  },
+  "signals": {
+    "trend": {
+      "评级": "偏空",
+      "得分": -30,
+      "依据": [
+        "DIF在DEA下-10",
+        "价在MA20下-10",
+        "RSI偏弱-10"
+      ]
+    },
+    "reversal": {
+      "超跌": true,
+      "放量反包": false,
+      "低位金叉": false,
+      "底背离": false,
+      "拐点评分": 25,
+      "拐点标签": "超跌待反弹",
+      "依据": [
+        "超跌区(KDJ/RSI/近低点)+25"
+      ]
+    },
+    "ob_os": {
+      "verdict": "中性",
+      "resonance": 1,
+      "per_indicator": {
+        "kdj": "超卖",
+        "rsi": "-",
+        "bias": "-9.74(中性)"
+      }
+    }
+  },
+  "fundflow": null,
+  "events": [
+    {
+      "date": "2026-08-04",
+      "type": "其他",
+      "impact": "待判",
+      "title": "曙光信息产业股份有限公司向不特定对象发行可转换公司债券上市公告书"
+    }
+  ],
+  "timeseries_refs": {
+    "kline": "data/raw/kline/603019.parquet",
+    "fundflow": "data/raw/fundflow/603019.parquet",
+    "announcements": "data/raw/announcement/603019.json"
+  },
+  "provenance": {
+    "tech": true,
+    "fundamental": true,
+    "announcements": 1,
+    "fundflow": false
+  }
+}

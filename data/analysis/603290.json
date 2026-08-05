@@ -1,0 +1,112 @@
+{
+  "schema_version": "1.0",
+  "meta": {
+    "code": "603290",
+    "name": "斯达半导",
+    "sector": "半导体",
+    "industry": "功率半导体(IGBT)",
+    "as_of": "2026-08-05"
+  },
+  "snapshot": {
+    "close": 82.8,
+    "pct_chg": 3.33,
+    "ma": {
+      "ma5": 80.99,
+      "ma10": 82.66,
+      "ma20": 95.38,
+      "ma60": 116.31,
+      "排列": "空头排列"
+    },
+    "macd": {
+      "dif": -11.37,
+      "dea": -10.936,
+      "macd": -0.868,
+      "状态": "空头"
+    },
+    "kdj": {
+      "k": 31.74,
+      "d": 23.43,
+      "j": 48.37,
+      "状态": "-"
+    },
+    "rsi": {
+      "rsi6": 39.07,
+      "rsi12": 33.27,
+      "rsi24": 37.67
+    },
+    "bias20": -13.19,
+    "vol_ratio": 1.06,
+    "vol_state": "平量"
+  },
+  "valuation": {
+    "pe_ttm": 60.42,
+    "pb": 2.85,
+    "mktcap_yi": 198.28,
+    "报告期": "20260331",
+    "pe_valid": true,
+    "mode": "PE适用",
+    "basis": "PE(TTM) 可作横向对比,结合增速看 PEG"
+  },
+  "fundamental": {
+    "营收": 864113007.84,
+    "净利": 26626793.51,
+    "营收增速": -5.996038,
+    "净利增速": -74.324395,
+    "ROE": 0.38,
+    "毛利率": 21.076737,
+    "净利率": 3.086601,
+    "负债率": 33.279441
+  },
+  "signals": {
+    "trend": {
+      "评级": "偏空",
+      "得分": -60,
+      "依据": [
+        "均线空头-30",
+        "DIF在DEA下-10",
+        "价在MA20下-10",
+        "RSI偏弱-10"
+      ]
+    },
+    "reversal": {
+      "超跌": false,
+      "放量反包": false,
+      "低位金叉": false,
+      "底背离": true,
+      "拐点评分": 20,
+      "拐点标签": "无",
+      "依据": [
+        "MACD底背离+20"
+      ]
+    },
+    "ob_os": {
+      "verdict": "中性",
+      "resonance": 1,
+      "per_indicator": {
+        "kdj": "-",
+        "rsi": "-",
+        "bias": "-13.19(超卖)"
+      }
+    }
+  },
+  "fundflow": null,
+  "events": [
+    {
+      "date": "2026-07-30",
+      "type": "其他",
+      "impact": "待判",
+      "title": "斯达半导体股份有限公司主体与相关债项2026年度跟踪评级报告"
+    }
+  ],
+  "timeseries_refs": {
+    "kline": "data/raw/kline/603290.parquet",
+    "fundflow": "data/raw/fundflow/603290.parquet",
+    "announcements": "data/raw/announcement/603290.json"
+  },
+  "provenance": {
+    "tech": true,
+    "fundamental": true,
+    "announcements": 1,
+    "fundflow": false
+  }
+}

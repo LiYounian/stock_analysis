@@ -1,0 +1,103 @@
+{
+  "schema_version": "1.0",
+  "meta": {
+    "code": "000636",
+    "name": "风华高科",
+    "sector": "电子元件",
+    "industry": "被动元件(MLCC)",
+    "as_of": "2026-08-05"
+  },
+  "snapshot": {
+    "close": 54.33,
+    "pct_chg": 4.56,
+    "ma": {
+      "ma5": 50.73,
+      "ma10": 46.58,
+      "ma20": 50.16,
+      "ma60": 54.06,
+      "排列": "纠缠"
+    },
+    "macd": {
+      "dif": -2.509,
+      "dea": -3.472,
+      "macd": 1.926,
+      "状态": "多头"
+    },
+    "kdj": {
+      "k": 73.4,
+      "d": 57.83,
+      "j": 104.55,
+      "状态": "-"
+    },
+    "rsi": {
+      "rsi6": 67.42,
+      "rsi12": 53.82,
+      "rsi24": 51.83
+    },
+    "bias20": 8.31,
+    "vol_ratio": 0.96,
+    "vol_state": "平量"
+  },
+  "valuation": {
+    "pe_ttm": 204.56,
+    "pb": 5.04,
+    "mktcap_yi": 628.61,
+    "报告期": "20260331",
+    "pe_valid": true,
+    "mode": "PE适用",
+    "basis": "PE(TTM) 可作横向对比,结合增速看 PEG"
+  },
+  "fundamental": {
+    "营收": 1514698051.44,
+    "净利": 88559116.72,
+    "营收增速": 18.899499,
+    "净利增速": 37.142786,
+    "ROE": 0.71,
+    "毛利率": 16.781194,
+    "净利率": 5.881014,
+    "负债率": 23.22539
+  },
+  "signals": {
+    "trend": {
+      "评级": "中性",
+      "得分": 20,
+      "依据": [
+        "DIF在DEA上+10",
+        "价在MA20上+10"
+      ]
+    },
+    "reversal": {
+      "超跌": false,
+      "放量反包": false,
+      "低位金叉": false,
+      "底背离": true,
+      "拐点评分": 20,
+      "拐点标签": "无",
+      "依据": [
+        "MACD底背离+20"
+      ]
+    },
+    "ob_os": {
+      "verdict": "中性",
+      "resonance": 1,
+      "per_indicator": {
+        "kdj": "超买",
+        "rsi": "-",
+        "bias": "8.31(中性)"
+      }
+    }
+  },
+  "fundflow": null,
+  "events": [],
+  "timeseries_refs": {
+    "kline": "data/raw/kline/000636.parquet",
+    "fundflow": "data/raw/fundflow/000636.parquet",
+    "announcements": "data/raw/announcement/000636.json"
+  },
+  "provenance": {
+    "tech": true,
+    "fundamental": true,
+    "announcements": 0,
+    "fundflow": false
+  }
+}

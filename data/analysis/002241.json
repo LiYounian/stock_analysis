@@ -1,0 +1,108 @@
+{
+  "schema_version": "1.0",
+  "meta": {
+    "code": "002241",
+    "name": "歌尔股份",
+    "sector": "消费电子",
+    "industry": "消费电子(声学/VR)",
+    "as_of": "2026-08-05"
+  },
+  "snapshot": {
+    "close": 23.11,
+    "pct_chg": -0.56,
+    "ma": {
+      "ma5": 23.24,
+      "ma10": 22.95,
+      "ma20": 22.61,
+      "ma60": 23.74,
+      "排列": "纠缠"
+    },
+    "macd": {
+      "dif": 0.068,
+      "dea": -0.058,
+      "macd": 0.251,
+      "状态": "多头"
+    },
+    "kdj": {
+      "k": 62.57,
+      "d": 63.16,
+      "j": 61.4,
+      "状态": "-"
+    },
+    "rsi": {
+      "rsi6": 54.07,
+      "rsi12": 52.68,
+      "rsi24": 49.65
+    },
+    "bias20": 2.2,
+    "vol_ratio": 0.72,
+    "vol_state": "平量"
+  },
+  "valuation": {
+    "pe_ttm": 20.66,
+    "pb": 2.2,
+    "mktcap_yi": 820.93,
+    "报告期": "20260331",
+    "pe_valid": true,
+    "mode": "PE适用",
+    "basis": "PE(TTM) 可作横向对比,结合增速看 PEG"
+  },
+  "fundamental": {
+    "营收": 18658663449.63,
+    "净利": 502998588.66,
+    "营收增速": 14.435689,
+    "净利增速": 7.282577,
+    "ROE": 1.37,
+    "毛利率": 13.766487,
+    "净利率": 2.800121,
+    "负债率": 58.713437
+  },
+  "signals": {
+    "trend": {
+      "评级": "中性",
+      "得分": 20,
+      "依据": [
+        "DIF在DEA上+10",
+        "价在MA20上+10"
+      ]
+    },
+    "reversal": {
+      "超跌": false,
+      "放量反包": false,
+      "低位金叉": false,
+      "底背离": false,
+      "拐点评分": 0,
+      "拐点标签": "无",
+      "依据": []
+    },
+    "ob_os": {
+      "verdict": "中性",
+      "resonance": 0,
+      "per_indicator": {
+        "kdj": "-",
+        "rsi": "-",
+        "bias": "2.2(中性)"
+      }
+    }
+  },
+  "fundflow": null,
+  "events": [
+    {
+      "date": "2026-08-05",
+      "type": "其他",
+      "impact": "待判",
+      "title": "关于为子公司提供担保的进展公告"
+    }
+  ],
+  "timeseries_refs": {
+    "kline": "data/raw/kline/002241.parquet",
+    "fundflow": "data/raw/fundflow/002241.parquet",
+    "announcements": "data/raw/announcement/002241.json"
+  },
+  "provenance": {
+    "tech": true,
+    "fundamental": true,
+    "announcements": 1,
+    "fundflow": false
+  }
+}

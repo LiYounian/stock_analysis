@@ -1,0 +1,135 @@
+{
+  "schema_version": "1.0",
+  "meta": {
+    "code": "603501",
+    "name": "豪威集团",
+    "sector": "半导体",
+    "industry": "CIS图像传感器设计(原韦尔股份)",
+    "as_of": "2026-08-05"
+  },
+  "snapshot": {
+    "close": 87.95,
+    "pct_chg": -0.31,
+    "ma": {
+      "ma5": 89.01,
+      "ma10": 92.77,
+      "ma20": 98.82,
+      "ma60": 97.0,
+      "排列": "纠缠"
+    },
+    "macd": {
+      "dif": -2.526,
+      "dea": -0.754,
+      "macd": -3.542,
+      "状态": "空头"
+    },
+    "kdj": {
+      "k": 8.01,
+      "d": 10.99,
+      "j": 2.05,
+      "状态": "超卖"
+    },
+    "rsi": {
+      "rsi6": 17.82,
+      "rsi12": 33.36,
+      "rsi24": 41.67
+    },
+    "bias20": -11.0,
+    "vol_ratio": 1.07,
+    "vol_state": "平量"
+  },
+  "valuation": {
+    "pe_ttm": 30.03,
+    "pb": 3.37,
+    "mktcap_yi": 1105.97,
+    "报告期": "20260331",
+    "pe_valid": true,
+    "mode": "PE适用",
+    "basis": "PE(TTM) 可作横向对比,结合增速看 PEG"
+  },
+  "fundamental": {
+    "营收": 6414033079.02,
+    "净利": 502949305.92,
+    "营收增速": -0.89722,
+    "净利增速": -41.920715,
+    "ROE": 1.56,
+    "毛利率": 29.380635,
+    "净利率": 7.696882,
+    "负债率": 33.132195
+  },
+  "signals": {
+    "trend": {
+      "评级": "偏空",
+      "得分": -30,
+      "依据": [
+        "DIF在DEA下-10",
+        "价在MA20下-10",
+        "RSI偏弱-10"
+      ]
+    },
+    "reversal": {
+      "超跌": true,
+      "放量反包": false,
+      "低位金叉": false,
+      "底背离": false,
+      "拐点评分": 25,
+      "拐点标签": "超跌待反弹",
+      "依据": [
+        "超跌区(KDJ/RSI/近低点)+25"
+      ]
+    },
+    "ob_os": {
+      "verdict": "超卖",
+      "resonance": 2,
+      "per_indicator": {
+        "kdj": "超卖",
+        "rsi": "-",
+        "bias": "-11.0(超卖)"
+      }
+    }
+  },
+  "fundflow": null,
+  "events": [
+    {
+      "date": "2026-08-05",
+      "type": "其他",
+      "impact": "待判",
+      "title": "第七届董事会第十九次会议决议公告"
+    },
+    {
+      "date": "2026-08-05",
+      "type": "其他",
+      "impact": "待判",
+      "title": "关于不向下修正“韦尔转债”转股价格的公告"
+    },
+    {
+      "date": "2026-08-05",
+      "type": "回购",
+      "impact": "利好",
+      "title": "关于变更回购股份用途并注销的公告"
+    },
+    {
+      "date": "2026-08-01",
+      "type": "股权质押",
+      "impact": "利空",
+      "title": "关于控股股东部分股权解除质押的公告"
+    },
+    {
+      "date": "2026-07-30",
+      "type": "其他",
+      "impact": "待判",
+      "title": "关于“韦尔转债”预计满足转股价格修正条件的提示性公告"
+    }
+  ],
+  "timeseries_refs": {
+    "kline": "data/raw/kline/603501.parquet",
+    "fundflow": "data/raw/fundflow/603501.parquet",
+    "announcements": "data/raw/announcement/603501.json"
+  },
+  "provenance": {
+    "tech": true,
+    "fundamental": true,
+    "announcements": 5,
+    "fundflow": false
+  }
+}

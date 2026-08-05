@@ -1,0 +1,102 @@
+{
+  "schema_version": "1.0",
+  "meta": {
+    "code": "600667",
+    "name": "太极实业",
+    "sector": "半导体",
+    "industry": "半导体封测/工程",
+    "as_of": "2026-08-05"
+  },
+  "snapshot": {
+    "close": 17.15,
+    "pct_chg": 5.34,
+    "ma": {
+      "ma5": 16.74,
+      "ma10": 16.92,
+      "ma20": 18.91,
+      "ma60": 18.53,
+      "排列": "纠缠"
+    },
+    "macd": {
+      "dif": -1.317,
+      "dea": -1.053,
+      "macd": -0.528,
+      "状态": "空头"
+    },
+    "kdj": {
+      "k": 38.91,
+      "d": 39.95,
+      "j": 36.82,
+      "状态": "-"
+    },
+    "rsi": {
+      "rsi6": 47.17,
+      "rsi12": 43.97,
+      "rsi24": 47.28
+    },
+    "bias20": -9.32,
+    "vol_ratio": 0.92,
+    "vol_state": "平量"
+  },
+  "valuation": {
+    "pe_ttm": 78.1,
+    "pb": 4.1,
+    "mktcap_yi": 358.7,
+    "报告期": "20260331",
+    "pe_valid": true,
+    "mode": "PE适用",
+    "basis": "PE(TTM) 可作横向对比,结合增速看 PEG"
+  },
+  "fundamental": {
+    "营收": 6657801346.7,
+    "净利": 129124367.92,
+    "营收增速": -0.910724,
+    "净利增速": 9.481611,
+    "ROE": 1.49,
+    "毛利率": 6.900597,
+    "净利率": 2.453599,
+    "负债率": 72.881191
+  },
+  "signals": {
+    "trend": {
+      "评级": "偏空",
+      "得分": -30,
+      "依据": [
+        "DIF在DEA下-10",
+        "价在MA20下-10",
+        "RSI偏弱-10"
+      ]
+    },
+    "reversal": {
+      "超跌": false,
+      "放量反包": false,
+      "低位金叉": false,
+      "底背离": false,
+      "拐点评分": 0,
+      "拐点标签": "无",
+      "依据": []
+    },
+    "ob_os": {
+      "verdict": "中性",
+      "resonance": 0,
+      "per_indicator": {
+        "kdj": "-",
+        "rsi": "-",
+        "bias": "-9.32(中性)"
+      }
+    }
+  },
+  "fundflow": null,
+  "events": [],
+  "timeseries_refs": {
+    "kline": "data/raw/kline/600667.parquet",
+    "fundflow": "data/raw/fundflow/600667.parquet",
+    "announcements": "data/raw/announcement/600667.json"
+  },
+  "provenance": {
+    "tech": true,
+    "fundamental": true,
+    "announcements": 0,
+    "fundflow": false
+  }
+}

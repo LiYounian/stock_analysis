@@ -1,0 +1,138 @@
+{
+  "schema_version": "1.0",
+  "meta": {
+    "code": "002747",
+    "name": "埃斯顿",
+    "sector": "机器人/自动化",
+    "industry": "工业机器人",
+    "as_of": "2026-08-05"
+  },
+  "snapshot": {
+    "close": 32.3,
+    "pct_chg": 5.04,
+    "ma": {
+      "ma5": 30.36,
+      "ma10": 30.8,
+      "ma20": 35.13,
+      "ma60": 33.52,
+      "排列": "纠缠"
+    },
+    "macd": {
+      "dif": -1.824,
+      "dea": -1.196,
+      "macd": -1.255,
+      "状态": "空头"
+    },
+    "kdj": {
+      "k": 42.49,
+      "d": 24.74,
+      "j": 77.98,
+      "状态": "-"
+    },
+    "rsi": {
+      "rsi6": 51.91,
+      "rsi12": 46.04,
+      "rsi24": 48.34
+    },
+    "bias20": -8.06,
+    "vol_ratio": 1.07,
+    "vol_state": "平量"
+  },
+  "valuation": {
+    "pe_ttm": 240.13,
+    "pb": 9.65,
+    "mktcap_yi": 312.6,
+    "报告期": "20260331",
+    "pe_valid": true,
+    "mode": "PE适用",
+    "basis": "PE(TTM) 可作横向对比,结合增速看 PEG"
+  },
+  "fundamental": {
+    "营收": 1216554921.4,
+    "净利": 97836660.5,
+    "营收增速": -2.216441,
+    "净利增速": 674.64055,
+    "ROE": 4.95,
+    "毛利率": 30.393911,
+    "净利率": 7.957014,
+    "负债率": 69.181733
+  },
+  "signals": {
+    "trend": {
+      "评级": "中性",
+      "得分": -20,
+      "依据": [
+        "DIF在DEA下-10",
+        "价在MA20下-10"
+      ]
+    },
+    "reversal": {
+      "超跌": false,
+      "放量反包": false,
+      "低位金叉": false,
+      "底背离": false,
+      "拐点评分": 0,
+      "拐点标签": "无",
+      "依据": []
+    },
+    "ob_os": {
+      "verdict": "中性",
+      "resonance": 0,
+      "per_indicator": {
+        "kdj": "-",
+        "rsi": "-",
+        "bias": "-8.06(中性)"
+      }
+    }
+  },
+  "fundflow": null,
+  "events": [
+    {
+      "date": "2026-08-05",
+      "type": "其他",
+      "impact": "待判",
+      "title": "第六届董事会独立董事专门会议第一次会议决议"
+    },
+    {
+      "date": "2026-08-05",
+      "type": "其他",
+      "impact": "待判",
+      "title": "第六届董事会第二次会议决议公告"
+    },
+    {
+      "date": "2026-08-05",
+      "type": "其他",
+      "impact": "待判",
+      "title": "南京埃斯顿自动化股份有限公司拟现金收购南京埃斯顿酷卓科技有限公司股权涉及其股东全部权益价值评估项目资产评估报告"
+    },
+    {
+      "date": "2026-08-05",
+      "type": "其他",
+      "impact": "待判",
+      "title": "南京埃斯顿酷卓科技有限公司审计报告"
+    },
+    {
+      "date": "2026-08-05",
+      "type": "其他",
+      "impact": "待判",
+      "title": "关于全资子公司拟收购埃斯顿酷卓股权暨关联交易的公告"
+    },
+    {
+      "date": "2026-08-05",
+      "type": "其他",
+      "impact": "待判",
+      "title": "H股公告-截至2026年7月31日止月份之股份发行人的证券变动月报表"
+    }
+  ],
+  "timeseries_refs": {
+    "kline": "data/raw/kline/002747.parquet",
+    "fundflow": "data/raw/fundflow/002747.parquet",
+    "announcements": "data/raw/announcement/002747.json"
+  },
+  "provenance": {
+    "tech": true,
+    "fundamental": true,
+    "announcements": 6,
+    "fundflow": false
+  }
+}

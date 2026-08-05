@@ -1,0 +1,119 @@
+{
+  "schema_version": "1.0",
+  "meta": {
+    "code": "688110",
+    "name": "东芯股份",
+    "sector": "半导体",
+    "industry": "存储芯片设计",
+    "as_of": "2026-08-05"
+  },
+  "snapshot": {
+    "close": 101.78,
+    "pct_chg": 4.82,
+    "ma": {
+      "ma5": 102.01,
+      "ma10": 107.54,
+      "ma20": 125.81,
+      "ma60": 144.57,
+      "排列": "空头排列"
+    },
+    "macd": {
+      "dif": -15.017,
+      "dea": -12.733,
+      "macd": -4.567,
+      "状态": "空头"
+    },
+    "kdj": {
+      "k": 16.09,
+      "d": 18.14,
+      "j": 12.0,
+      "状态": "超卖"
+    },
+    "rsi": {
+      "rsi6": 34.82,
+      "rsi12": 34.48,
+      "rsi24": 39.44
+    },
+    "bias20": -19.1,
+    "vol_ratio": 0.89,
+    "vol_state": "平量"
+  },
+  "valuation": {
+    "pe_ttm": 1.65,
+    "pb": 12.53,
+    "mktcap_yi": 450.25,
+    "报告期": "20260331",
+    "pe_valid": false,
+    "mode": "低PE_疑一次性损益",
+    "basis": "PE 异常低疑非经常损益抬高净利,改看扣非 PE + 主业盈利趋势"
+  },
+  "fundamental": {
+    "营收": 479323726.35,
+    "净利": 138284520.98,
+    "营收增速": 236.949587,
+    "净利增速": 333.42374,
+    "ROE": 3.91,
+    "毛利率": 53.169599,
+    "净利率": 31.985157,
+    "负债率": 6.327043
+  },
+  "signals": {
+    "trend": {
+      "评级": "偏空",
+      "得分": -60,
+      "依据": [
+        "均线空头-30",
+        "DIF在DEA下-10",
+        "价在MA20下-10",
+        "RSI偏弱-10"
+      ]
+    },
+    "reversal": {
+      "超跌": true,
+      "放量反包": false,
+      "低位金叉": false,
+      "底背离": true,
+      "拐点评分": 45,
+      "拐点标签": "超跌待反弹",
+      "依据": [
+        "超跌区(KDJ/RSI/近低点)+25",
+        "MACD底背离+20"
+      ]
+    },
+    "ob_os": {
+      "verdict": "超卖",
+      "resonance": 2,
+      "per_indicator": {
+        "kdj": "超卖",
+        "rsi": "-",
+        "bias": "-19.1(超卖)"
+      }
+    }
+  },
+  "fundflow": null,
+  "events": [
+    {
+      "date": "2026-07-31",
+      "type": "监管/调研",
+      "impact": "待判",
+      "title": "立信会计师事务所（特殊普通合伙）关于东芯半导体股份有限公司2025年年度报告的信息披露监管问询函的回复"
+    },
+    {
+      "date": "2026-07-31",
+      "type": "监管/调研",
+      "impact": "待判",
+      "title": "关于2025年年度报告的信息披露监管问询函的回复公告"
+    }
+  ],
+  "timeseries_refs": {
+    "kline": "data/raw/kline/688110.parquet",
+    "fundflow": "data/raw/fundflow/688110.parquet",
+    "announcements": "data/raw/announcement/688110.json"
+  },
+  "provenance": {
+    "tech": true,
+    "fundamental": true,
+    "announcements": 2,
+    "fundflow": false
+  }
+}

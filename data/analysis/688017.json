@@ -1,0 +1,104 @@
+{
+  "schema_version": "1.0",
+  "meta": {
+    "code": "688017",
+    "name": "绿的谐波",
+    "sector": "机器人/自动化",
+    "industry": "谐波减速器",
+    "as_of": "2026-08-05"
+  },
+  "snapshot": {
+    "close": 326.0,
+    "pct_chg": 4.5,
+    "ma": {
+      "ma5": 297.25,
+      "ma10": 301.11,
+      "ma20": 334.98,
+      "ma60": 353.2,
+      "排列": "空头排列"
+    },
+    "macd": {
+      "dif": -20.92,
+      "dea": -19.106,
+      "macd": -3.627,
+      "状态": "空头"
+    },
+    "kdj": {
+      "k": 61.33,
+      "d": 38.77,
+      "j": 106.45,
+      "状态": "-"
+    },
+    "rsi": {
+      "rsi6": 57.21,
+      "rsi12": 48.46,
+      "rsi24": 48.67
+    },
+    "bias20": -2.68,
+    "vol_ratio": 1.04,
+    "vol_state": "平量"
+  },
+  "valuation": {
+    "pe_ttm": 437.03,
+    "pb": 16.75,
+    "mktcap_yi": 597.66,
+    "报告期": "20260331",
+    "pe_valid": true,
+    "mode": "PE适用",
+    "basis": "PE(TTM) 可作横向对比,结合增速看 PEG"
+  },
+  "fundamental": {
+    "营收": 140134456.3,
+    "净利": 32634147.52,
+    "营收增速": 42.955626,
+    "净利增速": 61.168761,
+    "ROE": 0.92,
+    "毛利率": 33.618009,
+    "净利率": 23.540998,
+    "负债率": 9.443144
+  },
+  "signals": {
+    "trend": {
+      "评级": "偏空",
+      "得分": -50,
+      "依据": [
+        "均线空头-30",
+        "DIF在DEA下-10",
+        "价在MA20下-10"
+      ]
+    },
+    "reversal": {
+      "超跌": false,
+      "放量反包": false,
+      "低位金叉": false,
+      "底背离": true,
+      "拐点评分": 20,
+      "拐点标签": "无",
+      "依据": [
+        "MACD底背离+20"
+      ]
+    },
+    "ob_os": {
+      "verdict": "中性",
+      "resonance": 1,
+      "per_indicator": {
+        "kdj": "超买",
+        "rsi": "-",
+        "bias": "-2.68(中性)"
+      }
+    }
+  },
+  "fundflow": null,
+  "events": [],
+  "timeseries_refs": {
+    "kline": "data/raw/kline/688017.parquet",
+    "fundflow": "data/raw/fundflow/688017.parquet",
+    "announcements": "data/raw/announcement/688017.json"
+  },
+  "provenance": {
+    "tech": true,
+    "fundamental": true,
+    "announcements": 0,
+    "fundflow": false
+  }
+}

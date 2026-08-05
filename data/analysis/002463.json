@@ -1,0 +1,104 @@
+{
+  "schema_version": "1.0",
+  "meta": {
+    "code": "002463",
+    "name": "沪电股份",
+    "sector": "电子元件",
+    "industry": "PCB",
+    "as_of": "2026-08-05"
+  },
+  "snapshot": {
+    "close": 111.77,
+    "pct_chg": 10.0,
+    "ma": {
+      "ma5": 103.79,
+      "ma10": 108.44,
+      "ma20": 119.02,
+      "ma60": 126.15,
+      "排列": "空头排列"
+    },
+    "macd": {
+      "dif": -7.547,
+      "dea": -6.112,
+      "macd": -2.87,
+      "状态": "空头"
+    },
+    "kdj": {
+      "k": 36.72,
+      "d": 26.74,
+      "j": 56.69,
+      "状态": "-"
+    },
+    "rsi": {
+      "rsi6": 52.09,
+      "rsi12": 45.77,
+      "rsi24": 46.75
+    },
+    "bias20": -6.09,
+    "vol_ratio": 1.02,
+    "vol_state": "平量"
+  },
+  "valuation": {
+    "pe_ttm": 50.0,
+    "pb": 12.81,
+    "mktcap_yi": 2150.86,
+    "报告期": "20260331",
+    "pe_valid": true,
+    "mode": "PE适用",
+    "basis": "PE(TTM) 可作横向对比,结合增速看 PEG"
+  },
+  "fundamental": {
+    "营收": 6214156406.0,
+    "净利": 1242081367.0,
+    "营收增速": 53.90614,
+    "净利增速": 62.903309,
+    "ROE": 7.81,
+    "毛利率": 35.632417,
+    "净利率": 19.977606,
+    "负债率": 48.643118
+  },
+  "signals": {
+    "trend": {
+      "评级": "偏空",
+      "得分": -50,
+      "依据": [
+        "均线空头-30",
+        "DIF在DEA下-10",
+        "价在MA20下-10"
+      ]
+    },
+    "reversal": {
+      "超跌": false,
+      "放量反包": false,
+      "低位金叉": true,
+      "底背离": false,
+      "拐点评分": 25,
+      "拐点标签": "超跌待反弹",
+      "依据": [
+        "KDJ低位金叉+25"
+      ]
+    },
+    "ob_os": {
+      "verdict": "中性",
+      "resonance": 0,
+      "per_indicator": {
+        "kdj": "-",
+        "rsi": "-",
+        "bias": "-6.09(中性)"
+      }
+    }
+  },
+  "fundflow": null,
+  "events": [],
+  "timeseries_refs": {
+    "kline": "data/raw/kline/002463.parquet",
+    "fundflow": "data/raw/fundflow/002463.parquet",
+    "announcements": "data/raw/announcement/002463.json"
+  },
+  "provenance": {
+    "tech": true,
+    "fundamental": true,
+    "announcements": 0,
+    "fundflow": false
+  }
+}

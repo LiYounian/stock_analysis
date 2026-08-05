@@ -1,0 +1,112 @@
+{
+  "schema_version": "1.0",
+  "meta": {
+    "code": "301308",
+    "name": "江波龙",
+    "sector": "半导体",
+    "industry": "存储模组",
+    "as_of": "2026-08-05"
+  },
+  "snapshot": {
+    "close": 336.05,
+    "pct_chg": 5.08,
+    "ma": {
+      "ma5": 334.25,
+      "ma10": 350.95,
+      "ma20": 425.81,
+      "ma60": 527.45,
+      "排列": "空头排列"
+    },
+    "macd": {
+      "dif": -63.376,
+      "dea": -56.533,
+      "macd": -13.686,
+      "状态": "空头"
+    },
+    "kdj": {
+      "k": 22.16,
+      "d": 18.58,
+      "j": 29.32,
+      "状态": "-"
+    },
+    "rsi": {
+      "rsi6": 34.61,
+      "rsi12": 33.35,
+      "rsi24": 38.69
+    },
+    "bias20": -21.08,
+    "vol_ratio": 0.8,
+    "vol_state": "平量"
+  },
+  "valuation": {
+    "pe_ttm": 26.15,
+    "pb": 11.67,
+    "mktcap_yi": 1421.7,
+    "报告期": "20260331",
+    "pe_valid": true,
+    "mode": "PE适用",
+    "basis": "PE(TTM) 可作横向对比,结合增速看 PEG"
+  },
+  "fundamental": {
+    "营收": 9908726244.41,
+    "净利": 3862236561.17,
+    "营收增速": 132.792832,
+    "净利增速": 2644.049658,
+    "ROE": 39.4,
+    "毛利率": 55.527428,
+    "净利率": 40.16021,
+    "负债率": 65.550235
+  },
+  "signals": {
+    "trend": {
+      "评级": "偏空",
+      "得分": -60,
+      "依据": [
+        "均线空头-30",
+        "DIF在DEA下-10",
+        "价在MA20下-10",
+        "RSI偏弱-10"
+      ]
+    },
+    "reversal": {
+      "超跌": false,
+      "放量反包": false,
+      "低位金叉": false,
+      "底背离": true,
+      "拐点评分": 20,
+      "拐点标签": "无",
+      "依据": [
+        "MACD底背离+20"
+      ]
+    },
+    "ob_os": {
+      "verdict": "中性",
+      "resonance": 1,
+      "per_indicator": {
+        "kdj": "-",
+        "rsi": "-",
+        "bias": "-21.08(超卖)极端"
+      }
+    }
+  },
+  "fundflow": null,
+  "events": [
+    {
+      "date": "2026-07-31",
+      "type": "其他",
+      "impact": "待判",
+      "title": "关于为子公司提供担保的进展公告"
+    }
+  ],
+  "timeseries_refs": {
+    "kline": "data/raw/kline/301308.parquet",
+    "fundflow": "data/raw/fundflow/301308.parquet",
+    "announcements": "data/raw/announcement/301308.json"
+  },
+  "provenance": {
+    "tech": true,
+    "fundamental": true,
+    "announcements": 1,
+    "fundflow": false
+  }
+}

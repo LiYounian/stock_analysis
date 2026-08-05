@@ -107,13 +107,21 @@ def cmd_report() -> None:
         logger.info("单票卡 %s → %s", code, sp)
 
 
+def cmd_serialize() -> None:
+    """组装每票结构化 JSON 到 data/analysis/{code}.json(程序/DB/Web 可消费)。"""
+    from tools.analysis import serialize
+    out = serialize.serialize_all()
+    logger.info("结构化 JSON 完成:%d 只 → data/analysis/", len(out))
+
+
 def cmd_all() -> None:
     cmd_collect()
+    cmd_serialize()
     cmd_report()
 
 
 _CMDS = {"collect": cmd_collect, "analyze": cmd_analyze,
-         "report": cmd_report, "all": cmd_all}
+         "report": cmd_report, "serialize": cmd_serialize, "all": cmd_all}
 
 
 def main(argv: list[str]) -> int:

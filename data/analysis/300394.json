@@ -1,0 +1,104 @@
+{
+  "schema_version": "1.0",
+  "meta": {
+    "code": "300394",
+    "name": "天孚通信",
+    "sector": "光通信",
+    "industry": "光器件",
+    "as_of": "2026-08-05"
+  },
+  "snapshot": {
+    "close": 212.0,
+    "pct_chg": 17.45,
+    "ma": {
+      "ma5": 181.14,
+      "ma10": 192.96,
+      "ma20": 220.51,
+      "ma60": 270.53,
+      "排列": "空头排列"
+    },
+    "macd": {
+      "dif": -24.9,
+      "dea": -24.119,
+      "macd": -1.562,
+      "状态": "空头"
+    },
+    "kdj": {
+      "k": 41.46,
+      "d": 26.23,
+      "j": 71.94,
+      "状态": "-"
+    },
+    "rsi": {
+      "rsi6": 58.7,
+      "rsi12": 47.2,
+      "rsi24": 45.13
+    },
+    "bias20": -3.86,
+    "vol_ratio": 1.53,
+    "vol_state": "放量"
+  },
+  "valuation": {
+    "pe_ttm": 106.48,
+    "pb": 38.67,
+    "mktcap_yi": 2312.55,
+    "报告期": "20260331",
+    "pe_valid": true,
+    "mode": "PE适用",
+    "basis": "PE(TTM) 可作横向对比,结合增速看 PEG"
+  },
+  "fundamental": {
+    "营收": 1330270175.36,
+    "净利": 492218878.05,
+    "营收增速": 40.824278,
+    "净利增速": 45.787902,
+    "ROE": 8.57,
+    "毛利率": 56.603933,
+    "净利率": 37.005251,
+    "负债率": 14.253998
+  },
+  "signals": {
+    "trend": {
+      "评级": "偏空",
+      "得分": -50,
+      "依据": [
+        "均线空头-30",
+        "DIF在DEA下-10",
+        "价在MA20下-10"
+      ]
+    },
+    "reversal": {
+      "超跌": false,
+      "放量反包": true,
+      "低位金叉": false,
+      "底背离": false,
+      "拐点评分": 30,
+      "拐点标签": "超跌待反弹",
+      "依据": [
+        "放量反包站上MA5+30"
+      ]
+    },
+    "ob_os": {
+      "verdict": "中性",
+      "resonance": 0,
+      "per_indicator": {
+        "kdj": "-",
+        "rsi": "-",
+        "bias": "-3.86(中性)"
+      }
+    }
+  },
+  "fundflow": null,
+  "events": [],
+  "timeseries_refs": {
+    "kline": "data/raw/kline/300394.parquet",
+    "fundflow": "data/raw/fundflow/300394.parquet",
+    "announcements": "data/raw/announcement/300394.json"
+  },
+  "provenance": {
+    "tech": true,
+    "fundamental": true,
+    "announcements": 0,
+    "fundflow": false
+  }
+}

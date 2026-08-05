@@ -9,6 +9,8 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
+from tools.config.strategy import THRESHOLDS
+
 
 # ---------- 基础算子 ----------
 def _sma_cn(x: pd.Series, n: int, m: int = 1) -> pd.Series:
@@ -104,6 +106,8 @@ def compute(kline: pd.DataFrame) -> dict:
 
     rsi6, rsi12, rsi24 = (rsi(close, w).iloc[-1] for w in (6, 12, 24))
 
+    bias20 = ((close.iloc[-1] - ma20) / ma20 * 100) if not pd.isna(ma20) and ma20 else np.nan
+
     vol = kline["volume"]
     vol_ma5_prev = vol.iloc[-6:-1].mean() if n >= 6 else np.nan
     vol_ratio = vol.iloc[-1] / vol_ma5_prev if vol_ma5_prev and not pd.isna(vol_ma5_prev) else np.nan
@@ -118,6 +122,7 @@ def compute(kline: pd.DataFrame) -> dict:
 
     signal = _score(arr, macd_state, dif, dea, close.iloc[-1], ma20, rsi12, kdj_state)
     reversal = _reversal(kline, kd, md, rsi(close, 6), ma(close, 5), vol_ratio)
+    ob_os = _overbought_oversold(k, j, rsi12, bias20)
 
     def _f(x, nd=2):
         return None if pd.isna(x) else round(float(x), nd)
@@ -129,9 +134,11 @@ def compute(kline: pd.DataFrame) -> dict:
         "macd": {"dif": _f(dif, 3), "dea": _f(dea, 3), "macd": _f(bar, 3), "状态": macd_state},
         "kdj": {"k": _f(k), "d": _f(d), "j": _f(j), "状态": kdj_state},
         "rsi": {"rsi6": _f(rsi6), "rsi12": _f(rsi12), "rsi24": _f(rsi24)},
+        "bias": {"bias20": _f(bias20)},
         "vol": {"量比": _f(vol_ratio), "状态": vol_state},
         "signal": signal,
         "reversal": reversal,
+        "ob_os": ob_os,
     }
 
 
@@ -173,6 +180,49 @@ def _score(arr, macd_state, dif, dea, last_close, ma20, rsi12, kdj_state) -> dic
     score = max(-100, min(100, score))
     rating = "偏多" if score >= 30 else ("偏空" if score <= -30 else "中性")
     return {"评级": rating, "得分": score, "依据": reasons}
+
+
+def _overbought_oversold(k, j, rsi12, bias20) -> dict:
+    """超买超卖判定(多指标共振;KDJ 单指标降权,防 J=3K−2D 假信号)。
+
+    逐 KDJ/RSI12/BIAS20 判方向;共振数 ≥ 阈值(2)才下结论,否则中性。
+    KDJ 命中记入共振但不单独定论;J<次级阈值仅作提示,不计入共振。
+    """
+    t = THRESHOLDS["超买超卖"]
+    kt, rt, bt = t["KDJ"], t["RSI12"], t["BIAS20"]
+    per = {}
+    ob, os_ = [], []
+
+    if not pd.isna(k) and not pd.isna(j):
+        kdj_ob = k > kt["超买_K"] or j > kt["超买_J"]
+        kdj_os = k < kt["超卖_K"] or j < kt["超卖_J"]
+        per["kdj"] = "超买" if kdj_ob else ("超卖" if kdj_os else "-")
+        if j < kt["次级超卖_J"] and not kdj_os:
+            per["kdj"] += "(J濒临超卖提示)"
+        ob.append(kdj_ob); os_.append(kdj_os)
+
+    if not pd.isna(rsi12):
+        rsi_ob, rsi_os = rsi12 > rt["超买"], rsi12 < rt["超卖"]
+        per["rsi"] = "超买" if rsi_ob else ("超卖" if rsi_os else "-")
+        ob.append(rsi_ob); os_.append(rsi_os)
+
+    if not pd.isna(bias20):
+        bias_ob, bias_os = bias20 > bt["超买"], bias20 < bt["超卖"]
+        per["bias"] = f"{round(float(bias20), 2)}" + (
+            "(超买)" if bias_ob else ("(超卖)" if bias_os else "(中性)"))
+        if bias20 < bt["超卖极端"]:
+            per["bias"] += "极端"
+        ob.append(bias_ob); os_.append(bias_os)
+
+    n_ob, n_os = sum(ob), sum(os_)
+    need = t["共振数阈值"]
+    if n_os >= need and n_os >= n_ob:
+        verdict, resonance = "超卖", n_os
+    elif n_ob >= need and n_ob > n_os:
+        verdict, resonance = "超买", n_ob
+    else:
+        verdict, resonance = "中性", max(n_ob, n_os)
+    return {"verdict": verdict, "resonance": int(resonance), "per_indicator": per}
 
 
 def _bottom_divergence(close: pd.Series, hist: pd.Series) -> bool:

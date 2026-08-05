@@ -1,0 +1,110 @@
+{
+  "schema_version": "1.0",
+  "meta": {
+    "code": "000601",
+    "name": "韶能股份",
+    "sector": "公用事业",
+    "industry": "水电/电力",
+    "as_of": "2026-08-05"
+  },
+  "snapshot": {
+    "close": 6.64,
+    "pct_chg": 1.53,
+    "ma": {
+      "ma5": 6.45,
+      "ma10": 6.52,
+      "ma20": 6.46,
+      "ma60": 7.05,
+      "排列": "纠缠"
+    },
+    "macd": {
+      "dif": -0.067,
+      "dea": -0.094,
+      "macd": 0.053,
+      "状态": "多头"
+    },
+    "kdj": {
+      "k": 40.48,
+      "d": 38.16,
+      "j": 45.13,
+      "状态": "-"
+    },
+    "rsi": {
+      "rsi6": 57.49,
+      "rsi12": 51.82,
+      "rsi24": 49.54
+    },
+    "bias20": 2.71,
+    "vol_ratio": 1.14,
+    "vol_state": "平量"
+  },
+  "valuation": {
+    "pe_ttm": 70.97,
+    "pb": 1.71,
+    "mktcap_yi": 70.66,
+    "报告期": "20260331",
+    "pe_valid": true,
+    "mode": "PE适用",
+    "basis": "PE(TTM) 可作横向对比,结合增速看 PEG"
+  },
+  "fundamental": {
+    "营收": 1200676438.11,
+    "净利": 10557373.56,
+    "营收增速": 8.333179,
+    "净利增速": -41.874072,
+    "ROE": 0.26,
+    "毛利率": 10.925875,
+    "净利率": 1.061692,
+    "负债率": 67.044236
+  },
+  "signals": {
+    "trend": {
+      "评级": "中性",
+      "得分": 20,
+      "依据": [
+        "DIF在DEA上+10",
+        "价在MA20上+10"
+      ]
+    },
+    "reversal": {
+      "超跌": false,
+      "放量反包": false,
+      "低位金叉": true,
+      "底背离": false,
+      "拐点评分": 25,
+      "拐点标签": "超跌待反弹",
+      "依据": [
+        "KDJ低位金叉+25"
+      ]
+    },
+    "ob_os": {
+      "verdict": "中性",
+      "resonance": 0,
+      "per_indicator": {
+        "kdj": "-",
+        "rsi": "-",
+        "bias": "2.71(中性)"
+      }
+    }
+  },
+  "fundflow": null,
+  "events": [
+    {
+      "date": "2026-07-30",
+      "type": "回购",
+      "impact": "利好",
+      "title": "广东韶能集团股份有限公司关于2025年限制性股票激励计划部分限制性股票回购注销完成暨股份变动的公告"
+    }
+  ],
+  "timeseries_refs": {
+    "kline": "data/raw/kline/000601.parquet",
+    "fundflow": "data/raw/fundflow/000601.parquet",
+    "announcements": "data/raw/announcement/000601.json"
+  },
+  "provenance": {
+    "tech": true,
+    "fundamental": true,
+    "announcements": 1,
+    "fundflow": false
+  }
+}

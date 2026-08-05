@@ -1,0 +1,116 @@
+{
+  "schema_version": "1.0",
+  "meta": {
+    "code": "300124",
+    "name": "汇川技术",
+    "sector": "机器人/自动化",
+    "industry": "工业自动化/伺服",
+    "as_of": "2026-08-05"
+  },
+  "snapshot": {
+    "close": 64.1,
+    "pct_chg": -0.02,
+    "ma": {
+      "ma5": 63.48,
+      "ma10": 61.88,
+      "ma20": 61.64,
+      "ma60": 68.74,
+      "排列": "纠缠"
+    },
+    "macd": {
+      "dif": -0.975,
+      "dea": -1.749,
+      "macd": 1.547,
+      "状态": "多头"
+    },
+    "kdj": {
+      "k": 79.21,
+      "d": 68.93,
+      "j": 99.77,
+      "状态": "-"
+    },
+    "rsi": {
+      "rsi6": 66.77,
+      "rsi12": 53.55,
+      "rsi24": 47.97
+    },
+    "bias20": 4.0,
+    "vol_ratio": 0.67,
+    "vol_state": "缩量"
+  },
+  "valuation": {
+    "pe_ttm": 36.61,
+    "pb": 4.77,
+    "mktcap_yi": 1735.57,
+    "报告期": "20260331",
+    "pe_valid": true,
+    "mode": "PE适用",
+    "basis": "PE(TTM) 可作横向对比,结合增速看 PEG"
+  },
+  "fundamental": {
+    "营收": 10143223378.12,
+    "净利": 1013451151.58,
+    "营收增速": 12.979762,
+    "净利增速": -23.387362,
+    "ROE": 2.83,
+    "毛利率": 29.077055,
+    "净利率": 10.083913,
+    "负债率": 45.55159
+  },
+  "signals": {
+    "trend": {
+      "评级": "中性",
+      "得分": 20,
+      "依据": [
+        "DIF在DEA上+10",
+        "价在MA20上+10"
+      ]
+    },
+    "reversal": {
+      "超跌": false,
+      "放量反包": false,
+      "低位金叉": false,
+      "底背离": true,
+      "拐点评分": 20,
+      "拐点标签": "无",
+      "依据": [
+        "MACD底背离+20"
+      ]
+    },
+    "ob_os": {
+      "verdict": "中性",
+      "resonance": 0,
+      "per_indicator": {
+        "kdj": "-",
+        "rsi": "-",
+        "bias": "4.0(中性)"
+      }
+    }
+  },
+  "fundflow": null,
+  "events": [
+    {
+      "date": "2026-08-03",
+      "type": "回购",
+      "impact": "利好",
+      "title": "关于回购公司股份的进展公告"
+    },
+    {
+      "date": "2026-07-31",
+      "type": "其他",
+      "impact": "待判",
+      "title": "关于第一期长效激励持股计划第四个锁定期届满的提示性公告"
+    }
+  ],
+  "timeseries_refs": {
+    "kline": "data/raw/kline/300124.parquet",
+    "fundflow": "data/raw/fundflow/300124.parquet",
+    "announcements": "data/raw/announcement/300124.json"
+  },
+  "provenance": {
+    "tech": true,
+    "fundamental": true,
+    "announcements": 2,
+    "fundflow": false
+  }
+}

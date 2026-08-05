@@ -1,0 +1,123 @@
+{
+  "schema_version": "1.0",
+  "meta": {
+    "code": "002409",
+    "name": "雅克科技",
+    "sector": "半导体",
+    "industry": "半导体材料(电子特气/前驱体)",
+    "as_of": "2026-08-05"
+  },
+  "snapshot": {
+    "close": 129.48,
+    "pct_chg": 7.09,
+    "ma": {
+      "ma5": 134.67,
+      "ma10": 146.2,
+      "ma20": 159.55,
+      "ma60": 147.21,
+      "排列": "纠缠"
+    },
+    "macd": {
+      "dif": -8.765,
+      "dea": -3.725,
+      "macd": -10.079,
+      "状态": "空头"
+    },
+    "kdj": {
+      "k": 25.42,
+      "d": 35.06,
+      "j": 6.14,
+      "状态": "-"
+    },
+    "rsi": {
+      "rsi6": 34.59,
+      "rsi12": 38.68,
+      "rsi24": 44.89
+    },
+    "bias20": -18.85,
+    "vol_ratio": 0.85,
+    "vol_state": "平量"
+  },
+  "valuation": {
+    "pe_ttm": 61.21,
+    "pb": 7.61,
+    "mktcap_yi": 616.23,
+    "报告期": "20260331",
+    "pe_valid": true,
+    "mode": "PE适用",
+    "basis": "PE(TTM) 可作横向对比,结合增速看 PEG"
+  },
+  "fundamental": {
+    "营收": 1972760765.04,
+    "净利": 266687960.67,
+    "营收增速": -6.850399,
+    "净利增速": 2.466021,
+    "ROE": 3.34,
+    "毛利率": 31.245749,
+    "净利率": 15.153153,
+    "负债率": 35.701168
+  },
+  "signals": {
+    "trend": {
+      "评级": "偏空",
+      "得分": -30,
+      "依据": [
+        "DIF在DEA下-10",
+        "价在MA20下-10",
+        "RSI偏弱-10"
+      ]
+    },
+    "reversal": {
+      "超跌": false,
+      "放量反包": false,
+      "低位金叉": false,
+      "底背离": true,
+      "拐点评分": 20,
+      "拐点标签": "无",
+      "依据": [
+        "MACD底背离+20"
+      ]
+    },
+    "ob_os": {
+      "verdict": "中性",
+      "resonance": 1,
+      "per_indicator": {
+        "kdj": "-(J濒临超卖提示)",
+        "rsi": "-",
+        "bias": "-18.85(超卖)"
+      }
+    }
+  },
+  "fundflow": null,
+  "events": [
+    {
+      "date": "2026-08-01",
+      "type": "交易异动",
+      "impact": "待判",
+      "title": "关于公司股票交易异常波动的公告"
+    },
+    {
+      "date": "2026-07-29",
+      "type": "其他",
+      "impact": "待判",
+      "title": "关于三级子公司向其参股公司提供财务资助的公告"
+    },
+    {
+      "date": "2026-07-29",
+      "type": "其他",
+      "impact": "待判",
+      "title": "第七届董事会第三次会议决议公告"
+    }
+  ],
+  "timeseries_refs": {
+    "kline": "data/raw/kline/002409.parquet",
+    "fundflow": "data/raw/fundflow/002409.parquet",
+    "announcements": "data/raw/announcement/002409.json"
+  },
+  "provenance": {
+    "tech": true,
+    "fundamental": true,
+    "announcements": 3,
+    "fundflow": false
+  }
+}

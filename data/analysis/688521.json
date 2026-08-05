@@ -1,0 +1,106 @@
+{
+  "schema_version": "1.0",
+  "meta": {
+    "code": "688521",
+    "name": "芯原股份",
+    "sector": "半导体",
+    "industry": "芯片设计IP",
+    "as_of": "2026-08-05"
+  },
+  "snapshot": {
+    "close": 207.09,
+    "pct_chg": 12.49,
+    "ma": {
+      "ma5": 189.28,
+      "ma10": 206.07,
+      "ma20": 236.52,
+      "ma60": 261.1,
+      "排列": "空头排列"
+    },
+    "macd": {
+      "dif": -24.087,
+      "dea": -19.591,
+      "macd": -8.991,
+      "状态": "空头"
+    },
+    "kdj": {
+      "k": 26.9,
+      "d": 19.47,
+      "j": 41.76,
+      "状态": "-"
+    },
+    "rsi": {
+      "rsi6": 48.36,
+      "rsi12": 41.91,
+      "rsi24": 43.43
+    },
+    "bias20": -12.44,
+    "vol_ratio": 0.96,
+    "vol_state": "平量"
+  },
+  "valuation": {
+    "pe_ttm": -167.99,
+    "pb": 34.61,
+    "mktcap_yi": 1089.12,
+    "报告期": "20260331",
+    "pe_valid": false,
+    "mode": "亏损/PE失效",
+    "basis": "改用 PB + PS(市销率)+ 在手订单 + 扭亏进度"
+  },
+  "fundamental": {
+    "营收": 835739470.03,
+    "净利": -340842945.2,
+    "营收增速": 114.473459,
+    "净利增速": -54.687125,
+    "ROE": -10.38,
+    "毛利率": 32.294832,
+    "净利率": -40.783396,
+    "负债率": 59.735155
+  },
+  "signals": {
+    "trend": {
+      "评级": "偏空",
+      "得分": -60,
+      "依据": [
+        "均线空头-30",
+        "DIF在DEA下-10",
+        "价在MA20下-10",
+        "RSI偏弱-10"
+      ]
+    },
+    "reversal": {
+      "超跌": false,
+      "放量反包": false,
+      "低位金叉": true,
+      "底背离": true,
+      "拐点评分": 45,
+      "拐点标签": "超跌待反弹",
+      "依据": [
+        "KDJ低位金叉+25",
+        "MACD底背离+20"
+      ]
+    },
+    "ob_os": {
+      "verdict": "中性",
+      "resonance": 1,
+      "per_indicator": {
+        "kdj": "-",
+        "rsi": "-",
+        "bias": "-12.44(超卖)"
+      }
+    }
+  },
+  "fundflow": null,
+  "events": [],
+  "timeseries_refs": {
+    "kline": "data/raw/kline/688521.parquet",
+    "fundflow": "data/raw/fundflow/688521.parquet",
+    "announcements": "data/raw/announcement/688521.json"
+  },
+  "provenance": {
+    "tech": true,
+    "fundamental": true,
+    "announcements": 0,
+    "fundflow": false
+  }
+}

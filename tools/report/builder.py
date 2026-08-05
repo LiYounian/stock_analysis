@@ -81,9 +81,13 @@ def build_portfolio_tech_report(results: dict[str, dict],
     overbought = [c for c, r in valid.items() if r["kdj"]["状态"] == "超买"]
     heavy = [c for c, r in valid.items()
              if isinstance(r["vol"]["量比"], (int, float)) and r["vol"]["量比"] > 1.5]
+    # 超买超卖(共振确认,已过滤 KDJ 假信号)
+    os_confirmed = [c for c, r in valid.items() if r.get("ob_os", {}).get("verdict") == "超卖"]
+    ob_confirmed = [c for c, r in valid.items() if r.get("ob_os", {}).get("verdict") == "超买"]
     lines += ["", "## 三、技术异动与超跌反弹", ""]
-    for label, codes in [("MACD 金叉", golden), ("KDJ 超卖", oversold),
-                         ("KDJ 超买", overbought), ("放量(量比>1.5)", heavy)]:
+    for label, codes in [("超卖(≥2指标共振)", os_confirmed), ("超买(≥2指标共振)", ob_confirmed),
+                         ("MACD 金叉", golden), ("KDJ 超卖(单指标,未过滤)", oversold),
+                         ("放量(量比>1.5)", heavy)]:
         names = "、".join(f"{_name(c)}({c})" for c in codes) if codes else "无"
         lines.append(f"- **{label}**:{names}")
 
@@ -198,6 +202,9 @@ def build_stock_tech_report(code: str, result: dict, fundamental: dict | None = 
         f"- K {kd['k']} / D {kd['d']} / J {kd['j']} → **{kd['状态']}**", "",
         "## RSI",
         f"- RSI6/12/24:{rs['rsi6']} / {rs['rsi12']} / {rs['rsi24']}", "",
+        "## 超买超卖(多指标共振)",
+        (lambda o, b: f"- **{o.get('verdict','-')}**(共振 {o.get('resonance',0)}/BIAS20 {b.get('bias20','-')})"
+                      f":{o.get('per_indicator', {})}")(result.get("ob_os", {}), result.get("bias", {})), "",
         "## 量价",
         f"- 量比 {vol['量比']} → **{vol['状态']}**", "",
     ]
