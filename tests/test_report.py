@@ -45,14 +45,30 @@ def test_portfolio_report_with_fundamentals(tmp_path, monkeypatch):
     assert "五、情绪面" in content              # 有基本面时情绪面顺延为第五节
 
 
+def _fake_anns():
+    return [{"date": "2026-08-03", "type": "回购", "impact": "利好",
+             "title": "关于回购公司股份的公告", "url": "http://a"}]
+
+
+def test_portfolio_report_with_announcements(tmp_path, monkeypatch):
+    monkeypatch.setattr(settings, "REPORT_DIR", tmp_path)
+    results = {"002156": _fake_result(60)}
+    anns = {"002156": _fake_anns()}
+    content = open(builder.build_portfolio_tech_report(results, None, anns),
+                   encoding="utf-8").read()
+    assert "重要公告清单" in content
+    assert "回购" in content
+
+
 def test_stock_card_created(tmp_path, monkeypatch):
     monkeypatch.setattr(settings, "REPORT_DIR", tmp_path)
-    path = builder.build_stock_tech_report("002156", _fake_result(60), _fake_fund())
+    path = builder.build_stock_tech_report("002156", _fake_result(60), _fake_fund(), _fake_anns())
     content = open(path, encoding="utf-8").read()
     assert "综合评级:偏多" in content
     assert "多头排列" in content
     assert "PE(TTM) 47.98" in content          # 基本面章节
-    assert "P2 补" in content                  # 情绪面占位
+    assert "近期公告" in content and "回购" in content   # 公告章节
+    assert "P2-C 补" in content                # 情绪面占位
 
 
 def test_stock_card_insufficient(tmp_path, monkeypatch):

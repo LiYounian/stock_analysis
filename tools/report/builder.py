@@ -41,7 +41,8 @@ def _write(path, text: str) -> str:
 
 # ---------- 组合技术概览 ----------
 def build_portfolio_tech_report(results: dict[str, dict],
-                                fundamentals: dict[str, dict] | None = None) -> str:
+                                fundamentals: dict[str, dict] | None = None,
+                                announcements: dict[str, list] | None = None) -> str:
     """输入 {code: technical.compute 输出}(可选基本面);产出 docs/报告/组合技术_{date}.md。"""
     date = _today()
     valid = {c: r for c, r in results.items() if "signal" in r}
@@ -106,9 +107,31 @@ def build_portfolio_tech_report(results: dict[str, dict],
                          f"{_median_or_none(d.get('ROE', []))} | "
                          f"{_median_or_none(d.get('净利增速', []))} | {cnt} |")
 
-    sec_idx = "五" if fundamentals else "四"
-    lines += ["", "---", f"## {sec_idx}、情绪面", "*(P2 补:政策 / 公司行为 / 舆情三层)*", ""]
+    # 5. 重要公告清单(公司行为情绪层,有公告数据时)
+    idx = ["一", "二", "三", "四", "五", "六"]
+    n = 3 + (1 if fundamentals else 0)
+    if announcements:
+        important = {"业绩预告", "业绩快报", "增持", "减持", "回购", "合同订单",
+                     "诉讼仲裁", "权益变动", "股权激励", "再融资"}
+        rows_a = []
+        for code, items in announcements.items():
+            for it in items:
+                if it["type"] in important:
+                    rows_a.append((it["date"], code, it))
+        rows_a.sort(key=lambda x: x[0], reverse=True)
+        lines += ["", f"## {idx[n]}、重要公告清单(公司行为)", ""]
+        if rows_a:
+            lines += ["| 日期 | 名称 | 代码 | 类型 | 方向 | 标题 |",
+                      "|---|---|---|---|---|---|"]
+            for date_a, code, it in rows_a[:25]:
+                lines.append(f"| {date_a} | {_name(code)} | {code} | {it['type']} | "
+                             f"{it['impact']} | {it['title'][:30]} |")
+        else:
+            lines.append("近期无重要公告。")
+        n += 1
 
+    lines += ["", "---", f"## {idx[n]}、情绪面",
+              "*(P2-C 补:政策 / 舆情;公司行为见上「重要公告」)*", ""]
     return _write(settings.REPORT_DIR / f"组合技术_{date}.md", "\n".join(lines))
 
 
@@ -126,8 +149,20 @@ def _fundamental_section(f: dict | None) -> list[str]:
     ]
 
 
-def build_stock_tech_report(code: str, result: dict, fundamental: dict | None = None) -> str:
-    """输入单票 compute 输出(可选基本面);产出 docs/报告/个股_{code}_{date}.md。"""
+def _announcement_section(items: list | None) -> list[str]:
+    if items is None:
+        return ["## 近期公告", "*(未采集)*", ""]
+    if not items:
+        return ["## 近期公告", "近期无公告。", ""]
+    out = ["## 近期公告", "", "| 日期 | 类型 | 方向 | 标题 |", "|---|---|---|---|"]
+    for it in items[:10]:
+        out.append(f"| {it['date']} | {it['type']} | {it['impact']} | {it['title'][:32]} |")
+    return out + [""]
+
+
+def build_stock_tech_report(code: str, result: dict, fundamental: dict | None = None,
+                            announcements: list | None = None) -> str:
+    """输入单票 compute 输出(可选基本面/公告);产出 docs/报告/个股_{code}_{date}.md。"""
     date = _today()
     name = _name(code)
     if "signal" not in result:
@@ -155,5 +190,6 @@ def build_stock_tech_report(code: str, result: dict, fundamental: dict | None = 
     ]
     lines += [f"- {r}" for r in s["依据"]] or ["- (无)"]
     lines += ["", "---"] + _fundamental_section(fundamental)
-    lines += ["---", "## 情绪面", "*(P2 补:政策 / 公司行为 / 舆情)*", ""]
+    lines += ["---"] + _announcement_section(announcements)
+    lines += ["---", "## 情绪面", "*(P2-C 补:政策 / 舆情;公司行为见上「近期公告」)*", ""]
     return _write(settings.REPORT_DIR / f"个股_{code}_{date}.md", "\n".join(lines))
