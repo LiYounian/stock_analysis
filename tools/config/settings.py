@@ -23,11 +23,13 @@ UGC_LIMIT = 50             # 每票 UGC 抓取条数上限
 USE_QWEN_SENTIMENT = True   # 情感打分是否走 qwen 外包
 QWEN_BATCH_SIZE = 20        # 每批送 qwen 的文本条数
 
-# —— LLM API(用户提供,全部走环境变量,禁止硬编 key)——
-# 规格见 docs/大模型调用设计.md 第 6 节;key 通过 env / gitignore 的 .env 注入。
-LLM_BASE_URL = os.getenv("LLM_BASE_URL", "")   # 接口根地址
-LLM_API_KEY = os.getenv("LLM_API_KEY", "")     # 鉴权 key(禁止写进仓库)
-LLM_MODEL = os.getenv("LLM_MODEL", "")         # 模型别名
+# —— LLM API(全部走环境变量,禁止硬编 url/key,禁止入库)——
+# 优先 LLM_* 显式变量;否则回落到用户已有的 内部网关 DeepSeek 环境变量。
+# 实际 url/key 值只在用户 shell 环境里(~/.zshrc),代码只引用变量名。
+LLM_BASE_URL = os.getenv("LLM_BASE_URL") or os.getenv("LLM_BASE_URL", "")
+LLM_API_KEY = (os.getenv("LLM_API_KEY") or os.getenv("LLM_API_KEY")
+               or os.getenv("DEEPSEEK_API_KEY", ""))
+LLM_MODEL = os.getenv("LLM_MODEL", "deepseek-v4-pro")   # 用户推荐模型
 LLM_TIMEOUT = 60
 LLM_MAX_RETRY = 3
 # 触点 → provider 路由:重批量走 qwen,精确抽取/摘要走用户 API
