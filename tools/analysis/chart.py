@@ -2,7 +2,8 @@
 
 架构约束(§3/§9.3):展示层只读、不算、不 import 分析器。故把「K线 + 均线」
 在分析层预计算成视图落盘,web 只读该视图文件。
-产物:data/analysis/chart/{code}.json = {dates, close, ma5, ma20, ma60, volume}(最近 limit 根)。
+产物:data/analysis/chart/{code}.json = {dates, open, high, low, close, ma5, ma20, ma60, volume}
+(最近 limit 根)。含 OHLC 以支持蜡烛图(candlestick),折线图取 close 即可,向后兼容。
 """
 from __future__ import annotations
 
@@ -16,11 +17,15 @@ from tools.config import stock_pool
 
 logger = logging.getLogger("analysis.chart")
 
-_EMPTY = {"dates": [], "close": [], "ma5": [], "ma20": [], "ma60": [], "volume": []}
+_EMPTY = {"dates": [], "open": [], "high": [], "low": [], "close": [],
+          "ma5": [], "ma20": [], "ma60": [], "volume": []}
 
 
 def build_chart(code: str, limit: int = 120) -> dict:
-    """读 K线 + 预算 MA5/20/60,返回 Chart.js 所需序列(最近 limit 根)。缓存缺失返回空。"""
+    """读 K线 + 预算 MA5/20/60,返回图表序列(最近 limit 根)。缺失返回空。
+
+    含 OHLC(open/high/low/close)以支持蜡烛图;折线图取 close。向后兼容旧折线视图。
+    """
     try:
         df = market.load_kline(code).copy()
     except FileNotFoundError:
@@ -34,6 +39,7 @@ def build_chart(code: str, limit: int = 120) -> dict:
 
     return {
         "dates": [str(d)[:10] for d in df["date"]],
+        "open": col("open"), "high": col("high"), "low": col("low"),
         "close": col("close"), "ma5": col("ma5"), "ma20": col("ma20"),
         "ma60": col("ma60"), "volume": [float(v) for v in df["volume"]],
     }

@@ -42,7 +42,8 @@ def get_kline(code: str) -> dict:
     try:
         return store.get_code_view("chart", code, date="latest")
     except FileNotFoundError:
-        return {"dates": [], "close": [], "ma5": [], "ma20": [], "ma60": [], "volume": []}
+        return {"dates": [], "open": [], "high": [], "low": [], "close": [],
+                "ma5": [], "ma20": [], "ma60": [], "volume": []}
 
 
 def _name(recs, code):

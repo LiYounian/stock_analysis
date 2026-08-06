@@ -22,7 +22,9 @@ def _fake_kline(n=130):
 def test_build_chart_shape(monkeypatch):
     monkeypatch.setattr(chart.market, "load_kline", lambda code: _fake_kline())
     d = chart.build_chart("000021", limit=120)
-    assert set(d) == {"dates", "close", "ma5", "ma20", "ma60", "volume"}
+    assert set(d) == {"dates", "open", "high", "low", "close",
+                      "ma5", "ma20", "ma60", "volume"}   # 含 OHLC 支持蜡烛图
+    assert len(d["dates"]) == len(d["open"]) == len(d["close"]) == 120
     assert len(d["dates"]) == 120                 # 截到 limit
     assert d["ma20"][-1] is not None              # MA 已预算
     assert d["ma60"][0] is None or isinstance(d["ma60"][0], float)
