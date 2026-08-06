@@ -17,3 +17,6 @@ docs/报告/
 # 密钥/本地配置
 .env
 *.token
+
+# Claude Code 本地配置,不入库
+.claude/
