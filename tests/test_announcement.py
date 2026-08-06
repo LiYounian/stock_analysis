@@ -5,6 +5,7 @@ import pandas as pd
 import pytest
 
 from tools.collectors import announcement as an
+from tools.store import repo as store
 
 
 def test_classify_title():
@@ -47,19 +48,18 @@ def _install(monkeypatch, df):
 
 
 def test_fetch_tags_and_sorts(monkeypatch, tmp_path):
-    monkeypatch.setattr(an, "_ANN_DIR", tmp_path)
-    monkeypatch.setattr(an, "_ann_path", lambda code: tmp_path / f"{code}.json")
+    monkeypatch.setattr(store, "_RAW_DIR", tmp_path)
     _install(monkeypatch, _fake_cninfo_df())
     out = an.fetch_announcements(["000021"], days=30)
     items = out["000021"]
     assert items[0]["date"] == "2026-08-03"          # 倒序:减持在前
     assert items[0]["type"] == "减持" and items[0]["impact"] == "利空"
     assert items[1]["type"] == "回购" and items[1]["impact"] == "利好"
+    assert store.get_raw_meta("announcement", "000021")["source"] == "cninfo"
 
 
 def test_load_roundtrip_and_missing(monkeypatch, tmp_path):
-    monkeypatch.setattr(an, "_ANN_DIR", tmp_path)
-    monkeypatch.setattr(an, "_ann_path", lambda code: tmp_path / f"{code}.json")
+    monkeypatch.setattr(store, "_RAW_DIR", tmp_path)
     _install(monkeypatch, _fake_cninfo_df())
     an.fetch_announcements(["000021"], days=30)
     assert len(an.load_announcements("000021")) == 2

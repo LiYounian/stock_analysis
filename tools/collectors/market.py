@@ -4,7 +4,7 @@
   - 主源腾讯 `stock_zh_a_hist_tx`:本机实测可用,返回 OHLCV+成交额+换手率。
   - 东财 `stock_zh_a_hist`:本机被其 TLS 指纹反爬(python-requests 被 RST),留作其他环境备选。
     详见 docs/问题/问题台账.md R4。
-落盘:data/raw/kline/{code}.parquet
+落盘:走 store 层(kind="kline",parquet),旁记 meta.source=实际命中源。
 契约见 docs/计划/P1_技术面打通.md Step 1。
 """
 from __future__ import annotations
@@ -15,6 +15,7 @@ import time
 import pandas as pd
 
 from tools.config import settings
+from tools.store import repo as store
 
 logger = logging.getLogger("collectors.market")
 
@@ -25,7 +26,6 @@ _EM_COL_MAP = {
     "日期": "date", "开盘": "open", "收盘": "close", "最高": "high", "最低": "low",
     "成交量": "volume", "成交额": "amount", "涨跌幅": "pct_chg", "换手率": "turnover",
 }
-_KLINE_DIR = settings.DATA_RAW / "kline"
 # 源优先级(本机腾讯可用;东财被指纹墙,置末)
 DEFAULT_SOURCES = ("tencent", "sina", "eastmoney")
 
@@ -39,10 +39,6 @@ def market_prefix(code: str) -> str:
     if code[0] in ("8", "4"):
         return f"bj{code}"
     return code
-
-
-def _kline_path(code: str):
-    return _KLINE_DIR / f"{code}.parquet"
 
 
 def _normalize(df: pd.DataFrame) -> pd.DataFrame:
@@ -83,11 +79,12 @@ def _fetch_eastmoney(code, start, end, adjust) -> pd.DataFrame:
 _FETCHERS = {"tencent": _fetch_tencent, "sina": _fetch_sina, "eastmoney": _fetch_eastmoney}
 
 
-def fetch_one(code: str, start: str, end: str, adjust: str,
-              sources: tuple[str, ...] = DEFAULT_SOURCES) -> pd.DataFrame:
-    """拉单票日 K线(多源 fallback,不落盘)。
+def _fetch_one_with_source(code: str, start: str, end: str, adjust: str,
+                           sources: tuple[str, ...] = DEFAULT_SOURCES
+                           ) -> tuple[pd.DataFrame, str]:
+    """拉单票日 K线,返回 (归一化 df, 命中源名)。全失败抛 ConnectionError。
 
-    依次尝试 sources 各源;全失败抛 ConnectionError(不返回空 df 伪装成功)。
+    落盘时要把实际命中的源写进 raw meta.source,故此处把命中源一并透出。
     """
     errors = []
     for src in sources:
@@ -97,10 +94,20 @@ def fetch_one(code: str, start: str, end: str, adjust: str,
                 raise ValueError("空数据")
             out = _normalize(df)
             logger.debug("K线 %s 命中源 %s", code, src)
-            return out
+            return out, src
         except Exception as e:  # 换下一个源
             errors.append(f"{src}: {type(e).__name__} {str(e)[:40]}")
     raise ConnectionError(f"{code} 所有源均失败: {errors}")
+
+
+def fetch_one(code: str, start: str, end: str, adjust: str,
+              sources: tuple[str, ...] = DEFAULT_SOURCES) -> pd.DataFrame:
+    """拉单票日 K线(多源 fallback,不落盘)。
+
+    依次尝试 sources 各源;全失败抛 ConnectionError(不返回空 df 伪装成功)。
+    """
+    df, _src = _fetch_one_with_source(code, start, end, adjust, sources)
+    return df
 
 
 def fetch_kline(codes: list[str], start: str | None = None,
@@ -112,7 +119,6 @@ def fetch_kline(codes: list[str], start: str | None = None,
     单票失败记 logger 并跳过,不中断整批;返回成功票的 {code: DataFrame}。
     """
     settings.ensure_dirs()
-    _KLINE_DIR.mkdir(parents=True, exist_ok=True)
     if start is None:
         start = (pd.Timestamp.today() - pd.Timedelta(days=settings.KLINE_DAYS * 2)
                  ).strftime("%Y%m%d")
@@ -123,10 +129,10 @@ def fetch_kline(codes: list[str], start: str | None = None,
     failed: list[str] = []
     for code in codes:
         try:
-            df = fetch_one(code, start, end, adjust)
-            df.to_parquet(_kline_path(code), index=False)
+            df, src = _fetch_one_with_source(code, start, end, adjust)
+            store.put_raw("kline", code, df, meta={"source": src})
             out[code] = df
-            logger.info("K线 %s 落盘 %d 根", code, len(df))
+            logger.info("K线 %s 落盘 %d 根(源 %s)", code, len(df), src)
         except Exception as e:
             failed.append(code)
             logger.error("K线 %s 失败: %s", code, e)
@@ -137,8 +143,5 @@ def fetch_kline(codes: list[str], start: str | None = None,
 
 
 def load_kline(code: str) -> pd.DataFrame:
-    """从本地缓存读单票 K线(分析层用,不触网)。缓存缺失抛错。"""
-    p = _kline_path(code)
-    if not p.exists():
-        raise FileNotFoundError(f"{code} 无 K线缓存,请先 fetch_kline: {p}")
-    return pd.read_parquet(p)
+    """从本地缓存读单票 K线(分析层用,不触网)。缓存缺失抛 FileNotFoundError。"""
+    return store.get_raw("kline", code)

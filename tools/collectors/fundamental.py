@@ -3,22 +3,23 @@
 数据源(本机实测可用,避开被指纹墙的东财):
   - 同花顺 `stock_financial_abstract`:营收/净利/增速/ROE/毛利率/净利率/负债率。
   - 百度 `stock_zh_valuation_baidu`:PE(TTM)/PB/总市值。
-落盘:data/raw/fundamental/{code}.json
+落盘:走 store 层(kind="fundamental",json),旁记 meta.source。
 契约见 docs/计划/P2_结构化情绪与基本面.md。
 """
 from __future__ import annotations
 
-import json
 import logging
 import time
 
 import pandas as pd
 
 from tools.config import settings
+from tools.store import repo as store
 
 logger = logging.getLogger("collectors.fundamental")
 
-_FUND_DIR = settings.DATA_RAW / "fundamental"
+# 数据来源标注(同花顺财务摘要 + 百度估值)
+_SOURCE = "同花顺+百度"
 
 # 输出字段 → 同花顺财务摘要指标名
 _ABSTRACT_MAP = {
@@ -37,10 +38,6 @@ def _to_float(v):
         return None if pd.isna(f) else f
     except (TypeError, ValueError):
         return None
-
-
-def _fund_path(code: str):
-    return _FUND_DIR / f"{code}.json"
 
 
 def _fetch_abstract(code: str) -> dict:
@@ -79,15 +76,13 @@ def fetch_fundamental(codes: list[str]) -> dict[str, dict]:
     合并同花顺财务摘要 + 百度估值。单票整体失败记 logger 并跳过,不中断整批。
     """
     settings.ensure_dirs()
-    _FUND_DIR.mkdir(parents=True, exist_ok=True)
     out: dict[str, dict] = {}
     failed: list[str] = []
     for code in codes:
         try:
             rec = _fetch_abstract(code)
             rec.update(_fetch_baidu(code))
-            _fund_path(code).write_text(
-                json.dumps(rec, ensure_ascii=False, indent=2), encoding="utf-8")
+            store.put_raw("fundamental", code, rec, meta={"source": _SOURCE})
             out[code] = rec
             logger.info("基本面 %s 落盘(报告期 %s)", code, rec["报告期"])
         except Exception as e:
@@ -100,8 +95,5 @@ def fetch_fundamental(codes: list[str]) -> dict[str, dict]:
 
 
 def load_fundamental(code: str) -> dict:
-    """从本地缓存读单票基本面。缓存缺失抛错。"""
-    p = _fund_path(code)
-    if not p.exists():
-        raise FileNotFoundError(f"{code} 无基本面缓存,请先 fetch_fundamental: {p}")
-    return json.loads(p.read_text(encoding="utf-8"))
+    """从本地缓存读单票基本面。缓存缺失抛 FileNotFoundError。"""
+    return store.get_raw("fundamental", code)

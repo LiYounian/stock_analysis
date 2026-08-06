@@ -3,12 +3,11 @@
 数据源:巨潮 `stock_zh_a_disclosure_report_cninfo`(本机实测可用,权威、非东财)。
 只拿到标题/时间/链接(无正文),按标题关键词**规则打标**分类 + 粗判影响方向。
 正文级定性(利好/利空强度)留给 P2-C 的 LLM(event.py)。
-落盘:data/raw/announcement/{code}.json
+落盘:走 store 层(kind="announcement",json),旁记 meta.source="cninfo"。
 契约见 docs/计划/P2_结构化情绪与基本面.md。
 """
 from __future__ import annotations
 
-import json
 import logging
 import time
 import warnings
@@ -16,10 +15,11 @@ import warnings
 import pandas as pd
 
 from tools.config import settings
+from tools.store import repo as store
 
 logger = logging.getLogger("collectors.announcement")
 
-_ANN_DIR = settings.DATA_RAW / "announcement"
+_SOURCE = "cninfo"  # 巨潮
 
 # 标题关键词 → 类型(顺序即优先级,先命中先归类)
 _TYPE_RULES: list[tuple[tuple[str, ...], str]] = [
@@ -43,10 +43,6 @@ _TYPE_RULES: list[tuple[tuple[str, ...], str]] = [
 # 影响方向粗判(仅标题关键词,细判交 P2-C LLM)
 _BULLISH = ("增持", "回购", "预增", "扭亏", "中标", "重大合同", "订单", "股权激励")
 _BEARISH = ("减持", "预减", "预亏", "首亏", "诉讼", "仲裁", "被起诉", "质押", "冻结")
-
-
-def _ann_path(code: str):
-    return _ANN_DIR / f"{code}.json"
 
 
 def classify_title(title: str) -> str:
@@ -83,7 +79,6 @@ def fetch_announcements(codes: list[str], days: int = None) -> dict[str, list[di
     单票失败记 logger 并跳过,不中断整批。
     """
     settings.ensure_dirs()
-    _ANN_DIR.mkdir(parents=True, exist_ok=True)
     days = days or settings.NEWS_LOOKBACK_DAYS
     start = (pd.Timestamp.today() - pd.Timedelta(days=days)).strftime("%Y%m%d")
     end = pd.Timestamp.today().strftime("%Y%m%d")
@@ -105,8 +100,7 @@ def fetch_announcements(codes: list[str], days: int = None) -> dict[str, list[di
                         "url": r.get("公告链接", ""),
                     })
                 items.sort(key=lambda x: x["date"], reverse=True)
-            _ann_path(code).write_text(
-                json.dumps(items, ensure_ascii=False, indent=2), encoding="utf-8")
+            store.put_raw("announcement", code, items, meta={"source": _SOURCE})
             out[code] = items
             logger.info("公告 %s:%d 条", code, len(items))
         except Exception as e:
@@ -119,8 +113,5 @@ def fetch_announcements(codes: list[str], days: int = None) -> dict[str, list[di
 
 
 def load_announcements(code: str) -> list[dict]:
-    """从本地缓存读单票公告。缓存缺失抛错。"""
-    p = _ann_path(code)
-    if not p.exists():
-        raise FileNotFoundError(f"{code} 无公告缓存,请先 fetch_announcements: {p}")
-    return json.loads(p.read_text(encoding="utf-8"))
+    """从本地缓存读单票公告。缓存缺失抛 FileNotFoundError。"""
+    return store.get_raw("announcement", code)

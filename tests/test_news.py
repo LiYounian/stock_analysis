@@ -6,6 +6,7 @@ import pandas as pd
 import pytest
 
 from tools.collectors import news as nw
+from tools.store import repo as store
 
 
 def _fake_df():
@@ -24,8 +25,7 @@ def _install(monkeypatch, df):
 
 
 def test_fetch_normalizes_filters_sorts(monkeypatch, tmp_path):
-    monkeypatch.setattr(nw, "_NEWS_DIR", tmp_path)
-    monkeypatch.setattr(nw, "_news_path", lambda code: tmp_path / f"{code}.json")
+    monkeypatch.setattr(store, "_RAW_DIR", tmp_path)
     _install(monkeypatch, _fake_df())
     # days 很大以纳入 2026 的两条,排除 2000 的旧闻靠 cutoff;这里用大窗但旧闻 2000 仍 < cutoff
     out = nw.fetch_news(["000021"], days=3650)   # ~10年窗
@@ -34,11 +34,11 @@ def test_fetch_normalizes_filters_sorts(monkeypatch, tmp_path):
     assert all(it["time"][:4] == "2026" for it in items)
     assert items[0]["time"] > items[-1]["time"] if len(items) > 1 else True
     assert set(items[0].keys()) == {"title", "content", "time", "source", "url"}
+    assert store.get_raw_meta("news", "000021")["source"] == "eastmoney"
 
 
 def test_load_roundtrip_missing(monkeypatch, tmp_path):
-    monkeypatch.setattr(nw, "_NEWS_DIR", tmp_path)
-    monkeypatch.setattr(nw, "_news_path", lambda code: tmp_path / f"{code}.json")
+    monkeypatch.setattr(store, "_RAW_DIR", tmp_path)
     _install(monkeypatch, _fake_df())
     nw.fetch_news(["000021"], days=3650)
     assert isinstance(nw.load_news("000021"), list)
