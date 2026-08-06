@@ -2,18 +2,17 @@
 
 若无缓存数据(data/analysis 为空),用例自动跳过(不误报)。
 """
-import glob
-
 import pytest
 from fastapi.testclient import TestClient
 
-from tools.config import settings
+from web import data_access as da
 from web.app import app
 
 client = TestClient(app)
 
-_HAS_DATA = len([f for f in glob.glob(str(settings.PROJECT_ROOT / "data/analysis/*.json"))
-                 if not f.endswith(("panel.json", "screen.json"))]) > 0
+_RECS = da.list_records()                 # 最新日期下的个股记录(经 store)
+_HAS_DATA = len(_RECS) > 0
+_A_CODE = _RECS[0]["meta"]["code"] if _RECS else "000000"
 skip_no_data = pytest.mark.skipif(not _HAS_DATA, reason="无 data/analysis 缓存,先 run.py")
 
 
@@ -27,10 +26,7 @@ def test_dashboard_ok():
 
 @skip_no_data
 def test_stock_page_ok():
-    code = [f.rsplit("/", 1)[-1][:-5]
-            for f in glob.glob(str(settings.PROJECT_ROOT / "data/analysis/*.json"))
-            if not f.endswith(("panel.json", "screen.json"))][0]
-    r = client.get(f"/stock/{code}")
+    r = client.get(f"/stock/{_A_CODE}")
     assert r.status_code == 200
     assert "K线走势" in r.text
     assert "止盈止损" in r.text
@@ -57,10 +53,7 @@ def test_news_ok():
 
 @skip_no_data
 def test_api_stock_json():
-    code = [f.rsplit("/", 1)[-1][:-5]
-            for f in glob.glob(str(settings.PROJECT_ROOT / "data/analysis/*.json"))
-            if not f.endswith(("panel.json", "screen.json"))][0]
-    r = client.get(f"/api/stock/{code}")
+    r = client.get(f"/api/stock/{_A_CODE}")
     assert r.status_code == 200
     body = r.json()
     assert "record" in body and "kline" in body

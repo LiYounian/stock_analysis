@@ -1,29 +1,16 @@
-"""Web 数据访问层:只读 data/analysis 结构化 JSON + K线 parquet。
+"""Web 数据访问层:经 store 只读 data/analysis 最新日期的结构化 JSON + 视图。
 
-Web 不做计算,只读离线 run.py 产出的数据。这里做聚合/取数。
+Web 不做计算、不触网,只读离线 run.py 产出的数据(store 按日期存,取最新日期)。
+这里做聚合/取数;展示层只依赖 config + store(基座只读层),不 import 分析器。
 """
 from __future__ import annotations
 
-import glob
-import json
-
-from tools.config import settings   # 展示层只依赖 config + 读数据文件,不 import 分析器
-
-_ANALYSIS = settings.PROJECT_ROOT / "data" / "analysis"
+from tools.store import repo as store
 
 
 def _load_all() -> dict[str, dict]:
-    out = {}
-    for f in glob.glob(str(_ANALYSIS / "*.json")):
-        p = f.rsplit("/", 1)[-1]
-        if p in ("panel.json", "screen.json"):     # 非个股记录,跳过
-            continue
-        code = p[:-5]
-        try:
-            out[code] = json.loads(open(f, encoding="utf-8").read())
-        except Exception:
-            pass
-    return out
+    """最新日期下全部个股中心记录 {code: rec}。"""
+    return {r["meta"]["code"]: r for r in store.iter_records(date="latest")}
 
 
 def list_records() -> list[dict]:
@@ -35,20 +22,27 @@ def list_records() -> list[dict]:
 
 
 def get_record(code: str) -> dict | None:
-    return _load_all().get(code)
+    try:
+        return store.get_record(code, date="latest")
+    except FileNotFoundError:
+        return None
 
 
 def as_of() -> str:
+    """最新数据日期(取最新日期目录名;回退记录里的 meta.as_of)。"""
+    dates = store.list_dates("analysis")
+    if dates:
+        return dates[-1]
     recs = list(_load_all().values())
     return recs[0]["meta"]["as_of"] if recs else "-"
 
 
 def get_kline(code: str) -> dict:
-    """读预生成的 K线图表视图(analysis/chart 产出)。展示层只读、不算(§9.3)。"""
-    p = _ANALYSIS / "chart" / f"{code}.json"
-    if not p.exists():
+    """读预生成的 K线图表视图(analysis/<日期>/chart 产出)。展示层只读、不算(§9.3)。"""
+    try:
+        return store.get_code_view("chart", code, date="latest")
+    except FileNotFoundError:
         return {"dates": [], "close": [], "ma5": [], "ma20": [], "ma60": [], "volume": []}
-    return json.loads(p.read_text(encoding="utf-8"))
 
 
 def _name(recs, code):
@@ -57,12 +51,12 @@ def _name(recs, code):
 
 
 def screen_page() -> dict:
-    """选股页数据:读 screen.json(run.py screen 产出)+ 补每票关键字段。"""
+    """选股页数据:读 screen 视图(run.py screen 产出)+ 补每票关键字段。"""
     recs = _load_all()
-    sp = _ANALYSIS / "screen.json"
-    if not sp.exists():
+    try:
+        data = store.get_view("screen", date="latest")
+    except FileNotFoundError:
         return {"presets": {}, "aggregate": {}, "meta": {}, "as_of": as_of()}
-    data = json.loads(sp.read_text(encoding="utf-8"))
     # 给每组的代码补名称/板块/评级/买卖倾向,便于表格展示
     detail = {}
     for name, codes in data.get("presets", {}).items():

@@ -76,10 +76,10 @@ def _row(rec: dict) -> dict:
     }
 
 
-def build_panel() -> pd.DataFrame:
+def build_panel(codes: list[str] | None = None) -> pd.DataFrame:
     """组装横向总表 DataFrame(按趋势分升序,超卖/弱势在前便于看反弹候选)。"""
     rows = []
-    for code in stock_pool.get_codes():
+    for code in (codes or stock_pool.get_codes()):
         try:
             rows.append(_row(serialize.load_record(code)))
         except FileNotFoundError:
@@ -90,21 +90,22 @@ def build_panel() -> pd.DataFrame:
     return df
 
 
-def write_panel() -> dict:
-    """落盘 CSV + JSON + markdown 视图。返回路径。"""
-    df = build_panel()
+def write_panel(codes: list[str] | None = None) -> dict:
+    """落盘 panel 视图(经 store 按日期)+ CSV/markdown 人读artifact。返回路径。"""
+    from tools.store import repo as store
+    df = build_panel(codes)
+    records = df.where(pd.notna(df), None).to_dict(orient="records")
+    view_p = store.put_view("panel", records)             # 按日期视图(Web/程序读)
+
     _OUT_DIR.mkdir(parents=True, exist_ok=True)
     csv_p = _OUT_DIR / "panel.csv"
-    json_p = _OUT_DIR / "panel.json"
     df.to_csv(csv_p, index=False, encoding="utf-8-sig")   # utf-8-sig 便于 Excel 打开
-    df.to_json(json_p, orient="records", force_ascii=False, indent=2)
 
-    settings.REPORT_DIR.mkdir(parents=True, exist_ok=True)
     date = pd.Timestamp.today().strftime("%Y%m%d")
     md_p = settings.PROJECT_ROOT / "docs" / "汇总" / f"横向总表_{date}.md"
     md_p.parent.mkdir(parents=True, exist_ok=True)
     md_p.write_text(f"# 横向总表 · {date}\n\n共 {len(df)} 只,按趋势分升序(弱势/超卖在前)。\n"
-                    f"数据源 data/analysis/*.json;完整数据见 panel.csv / panel.json。\n\n"
+                    f"数据源 data/analysis/<日期>/*.json;完整数据见 panel.csv。\n\n"
                     + df.to_markdown(index=False) + "\n", encoding="utf-8")
-    logger.info("横向总表:%d 只 → %s / %s / %s", len(df), csv_p, json_p, md_p)
-    return {"csv": str(csv_p), "json": str(json_p), "md": str(md_p)}
+    logger.info("横向总表:%d 只 → %s(视图)/ %s", len(df), view_p, csv_p)
+    return {"view": view_p, "csv": str(csv_p), "md": str(md_p)}

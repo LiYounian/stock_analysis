@@ -12,6 +12,7 @@ import pytest
 from tools.analysis import event as ev
 from tools.collectors import policy as pol
 from tools.collectors import ugc as ug
+from tools.store import repo as store
 
 
 # ---------- 公共:隔离 data/ + mock LLM ----------
@@ -33,12 +34,13 @@ class _FakeClient:
 
 @pytest.fixture
 def isolate(monkeypatch, tmp_path):
-    """把 LLM 缓存 + 分析产出目录 + 政策/UGC 缓存全部指到 tmp_path。"""
+    """LLM 缓存指 tmp;情绪/政策产出经 store,故 monkeypatch store 目录 + 固定运行日期。"""
     monkeypatch.setattr(ev.settings, "LLM_CACHE", tmp_path / "llm_cache")
-    monkeypatch.setattr(ev, "_ANALYSIS_DIR", tmp_path / "analysis")
-    monkeypatch.setattr(ev, "_SENT_DIR", tmp_path / "analysis" / "sentiment")
-    monkeypatch.setattr(ev, "_POLICY_SENT", tmp_path / "analysis" / "sentiment_policy.json")
-    return tmp_path
+    monkeypatch.setattr(store, "_RAW_DIR", tmp_path / "raw")
+    monkeypatch.setattr(store, "_ANALYSIS_DIR", tmp_path / "analysis")
+    store.set_active_date("2026-08-06")
+    yield tmp_path
+    store.set_active_date(None)
 
 
 def _fake_policy(monkeypatch, items):
@@ -74,9 +76,8 @@ def test_score_policy_structure_and_persist(isolate, monkeypatch):
     assert r["受影响行业"] == ["半导体"] and r["层"] == "政策"
     assert r["title"] == "国家出台半导体扶持政策"     # 原字段保留
 
-    # 落盘存在且结构一致
-    saved = json.loads(ev._POLICY_SENT.read_text(encoding="utf-8"))
-    assert saved == scored
+    # 落盘存在且结构一致(经 store 视图)
+    assert store.get_view("sentiment_policy") == scored
 
 
 def test_score_policy_cache_hit(isolate, monkeypatch):
@@ -95,7 +96,7 @@ def test_score_policy_no_cache_degrades(isolate, monkeypatch):
     monkeypatch.setattr(pol, "load_policy", _raise)
     scored = ev.score_policy(client=_FakeClient())
     assert scored == []                                # 降级不崩
-    assert ev._POLICY_SENT.exists()                    # 仍落空文件
+    assert store.get_view("sentiment_policy") == []    # 仍落空视图
 
 
 # ---------- UGC 情感 ----------
@@ -163,8 +164,8 @@ def test_analyze_stock_three_layers(isolate, monkeypatch):
     assert s["净情绪分"] > 0
     assert min(news_net, ugc_net, pol_net) <= s["净情绪分"] <= max(news_net, ugc_net, pol_net)
 
-    # 落盘存在
-    assert (ev._SENT_DIR / f"{code}.json").exists()
+    # 落盘存在(经 store 按票视图)
+    assert store.get_code_view("sentiment", code)["code"] == code
 
 
 def test_analyze_stock_backward_compat_news_only(isolate, monkeypatch):

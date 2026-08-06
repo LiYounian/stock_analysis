@@ -6,18 +6,16 @@
 """
 from __future__ import annotations
 
-import json
 import logging
 
 import pandas as pd
 
 from tools.analysis import technical as ta
 from tools.collectors import market
-from tools.config import settings, stock_pool
+from tools.config import stock_pool
 
 logger = logging.getLogger("analysis.chart")
 
-_CHART_DIR = settings.PROJECT_ROOT / "data" / "analysis" / "chart"
 _EMPTY = {"dates": [], "close": [], "ma5": [], "ma20": [], "ma60": [], "volume": []}
 
 
@@ -41,15 +39,14 @@ def build_chart(code: str, limit: int = 120) -> dict:
     }
 
 
-def write_charts(limit: int = 120) -> int:
-    """全池生成图表视图落盘。返回成功数。"""
-    _CHART_DIR.mkdir(parents=True, exist_ok=True)
+def write_charts(limit: int = 120, codes: list[str] | None = None) -> int:
+    """给定票池(缺省全池)生成图表视图,经 store 按日期落盘。返回成功数。"""
+    from tools.store import repo as store
     n = 0
-    for code in stock_pool.get_codes():
+    for code in (codes or stock_pool.get_codes()):
         data = build_chart(code, limit)
         if data["dates"]:
-            (_CHART_DIR / f"{code}.json").write_text(
-                json.dumps(data, ensure_ascii=False), encoding="utf-8")
+            store.put_code_view("chart", code, data)
             n += 1
-    logger.info("K线图表视图落盘 %d 只 → %s", n, _CHART_DIR)
+    logger.info("K线图表视图落盘 %d 只(store 按日期)", n)
     return n

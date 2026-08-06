@@ -111,29 +111,31 @@ def build_record(code: str, as_of: str) -> dict:
     }
 
 
-def serialize_all(as_of: str | None = None) -> dict[str, str]:
-    """对全池组装并落盘 data/analysis/{code}.json。落盘前过 contracts 校验(§9.2)。返回 {code: path}。"""
+def serialize_all(as_of: str | None = None, codes: list[str] | None = None) -> dict[str, str]:
+    """对给定票池(缺省全池)组装并经 store 按日期落盘。落盘前过 contracts 校验(§9.2)。
+
+    落盘走 store.put_record(rec, date=as_of):记录进 data/analysis/<as_of>/{code}.json。
+    返回 {code: path}。
+    """
     import pandas as pd
 
     from tools.contracts import record as contracts
+    from tools.store import repo as store
     as_of = as_of or pd.Timestamp.today().strftime("%Y-%m-%d")
-    _OUT_DIR.mkdir(parents=True, exist_ok=True)
+    codes = codes or stock_pool.get_codes()
     out, invalid = {}, 0
-    for code in stock_pool.get_codes():
+    for code in codes:
         rec = build_record(code, as_of)
         errs = contracts.validate_record(rec)     # 契约优先:产出即校验,漂移当场暴露
         if errs:
             invalid += 1
             logger.warning("契约校验 %s:%d 处问题 %s", code, len(errs), errs[:3])
-        p = _OUT_DIR / f"{code}.json"
-        p.write_text(json.dumps(rec, ensure_ascii=False, indent=2), encoding="utf-8")
-        out[code] = str(p)
-    logger.info("结构化 JSON 落盘 %d 只(契约不合规 %d)→ %s", len(out), invalid, _OUT_DIR)
+        out[code] = store.put_record(rec, date=as_of)
+    logger.info("结构化 JSON 落盘 %d 只(契约不合规 %d,日期 %s)", len(out), invalid, as_of)
     return out
 
 
-def load_record(code: str) -> dict:
-    p = _OUT_DIR / f"{code}.json"
-    if not p.exists():
-        raise FileNotFoundError(f"{code} 无结构化记录,请先 serialize_all: {p}")
-    return json.loads(p.read_text(encoding="utf-8"))
+def load_record(code: str, date: str | None = "latest") -> dict:
+    """读单票中心记录(缺省最新日期)。缺失抛 FileNotFoundError。"""
+    from tools.store import repo as store
+    return store.get_record(code, date=date)

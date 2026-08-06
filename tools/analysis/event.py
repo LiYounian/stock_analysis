@@ -130,18 +130,19 @@ def score_policy(client=None, date: str | None = None) -> list[dict]:
         except Exception as e:
             r = {"error": str(e)[:80]}
         scored.append({**it, **r, "层": "政策"})
-    _ANALYSIS_DIR.mkdir(parents=True, exist_ok=True)
-    _POLICY_SENT.write_text(
-        json.dumps(scored, ensure_ascii=False, indent=2), encoding="utf-8")
-    logger.info("政策打分完成:%d 条 → %s", len(scored), _POLICY_SENT)
+    from tools.store import repo as store
+    p = store.put_view("sentiment_policy", scored)     # 按日期视图
+    logger.info("政策打分完成:%d 条 → %s", len(scored), p)
     return scored
 
 
 def load_policy_scores() -> list[dict]:
-    """读政策打分缓存;缺失返回空 list(降级,不抛)。"""
-    if not _POLICY_SENT.exists():
+    """读政策打分缓存(最新日期);缺失返回空 list(降级,不抛)。"""
+    from tools.store import repo as store
+    try:
+        return store.get_view("sentiment_policy")
+    except FileNotFoundError:
         return []
-    return json.loads(_POLICY_SENT.read_text(encoding="utf-8"))
 
 
 def _stock_policy_items(code: str) -> list[dict]:
@@ -268,14 +269,12 @@ def analyze_stock(code: str, client=None, limit: int | None = None) -> dict:
         },
     }
     rec = {"code": code, "sentiment": sentiment, "events": events}
-    _SENT_DIR.mkdir(parents=True, exist_ok=True)
-    (_SENT_DIR / f"{code}.json").write_text(
-        json.dumps(rec, ensure_ascii=False, indent=2), encoding="utf-8")
+    from tools.store import repo as store
+    store.put_code_view("sentiment", code, rec)        # 按日期/按票视图
     return rec
 
 
 def load_sentiment(code: str) -> dict:
-    p = _SENT_DIR / f"{code}.json"
-    if not p.exists():
-        raise FileNotFoundError(f"{code} 无情绪分析,请先 analyze_stock: {p}")
-    return json.loads(p.read_text(encoding="utf-8"))
+    """读单票情绪分析(最新日期)。缺失抛 FileNotFoundError。"""
+    from tools.store import repo as store
+    return store.get_code_view("sentiment", code)

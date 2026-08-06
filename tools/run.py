@@ -1,165 +1,82 @@
-"""编排入口:采集 → 分析 → 报告(P1 技术面闭环)。
+"""编排入口:采集 → 情绪 → 组装 → 视图(按日期存储,开发期默认 10 只)。
 
 用法:
-    python -m tools.run collect     # 拉全池 K线到缓存
-    python -m tools.run analyze     # 读缓存算技术指标,打印排行
-    python -m tools.run report      # 出组合概览 + Top/Bottom 各5 单票卡
-    python -m tools.run all         # 采集 → 报告
+    python -m tools.run collect      # 采集数值面(K线/基本面/公告/资金流)
+    python -m tools.run message      # 采集消息面(新闻/舆情/政策)
+    python -m tools.run sentiment    # LLM 三层情绪打分(需 LLM 配置)
+    python -m tools.run serialize    # 组装中心记录 + K线图表视图(读情绪并入决策)
+    python -m tools.run panel        # 横向总表视图
+    python -m tools.run screen       # 组合聚合 + 预设选股视图
+    python -m tools.run all          # 全链路(采集→情绪→组装→视图),一个日期
+    # 追加 --all 用全池 32 只;默认开发子集 10 只(config/dev_sample.json)
+
+按日期:编排开始 store.set_active_date(今天),本次所有产出落 data/<日期>/。
 """
 import logging
 import sys
+
+import pandas as pd
 
 from tools.analysis import technical as ta
 from tools.collectors import announcement as an
 from tools.collectors import fundamental as fd
 from tools.collectors import fundflow as ff
 from tools.collectors import market
+from tools.collectors import news, policy, ugc
 from tools.config import stock_pool
-from tools.report import builder
+from tools.store import repo as store
 
 logging.basicConfig(level=logging.INFO, format="%(name)s %(levelname)s %(message)s")
 logger = logging.getLogger("run")
 
-TOPN = 5   # 单票报告出技术评级 Top/Bottom 各 N(用户拍板)
+DEV_N = 10   # 开发期默认样本数
 
 
-def cmd_collect() -> None:
-    codes = stock_pool.get_codes()
-    logger.info("采集全池 %d 只 K线...", len(codes))
-    kl = market.fetch_kline(codes)
-    logger.info("K线采集:成功 %d / %d", len(kl), len(codes))
-    logger.info("采集全池基本面...")
-    fund = fd.fetch_fundamental(codes)
-    logger.info("基本面采集:成功 %d / %d", len(fund), len(codes))
-    logger.info("采集全池公告...")
-    ann = an.fetch_announcements(codes)
-    logger.info("公告采集:成功 %d / %d", len(ann), len(codes))
-    logger.info("采集全池资金流...")
-    fflow = ff.fetch_fundflow(codes)
-    logger.info("资金流采集:成功 %d / %d", len(fflow), len(codes))
+def _pool(argv: list[str] | None = None) -> list[str]:
+    """票池:默认开发子集 10 只;argv 含 --all 用全池 32 只。"""
+    if argv and "--all" in argv:
+        logger.info("票池:全池 %d 只", len(stock_pool.get_codes()))
+        return stock_pool.get_codes()
+    codes = stock_pool.get_dev_codes(DEV_N)
+    logger.info("票池:开发子集 %d 只 %s", len(codes), codes)
+    return codes
 
 
-def _load_fundamentals() -> dict[str, dict]:
-    out: dict[str, dict] = {}
-    for code in stock_pool.get_codes():
-        try:
-            out[code] = fd.load_fundamental(code)
-        except FileNotFoundError:
-            pass
-    return out
+def _as_of() -> str:
+    return pd.Timestamp.today().strftime("%Y-%m-%d")
 
 
-def _load_announcements() -> dict[str, list]:
-    out: dict[str, list] = {}
-    for code in stock_pool.get_codes():
-        try:
-            out[code] = an.load_announcements(code)
-        except FileNotFoundError:
-            pass
-    return out
+# ————————————————————————————————————————————————
+# 采集:数值面 + 消息面
+# ————————————————————————————————————————————————
+def collect_values(codes: list[str]) -> None:
+    logger.info("采集数值面 %d 只(K线/基本面/公告/资金流)...", len(codes))
+    logger.info("K线:成功 %d", len(market.fetch_kline(codes)))
+    logger.info("基本面:成功 %d", len(fd.fetch_fundamental(codes)))
+    logger.info("公告:成功 %d", len(an.fetch_announcements(codes)))
+    logger.info("资金流:成功 %d", len(ff.fetch_fundflow(codes)))
 
 
-def _load_fundflows() -> dict[str, dict]:
-    """读资金流缓存并派生摘要,供聚合/报告用。"""
-    out: dict[str, dict] = {}
-    for code in stock_pool.get_codes():
-        try:
-            out[code] = ff.summarize(ff.load_fundflow(code))
-        except FileNotFoundError:
-            pass
-    return out
+def collect_message(codes: list[str]) -> None:
+    logger.info("采集消息面 %d 只(新闻/舆情/政策)...", len(codes))
+    logger.info("新闻:成功 %d", len(news.fetch_news(codes)))
+    logger.info("舆情(股吧):成功 %d", len(ugc.fetch_ugc(codes)))
+    pol = policy.fetch_policy()          # 政策按行业关键词(全池共用)
+    logger.info("政策:%d 条", len(pol))
 
 
-def _analyze_all() -> dict[str, dict]:
-    """读缓存算全池技术指标(不触网)。缓存缺失的票跳过。"""
-    results: dict[str, dict] = {}
-    for code in stock_pool.get_codes():
-        try:
-            results[code] = ta.compute(market.load_kline(code))
-        except FileNotFoundError:
-            logger.warning("%s 无缓存,跳过(先 collect)", code)
-    return results
-
-
-def cmd_analyze() -> dict[str, dict]:
-    results = _analyze_all()
-    ranked = sorted((r for r in results.items() if "signal" in r[1]),
-                    key=lambda kv: kv[1]["signal"]["得分"], reverse=True)
-    logger.info("技术评级排行:")
-    for code, r in ranked:
-        s = r["signal"]
-        logger.info("  %s %s 评级=%s(%d)", code, stock_pool.get(code).name,
-                    s["评级"], s["得分"])
-    return results
-
-
-def cmd_report() -> None:
-    results = _analyze_all()
-    funds = _load_fundamentals()
-    anns = _load_announcements()
-    p = builder.build_portfolio_tech_report(results, funds, anns)
-    logger.info("组合技术概览 → %s", p)
-    valid = [(c, r) for c, r in results.items() if "signal" in r]
-    valid.sort(key=lambda kv: kv[1]["signal"]["得分"], reverse=True)
-    focus = valid[:TOPN] + valid[-TOPN:]           # Top/Bottom 各 N
-    for code, r in focus:
-        sp = builder.build_stock_tech_report(code, r, funds.get(code), anns.get(code))
-        logger.info("单票卡 %s → %s", code, sp)
-
-
-def cmd_serialize() -> None:
-    """组装每票结构化 JSON + K线图表视图到 data/analysis/(程序/DB/Web 可消费)。"""
-    from tools.analysis import chart, serialize
-    out = serialize.serialize_all()
-    logger.info("结构化 JSON 完成:%d 只 → data/analysis/", len(out))
-    n = chart.write_charts()                    # K线图表视图(供 web 只读,§9.3)
-    logger.info("K线图表视图完成:%d 只 → data/analysis/chart/", n)
-
-
-def cmd_panel() -> None:
-    """拍平全池结构化 JSON 成横向总表(CSV/JSON/markdown)。"""
-    from tools.analysis import panel
-    out = panel.write_panel()
-    logger.info("横向总表 → %s", out["csv"])
-
-
-def cmd_screen() -> None:
-    """组合聚合 + 预设选股,落 data/analysis/screen.json(供 Web 选股页)。"""
-    import json
-    from tools.analysis import portfolio, serialize
-    from tools.screener import screen as sc
-    recs = {}
-    for code in stock_pool.get_codes():
-        try:
-            recs[code] = serialize.load_record(code)
-        except FileNotFoundError:
-            pass
-    agg = portfolio.aggregate(recs)
-    presets = sc.run_presets(recs)
-    out = serialize._OUT_DIR / "screen.json"
-    out.write_text(json.dumps({"aggregate": agg, "presets": presets},
-                              ensure_ascii=False, indent=2), encoding="utf-8")
-    logger.info("选股结果 → %s(主线 %s,预设 %d 组)", out, agg.get("hot_theme"), len(presets))
-
-
-def cmd_sentiment() -> None:
-    """情绪面(LLM):新闻 + 舆情(UGC)+ 政策 三层打分。opt-in(有 LLM 成本,不进 all)。"""
+# ————————————————————————————————————————————————
+# 情绪:LLM 三层打分(政策全局 + 各票新闻/舆情)
+# ————————————————————————————————————————————————
+def run_sentiment(codes: list[str]) -> int:
     from tools.analysis import event
-    from tools.collectors import news
     from tools.llm import client as lc
     if not lc.is_configured():
-        logger.error("LLM 未配置(需环境变量 LLM_BASE_URL+LLM_API_KEY),跳过")
-        return
-    codes = stock_pool.get_codes()
-    logger.info("采集全池新闻...")
-    news.fetch_news(codes)
-    # 政策层:先对政策缓存整体打分(命中各票行业时供 analyze_stock 取用)。
-    # 无政策缓存则降级为空(score_policy 内部已处理),提示先 collect。
-    logger.info("LLM 政策打分(需先 collect 政策;缺缓存则跳过)...")
-    scored = event.score_policy()
-    if not scored:
-        logger.warning("政策打分为空(政策缓存缺失?先跑政策采集),政策层将降级")
-    logger.info("LLM 三层情绪分析(新闻+舆情+政策,缓存命中免重复)...")
+        logger.warning("LLM 未配置,跳过情绪打分(记录 sentiment 将为空)")
+        return 0
+    logger.info("LLM 政策打分...")
+    if not event.score_policy():
+        logger.warning("政策打分为空(缺政策缓存?),政策层降级")
     ok = 0
     for code in codes:
         try:
@@ -168,33 +85,101 @@ def cmd_sentiment() -> None:
             continue
         ok += 1
         s = rec["sentiment"]
-        u = s["三层"]["舆情"]
-        if u.get("degraded"):
-            logger.info("    %s 舆情层降级(%s),缺 UGC 缓存请先 collect", code, u["degraded"])
         logger.info("  %s 净情绪 %s(新闻%d/舆情%d/政策%d)", code, s["净情绪分"],
-                    s["三层"]["新闻"]["样本数"], u.get("样本数", 0), s["三层"]["政策"]["样本数"])
-    logger.info("情绪分析完成:%d 只 → data/analysis/sentiment/", ok)
+                    s["三层"]["新闻"]["样本数"], s["三层"]["舆情"].get("样本数", 0),
+                    s["三层"]["政策"]["样本数"])
+    logger.info("情绪打分完成:%d 只", ok)
+    return ok
 
 
-def cmd_all() -> None:
-    cmd_collect()
-    cmd_serialize()
-    cmd_panel()
-    cmd_screen()
-    cmd_report()
+# ————————————————————————————————————————————————
+# 组装 + 视图
+# ————————————————————————————————————————————————
+def run_serialize(codes: list[str], as_of: str) -> None:
+    from tools.analysis import chart, serialize
+    out = serialize.serialize_all(as_of=as_of, codes=codes)
+    logger.info("中心记录:%d 只 → data/analysis/%s/", len(out), as_of)
+    n = chart.write_charts(codes=codes)
+    logger.info("K线图表视图:%d 只", n)
 
 
-_CMDS = {"collect": cmd_collect, "analyze": cmd_analyze,
-         "report": cmd_report, "serialize": cmd_serialize,
-         "panel": cmd_panel, "screen": cmd_screen,
-         "sentiment": cmd_sentiment, "all": cmd_all}
+def run_panel(codes: list[str]) -> None:
+    from tools.analysis import panel
+    r = panel.write_panel(codes=codes)
+    logger.info("横向总表 → %s", r["view"])
+
+
+def run_screen(codes: list[str]) -> None:
+    from tools.analysis import portfolio, serialize
+    from tools.screener import screen as sc
+    recs = {}
+    for code in codes:
+        try:
+            recs[code] = serialize.load_record(code)
+        except FileNotFoundError:
+            pass
+    agg = portfolio.aggregate(recs)
+    presets = sc.run_presets(recs)
+    p = store.put_view("screen", {"aggregate": agg, "presets": presets})
+    logger.info("选股视图 → %s(主线 %s,预设 %d 组)", p, agg.get("hot_theme"), len(presets))
+
+
+# ————————————————————————————————————————————————
+# CLI 命令(单步:各自设当天日期 + 开发池)
+# ————————————————————————————————————————————————
+def _prep(argv):
+    as_of = _as_of()
+    store.set_active_date(as_of)
+    return _pool(argv), as_of
+
+
+def cmd_collect(argv): collect_values(_prep(argv)[0])
+def cmd_message(argv): collect_message(_prep(argv)[0])
+def cmd_sentiment(argv): run_sentiment(_prep(argv)[0])
+def cmd_serialize(argv): codes, as_of = _prep(argv); run_serialize(codes, as_of)
+def cmd_panel(argv): run_panel(_prep(argv)[0])
+def cmd_screen(argv): run_screen(_prep(argv)[0])
+
+
+def cmd_analyze(argv):
+    """读缓存算技术指标,打印评级排行(不落盘)。"""
+    codes, _ = _prep(argv)
+    ranked = []
+    for code in codes:
+        try:
+            r = ta.compute(market.load_kline(code))
+            if "signal" in r:
+                ranked.append((code, r["signal"]))
+        except FileNotFoundError:
+            logger.warning("%s 无 K线缓存,跳过", code)
+    ranked.sort(key=lambda kv: kv[1]["得分"], reverse=True)
+    for code, s in ranked:
+        logger.info("  %s %s 评级=%s(%d)", code, stock_pool.get(code).name, s["评级"], s["得分"])
+
+
+def cmd_all(argv):
+    """全链路:采集(数值+消息)→ 情绪 → 组装 → 视图,全程同一日期。"""
+    codes, as_of = _prep(argv)
+    logger.info("===== 全链路开始(日期 %s,%d 只)=====", as_of, len(codes))
+    collect_values(codes)
+    collect_message(codes)
+    run_sentiment(codes)                 # LLM 未配置则内部跳过
+    run_serialize(codes, as_of)          # serialize 读情绪并入买卖倾向
+    run_panel(codes)
+    run_screen(codes)
+    logger.info("===== 全链路完成 → data/analysis/%s/ =====", as_of)
+
+
+_CMDS = {"collect": cmd_collect, "message": cmd_message, "sentiment": cmd_sentiment,
+         "serialize": cmd_serialize, "panel": cmd_panel, "screen": cmd_screen,
+         "analyze": cmd_analyze, "all": cmd_all}
 
 
 def main(argv: list[str]) -> int:
     if len(argv) < 2 or argv[1] not in _CMDS:
-        print(f"用法: python -m tools.run [{'|'.join(_CMDS)}]")
+        print(f"用法: python -m tools.run [{'|'.join(_CMDS)}] [--all]")
         return 1
-    _CMDS[argv[1]]()
+    _CMDS[argv[1]](argv)
     return 0
 
 

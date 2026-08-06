@@ -3,7 +3,12 @@
 来源:东方财富「AI」自选分组截图(2026-08-05),去重后 32 只。
 详见 docs/股票清单.md。已剔除板块指数「机器人 BK1408」(非个股)。
 """
+import json
+import random
 from dataclasses import dataclass
+from pathlib import Path
+
+_DEV_SAMPLE_FILE = Path(__file__).resolve().parents[2] / "config" / "dev_sample.json"
 
 
 @dataclass(frozen=True)
@@ -80,3 +85,24 @@ def by_sector() -> dict[str, list[Stock]]:
 def get(code: str) -> Stock | None:
     """按代码查单只。"""
     return next((s for s in _POOL if s.code == code), None)
+
+
+def get_dev_codes(n: int = 10) -> list[str]:
+    """开发期固定子集:首次从全池随机抽 n 只并持久化到 config/dev_sample.json,之后复用。
+
+    既是「随机选出」(首次 random.sample),又「固定复用」(落盘后每次读同一批)→ 开发可复现。
+    想重选:删掉 config/dev_sample.json 再调用。
+    """
+    if _DEV_SAMPLE_FILE.exists():
+        try:
+            saved = json.loads(_DEV_SAMPLE_FILE.read_text(encoding="utf-8"))
+            codes = [c for c in saved.get("codes", []) if get(c)]
+            if len(codes) >= min(n, len(_POOL)):
+                return codes[:n]
+        except Exception:
+            pass
+    picked = sorted(random.sample(get_codes(), min(n, len(_POOL))))
+    _DEV_SAMPLE_FILE.parent.mkdir(parents=True, exist_ok=True)
+    _DEV_SAMPLE_FILE.write_text(
+        json.dumps({"n": n, "codes": picked}, ensure_ascii=False, indent=2), encoding="utf-8")
+    return picked
