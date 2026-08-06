@@ -47,7 +47,7 @@ class OpenAICompatClient:
         if not base_url or not api_key:
             raise RuntimeError(
                 "LLM 未配置:请在环境变量设置 LLM_BASE_URL + LLM_API_KEY"
-                "(或显式 LLM_BASE_URL / LLM_API_KEY)。")
+                "(可选 LLM_MODEL,均只在本机 shell,不入库)。")
         from openai import OpenAI
         self._cli = OpenAI(api_key=api_key, base_url=base_url, timeout=settings.LLM_TIMEOUT)
         self.model = model
