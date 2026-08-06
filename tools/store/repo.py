@@ -32,7 +32,8 @@ _ANALYSIS_DIR = settings.PROJECT_ROOT / "data" / "analysis"   # data/analysis
 
 # —— kind → 物理格式 ——
 _PARQUET_KINDS = ("kline", "fundflow")
-_JSON_KINDS = ("fundamental", "announcement", "news", "llm_cache")
+# ugc 按票(code)、policy 按日期(code 槽存 policy_{date})存;均为半结构化 json。
+_JSON_KINDS = ("fundamental", "announcement", "news", "ugc", "policy", "llm_cache")
 _RAW_KINDS = _PARQUET_KINDS + _JSON_KINDS
 
 # 个股中心记录文件名 = 6 位代码;iter_records 靠此排除 panel/screen 等非个股文件。
