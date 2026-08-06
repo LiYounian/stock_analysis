@@ -79,6 +79,51 @@ def test_raw_parquet_roundtrip(store):
     assert list(got["close"]) == [1.0, 2.0]
 
 
+# —— 采集元数据 + 原子写 + 新鲜度 ——
+def test_put_raw_writes_meta(store):
+    """put_raw 旁写 meta:source 透传、rows 自测、fetched_at 自动补。"""
+    store.put_raw("news", "000021", [{"t": 1}, {"t": 2}], meta={"source": "eastmoney"})
+    m = store.get_raw_meta("news", "000021")
+    assert m["source"] == "eastmoney"
+    assert m["rows"] == 2
+    assert m["fetched_at"]                       # 自动补,非空
+    # meta sidecar 不污染数据读取
+    assert store.get_raw("news", "000021") == [{"t": 1}, {"t": 2}]
+
+
+def test_put_raw_meta_missing_returns_none(store):
+    """从未写过 → get_raw_meta 返回 None(元数据 advisory)。"""
+    assert store.get_raw_meta("news", "999999") is None
+
+
+def test_atomic_write_leaves_no_tmp(store):
+    """原子写落地后目录里不残留 .tmp。"""
+    store.put_raw("news", "000021", [{"t": 1}])
+    store.put_record(_rec("000021"))
+    leftovers = list((store._RAW_DIR / "news").glob("*.tmp")) + \
+        list(store._ANALYSIS_DIR.glob("*.tmp"))
+    assert leftovers == []
+
+
+def test_is_stale_fresh_vs_missing(store):
+    """刚写的不算陈旧;无任何数据/元数据视为陈旧。"""
+    store.put_raw("kline", "000021",
+                  __import__("pandas").DataFrame({"close": [1.0]}),
+                  meta={"source": "tencent"})
+    assert store.is_stale("kline", "000021", max_days=3) is False
+    assert store.is_stale("kline", "999999", max_days=3) is True
+
+
+def test_is_stale_old_meta(store):
+    """篡改 fetched_at 到很久以前 → 判定陈旧。"""
+    store.put_raw("news", "000021", [{"t": 1}])
+    mp = store._meta_path("news", "000021")
+    m = json.loads(mp.read_text(encoding="utf-8"))
+    m["fetched_at"] = "2000-01-01T00:00:00"
+    mp.write_text(json.dumps(m), encoding="utf-8")
+    assert store.is_stale("news", "000021", max_days=3) is True
+
+
 # —— 视图往返 ——
 def test_view_roundtrip(store):
     obj = {"rows": [{"代码": "000021", "涨跌%": 1.2}]}

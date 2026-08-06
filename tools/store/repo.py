@@ -17,7 +17,9 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
+from datetime import datetime
 from pathlib import Path
 
 from tools.config import settings
@@ -48,6 +50,12 @@ def _raw_path(kind: str, code: str) -> Path:
     return _RAW_DIR / kind / f"{code}.{ext}"
 
 
+def _meta_path(kind: str, code: str) -> Path:
+    """raw 采集元数据 sidecar(记 fetched_at/source/rows,供新鲜度判断)。
+    与数据文件同目录、独立后缀 `.meta.json`,不与 `{code}.json` 冲突。"""
+    return _raw_path(kind, code).parent / f"{code}.meta.json"
+
+
 def _record_path(code: str) -> Path:
     return _ANALYSIS_DIR / f"{code}.json"
 
@@ -61,9 +69,17 @@ def _read_json(p: Path):
 
 
 def _write_json(p: Path, obj) -> str:
+    """原子写:先写同目录 .tmp,再 os.replace 覆盖目标(崩溃/并发不留半截文件)。"""
     p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(json.dumps(obj, ensure_ascii=False, indent=2), encoding="utf-8")
+    tmp = p.parent / (p.name + ".tmp")
+    tmp.write_text(json.dumps(obj, ensure_ascii=False, indent=2), encoding="utf-8")
+    os.replace(tmp, p)
     return str(p)
+
+
+def _now_iso() -> str:
+    """本地时区当前时间(秒级 ISO),作 raw 采集时间戳。"""
+    return datetime.now().astimezone().isoformat(timespec="seconds")
 
 
 # ————————————————————————————————————————————————
@@ -83,14 +99,60 @@ def get_raw(kind: str, code: str):
     return _read_json(p)
 
 
-def put_raw(kind: str, code: str, payload) -> str:
-    """写单票某类 raw 数据。parquet kind 需传 DataFrame,json kind 传 dict/list。返回路径。"""
+def put_raw(kind: str, code: str, payload, meta: dict | None = None) -> str:
+    """写单票某类 raw 数据(原子写)+ 旁写采集元数据 sidecar。返回数据文件路径。
+
+    parquet kind 需传 DataFrame,json kind 传 dict/list。
+    meta:可含 source 等;`fetched_at` 自动补当前时间、`rows` 自动测量(均可被 meta 覆盖)。
+    """
     p = _raw_path(kind, code)
     p.parent.mkdir(parents=True, exist_ok=True)
     if kind in _PARQUET_KINDS:
-        payload.to_parquet(p, index=False)
-        return str(p)
-    return _write_json(p, payload)
+        tmp = p.parent / (p.name + ".tmp")
+        payload.to_parquet(tmp, index=False)
+        os.replace(tmp, p)               # 原子覆盖
+        data_path = str(p)
+    else:
+        data_path = _write_json(p, payload)
+    _write_meta(kind, code, payload, meta)
+    return data_path
+
+
+def _write_meta(kind: str, code: str, payload, meta: dict | None) -> None:
+    """旁写 {code}.meta.json:fetched_at(自动)+ rows(可测则测)+ 调用方 meta。"""
+    m = {"fetched_at": _now_iso(), "kind": kind, "code": code}
+    try:
+        m["rows"] = len(payload)
+    except TypeError:
+        pass
+    if meta:
+        m.update(meta)
+    _write_json(_meta_path(kind, code), m)
+
+
+def get_raw_meta(kind: str, code: str) -> dict | None:
+    """读某票某类 raw 的采集元数据;无 sidecar 返回 None(元数据是可选/advisory)。"""
+    p = _meta_path(kind, code)
+    return _read_json(p) if p.exists() else None
+
+
+def raw_age_days(kind: str, code: str) -> float | None:
+    """raw 数据距上次采集的天数;无元数据/时间戳不可解析时返回 None。"""
+    m = get_raw_meta(kind, code)
+    if not m or not m.get("fetched_at"):
+        return None
+    try:
+        t = datetime.fromisoformat(m["fetched_at"])
+    except ValueError:
+        return None
+    now = datetime.now(t.tzinfo) if t.tzinfo else datetime.now()
+    return (now - t).total_seconds() / 86400.0
+
+
+def is_stale(kind: str, code: str, max_days: float) -> bool:
+    """数据是否超 max_days 未更新。无数据/无元数据一律视为陈旧(促使重采)。"""
+    age = raw_age_days(kind, code)
+    return age is None or age > max_days
 
 
 # ————————————————————————————————————————————————

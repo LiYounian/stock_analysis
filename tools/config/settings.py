@@ -39,6 +39,9 @@ LLM_CACHE = DATA_RAW / "llm_cache"             # 抽取结果缓存,改下游免
 # —— 采集限频(防封)——
 FETCH_SLEEP_SEC = 0.5       # 单次请求间隔
 
+# —— 数据新鲜度(store 层用)——
+RAW_STALE_DAYS = 3          # raw 缓存超过此天数(或无采集元数据)视为陈旧,促使重采
+
 
 def ensure_dirs() -> None:
     """确保缓存/报告目录存在。"""
