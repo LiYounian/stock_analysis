@@ -9,7 +9,14 @@
 (200,含 80+ 帖),无需浏览器/登录态。解析该 JSON 即得帖子。
 
 情感打分是后续 LLM 的事(见 analysis/sentiment);本模块只负责
-**采集 + 量化热度指标(纯代码)**。落盘:data/raw/ugc/{code}.json。
+**采集 + 量化热度指标(纯代码)**。
+
+落盘走 store 层(依赖方向 collectors→store 合规):
+`store.put_raw("ugc", code, items, meta=...)` / `store.get_raw("ugc", code)`,
+不再直读写 data/raw/ugc/{code}.json 路径(store 内部收敛为 json kind)。
+
+时间窗:仿 news.py,只保留发帖日期在 `today - NEWS_LOOKBACK_DAYS` 之后的帖子,
+使跨票热度可比(否则各票取到的帖子时间跨度不一,热度绝对量无意义)。
 契约:fetch_ugc(codes, limit) -> {code: [帖子...]};compute_heat(code) -> 热度指标。
 """
 from __future__ import annotations
@@ -18,20 +25,20 @@ import json
 import logging
 import re
 import time
+from datetime import date, timedelta
 
 from tools.config import settings
+from tools.store import repo as store
 
 logger = logging.getLogger("collectors.ugc")
 
-_UGC_DIR = settings.DATA_RAW / "ugc"
 # 东财股吧列表页(SSR 内联帖子 JSON,curl_cffi 可直取,见模块 docstring)
 _LIST_URL = "https://guba.eastmoney.com/list,{code}.html"
 # 内联帖子列表的正则锚点:var article_list = {...};
 _ARTICLE_RE = re.compile(r"var\s+article_list\s*=\s*(\{.*?\});", re.S)
-
-
-def _ugc_path(code: str):
-    return _UGC_DIR / f"{code}.json"
+# 帖子时间解析:带年份 "YYYY-MM-DD ..." 与无年份 "MM-DD ..." 两种股吧常见格式
+_DATE_FULL_RE = re.compile(r"^(\d{4})-(\d{2})-(\d{2})")
+_DATE_MMDD_RE = re.compile(r"^(\d{2})-(\d{2})(?:\s|$)")
 
 
 def _http_get(code: str) -> str:
@@ -41,6 +48,54 @@ def _http_get(code: str) -> str:
     r = creq.get(_LIST_URL.format(code=code), impersonate="chrome", timeout=20)
     r.raise_for_status()
     return r.text
+
+
+def _post_date(t: str) -> str | None:
+    """从股吧帖子 time 字段抽出 `YYYY-MM-DD`;解析不出返回 None。
+
+    东财列表页时间格式不统一:
+      - `YYYY-MM-DD HH:MM[:SS]`(带年份)→ 直取前 10 位;
+      - `MM-DD HH:MM`(无年份,列表页最常见)→ 补**最近合理年份**:先按今年组装,
+        若得到的日期落在未来(跨年边界,如今年 1 月看到去年 12 月的帖)则回退去年。
+    解析不出(空串/非法月日/其它格式)→ 返回 None,由调用方选择**保留**该帖
+    (宁保留勿误删:时间窗过滤只丢弃"能确认早于窗口"的帖,存疑一律留下)。
+    """
+    t = (t or "").strip()
+    m = _DATE_FULL_RE.match(t)
+    if m:
+        return f"{m.group(1)}-{m.group(2)}-{m.group(3)}"
+    m = _DATE_MMDD_RE.match(t)
+    if m:
+        today = date.today()
+        mm, dd = int(m.group(1)), int(m.group(2))
+        try:
+            d = date(today.year, mm, dd)
+        except ValueError:
+            return None
+        if d > today:                    # 跨年:今年组装成了未来 → 实为去年
+            try:
+                d = date(today.year - 1, mm, dd)
+            except ValueError:
+                return None
+        return d.isoformat()
+    return None
+
+
+def _cutoff(days: int | None = None) -> str:
+    """时间窗下界 `YYYY-MM-DD` = today - days(缺省取 settings.NEWS_LOOKBACK_DAYS)。"""
+    days = settings.NEWS_LOOKBACK_DAYS if days is None else days
+    return (date.today() - timedelta(days=days)).isoformat()
+
+
+def _filter_recent(posts: list[dict], cutoff: str) -> list[dict]:
+    """丢弃发帖日期早于 cutoff 的帖子;日期解析不出的**保留**(宁保留勿误删)。"""
+    kept = []
+    for p in posts:
+        d = _post_date(p.get("time", ""))
+        if d is not None and d < cutoff:
+            continue
+        kept.append(p)
+    return kept
 
 
 def _extract_one(p: dict) -> dict:
@@ -89,22 +144,27 @@ def _parse(html: str, limit: int | None = None) -> list[dict]:
 
 
 def fetch_one(code: str, limit: int | None = None) -> list[dict]:
-    """拉单票股吧帖子(不落盘)。空数据抛错,不返回空列表伪装成功。"""
-    items = _parse(_http_get(code), limit)
+    """拉单票股吧帖子(不落盘)。空数据抛错,不返回空列表伪装成功。
+
+    先解析全部帖子,再按时间窗(today - NEWS_LOOKBACK_DAYS)过滤,最后取最新 limit 条。
+    过滤在取 limit 之前,避免"先截断再过滤"漏掉窗口内的帖子。
+    """
+    items = _filter_recent(_parse(_http_get(code)), _cutoff())
+    if limit:
+        items = items[:limit]
     if not items:
-        raise ValueError(f"{code} 股吧无帖子(接口异常/被反爬/代码错)")
+        raise ValueError(f"{code} 股吧无帖子(接口异常/被反爬/代码错/全部超时间窗)")
     return items
 
 
 def fetch_ugc(codes: list[str], limit: int | None = None) -> dict[str, list[dict]]:
-    """抓取每票近期股吧帖子并落盘。
+    """抓取每票近期股吧帖子并经 store 落盘。
 
     输出:{code: [{time, author, is_v, text, likes, replies}, ...]}(时间倒序)。
+    仅保留时间窗(today - NEWS_LOOKBACK_DAYS)内的帖子,使跨票热度可比。
     is_v 标记是否大V/加V用户,供热度加权。
     单票失败记 logger 跳过,不中断整批;拉到空视作失败(不静默)。
     """
-    settings.ensure_dirs()
-    _UGC_DIR.mkdir(parents=True, exist_ok=True)
     limit = limit or settings.UGC_LIMIT
 
     out: dict[str, list[dict]] = {}
@@ -112,8 +172,7 @@ def fetch_ugc(codes: list[str], limit: int | None = None) -> dict[str, list[dict
     for code in codes:
         try:
             items = fetch_one(code, limit)
-            _ugc_path(code).write_text(
-                json.dumps(items, ensure_ascii=False, indent=2), encoding="utf-8")
+            store.put_raw("ugc", code, items, meta={"source": "eastmoney_guba"})
             out[code] = items
             logger.info("股吧 %s:%d 帖", code, len(items))
         except Exception as e:
@@ -126,11 +185,21 @@ def fetch_ugc(codes: list[str], limit: int | None = None) -> dict[str, list[dict
 
 
 def load_ugc(code: str) -> list[dict]:
-    """从本地缓存读单票 UGC 帖子。缓存缺失抛错。"""
-    p = _ugc_path(code)
-    if not p.exists():
-        raise FileNotFoundError(f"{code} 无 UGC 缓存,请先 fetch_ugc: {p}")
-    return json.loads(p.read_text(encoding="utf-8"))
+    """从 store 读单票 UGC 帖子。缓存缺失抛 FileNotFoundError。"""
+    return store.get_raw("ugc", code)
+
+
+def _day_span(posts: list[dict]) -> int:
+    """帖子实际覆盖的天数 = 最新帖与最早帖日期跨度 + 1,至少 1。
+
+    仅用能解析出日期的帖子(见 _post_date);少于 2 个可解析日期时无法算跨度,
+    返回 1(退化为不归一,heat_per_day == heat_score)。
+    """
+    dates = [d for p in posts if (d := _post_date(p.get("time", ""))) is not None]
+    if len(dates) < 2:
+        return 1
+    span = (date.fromisoformat(max(dates)) - date.fromisoformat(min(dates))).days + 1
+    return max(span, 1)
 
 
 def _heat(posts: list[dict]) -> dict:
@@ -141,27 +210,35 @@ def _heat(posts: list[dict]) -> dict:
     - reply_total:回复总数
     - heat_score:热度分 = (帖数 + 0.5*回复总数 + 0.2*点赞总数) * (1 + v_ratio),保留2位
       直觉:讨论量为主、互动(回复>点赞)加成,有大V参与再整体放大。
+      **绝对量**,跨票不可比(各票取到的帖子时间跨度不一)。
+    - heat_per_day:日均热度 = heat_score / 帖子覆盖天数(见 _day_span),保留2位。
+      **归一口径**,除掉时间跨度差异后跨票可比。跨度无法计算(<2 个可解析日期)时
+      退化为 heat_per_day == heat_score。原 heat_score 保留不删(向后兼容)。
     """
     n = len(posts)
     if n == 0:
-        return {"post_count": 0, "v_ratio": 0.0, "reply_total": 0, "heat_score": 0.0}
+        return {"post_count": 0, "v_ratio": 0.0, "reply_total": 0,
+                "heat_score": 0.0, "heat_per_day": 0.0}
     v_cnt = sum(1 for p in posts if p.get("is_v"))
     reply_total = sum(int(p.get("replies") or 0) for p in posts)
     like_total = sum(int(p.get("likes") or 0) for p in posts)
     v_ratio = round(v_cnt / n, 4)
-    heat = (n + 0.5 * reply_total + 0.2 * like_total) * (1 + v_ratio)
+    heat = round((n + 0.5 * reply_total + 0.2 * like_total) * (1 + v_ratio), 2)
+    span = _day_span(posts)
+    heat_per_day = round(heat / span, 2)
     return {
         "post_count": n,
         "v_ratio": v_ratio,
         "reply_total": reply_total,
-        "heat_score": round(heat, 2),
+        "heat_score": heat,
+        "heat_per_day": heat_per_day,
     }
 
 
 def compute_heat(code: str) -> dict:
     """基于已抓 UGC 算量化热度指标(读本地缓存;不依赖情感打分)。
 
-    输出:{post_count, v_ratio, reply_total, heat_score}。
+    输出:{post_count, v_ratio, reply_total, heat_score, heat_per_day}。
     缓存缺失抛错(经 load_ugc)。纯计算逻辑见 _heat。
     """
     return _heat(load_ugc(code))
