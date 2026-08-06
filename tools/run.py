@@ -143,7 +143,7 @@ def cmd_screen() -> None:
 
 
 def cmd_sentiment() -> None:
-    """情绪面(LLM):采集新闻 + 逐票抽取/归类/聚合。opt-in(有 LLM 成本,不进 all)。"""
+    """情绪面(LLM):新闻 + 舆情(UGC)+ 政策 三层打分。opt-in(有 LLM 成本,不进 all)。"""
     from tools.analysis import event
     from tools.collectors import news
     from tools.llm import client as lc
@@ -153,16 +153,26 @@ def cmd_sentiment() -> None:
     codes = stock_pool.get_codes()
     logger.info("采集全池新闻...")
     news.fetch_news(codes)
-    logger.info("LLM 情绪分析(每票新闻抽取,缓存命中免重复)...")
+    # 政策层:先对政策缓存整体打分(命中各票行业时供 analyze_stock 取用)。
+    # 无政策缓存则降级为空(score_policy 内部已处理),提示先 collect。
+    logger.info("LLM 政策打分(需先 collect 政策;缺缓存则跳过)...")
+    scored = event.score_policy()
+    if not scored:
+        logger.warning("政策打分为空(政策缓存缺失?先跑政策采集),政策层将降级")
+    logger.info("LLM 三层情绪分析(新闻+舆情+政策,缓存命中免重复)...")
     ok = 0
     for code in codes:
         try:
             rec = event.analyze_stock(code)
-            ok += 1
-            logger.info("  %s 净情绪 %s(样本 %d)", code,
-                        rec["sentiment"]["净情绪分"], rec["sentiment"]["样本数"])
         except FileNotFoundError:
-            pass
+            continue
+        ok += 1
+        s = rec["sentiment"]
+        u = s["三层"]["舆情"]
+        if u.get("degraded"):
+            logger.info("    %s 舆情层降级(%s),缺 UGC 缓存请先 collect", code, u["degraded"])
+        logger.info("  %s 净情绪 %s(新闻%d/舆情%d/政策%d)", code, s["净情绪分"],
+                    s["三层"]["新闻"]["样本数"], u.get("样本数", 0), s["三层"]["政策"]["样本数"])
     logger.info("情绪分析完成:%d 只 → data/analysis/sentiment/", ok)
 
 
