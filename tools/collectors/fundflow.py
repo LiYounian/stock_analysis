@@ -2,7 +2,7 @@
 
 数据源:东财 `push2his.eastmoney.com/api/qt/stock/fflow/daykline/get`,
 用 curl_cffi 伪装 chrome TLS 指纹绕过 JA3 反爬(见问题台账 B2)。
-落盘:data/raw/fundflow/{code}.parquet
+落盘:走 store 层(kind="fundflow",parquet),旁记 meta.source="eastmoney"。
 契约见 docs/计划/P3_Web展示与预测引擎.md P3-A。
 """
 from __future__ import annotations
@@ -13,10 +13,11 @@ import time
 import pandas as pd
 
 from tools.config import settings
+from tools.store import repo as store
 
 logger = logging.getLogger("collectors.fundflow")
 
-_FF_DIR = settings.DATA_RAW / "fundflow"
+_SOURCE = "eastmoney"  # 东财
 _FF_URL = "https://push2his.eastmoney.com/api/qt/stock/fflow/daykline/get"
 # fflow/daykline 的 klines 字段顺序(东财固定):日期,主力,小单,中单,大单,超大单,主力占比...
 _FIELDS2 = "f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61,f62,f63,f64,f65"
@@ -28,10 +29,6 @@ _COLS = ["date", "主力净流入", "小单净流入", "中单净流入", "大�
 def _secid(code: str) -> str:
     """6 位代码 → 东财 secid。沪(6/9)= 1.code;深/京(0/2/3/4/8)= 0.code。"""
     return f"1.{code}" if code[0] in ("6", "9") else f"0.{code}"
-
-
-def _ff_path(code: str):
-    return _FF_DIR / f"{code}.parquet"
 
 
 def _http_get(secid: str) -> dict:
@@ -76,13 +73,12 @@ def fetch_one(code: str, days: int | None = None) -> pd.DataFrame:
 def fetch_fundflow(codes: list[str], days: int | None = None) -> dict[str, pd.DataFrame]:
     """拉取多票资金流并落盘。单票失败记 logger 并跳过,不中断整批。"""
     settings.ensure_dirs()
-    _FF_DIR.mkdir(parents=True, exist_ok=True)
     out: dict[str, pd.DataFrame] = {}
     failed: list[str] = []
     for code in codes:
         try:
             df = fetch_one(code, days)
-            df.to_parquet(_ff_path(code), index=False)
+            store.put_raw("fundflow", code, df, meta={"source": _SOURCE})
             out[code] = df
             logger.info("资金流 %s:%d 天", code, len(df))
         except Exception as e:
@@ -95,11 +91,8 @@ def fetch_fundflow(codes: list[str], days: int | None = None) -> dict[str, pd.Da
 
 
 def load_fundflow(code: str) -> pd.DataFrame:
-    """从本地缓存读单票资金流。缓存缺失抛错。"""
-    p = _ff_path(code)
-    if not p.exists():
-        raise FileNotFoundError(f"{code} 无资金流缓存,请先 fetch_fundflow: {p}")
-    return pd.read_parquet(p)
+    """从本地缓存读单票资金流。缓存缺失抛 FileNotFoundError。"""
+    return store.get_raw("fundflow", code)
 
 
 def summarize(df: pd.DataFrame) -> dict:

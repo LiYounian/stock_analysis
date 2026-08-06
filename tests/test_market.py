@@ -7,6 +7,7 @@ import pandas as pd
 import pytest
 
 from tools.collectors import market
+from tools.store import repo as store
 
 
 def _sample_std():
@@ -57,10 +58,22 @@ def test_fetch_one_all_fail_raises(monkeypatch):
         market.fetch_one("000021", "20260101", "20260105", "qfq")
 
 
+def test_fetch_kline_meta_records_fallback_source(monkeypatch, tmp_path):
+    """主源失败 → 落盘 meta.source 记的是实际命中的 fallback 源(sina)。"""
+    monkeypatch.setattr(store, "_RAW_DIR", tmp_path)
+
+    def boom(*a, **k):
+        raise ConnectionError("被墙")
+    monkeypatch.setitem(market._FETCHERS, "tencent", boom)
+    monkeypatch.setitem(market._FETCHERS, "sina", lambda *a, **k: _sample_std())
+
+    market.fetch_kline(["000021"], start="20260101", end="20260105")
+    assert store.get_raw_meta("kline", "000021")["source"] == "sina"
+
+
 def test_fetch_and_load_roundtrip(monkeypatch, tmp_path):
-    """落盘 → 读盘往返一致;缓存缺失抛错。"""
-    monkeypatch.setattr(market, "_KLINE_DIR", tmp_path)
-    monkeypatch.setattr(market, "_kline_path", lambda code: tmp_path / f"{code}.parquet")
+    """落盘 → 读盘往返一致(经 store);缓存缺失抛错;meta 记命中源。"""
+    monkeypatch.setattr(store, "_RAW_DIR", tmp_path)
     monkeypatch.setitem(market._FETCHERS, "tencent", lambda *a, **k: _sample_std())
 
     out = market.fetch_kline(["000021"], start="20260101", end="20260105")
@@ -68,6 +81,10 @@ def test_fetch_and_load_roundtrip(monkeypatch, tmp_path):
     loaded = market.load_kline("000021")
     assert len(loaded) == 2
     assert loaded["date"].is_monotonic_increasing
+
+    # 落盘经 store,旁写 meta 记实际命中源(此处主源腾讯命中)
+    m = store.get_raw_meta("kline", "000021")
+    assert m["source"] == "tencent"
 
     with pytest.raises(FileNotFoundError):
         market.load_kline("999999")

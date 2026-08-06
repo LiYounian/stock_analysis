@@ -6,6 +6,7 @@
 import pytest
 
 from tools.collectors import fundflow as ff
+from tools.store import repo as store
 
 
 def test_secid():
@@ -48,12 +49,12 @@ def test_summarize_streak_and_sum():
 
 
 def test_fetch_and_load_roundtrip(monkeypatch, tmp_path):
-    monkeypatch.setattr(ff, "_FF_DIR", tmp_path)
-    monkeypatch.setattr(ff, "_ff_path", lambda code: tmp_path / f"{code}.parquet")
+    monkeypatch.setattr(store, "_RAW_DIR", tmp_path)
     monkeypatch.setattr(ff, "_http_get", lambda secid: _fake_js())
     out = ff.fetch_fundflow(["000021"])
     assert "000021" in out and len(out["000021"]) == 3
     loaded = ff.load_fundflow("000021")
     assert loaded.iloc[-1]["主力净流入"] == 3000
+    assert store.get_raw_meta("fundflow", "000021")["source"] == "eastmoney"
     with pytest.raises(FileNotFoundError):
         ff.load_fundflow("999999")

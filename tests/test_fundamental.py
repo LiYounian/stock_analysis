@@ -9,6 +9,7 @@ import pandas as pd
 import pytest
 
 from tools.collectors import fundamental as fd
+from tools.store import repo as store
 
 
 def _fake_abstract_df():
@@ -69,12 +70,12 @@ def test_missing_indicator_none(monkeypatch):
 
 
 def test_fetch_and_load_roundtrip(monkeypatch, tmp_path):
-    monkeypatch.setattr(fd, "_FUND_DIR", tmp_path)
-    monkeypatch.setattr(fd, "_fund_path", lambda code: tmp_path / f"{code}.json")
+    monkeypatch.setattr(store, "_RAW_DIR", tmp_path)
     _install_fake_ak(monkeypatch, _fake_abstract_df())
     out = fd.fetch_fundamental(["000021"])
     assert "000021" in out
     loaded = fd.load_fundamental("000021")
     assert loaded["ROE"] == 8.8
+    assert store.get_raw_meta("fundamental", "000021")["source"] == fd._SOURCE
     with pytest.raises(FileNotFoundError):
         fd.load_fundamental("999999")
