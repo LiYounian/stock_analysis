@@ -110,8 +110,12 @@ def scenarios(kline: pd.DataFrame) -> dict:
 
 
 # ---------- 买卖倾向 ----------
-def bias_recommendation(tech: dict, fundflow: dict | None) -> dict:
-    """综合超买超卖/拐点/趋势/资金流打分 → 偏买入/偏卖出/观望。"""
+def bias_recommendation(tech: dict, fundflow: dict | None, sentiment: dict | None = None) -> dict:
+    """综合超买超卖/拐点/趋势/资金流/情绪打分 → 偏买入/偏卖出/观望。
+
+    sentiment 为 record 的 sentiment 块 dict(含 净情绪分/样本数);None 或样本数为0时不计分,
+    保证向后兼容。情绪仅一维输入并入,依据可追溯,非决定项。
+    """
     score, reasons = 0, []
     ob = (tech.get("ob_os") or {}).get("结论")
     if ob == "超卖":
@@ -142,13 +146,27 @@ def bias_recommendation(tech: dict, fundflow: dict | None) -> dict:
             elif zhu < 0:
                 score -= 1; reasons.append("主力净流出-1")
 
+    if sentiment:
+        net = sentiment.get("净情绪分")
+        n = sentiment.get("样本数") or 0
+        if isinstance(net, (int, float)) and n > 0:
+            w = _P["情绪权重"]
+            if net >= _P["情绪偏多阈值"]:
+                score += w; reasons.append(f"情绪偏多+{w}")
+            elif net <= _P["情绪偏空阈值"]:
+                score -= w; reasons.append(f"情绪偏空-{w}")
+
     conclusion = "偏买入" if score >= 2 else ("偏卖出" if score <= -2 else "观望")
     return {"结论": conclusion, "得分": score, "依据": reasons}
 
 
 # ---------- 汇总 ----------
-def predict(kline: pd.DataFrame, tech: dict, fundflow: dict | None = None) -> dict:
-    """汇总预测/推荐。kline 需含 date/high/low/close/volume;tech=technical.compute 输出。"""
+def predict(kline: pd.DataFrame, tech: dict, fundflow: dict | None = None,
+            sentiment: dict | None = None) -> dict:
+    """汇总预测/推荐。kline 需含 date/high/low/close/volume;tech=technical.compute 输出。
+
+    sentiment 为 record 的 sentiment 块(可选),透传给买卖倾向作一维并入;None 时行为不变。
+    """
     if kline is None or len(kline) < 30:
         return {"error": "数据不足", "n": 0 if kline is None else len(kline)}
     price = float(kline["close"].iloc[-1])
@@ -163,6 +181,6 @@ def predict(kline: pd.DataFrame, tech: dict, fundflow: dict | None = None) -> di
         **support_resistance(kline),
         "持有期建议": stop_targets(price, atr_pct),
         "情景预测": scenarios(kline),
-        "买卖倾向": bias_recommendation(tech, fundflow),
+        "买卖倾向": bias_recommendation(tech, fundflow, sentiment),
         "免责": DISCLAIMER,
     }

@@ -69,6 +69,47 @@ def test_bias_buy_and_sell():
     assert r2["结论"] == "偏卖出"
 
 
+def test_bias_sentiment_bullish_raises_score():
+    """情绪偏多(净情绪分≥阈值)→ 得分高于无情绪、依据含「情绪偏多」;向后兼容基线不变。"""
+    from tools.config.strategy import THRESHOLDS
+    p = THRESHOLDS["预测"]
+    tech = {"ob_os": {"结论": "中性"}, "reversal": {"拐点标签": "无"}, "signal": {"评级": "偏多"}}
+    base = pr.bias_recommendation(tech, None)
+    bull = pr.bias_recommendation(tech, None, {"净情绪分": 0.5, "样本数": 5})
+    assert bull["得分"] == base["得分"] + p["情绪权重"]
+    assert any("情绪偏多" in r for r in bull["依据"])
+
+
+def test_bias_sentiment_bearish_lowers_score():
+    """情绪偏空(净情绪分≤阈值)→ 得分低于无情绪、依据含「情绪偏空」。"""
+    from tools.config.strategy import THRESHOLDS
+    p = THRESHOLDS["预测"]
+    tech = {"ob_os": {"结论": "中性"}, "reversal": {"拐点标签": "无"}, "signal": {"评级": "偏多"}}
+    base = pr.bias_recommendation(tech, None)
+    bear = pr.bias_recommendation(tech, None, {"净情绪分": -0.5, "样本数": 5})
+    assert bear["得分"] == base["得分"] - p["情绪权重"]
+    assert any("情绪偏空" in r for r in bear["依据"])
+
+
+def test_bias_sentiment_backward_compat():
+    """sentiment=None 或 样本数为0 → 与原行为一致(不加分、依据不含情绪)。"""
+    tech = {"ob_os": {"结论": "中性"}, "reversal": {"拐点标签": "无"}, "signal": {"评级": "偏多"}}
+    base = pr.bias_recommendation(tech, None)
+    none_r = pr.bias_recommendation(tech, None, None)
+    zero_r = pr.bias_recommendation(tech, None, {"净情绪分": 0.9, "样本数": 0})
+    assert none_r == base
+    assert zero_r["得分"] == base["得分"]
+    assert not any("情绪" in r for r in zero_r["依据"])
+
+
+def test_predict_passes_sentiment_through():
+    """predict 透传 sentiment 到买卖倾向。"""
+    kl = _kline(list(np.linspace(10, 20, 120)))
+    tech = {"ob_os": {"结论": "中性"}, "reversal": {"拐点标签": "无"}, "signal": {"评级": "偏多"}}
+    out = pr.predict(kl, tech, sentiment={"净情绪分": 0.5, "样本数": 5})
+    assert any("情绪偏多" in r for r in out["买卖倾向"]["依据"])
+
+
 def test_predict_insufficient():
     assert pr.predict(_kline([10.0] * 10), {}).get("error") == "数据不足"
 
