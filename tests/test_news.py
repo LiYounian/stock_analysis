@@ -37,6 +37,49 @@ def test_fetch_normalizes_filters_sorts(monkeypatch, tmp_path):
     assert store.get_raw_meta("news", "000021")["source"] == "eastmoney"
 
 
+def test_falls_back_to_cls_when_em_fails(monkeypatch, tmp_path):
+    """东财挂 → 回落财联社电报,按股票名命中,meta.source 记备源。"""
+    monkeypatch.setattr(store, "_RAW_DIR", tmp_path)
+    from tools.config import stock_pool
+    monkeypatch.setattr(stock_pool, "get",
+                        lambda code: types.SimpleNamespace(code=code, name="紫光国微"))
+    cls_df = pd.DataFrame({
+        "标题": ["紫光国微发布利好", "无关宏观新闻"],
+        "内容": ["公司公告内容", "美联储议息"],
+        "发布日期": ["2026-08-06", "2026-08-06"],
+        "发布时间": ["10:00:00", "11:00:00"],
+    })
+
+    def _boom(symbol):
+        raise ConnectionError("东财挂了")
+
+    fake = types.SimpleNamespace(stock_news_em=_boom,
+                                 stock_info_global_cls=lambda: cls_df)
+    monkeypatch.setitem(sys.modules, "akshare", fake)
+
+    items = nw.fetch_news(["000021"], days=3650)["000021"]
+    assert len(items) == 1                          # 仅命中股票名那条(宏观条被过滤)
+    assert "紫光国微" in items[0]["title"]
+    assert items[0]["source"] == "财联社电报"
+    assert store.get_raw_meta("news", "000021")["source"] == "财联社电报"
+
+
+def test_em_empty_then_cls_empty_keeps_eastmoney(monkeypatch, tmp_path):
+    """东财返回空 + 备源无命中 → 落空数据,source 仍记主源 eastmoney。"""
+    monkeypatch.setattr(store, "_RAW_DIR", tmp_path)
+    from tools.config import stock_pool
+    monkeypatch.setattr(stock_pool, "get",
+                        lambda code: types.SimpleNamespace(code=code, name="紫光国微"))
+    empty_cls = pd.DataFrame({"标题": [], "内容": [], "发布日期": [], "发布时间": []})
+    fake = types.SimpleNamespace(stock_news_em=lambda symbol: pd.DataFrame(),
+                                 stock_info_global_cls=lambda: empty_cls)
+    monkeypatch.setitem(sys.modules, "akshare", fake)
+
+    items = nw.fetch_news(["000021"], days=3650)["000021"]
+    assert items == []
+    assert store.get_raw_meta("news", "000021")["source"] == "eastmoney"
+
+
 def test_load_roundtrip_missing(monkeypatch, tmp_path):
     monkeypatch.setattr(store, "_RAW_DIR", tmp_path)
     _install(monkeypatch, _fake_df())
