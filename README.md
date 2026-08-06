@@ -37,36 +37,44 @@
 
 ---
 
-## 代码结构
+## 代码结构(分层,依赖单向向下)
 
-| 路径 | 内容 |
-|---|---|
-| `tools/config/` | 股票池 `stock_pool.py` + 全局参数 `settings.py` |
-| `tools/collectors/` | 采集层:行情/基本面/公告/资金流/新闻/UGC/政策 |
-| `tools/analysis/` | 分析层:技术指标(含拐点)/情感/事件三层/组合聚合/预测 |
-| `tools/screener/` | 阶段一:选股筛选(留口子 N1) |
-| `tools/financial_report/` | 财报深度分析(留口子 N2) |
-| `tools/llm/` | 统一 LLM 客户端(用户 API / qwen 可插拔) |
-| `tools/report/` | 报告渲染 |
-| `tools/run.py` | 编排入口 |
-| `web/` | Web 展示(FastAPI + Jinja2 + Chart.js,P3.4+) |
-| `data/` | 原始截图 + `raw/` 采集缓存(gitignore) |
+| 路径 | 层 | 内容 |
+|---|---|---|
+| `tools/config/` | 基座 | 票池 `stock_pool` · 参数 `settings` · 策略阈值+公式 `strategy`(单一真源) |
+| `tools/contracts/` | 基座 | 中心记录 schema + 枚举词表 + 校验器 `validate_record`(层间契约) |
+| `tools/llm/` | 基座 | 统一 LLM 客户端(deepseek-v4-pro @ 网关)+ prompts |
+| `tools/store/` | 基座 | 数据存取层:raw/记录/视图 统一读写(未来换 DB 只改此层) |
+| `tools/collectors/` | 采集 | 行情/基本面/公告/资金流/新闻/**政策/UGC股吧**(唯一外部 I/O) |
+| `tools/analysis/` | 分析 | 技术(含拐点/超买超卖)· 估值 · 预测 · 情绪 `event`(LLM)· serialize(产中心记录)· panel · chart |
+| `tools/strategy/` | 分析 | **策略层:选股/评分/信号 可注册**(`@strategy`) |
+| `tools/screener/` | 选股 | 选股预设(N1 留口子) |
+| `tools/backtest/` | 聚合同级 | **回测层:信号回测 + 绩效(防未来函数)** |
+| `tools/financial_report/` | 分析 | 财报深挖(N2 留口子) |
+| `tools/pipeline/` · `tools/registry/` | 编排/基座 | 编排 DAG · 能力注册表(规划,骨架已立) |
+| `tools/report/` · `tools/run.py` | 展示/编排 | 报告渲染 · CLI 编排 |
+| `web/` | 展示 | FastAPI+Jinja2+Chart.js **四页**(概览/选股/新闻/个股),只读中心记录 |
+| `data/` | 存储 | `raw/` 采集缓存 + `analysis/` 中心记录+视图(gitignore) |
+
+> 架构分层/边界/接口契约见 [架构设计.md](docs/架构设计.md);信息流转+任务流程+逐层职责见 [信息流转与层职责.md](docs/信息流转与层职责.md)。
 
 ## 当前状态
 
-**里程碑:不依赖 LLM 的结构化数据层全部打通(P0 / P1 / P2-A / P2-B)。P3(资金流+预测+Web)进行中。**
+**数据 / 分析 / 展示主干 + 策略/存取/回测层 + LLM 情绪均已落地。** 全量 **139 单测通过**。任务与待办见 [任务看板.md](docs/任务看板.md)。
 
-| 阶段 | 内容 | 状态 |
-|---|---|---|
-| P0 | 框架 + 开发规范 + LLM 调用设计 | ✅ |
-| P1 | 技术面:采集 + MACD/KDJ/RSI/均线/量价 + 评级 + 拐点信号 | ✅ |
-| P2-A | 基本面:营收/净利/ROE/毛利/负债 + PE/PB/市值 | ✅ |
-| P2-B | 公司行为:巨潮公告 + 15 类打标 + 方向粗判 | ✅ |
-| P2-C | 新闻抽取(L1)+ 事件三层分类 | 🔒 待 LLM API(Q7) |
-| P3 | 资金流采集 + 选股筛选 + 预测引擎(止盈止损/推荐金额)+ Web | ⏳ 进行中 |
-| P4 | 舆情 + 情感打分(L2)+ 情绪面超买超卖 | 🔒 待 LLM API |
+| 能力 | 状态 |
+|---|---|
+| 技术面(指标/拐点/超买超卖)· 基本面 · 公告 · 资金流 | ✅ |
+| 预测/推荐(止盈止损%/情景概率/买卖倾向,纯百分比) | ✅ |
+| 新闻情绪(LLM 抽取 deepseek-v4-pro + 三层归类 + 情感聚合) | ✅ |
+| 契约层 + 架构/规范权威化 + Git worktree 协作 | ✅ |
+| 策略层(可注册)· 数据存取层 · 回测层 BT.1(信号回测) | ✅ |
+| 政策采集(东财新闻)· UGC 采集(东财股吧,curl_cffi) | ✅ 采集通 |
+| Web 四页(概览/选股/新闻/个股,含 K线+预测+情绪面板) | ✅ |
+| 回测 BT.2 选股回测 · 情绪打分接入决策 · pipeline/registry | ⏳ 待做 |
+| 选股规则 N1 · 财报框架 N2 | 🔒 待用户 |
 
-数据源(避开东财 TLS 指纹墙):行情=腾讯/新浪,基本面=同花顺+百度,公告=巨潮 cninfo,资金流=curl_cffi 东财。
+数据源(避开东财 TLS 指纹墙):行情=腾讯/新浪,基本面=同花顺+百度,公告=巨潮,**资金流/新闻/政策/股吧=东财(curl_cffi 指纹伪装 / akshare)**,情绪=deepseek-v4-pro。
 
 ## 快速开始
 
