@@ -73,7 +73,7 @@ def build_record(code: str, as_of: str) -> dict:
     # 预测/推荐(P3.2):止盈止损%/情景/买卖倾向。需 tech + kline。
     prediction = None
     if has_tech and kdf is not None:
-        prediction = _safe(lambda: pr.predict(kdf, tech, flow))
+        prediction = _safe(lambda: pr.predict(kdf, tech, flow, sentiment=sentiment))
 
     valuation_block = None
     if fund:
