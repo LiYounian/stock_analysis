@@ -110,12 +110,31 @@
   {% endif %}
 
   {% if r.sentiment %}
+  {% set sen = r.sentiment %}{% set L = sen.三层 or {} %}
   <section class="card wide">
-    <h2>新闻情绪(LLM 抽取)
-      <small>净情绪 <b class="{{ 'pos' if r.sentiment.净情绪分>0 else ('neg' if r.sentiment.净情绪分<0 else '') }}">
-        {{ r.sentiment.净情绪分 }}</b> · 利好 {{ r.sentiment.利好数 }} / 利空 {{ r.sentiment.利空数 }} / 样本 {{ r.sentiment.样本数 }}</small>
+    <h2>情绪面(LLM 三层:新闻/舆情/政策)
+      <small>净情绪 <b class="{{ 'pos' if sen.净情绪分>0 else ('neg' if sen.净情绪分<0 else '') }}">
+        {{ sen.净情绪分 }}</b>{% if sen.口径 %} · {{ sen.口径 }}{% endif %}</small>
     </h2>
-    {% if r.sentiment.events %}
+    {% if L %}
+    <table class="layer3">
+      <tr><th>层(权重)</th><th>净情绪</th><th>多空</th><th>样本数</th></tr>
+      <tr><td>新闻 · 0.5</td>
+          <td class="{{ 'pos' if (L.新闻.净情绪 or 0)>0 else ('neg' if (L.新闻.净情绪 or 0)<0 else '') }}">{{ L.新闻.净情绪 }}</td>
+          <td>{{ L.新闻.多空 or ('偏多' if (L.新闻.净情绪 or 0)>0.2 else ('偏空' if (L.新闻.净情绪 or 0)<-0.2 else '中性')) }}</td>
+          <td>{{ L.新闻.样本数 }}</td></tr>
+      <tr><td>舆情(股吧)· 0.2</td>
+          <td class="{{ 'pos' if (L.舆情.净情绪 or 0)>0 else ('neg' if (L.舆情.净情绪 or 0)<0 else '') }}">{{ L.舆情.净情绪 }}</td>
+          <td>{{ L.舆情.多空 }}</td><td>{{ L.舆情.样本数 }}{% if L.舆情.degraded %} <span class="muted">(降级)</span>{% endif %}</td></tr>
+      <tr><td>政策 · 0.3</td>
+          <td class="{{ 'pos' if (L.政策.净情绪 or 0)>0 else ('neg' if (L.政策.净情绪 or 0)<0 else '') }}">{{ L.政策.净情绪 }}</td>
+          <td>{{ L.政策.多空 or ('偏多' if (L.政策.净情绪 or 0)>0.2 else ('偏空' if (L.政策.净情绪 or 0)<-0.2 else '中性')) }}</td>
+          <td>{{ L.政策.样本数 }}</td></tr>
+    </table>
+    <p class="muted">净情绪按信源可靠性加权;达 ±0.2 阈值时以权重 2 并入买卖倾向(非决定项)。</p>
+    {% endif %}
+    <h3 class="sub">相关消息明细</h3>
+    {% if sen.events %}
     <table><tr><th>时间</th><th>层</th><th>方向</th><th>强度</th><th>关系</th><th>标题</th></tr>
       {% for e in r.sentiment.events %}
       <tr><td>{{ (e.time or '')[:10] }}</td><td>{{ e.层 }}</td>
