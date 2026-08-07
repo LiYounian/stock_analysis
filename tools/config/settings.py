@@ -57,6 +57,20 @@ SCHED_BACKFILL_INTERVAL_MIN = int(os.getenv("SCHED_BACKFILL_INTERVAL_MIN", "0"))
 SCHED_FULL_ALL = os.getenv("SCHED_FULL_ALL", "true").lower() in ("1", "true", "yes")  # 全池 vs 开发子集
 SCHED_MISFIRE_GRACE_SEC = int(os.getenv("SCHED_MISFIRE_GRACE_SEC", "3600"))   # 错过触发的宽限(补跑)
 
+# —— 展示端数据同步(B 期:本地签名上传 → 展示端 ingest 落库)——
+# 全部走环境变量,禁硬编 URL/域名/密钥,禁入库。展示端与本地端各配所需项。
+# 钢印用对称 HMAC-SHA256 起步,sig_alg 字段留位;展示端支持"当前+旧"双密钥轮换窗口(按 key_id 选,验不过再逐一试)。
+SYNC_INGEST_URL = os.getenv("SYNC_INGEST_URL", "")               # 本地端:展示端 ingest 地址,如 https://<host>:8802/ingest
+SYNC_INGEST_PORT = int(os.getenv("SYNC_INGEST_PORT", "8802"))    # 展示端:ingest 服务端口(与展示 web 8801 分开)
+SYNC_INGEST_TOKEN = os.getenv("SYNC_INGEST_TOKEN", "")           # 两端:Bearer 鉴权令牌
+SYNC_SIGNING_KEY = os.getenv("SYNC_SIGNING_KEY", "")             # 两端:当前 HMAC 共享密钥
+SYNC_KEY_ID = os.getenv("SYNC_KEY_ID", "k1")                     # 本地端:当前密钥标识(随信封上送)
+SYNC_SIGNING_KEY_OLD = os.getenv("SYNC_SIGNING_KEY_OLD", "")     # 展示端:轮换窗口内的旧密钥(可空)
+SYNC_KEY_ID_OLD = os.getenv("SYNC_KEY_ID_OLD", "k0")            # 展示端:旧密钥标识
+SYNC_REPLAY_WINDOW_S = int(os.getenv("SYNC_REPLAY_WINDOW_S", "300"))   # 展示端:防重放时间窗口(秒)
+SYNC_MAX_AGE_DAYS = int(os.getenv("SYNC_MAX_AGE_DAYS", "90"))    # 展示端:时效保留窗口(天),更早的产物拒收
+SYNC_SOURCE_ID = os.getenv("SYNC_SOURCE_ID", "local")           # 本地端:来源标识(随信封上送)
+
 
 def ensure_dirs() -> None:
     """确保缓存/报告目录存在。"""
