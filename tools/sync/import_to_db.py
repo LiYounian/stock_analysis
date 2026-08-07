@@ -52,33 +52,44 @@ def _load(p: Path):
 
 def import_date(analysis_dir: Path, date: str) -> dict:
     """导入某一天的全部产物到 DB(幂等)。返回 records/views/code_views 计数。"""
-    day = analysis_dir / date
-    counts = {"records": 0, "views": 0, "code_views": 0}
+    payload = collect_date(analysis_dir, date)
+    for code, rec in payload["records"].items():
+        backend_db.put_record(rec, date)
+    for name, obj in payload["views"].items():
+        backend_db.put_view(name, obj, date)
+    for name, per_code in payload["code_views"].items():
+        for code, obj in per_code.items():
+            backend_db.put_code_view(name, code, obj, date)
+    counts = {"records": len(payload["records"]), "views": len(payload["views"]),
+              "code_views": sum(len(v) for v in payload["code_views"].values())}
+    logger.info("导入 %s:记录 %d / 视图 %d / 按票视图 %d",
+                date, counts["records"], counts["views"], counts["code_views"])
+    return counts
 
-    # 顶层 *.json:6 位代码 = 中心记录;其余 = 池级视图
+
+def collect_date(analysis_dir: Path, date: str) -> dict:
+    """把某日产物读成内存结构(不落库),供导入器与上传工具共用枚举口径:
+      {"records": {code: rec}, "views": {name: obj}, "code_views": {name: {code: obj}}}
+    顶层 6 位 json=record,其余=view;子目录 <name>/<code>.json=code_view。
+    """
+    day = analysis_dir / date
+    out: dict = {"records": {}, "views": {}, "code_views": {}}
+    if not day.is_dir():
+        return out
     for p in sorted(day.glob("*.json")):
         obj = _load(p)
         if _CODE_RE.match(p.stem):
             obj.setdefault("meta", {}).setdefault("code", p.stem)   # 兜底补 code
-            backend_db.put_record(obj, date)
-            counts["records"] += 1
+            out["records"][p.stem] = obj
         else:
-            backend_db.put_view(p.stem, obj, date)
-            counts["views"] += 1
-
-    # 子目录:按票视图 <name>/<代码>.json
+            out["views"][p.stem] = obj
     for sub in sorted(day.iterdir()):
         if not sub.is_dir():
             continue
-        for q in sorted(sub.glob("*.json")):
-            if not _CODE_RE.match(q.stem):
-                continue
-            backend_db.put_code_view(sub.name, q.stem, _load(q), date)
-            counts["code_views"] += 1
-
-    logger.info("导入 %s:记录 %d / 视图 %d / 按票视图 %d",
-                date, counts["records"], counts["views"], counts["code_views"])
-    return counts
+        per_code = {q.stem: _load(q) for q in sorted(sub.glob("*.json")) if _CODE_RE.match(q.stem)}
+        if per_code:
+            out["code_views"][sub.name] = per_code
+    return out
 
 
 def import_all(analysis_dir: Path | None = None, only_date: str | None = None) -> dict:
