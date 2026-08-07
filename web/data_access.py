@@ -92,24 +92,58 @@ def news_page(date: str = "latest") -> list[dict]:
 
 
 # ————————————————————————————————————————————————
-# 新闻详情(读原始新闻 data/raw/<日期>/news/{code}.json,经 store 统一入口)
-# 原始新闻每条:{title, content(正文,≤2000字), time, source, url}
+# 新闻(读统一「新闻+AI」视图 data/analysis/<日期>/news_ai/{code}.json,经 store)
+# 每条:{title, time, source, url, content, ai:{方向, 强度, 与本股关系, 评论, 原因}}
+# 缺 news_ai(未跑 enrich / LLM 未配置)→ 回退原始新闻,ai 置空(向后兼容不崩)。
+# /news 列、个股页新闻块、详情页 共用此单一 reader,零重复逻辑。
 # ————————————————————————————————————————————————
+def _empty_ai() -> dict:
+    """回退原始新闻时的空 ai 块(中性占位,前端可安全取 .ai.方向)。"""
+    return {"方向": "中性", "强度": 0, "与本股关系": "", "评论": "", "原因": ""}
+
+
 def news_list(code: str, date: str = "latest") -> list[dict]:
-    """某票某日的原始新闻列表(时间倒序,采集时已排序)。缺失返回 []。"""
+    """某票某日「新闻+AI」列表(时间倒序,生产时已排序)。
+
+    优先读 news_ai 视图;缺失回退原始新闻并补空 ai。两源皆缺返回 []。
+    """
     try:
-        items = store.get_raw("news", code, date=date)
-        return items if isinstance(items, list) else []
+        items = store.get_code_view("news_ai", code, date=date)
+        if isinstance(items, list):
+            return items
+    except FileNotFoundError:
+        pass
+    try:
+        raw = store.get_raw("news", code, date=date)
     except FileNotFoundError:
         return []
+    if not isinstance(raw, list):
+        return []
+    return [{**n, "ai": _empty_ai()} for n in raw]
 
 
 def news_detail(code: str, idx: int, date: str = "latest") -> dict | None:
-    """某票某日第 idx 条原始新闻(含完整正文+来源+链接)。越界返回 None。"""
+    """某票某日第 idx 条新闻(含完整正文+来源+链接+AI 评论)。越界返回 None。"""
     items = news_list(code, date)
     if 0 <= idx < len(items):
         return items[idx]
     return None
+
+
+def news_flow(date: str = "latest") -> list[dict]:
+    """全市场当日新闻流:遍历全池各票新闻拍平,按时间倒序。
+
+    每项 = {code, name, sector} + 新闻字段(title/time/source/url/content) + ai。
+    """
+    recs = _load_all(date)
+    out: list[dict] = []
+    for code, r in recs.items():
+        meta = r.get("meta") or {}
+        for item in news_list(code, date):
+            out.append({"code": code, "name": meta.get("name", code),
+                        "sector": meta.get("sector", ""), **item})
+    out.sort(key=lambda x: x.get("time") or "", reverse=True)
+    return out
 
 
 def dashboard(date: str = "latest") -> dict:

@@ -89,6 +89,9 @@ def run_sentiment(codes: list[str]) -> int:
                     s["三层"]["新闻"]["样本数"], s["三层"]["舆情"].get("样本数", 0),
                     s["三层"]["政策"]["样本数"])
     logger.info("情绪打分完成:%d 只", ok)
+    # 同阶段生产「新闻+AI」统一视图(复用本阶段已建的 LLM 抽取缓存,不额外烧钱)
+    from tools.analysis import news_ai
+    logger.info("新闻 AI 视图:%d 只", news_ai.write_news_ai(codes))
     return ok
 
 
