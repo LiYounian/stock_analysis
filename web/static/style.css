@@ -81,5 +81,26 @@ canvas { background: #111318; border-radius: 6px; }
   border-left: 3px solid #3a3f4b; padding: 4px 0 4px 14px; }
 .src-link { font-size: 13px; }
 .src-link a { word-break: break-all; }
+/* 面包屑 + 返回 */
+.crumb { font-size: 13px; color: var(--muted); margin: 4px 0 12px; }
+.crumb a { color: #7aa2f7; text-decoration: none; }
+.crumb a:hover { text-decoration: underline; }
+.crumb .back { float: right; }
+/* AI 方向徽章 + 评论 */
+.ai-dir { display: inline-block; padding: 1px 7px; border-radius: 4px; font-size: 12px;
+  background: #2a2e37; }
+.ai-dir.pos { background: #3a2326; color: #ff6b6b; }
+.ai-dir.neg { background: #1f3327; color: #4ade80; }
+.ai-dir.neu { color: var(--muted); }
+.ai-comment { font-size: 12.5px; max-width: 420px; }
+table.news-flow td { vertical-align: top; }
+.nowrap { white-space: nowrap; }
+/* 详情页 AI 分析框 */
+.ai-box { background: #1a1f2b; border: 1px solid #2a3346; border-radius: 6px;
+  padding: 10px 14px; margin: 10px 0 16px; }
+.ai-box .ai-head { font-size: 14px; font-weight: 600; margin-bottom: 6px; }
+.ai-box .ai-rel { font-size: 12px; color: var(--muted); margin-left: 8px; }
+.ai-box .ai-line { font-size: 13.5px; line-height: 1.6; margin: 4px 0; }
+.tiny { font-size: 11px; }
 
 @media (max-width: 760px) { .grid { grid-template-columns: 1fr; } }

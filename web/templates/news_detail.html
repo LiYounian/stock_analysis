@@ -1,9 +1,13 @@
 {% extends "base.html" %}
 {% block title %}{{ item.title }} · A股策略辅助工具{% endblock %}
 {% block content %}
-<div class="stock-head">
-  <a class="mini" href="/news/{{ code }}?date={{ _d }}">← 返回 {{ name }} 新闻列表</a>
-</div>
+{% set ai = item.ai or {} %}
+<nav class="crumb">
+  <a href="/news?date={{ _d }}">每日信息流</a> ›
+  <a href="/news/{{ code }}?date={{ _d }}">{{ name }} 新闻</a> ›
+  <span>本条</span>
+  <a class="back" href="javascript:history.back()">← 返回上一页</a>
+</nav>
 
 <section class="card wide news-detail">
   <h1>{{ item.title }}</h1>
@@ -13,6 +17,19 @@
     · {{ name }}(<a href="/stock/{{ code }}?date={{ _d }}">{{ code }}</a>)
   </p>
 
+  {% if ai %}
+  <div class="ai-box">
+    <div class="ai-head">🤖 AI 分析
+      <span class="ai-dir {{ 'pos' if ai.方向=='利好' else ('neg' if ai.方向=='利空' else 'neu') }}">{{ ai.方向 or '中性' }}{% if ai.强度 %} · 强度 {{ ai.强度 }}{% endif %}</span>
+      {% if ai.与本股关系 %}<span class="ai-rel">与本股:{{ ai.与本股关系 }}</span>{% endif %}
+    </div>
+    {% if ai.评论 %}<p class="ai-line"><b>评论:</b>{{ ai.评论 }}</p>{% endif %}
+    {% if ai.原因 %}<p class="ai-line"><b>原因:</b>{{ ai.原因 }}</p>{% endif %}
+    <p class="muted tiny">AI 推断,仅供参考,非投资建议。</p>
+  </div>
+  {% endif %}
+
+  <h3 class="sub">新闻正文</h3>
   {% if item.content %}
   <div class="news-body">{{ item.content }}</div>
   {% else %}

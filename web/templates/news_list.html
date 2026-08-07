@@ -1,23 +1,32 @@
 {% extends "base.html" %}
 {% block title %}{{ name }} 新闻 · A股策略辅助工具{% endblock %}
 {% block content %}
+<nav class="crumb">
+  <a href="/news?date={{ _d }}">每日信息流</a> ›
+  <span>{{ name }} 新闻</span>
+  <a class="back" href="javascript:history.back()">← 返回上一页</a>
+</nav>
+
 <div class="stock-head">
   <h1>{{ name }} <span class="code">{{ code }}</span> · 当日新闻
     <small>{{ s.as_of }} · 共 {{ items|length }} 条</small></h1>
-  <a class="mini" href="/stock/{{ code }}?date={{ _d }}">← 返回个股</a>
+  <a class="mini" href="/stock/{{ code }}?date={{ _d }}">个股详情</a>
 </div>
 
 <section class="card wide">
-  <table>
-    <tr><th>时间</th><th>来源</th><th>标题(点击看详情)</th></tr>
+  <table class="news-flow">
+    <tr><th>时间</th><th>来源</th><th>AI方向</th><th>标题(点击看详情)</th><th>AI 评论</th></tr>
     {% for it in items %}
+    {% set ai = it.ai or {} %}
     <tr>
-      <td>{{ (it.time or '')[:16] }}</td>
-      <td>{{ it.source or '-' }}</td>
-      <td class="title"><a href="/news/{{ code }}/{{ loop.index0 }}?date={{ _d }}">{{ it.title }}</a></td>
+      <td class="nowrap">{{ (it.time or '')[:16] }}</td>
+      <td class="nowrap">{{ it.source or '-' }}</td>
+      <td class="nowrap"><span class="ai-dir {{ 'pos' if ai.方向=='利好' else ('neg' if ai.方向=='利空' else 'neu') }}">{{ ai.方向 or '—' }}{% if ai.强度 %}·{{ ai.强度 }}{% endif %}</span></td>
+      <td class="title"><a href="/news/{{ code }}/{{ loop.index0 }}?date={{ _d }}">{{ it.title }} →</a></td>
+      <td class="ai-comment muted">{{ ai.评论 or '' }}</td>
     </tr>
     {% else %}
-    <tr><td colspan="3">该日无原始新闻(可能未采集或非交易日)。</td></tr>
+    <tr><td colspan="5">该日无原始新闻(可能未采集或非交易日)。</td></tr>
     {% endfor %}
   </table>
 </section>

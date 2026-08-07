@@ -1,23 +1,44 @@
 {% extends "base.html" %}
-{% block title %}新闻 · A股策略辅助工具{% endblock %}
+{% block title %}每日信息流 · A股策略辅助工具{% endblock %}
 {% block content %}
-<h1>每日信息流 <small>公司行为公告 · 利好/利空</small></h1>
-<p class="muted">当前展示公司公告(巨潮,规则打标)。点<b>股票名</b>看该股当日全部原始新闻(含正文与来源)。</p>
+<h1>每日信息流 <small>全市场新闻 · AI 分析(方向 + 评论)</small></h1>
+<p class="muted">点<b>标题</b>看该条新闻详情(完整正文 + 来源 + AI 评论/原因);点<b>股票名</b>看该股全部新闻。AI 分析仅供参考,非投资建议。</p>
 
 <section class="card wide">
-  <table>
-    <tr><th>日期</th><th>股票</th><th>板块</th><th>类型</th><th>方向</th><th>标题</th></tr>
-    {% for a in news %}
+  <table class="news-flow">
+    <tr><th>时间</th><th>股票</th><th>来源</th><th>AI方向</th><th>标题(点击看详情)</th><th>AI 评论</th></tr>
+    {% for it in flow %}
+    {% set ai = it.ai or {} %}
     <tr>
-      <td>{{ a.date }}</td>
-      <td><a href="/news/{{ a.code }}?date={{ _d }}">{{ a.name }}</a>
-          <a class="mini" href="/stock/{{ a.code }}?date={{ _d }}">个股</a></td>
-      <td>{{ a.sector }}</td>
-      <td>{{ a.type }}</td>
-      <td class="{{ 'pos' if a.impact=='利好' else ('neg' if a.impact=='利空' else '') }}">{{ a.impact }}</td>
-      <td class="title"><a href="/news/{{ a.code }}?date={{ _d }}">{{ a.title }} →</a></td>
+      <td class="nowrap">{{ (it.time or '')[:16] }}</td>
+      <td class="nowrap"><a href="/news/{{ it.code }}?date={{ _d }}">{{ it.name }}</a>
+          <a class="mini" href="/stock/{{ it.code }}?date={{ _d }}">个股</a></td>
+      <td class="nowrap">{{ it.source or '-' }}</td>
+      <td class="nowrap"><span class="ai-dir {{ 'pos' if ai.方向=='利好' else ('neg' if ai.方向=='利空' else 'neu') }}">{{ ai.方向 or '—' }}{% if ai.强度 %}·{{ ai.强度 }}{% endif %}</span></td>
+      <td class="title"><a href="/news/{{ it.code }}/{{ it.idx }}?date={{ _d }}">{{ it.title }} →</a></td>
+      <td class="ai-comment muted">{{ ai.评论 or '' }}</td>
     </tr>
-    {% else %}<tr><td colspan="6">无公告数据</td></tr>{% endfor %}
+    {% else %}
+    <tr><td colspan="6">当日无新闻,或未生成 AI 分析(需先跑流水线 sentiment / news_ai,且 LLM 已配置)。</td></tr>
+    {% endfor %}
   </table>
 </section>
+
+{% if anns %}
+<section class="card wide">
+  <h2>公司公告 <small>巨潮 · 规则打标</small></h2>
+  <table>
+    <tr><th>日期</th><th>股票</th><th>类型</th><th>方向</th><th>标题</th></tr>
+    {% for a in anns[:20] %}
+    <tr>
+      <td class="nowrap">{{ a.date }}</td>
+      <td class="nowrap"><a href="/news/{{ a.code }}?date={{ _d }}">{{ a.name }}</a></td>
+      <td>{{ a.type }}</td>
+      <td class="{{ 'pos' if a.impact=='利好' else ('neg' if a.impact=='利空' else '') }}">{{ a.impact }}</td>
+      <td class="title">{{ a.title }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+</section>
+{% endif %}
 {% endblock %}
