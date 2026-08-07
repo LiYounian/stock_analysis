@@ -22,9 +22,8 @@
 
 <div class="grid">
   <section class="card wide">
-    <h2>K线走势(近120日,收盘+均线,叠加支撑/压力/止盈止损)</h2>
-    <div class="chart-wrap"><canvas id="priceChart"></canvas></div>
-    <div class="chart-wrap vol"><canvas id="volChart"></canvas></div>
+    <h2>K线走势(蜡烛图+成交量+MA5/20/60,叠加支撑/压力/止盈止损)</h2>
+    <div id="klineChart" style="height:460px;"></div>
   </section>
 
   {% if p %}
@@ -164,5 +163,6 @@
 {% endblock %}
 
 {% block scripts %}
-<script src="/static/stock.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/echarts@5.5.1/dist/echarts.min.js"></script>
+<script src="/static/kline_echarts.js"></script>
 {% endblock %}
