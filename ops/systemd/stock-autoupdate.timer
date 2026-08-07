@@ -1,0 +1,13 @@
+# 周期触发自动更新(示例:每小时一次,开机后 5 分钟首跑)
+# 安装:拷到 /etc/systemd/system/ → systemctl daemon-reload → systemctl enable --now stock-autoupdate.timer
+[Unit]
+Description=Run stock auto-update periodically
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=1h
+Persistent=true
+Unit=stock-autoupdate.service
+
+[Install]
+WantedBy=timers.target
