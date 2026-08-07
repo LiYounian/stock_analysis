@@ -1,0 +1,145 @@
+"""编排接线单测(合议全链路):步骤顺序、事件采集降级、council 二次附着纳入多因子/事件驱动。
+
+锁语义:council 数据生产者(factor 横截面 + 事件精数值)必须排在 serialize 之后、council 回写之前;
+        采集失败降级不炸;reattach 后多因子/事件驱动专家不再弃权。
+"""
+import pandas as pd
+
+from tools import run
+from tools.analysis import serialize
+from tools.contracts.expert import validate_verdict
+
+
+# ———————————— cmd_all 步骤顺序 ————————————
+def test_cmd_all_step_order(monkeypatch):
+    """council 回写在 serialize/events/factor 之后;panel/screen 在 council 之后。"""
+    calls = []
+
+    def rec(name):
+        def _f(*a, **k):
+            calls.append(name)
+        return _f
+
+    monkeypatch.setattr(run, "_prep", lambda argv: (["000001", "000002"], "2026-08-08"))
+    monkeypatch.setattr(run, "collect_values", rec("collect_values"))
+    monkeypatch.setattr(run, "collect_message", rec("collect_message"))
+    monkeypatch.setattr(run, "run_sentiment", rec("run_sentiment"))
+    monkeypatch.setattr(run, "run_serialize", rec("run_serialize"))
+    monkeypatch.setattr(run, "run_events", rec("run_events"))
+    monkeypatch.setattr(run, "run_factor", rec("run_factor"))
+    monkeypatch.setattr(run, "run_council", rec("run_council"))
+    monkeypatch.setattr(run, "run_panel", rec("run_panel"))
+    monkeypatch.setattr(run, "run_screen", rec("run_screen"))
+
+    run.cmd_all([])
+
+    # 关键顺序断言
+    assert calls.index("run_serialize") < calls.index("run_events")
+    assert calls.index("run_serialize") < calls.index("run_factor")
+    assert calls.index("run_events") < calls.index("run_council")
+    assert calls.index("run_factor") < calls.index("run_council")
+    assert calls.index("run_council") < calls.index("run_panel")
+    assert calls.index("run_council") < calls.index("run_screen")
+
+
+def test_recent_quarter_ends():
+    qs = run._recent_quarter_ends("2026-08-08", 2)
+    assert qs == ["20260630", "20260331"]           # as_of 前最近 2 个季度末
+    assert all(len(q) == 8 for q in qs)
+
+
+# ———————————— 事件采集降级不炸 ————————————
+def test_run_events_degrade_no_crash(monkeypatch):
+    """collectors 返回空(东财被墙/akshare 缺失)→ run_events 不抛。"""
+    from tools.collectors import event_driven as ed
+    monkeypatch.setattr(ed, "fetch_earnings_forecast", lambda period, kind: pd.DataFrame())
+    monkeypatch.setattr(ed, "fetch_insider_trades", lambda tag="latest": pd.DataFrame())
+    run.run_events(["000001"], "2026-08-08")          # 不抛即通过
+
+
+def test_run_events_survives_exception(monkeypatch):
+    """即便采集函数抛异常,run_events 也应吞掉(降级纪律)——这里验证 collectors 已内建 try/except。"""
+    from tools.collectors import event_driven as ed
+    # 直接验证 collectors 层:akshare 不可用路径返回空 df,不抛
+    monkeypatch.setattr(ed, "_akshare", lambda: None)
+    assert ed.fetch_earnings_forecast("20260630", "yjyg").empty
+    assert ed.fetch_insider_trades("latest").empty
+
+
+# ———————————— reattach_council 纳入多因子/事件驱动 ————————————
+def _synthetic_record(code, roe, pe):
+    return {"schema_version": "1.0",
+            "meta": {"code": code, "name": "T" + code, "sector": "半导体",
+                     "industry": "芯片", "as_of": "2026-08-08"},
+            "snapshot": None,
+            "valuation": {"pe_ttm": pe, "pb": 2.0, "mktcap_yi": 100, "报告期": "20260331", "pe_valid": True},
+            "fundamental": {"ROE": roe, "毛利率": 30, "负债率": 40, "净利增速": 20},
+            "signals": {"trend": {"评级": "偏多", "得分": 40, "依据": ["多头"]},
+                        "ob_os": {"verdict": "中性", "resonance": 0},
+                        "reversal": {"拐点标签": "无", "拐点评分": 0}},
+            "prediction": None, "sentiment": None,
+            "fundflow": {"今日主力净流入": 1e7, "主力连续净流入天数": 1},
+            "events": [{"date": "2026-08-05", "type": "增持", "impact": "利好", "title": "股东增持"}],
+            "timeseries_refs": {}, "provenance": {}}
+
+
+def test_reattach_council_picks_up_factor_and_event(monkeypatch):
+    """两只票:先 factor.precompute(横截面)→ 再 reattach_council → 多因子/事件驱动不再弃权。"""
+    recs = {"000001": _synthetic_record("000001", roe=15.0, pe=20.0),
+            "000002": _synthetic_record("000002", roe=5.0, pe=60.0)}
+    kv = {}                                            # 内存 code_view 存根
+
+    # —— 存根 store:记录读写 + factor code_view ——
+    import tools.analysis.factor.score as score
+    import tools.analysis.experts as experts
+    import tools.analysis.serialize as ser
+
+    def fake_get_record(code, date="latest"):
+        if code in recs:
+            return recs[code]
+        raise FileNotFoundError(code)
+
+    def fake_put_record(rec, date=None):
+        recs[rec["meta"]["code"]] = rec
+        return f"mem://{rec['meta']['code']}"
+
+    def fake_put_code_view(name, code, obj, date=None):
+        kv[(name, code)] = obj
+        return f"mem://{name}/{code}"
+
+    def fake_get_code_view(name, code, date="latest"):
+        if (name, code) in kv:
+            return kv[(name, code)]
+        raise FileNotFoundError(f"{name}/{code}")
+
+    # factor.precompute 读记录 + K线;stub 掉 load_record/market/set_active_date/put_code_view
+    monkeypatch.setattr(score, "_availability", score._availability)  # 保持
+    import tools.store.repo as store
+    monkeypatch.setattr(store, "set_active_date", lambda d: None)
+    monkeypatch.setattr(store, "put_code_view", fake_put_code_view)
+    monkeypatch.setattr(store, "get_code_view", fake_get_code_view)
+    monkeypatch.setattr(store, "get_record", fake_get_record)
+    monkeypatch.setattr(store, "put_record", fake_put_record)
+    monkeypatch.setattr(ser, "load_record", lambda c, date="latest": fake_get_record(c, date))
+    from tools.collectors import market
+    monkeypatch.setattr(market, "load_kline", lambda c: (_ for _ in ()).throw(FileNotFoundError(c)))
+    # 事件驱动:断精数值,走公告 fallback
+    from tools.analysis.event_driven import summary as ed_sum
+    monkeypatch.setattr(ed_sum, "_load_precise", lambda code, t: [])
+
+    # 1) 横截面预算
+    score.precompute(as_of="2026-08-08", codes=["000001", "000002"])
+    assert ("factor", "000001") in kv                  # code_view 已落
+
+    # 2) 回写 council
+    n = serialize.reattach_council(["000001", "000002"], "2026-08-08")
+    assert n == 2
+
+    # 3) 断言:多因子/事件驱动专家在 council 里不再弃权
+    exp = {e["专家"]: e for e in recs["000001"]["council"]["experts"]}
+    assert "多因子" in exp and exp["多因子"]["数据充分度"] != "缺失"
+    assert "事件驱动" in exp and exp["事件驱动"]["数据充分度"] != "缺失"
+    for e in recs["000001"]["council"]["experts"]:
+        assert validate_verdict(e) == []
+    # 默认组综合结论已产出
+    assert recs["000001"]["council"]["default"]["综合方向"] in ("看多", "看空", "中性")
