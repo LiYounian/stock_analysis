@@ -10,4 +10,6 @@ ENV_FILE="${STOCK_SYNC_ENV:-$HOME/.config/stock/sync.env}"
 
 REPO="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$REPO"
-exec "$REPO/.venv/bin/python3" -m ops.local_autopush "$@"
+# 解释器:优先 $STOCK_PYTHON(本机 conda 环境在 sync.env 里设),否则退回 venv
+PY="${STOCK_PYTHON:-$REPO/.venv/bin/python3}"
+exec "$PY" -m ops.local_autopush "$@"
