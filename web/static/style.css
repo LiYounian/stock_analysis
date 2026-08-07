@@ -103,4 +103,19 @@ table.news-flow td { vertical-align: top; }
 .ai-box .ai-line { font-size: 13.5px; line-height: 1.6; margin: 4px 0; }
 .tiny { font-size: 11px; }
 
+/* 票池管理页 */
+.pool-form { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.pool-form input {
+  background: var(--bg); border: 1px solid var(--line); color: var(--fg);
+  padding: 7px 10px; border-radius: 5px; font-size: 13px; min-width: 120px;
+}
+.pool-form input:focus { outline: none; border-color: var(--accent); }
+button {
+  background: var(--accent); color: #fff; border: none; cursor: pointer;
+  padding: 7px 14px; border-radius: 5px; font-size: 13px;
+}
+button:hover { filter: brightness(1.1); }
+button:disabled { opacity: .5; cursor: not-allowed; }
+.del-btn { background: #3a2020; color: #e89; padding: 4px 10px; }
+
 @media (max-width: 760px) { .grid { grid-template-columns: 1fr; } }
