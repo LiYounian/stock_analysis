@@ -160,6 +160,17 @@ def bias_recommendation(tech: dict, fundflow: dict | None, sentiment: dict | Non
     return {"结论": conclusion, "得分": score, "依据": reasons}
 
 
+def bias_recommendation_council(tech: dict, fundflow: dict | None = None,
+                                sentiment: dict | None = None) -> dict:
+    """买卖倾向的合议迁移入口(F4 · D6=A)。委托 council 的「买卖倾向(默认组)」预设。
+
+    与上面的 bias_recommendation 逐票 100% 等价(见 tests/test_council_bias_equiv.py 的 exhaustive 回归)。
+    I1:旧函数 bias_recommendation 暂保留作等价对照,验收通过后再由 serialize 切换到本路径、并清理旧函数。
+    """
+    from tools.analysis import council
+    return council.bias_council(tech, fundflow, sentiment)
+
+
 # ---------- 汇总 ----------
 def predict(kline: pd.DataFrame, tech: dict, fundflow: dict | None = None,
             sentiment: dict | None = None) -> dict:
