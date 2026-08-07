@@ -102,7 +102,7 @@ def write_panel(codes: list[str] | None = None) -> dict:
     df.to_csv(csv_p, index=False, encoding="utf-8-sig")   # utf-8-sig 便于 Excel 打开
 
     date = pd.Timestamp.today().strftime("%Y%m%d")
-    md_p = settings.PROJECT_ROOT / "docs" / "汇总" / f"横向总表_{date}.md"
+    md_p = settings.PROJECT_ROOT / "data" / "reports" / f"横向总表_{date}.md"
     md_p.parent.mkdir(parents=True, exist_ok=True)
     md_p.write_text(f"# 横向总表 · {date}\n\n共 {len(df)} 只,按趋势分升序(弱势/超卖在前)。\n"
                     f"数据源 data/analysis/<日期>/*.json;完整数据见 panel.csv。\n\n"

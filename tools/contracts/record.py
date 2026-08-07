@@ -1,6 +1,6 @@
 """数据契约:中心记录 data/analysis/{code}.json 的 schema + 校验 + 枚举词表。
 
-这是"层与层之间的 API"单一真源(见 docs/架构评审与规范_v1.md 第七章)。
+这是"层与层之间的 API"单一真源(见 docs/参考/架构评审与规范_v1.md 第七章)。
 生产者(serialize)按此产出,消费者(panel/screen/web/report/Agent)按此消费。
 轻量校验,不引第三方依赖;对"数据不可用=null"宽容,只在字段存在且非空时校验枚举/类型。
 """
