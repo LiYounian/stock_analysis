@@ -185,6 +185,29 @@ def expert_多因子(record: dict, kline=None) -> ExpertVerdict:
 
 
 # 内置专家名 → 适配器(record-shaped;多因子读 factor code_view)
+def expert_事件驱动(record: dict, kline=None) -> ExpertVerdict:
+    """PEAD 业绩超预期 + 增减持/回购(F7)。经 event_driven.summarize 汇总:
+    优先采集精数值(增速/规模),缺则回退 record['events'] 公告粗判;无事件→弃权。
+
+    方向/强度只用事件属性(超预期幅度/规模),不用未来收益(防未来函数)。
+    """
+    meta = (record or {}).get("meta") or {}
+    code, as_of = meta.get("code"), meta.get("as_of")
+    if not code or not as_of:
+        return _missing("事件驱动", 原因="缺 code/as_of")
+    try:
+        from tools.analysis.event_driven import summary as ed
+        s = ed.summarize(code, as_of, announcements=(record or {}).get("events"))
+    except Exception:                            # noqa: BLE001
+        return _missing("事件驱动", 原因="事件汇总失败")
+    if not s:
+        return _missing("事件驱动", 原因="近期无相关事件")
+    return ExpertVerdict(专家="事件驱动", 能力类型="方向", 方向=s["方向"], 强度=s["强度"],
+                         置信度=s["置信度"], 默认权重=_w("事件驱动"),
+                         依据=s["依据"], 数据充分度=s["数据充分度"], 原始=s["原始"])
+
+
+# 内置专家名 → 适配器(record-shaped)
 BUILTIN = {
     "技术趋势": expert_技术趋势,
     "超买超卖": expert_超买超卖,
@@ -192,6 +215,7 @@ BUILTIN = {
     "资金流": expert_资金流,
     "情绪三层": expert_情绪三层,
     "多因子": expert_多因子,
+    "事件驱动": expert_事件驱动,
 }
 
 
