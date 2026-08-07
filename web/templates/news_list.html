@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+{% block title %}{{ name }} 新闻 · A股策略辅助工具{% endblock %}
+{% block content %}
+<div class="stock-head">
+  <h1>{{ name }} <span class="code">{{ code }}</span> · 当日新闻
+    <small>{{ s.as_of }} · 共 {{ items|length }} 条</small></h1>
+  <a class="mini" href="/stock/{{ code }}?date={{ _d }}">← 返回个股</a>
+</div>
+
+<section class="card wide">
+  <table>
+    <tr><th>时间</th><th>来源</th><th>标题(点击看详情)</th></tr>
+    {% for it in items %}
+    <tr>
+      <td>{{ (it.time or '')[:16] }}</td>
+      <td>{{ it.source or '-' }}</td>
+      <td class="title"><a href="/news/{{ code }}/{{ loop.index0 }}?date={{ _d }}">{{ it.title }}</a></td>
+    </tr>
+    {% else %}
+    <tr><td colspan="3">该日无原始新闻(可能未采集或非交易日)。</td></tr>
+    {% endfor %}
+  </table>
+</section>
+{% endblock %}
