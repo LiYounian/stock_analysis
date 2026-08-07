@@ -3,10 +3,16 @@
 设计权威:docs/计划/多策略合议_专家投票架构_与新策略roadmap.md §三 + §八(D1 加权求和+冲突仅标注)。
 仲裁规则(D1 锁定):**加权求和为准,冲突只标注、不改判**。
 
-合成(§2.2):
+合成(§2.2 + 弃权稀释修正):
     contrib_i = 强度_i × 置信度_i × 权重_i
-    S = Σ contrib_i / Σ 权重_i           # 归一回 [-1,1](Σ权重=0 时 S=0)
-    S ≥ +τ → 看多;S ≤ −τ → 看空;其间 → 中性
+    S = Σ contrib_i / 分母
+      分母 = Σ(权重_i × 置信度_i)   # 默认"置信度加权":弃权专家(置信度0)不入分母,不稀释在场专家
+           或 Σ 权重_i             # 旧"等权":弃权专家仍占分母 → 稀释(config 合议.分母模式 可切回)
+    (分母=0 → S=0);S ≥ +τ → 看多;S ≤ −τ → 看空;其间 → 中性
+
+弃权稀释修正(本次):多因子/事件驱动/板块轮动等在数据不全时弃权(置信度0、贡献0),
+旧"Σ权重"分母仍把它们的权重计入 → 把 S 拉向 0、稀释在场专家。改用分子分母口径一致的
+"Σ(权重×置信度)":弃权专家分子分母都为 0、自动退出;部分降级(置信度0.5)按比例计入。
 
 冲突(§3.2 第4步):同时存在"看多"专家与"看空"专家,且两方各自 |Σ贡献| ≥ conflict_epsilon。
 
@@ -37,6 +43,7 @@ def convene(expert_names: list[str], record: dict, kline=None,
     """
     tau = float(_C["tau"])
     eps = float(_C["conflict_epsilon"])
+    conf_weighted = _C.get("分母模式", "置信度加权") == "置信度加权"
     wo = weight_override or {}
 
     verdicts = []
@@ -47,19 +54,21 @@ def convene(expert_names: list[str], record: dict, kline=None,
         verdicts.append(v)
 
     归因 = []
-    sum_w = 0.0
+    denom = 0.0
     sum_contrib = 0.0
     for v in verdicts:
         w = float(wo.get(v.专家, v.默认权重))
-        contrib = float(v.强度) * float(v.置信度) * w
-        sum_w += w
+        conf = float(v.置信度)
+        contrib = float(v.强度) * conf * w
+        # 分母:置信度加权(弃权专家 conf=0 → 不入分母,不稀释)或 等权(旧口径)
+        denom += (w * conf) if conf_weighted else w
         sum_contrib += contrib
         归因.append({"专家": v.专家, "方向": v.方向, "强度": round(float(v.强度), 4),
-                     "置信度": round(float(v.置信度), 4), "权重": w,
+                     "置信度": round(conf, 4), "权重": w,
                      "贡献": round(contrib, 4), "依据": list(v.依据),
                      "数据充分度": v.数据充分度})
 
-    S = (sum_contrib / sum_w) if sum_w > 0 else 0.0
+    S = (sum_contrib / denom) if denom > 0 else 0.0
     综合方向 = "看多" if S >= tau else ("看空" if S <= -tau else "中性")
 
     # 冲突:正反两方各自加权贡献都非微弱
@@ -74,7 +83,8 @@ def convene(expert_names: list[str], record: dict, kline=None,
 
     归因.sort(key=lambda a: abs(a["贡献"]), reverse=True)
 
-    口径 = f"预设权重·τ={tau}·仲裁=加权求和(冲突仅标注)·ε={eps}"
+    分母口径 = "Σ(权重×置信度)" if conf_weighted else "Σ权重"
+    口径 = f"预设权重·τ={tau}·分母={分母口径}·仲裁=加权求和(冲突仅标注)·ε={eps}"
     if wo:
         口径 += "·含权重覆盖"
 

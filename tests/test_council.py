@@ -80,12 +80,41 @@ def test_weak_opposition_not_conflict():
 
 
 def test_attribution_sum_consistent_with_S():
-    """归因贡献之和 / Σ权重 == 综合分(数值自洽)。"""
+    """归因贡献之和 / 分母(Σ权重×置信度)== 综合分(数值自洽,置信度加权口径)。"""
     rec = _all_bull_rec()
     r = council.convene_default(rec)
     total_contrib = sum(a["贡献"] for a in r["归因"])
-    total_w = sum(a["权重"] for a in r["归因"])
-    assert abs(total_contrib / total_w - r["综合分"]) < 1e-6
+    denom = sum(a["权重"] * a["置信度"] for a in r["归因"])
+    assert abs(total_contrib / denom - r["综合分"]) < 1e-6
+
+
+def test_abstain_does_not_dilute():
+    """弃权稀释修正:一堆弃权专家不应把在场专家的综合分拉向 0。
+
+    构造:技术趋势强看多(置信度1),其余专家全弃权(缺数据→置信度0)。
+    置信度加权分母下,S 应 ≈ 该单一专家的强度(不被弃权者稀释)。
+    """
+    rec = _rec(signals={"trend": {"评级": "偏多", "得分": 80, "依据": ["多头"]}})
+    # 只有技术趋势有数据,其余(超买超卖/拐点/资金流/情绪/多因子/事件驱动/板块轮动)弃权
+    r = council.convene_default(rec)
+    tv = next(a for a in r["归因"] if a["专家"] == "技术趋势")
+    # 分母只剩技术趋势的 权重×置信度 → S == 其强度
+    assert abs(r["综合分"] - tv["强度"]) < 1e-6
+    assert r["综合方向"] == "看多"                  # 不被弃权者稀释到中性
+
+
+def test_abstain_dilution_vs_old_denominator():
+    """对照:置信度加权(默认)的 |S| 应 ≥ 等权旧口径(弃权者被排除,分母更小、S 更大)。"""
+    import tools.analysis.council as C
+    rec = _rec(signals={"trend": {"评级": "偏多", "得分": 80, "依据": ["多头"]}})
+    s_new = council.convene_default(rec)["综合分"]     # 置信度加权
+    orig = C._C["分母模式"]
+    try:
+        C._C["分母模式"] = "等权"                       # 临时切旧口径
+        s_old = council.convene_default(rec)["综合分"]
+    finally:
+        C._C["分母模式"] = orig
+    assert abs(s_new) > abs(s_old)                     # 修正后不再被稀释
 
 
 def test_attribution_sorted_by_abs_contrib():
