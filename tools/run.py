@@ -5,10 +5,13 @@
     python -m tools.run message      # 采集消息面(新闻/舆情/政策)
     python -m tools.run sentiment    # LLM 三层情绪打分(需 LLM 配置)
     python -m tools.run serialize    # 组装中心记录 + K线图表视图(读情绪并入决策)
+    python -m tools.run events       # 采集事件精数值(业绩预告/快报+增减持),供事件驱动专家
+    python -m tools.run factor       # 多因子截面打分预算(全池横截面)→ code_view,供多因子专家
+    python -m tools.run council      # 横截面/事件就绪后回写各 record 的 council 块
     python -m tools.run panel        # 横向总表视图
     python -m tools.run screen       # 组合聚合 + 预设选股视图
     python -m tools.run pattern      # 形态选股(模块二)扫描:RS+硬规则AND+达标占比
-    python -m tools.run all          # 全链路(采集→情绪→组装→视图),一个日期
+    python -m tools.run all          # 全链路(采集→情绪→组装→事件→多因子→合议回写→视图),一个日期
     # 追加 --all 用全池 32 只;默认开发子集 10 只(config/dev_sample.json)
     # pattern 额外支持 --universe [N]:从全 A 票池取前 N 只(默认 50)扫描
 
@@ -130,6 +133,53 @@ def run_screen(codes: list[str]) -> None:
 
 
 # ————————————————————————————————————————————————
+# 合议数据生产者(横截面/事件),必须在 serialize 之后、council 回写之前
+# ————————————————————————————————————————————————
+def _recent_quarter_ends(as_of: str, n: int = 2) -> list[str]:
+    """as_of 往前最近 n 个季度末报告期 "YYYYMMDD"(供业绩预告/快报采集)。"""
+    t = pd.to_datetime(as_of)
+    ends = []
+    for y in (t.year, t.year - 1):
+        for md in ("1231", "0930", "0630", "0331"):
+            d = pd.to_datetime(f"{y}{md}")
+            if d <= t:
+                ends.append(f"{y}{md}")
+    return ends[:n]
+
+
+def run_events(codes: list[str], as_of: str) -> None:
+    """采集事件精数值(业绩预告/快报 + 增减持),供「事件驱动」专家。
+
+    collectors 内部已全程 try/except 降级:东财被墙/限流/akshare 缺失 → 空,不炸流水;
+    此时事件驱动专家回退 record['events'] 公告粗判(不弃权)。
+    """
+    from tools.collectors import event_driven as ed
+    got = 0
+    for period in _recent_quarter_ends(as_of, 2):
+        for kind in ("yjyg", "yjkb"):
+            df = ed.fetch_earnings_forecast(period, kind)
+            got += 0 if df is None else len(df)
+    df = ed.fetch_insider_trades("latest")
+    got += 0 if df is None else len(df)
+    logger.info("事件精数值采集:%d 行(降级则空,专家回退公告粗判)", got)
+
+
+def run_factor(codes: list[str], as_of: str) -> None:
+    """多因子截面打分预算(横截面,需全池已 serialize)→ code_view 'factor',供「多因子」专家。"""
+    from tools.analysis.factor import score
+    r = score.precompute(as_of=as_of, codes=codes)
+    logger.info("多因子截面预算:打分 %d/%d 只,因子可得性 %s",
+                r.get("打分数"), r.get("扫描数"), r.get("因子可得性"))
+
+
+def run_council(codes: list[str], as_of: str) -> None:
+    """横截面/事件数据就绪后,重算并回写各记录的 council 块(多因子/事件驱动不再弃权)。"""
+    from tools.analysis import serialize
+    n = serialize.reattach_council(codes, as_of)
+    logger.info("合议块回写:%d 只(此时全专家数据就绪)", n)
+
+
+# ————————————————————————————————————————————————
 # CLI 命令(单步:各自设当天日期 + 开发池)
 # ————————————————————————————————————————————————
 def _prep(argv):
@@ -144,6 +194,9 @@ def cmd_sentiment(argv): run_sentiment(_prep(argv)[0])
 def cmd_serialize(argv): codes, as_of = _prep(argv); run_serialize(codes, as_of)
 def cmd_panel(argv): run_panel(_prep(argv)[0])
 def cmd_screen(argv): run_screen(_prep(argv)[0])
+def cmd_events(argv): codes, as_of = _prep(argv); run_events(codes, as_of)
+def cmd_factor(argv): codes, as_of = _prep(argv); run_factor(codes, as_of)
+def cmd_council(argv): codes, as_of = _prep(argv); run_council(codes, as_of)
 
 
 def cmd_pattern(argv):
@@ -179,20 +232,29 @@ def cmd_analyze(argv):
 
 
 def cmd_all(argv):
-    """全链路:采集(数值+消息)→ 情绪 → 组装 → 视图,全程同一日期。"""
+    """全链路:采集 → 情绪 → 组装 → 合议数据(横截面/事件)→ 合议回写 → 视图,全程同一日期。
+
+    顺序命门(横截面依赖):serialize 先产 record;factor 截面打分与事件采集**读 record/全池**,
+    故排在 serialize 之后;council 块含多因子/事件驱动专家 → 必须在这两个数据就绪**之后**回写,
+    否则那两个专家因数据未就绪而弃权。panel/screen 读最终 record(含完整 council)。
+    """
     codes, as_of = _prep(argv)
     logger.info("===== 全链路开始(日期 %s,%d 只)=====", as_of, len(codes))
     collect_values(codes)
     collect_message(codes)
     run_sentiment(codes)                 # LLM 未配置则内部跳过
-    run_serialize(codes, as_of)          # serialize 读情绪并入买卖倾向
+    run_serialize(codes, as_of)          # 组装 record(首次 council:多因子/事件驱动此时弃权)
+    run_events(codes, as_of)             # 事件精数值(降级不炸)→ 供事件驱动专家
+    run_factor(codes, as_of)             # 多因子截面预算(读全池 record)→ 供多因子专家
+    run_council(codes, as_of)            # 数据就绪后回写 council 块(全专家不再弃权)
     run_panel(codes)
     run_screen(codes)
-    logger.info("===== 全链路完成 → data/analysis/%s/ =====", as_of)
+    logger.info("===== 全链路完成 → data/analysis/%s/(record 含完整 council)=====", as_of)
 
 
 _CMDS = {"collect": cmd_collect, "message": cmd_message, "sentiment": cmd_sentiment,
          "serialize": cmd_serialize, "panel": cmd_panel, "screen": cmd_screen,
+         "events": cmd_events, "factor": cmd_factor, "council": cmd_council,
          "pattern": cmd_pattern, "analyze": cmd_analyze, "all": cmd_all}
 
 
