@@ -43,6 +43,11 @@ def _isolate(monkeypatch, tmp_path):
     monkeypatch.setattr(store, "_ANALYSIS_DIR", tmp_path / "analysis")
     monkeypatch.setattr(store, "_RAW_DIR", tmp_path / "raw")
     monkeypatch.setattr(index, "load_index", lambda code: _bench_df())
+    # 默认注入"干净的正向确认"(净利增速>0),使 RS/板块/达标占比 类测试与正向确认解耦;
+    # 针对护栏/正向确认的测试各自 override 下面两个。
+    monkeypatch.setattr(fundamental, "load_fundamental",
+                        lambda code: {"净利增速": 10.0, "PE分位": 0.5})
+    monkeypatch.setattr(announcement, "load_announcements", lambda code: [])
 
 
 def test_single_layer_fallback_when_no_membership(monkeypatch, tmp_path):
@@ -122,3 +127,19 @@ def test_guardrail_clean_passes(monkeypatch, tmp_path):
     v = _guard(monkeypatch, tmp_path, {"净利增速": 12.0, "PE分位": 0.4},
                [{"title": "关于回购公司股份的公告"}])
     assert v["达标数"] == 1 and v["护栏覆盖"] == "1/1"   # 干净票不被误杀
+
+
+# ---------- 批次A:正向确认纪律（突破不裸用，须叠加基本面或事件）----------
+def test_no_positive_confirm_rejected(monkeypatch, tmp_path):
+    """形态+RS+量能+过护栏,但无正向确认(净利增速缺 + 无正向事件)→ 不计入达标。"""
+    v = _guard(monkeypatch, tmp_path, {"净利增速": None, "PE分位": 0.5}, [])
+    assert v["达标数"] == 0
+    assert "突破不裸用" in v["纪律"]
+
+
+def test_event_alone_confirms(monkeypatch, tmp_path):
+    """仅事件(增持公告,无基本面)也构成正向确认 → 可达标。"""
+    v = _guard(monkeypatch, tmp_path, {"净利增速": None, "PE分位": 0.5},
+               [{"title": "关于控股股东增持公司股份的公告"}])
+    assert v["达标数"] == 1
+    assert v["达标清单"][0]["正向确认依据"]                # 依据非空(事件)
