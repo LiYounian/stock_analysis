@@ -67,6 +67,16 @@ def _write_date(date: str | None) -> str:
     return date or _ACTIVE_DATE or _today()
 
 
+# —— 存储后端分发:分析侧(record/view/code_view)可切 DB;raw 恒走文件 ——
+def _use_db() -> bool:
+    return settings.STORE_BACKEND == "db"
+
+
+def _db():
+    from tools.store import backend_db
+    return backend_db
+
+
 def _latest_date(root: Path) -> str | None:
     """root 下最新的日期子目录名;无则 None。"""
     if not root.exists():
@@ -83,7 +93,9 @@ def _read_date(root: Path, date: str | None) -> str | None:
 
 
 def list_dates(root: str = "analysis") -> list[str]:
-    """列出某根(analysis/raw)下所有日期目录,升序。"""
+    """列出某根(analysis/raw)下所有日期,升序。analysis 侧受 STORE_BACKEND 影响(raw 恒文件)。"""
+    if root == "analysis" and _use_db():
+        return _db().list_dates()
     return sorted(p.name for p in (_ANALYSIS_DIR if root == "analysis" else _RAW_DIR).iterdir()
                   if p.is_dir() and _DATE_RE.match(p.name)) if (
         _ANALYSIS_DIR if root == "analysis" else _RAW_DIR).exists() else []
@@ -223,6 +235,8 @@ def is_stale(kind: str, code: str, max_days: float, date: str | None = "latest")
 # ————————————————————————————————————————————————
 def get_record(code: str, date: str | None = "latest") -> dict:
     """读单票中心记录(缺省最新日期)。缺文件抛 FileNotFoundError。"""
+    if _use_db():
+        return _db().get_record(code, date)
     d = _read_date(_ANALYSIS_DIR, date)
     if d is None:
         raise FileNotFoundError(f"{code} 无结构化记录(无任何日期目录),请先 serialize")
@@ -234,6 +248,8 @@ def get_record(code: str, date: str | None = "latest") -> dict:
 
 def put_record(rec: dict, date: str | None = None) -> str:
     """写中心记录(用 rec['meta']['code'] 定文件名)。缺 code 抛 ValueError。返回路径。"""
+    if _use_db():
+        return _db().put_record(rec, _write_date(date))
     code = (rec.get("meta") or {}).get("code")
     if not code:
         raise ValueError("记录缺 meta.code,无法确定文件名")
@@ -246,6 +262,9 @@ def iter_records(date: str | None = "latest"):
     仅 yield 文件名为 6 位代码的 json,自动排除 panel/screen 等视图文件。
     无任何日期目录时直接返回(空)。
     """
+    if _use_db():
+        yield from _db().iter_records(date)
+        return
     d = _read_date(_ANALYSIS_DIR, date)
     if d is None:
         return
@@ -278,14 +297,17 @@ def delete_stock(code: str) -> list[str]:
             for d in list_dates("raw"):
                 _rm(_raw_path(kind, code, d))
                 _rm(_meta_path(kind, code, d))
-    # 中心记录 + 按票视图子目录(chart/sentiment…),遍历所有分析日期分区
-    for d in list_dates("analysis"):
-        _rm(_record_path(code, d))
-        daydir = _ANALYSIS_DIR / d
-        if daydir.exists():
-            for sub in daydir.iterdir():
-                if sub.is_dir():
-                    _rm(sub / f"{code}.json")
+    # 中心记录 + 按票视图(chart/sentiment…):DB 后端删库行,文件后端删各日期分区文件
+    if _use_db():
+        removed += _db().delete_stock(code)
+    else:
+        for d in list_dates("analysis"):
+            _rm(_record_path(code, d))
+            daydir = _ANALYSIS_DIR / d
+            if daydir.exists():
+                for sub in daydir.iterdir():
+                    if sub.is_dir():
+                        _rm(sub / f"{code}.json")
     return removed
 
 
@@ -294,6 +316,8 @@ def delete_stock(code: str) -> list[str]:
 # ————————————————————————————————————————————————
 def get_view(name: str, date: str | None = "latest"):
     """读视图对象(如 panel/screen,缺省最新日期)。缺文件抛 FileNotFoundError。"""
+    if _use_db():
+        return _db().get_view(name, date)
     d = _read_date(_ANALYSIS_DIR, date)
     if d is None:
         raise FileNotFoundError(f"无视图 {name}(无任何日期目录),请先生成")
@@ -305,6 +329,8 @@ def get_view(name: str, date: str | None = "latest"):
 
 def put_view(name: str, obj, date: str | None = None) -> str:
     """写视图对象(缺省当前运行日期)。返回路径。"""
+    if _use_db():
+        return _db().put_view(name, obj, _write_date(date))
     return _write_json(_view_path(name, _write_date(date)), obj)
 
 
@@ -313,11 +339,15 @@ def put_view(name: str, obj, date: str | None = None) -> str:
 # ————————————————————————————————————————————————
 def put_code_view(name: str, code: str, obj, date: str | None = None) -> str:
     """写按票视图(如 chart/sentiment,缺省当前运行日期)。返回路径。"""
+    if _use_db():
+        return _db().put_code_view(name, code, obj, _write_date(date))
     return _write_json(_code_view_path(name, code, _write_date(date)), obj)
 
 
 def get_code_view(name: str, code: str, date: str | None = "latest") -> dict:
     """读按票视图(缺省最新日期)。缺文件抛 FileNotFoundError。"""
+    if _use_db():
+        return _db().get_code_view(name, code, date)
     d = _read_date(_ANALYSIS_DIR, date)
     if d is None:
         raise FileNotFoundError(f"{code} 无 {name} 视图(无任何日期目录)")

@@ -44,7 +44,7 @@
 | `tools/config/` | 基座 | 票池 `stock_pool` · 参数 `settings` · 策略阈值+公式 `strategy`(单一真源) |
 | `tools/contracts/` | 基座 | 中心记录 schema + 枚举词表 + 校验器 `validate_record`(层间契约) |
 | `tools/llm/` | 基座 | 统一 LLM 客户端(deepseek-v4-pro @ 网关)+ prompts |
-| `tools/store/` | 基座 | 数据存取层:raw/记录/视图 统一读写(未来换 DB 只改此层) |
+| `tools/store/` | 基座 | 数据存取层:raw/记录/视图 统一读写;**DB 后端可配置切换**(`repo` 文件后端 + `backend_db` SQLite/MySQL/PG,`STORE_BACKEND`/`DB_URL`,上层零改动) |
 | `tools/collectors/` | 采集 | 行情/基本面/公告/资金流/新闻/**政策/UGC股吧**(唯一外部 I/O) |
 | `tools/analysis/` | 分析 | 技术(含拐点/超买超卖)· 估值 · 预测 · 情绪 `event`(LLM)· serialize(产中心记录)· panel · chart |
 | `tools/strategy/` | 分析 | **策略层:选股/评分/信号 可注册**(`@strategy`) |
@@ -52,7 +52,7 @@
 | `tools/backtest/` | 聚合同级 | **回测层:信号回测 + 绩效(防未来函数)** |
 | `tools/financial_report/` | 分析 | 财报深挖(N2 留口子) |
 | `tools/pipeline/` · `tools/registry/` | 编排/基座 | 编排 DAG · 能力注册表(规划,骨架已立) |
-| `tools/report/` · `tools/run.py` | 展示/编排 | 报告渲染 · CLI 编排 |
+| `tools/report/` · `tools/run.py` · `tools/scheduler.py` | 展示/编排 | 报告渲染 · CLI 编排 · **定时调度(进程内 APScheduler,按配置间隔跑流水线)** |
 | `web/` | 展示 | FastAPI+Jinja2+Chart.js **四页**(概览/选股/新闻/个股),只读中心记录 |
 | `data/` | 存储 | `raw/` 采集缓存 + `analysis/` 中心记录+视图(gitignore) |
 
@@ -84,7 +84,7 @@
 PY=~/.conda/envs/stock_analysis/bin/python
 $PY -m tools.run all                       # 采集→分析→结构化JSON→总表→报告
 $PY -m pytest tests/ -q                     # 跑测试(55)
-$PY -m uvicorn web.app:app --port 8000      # 起 Web:http://localhost:8000
+$PY -m uvicorn web.app:app --port 8801      # 起 Web:http://localhost:8801
 ```
 
 **Web 四页**:`/` 今日概览 · `/screen` 选股(预设筛选+组合概览)· `/news` 新闻(公司行为公告)· `/stock/{code}` 个股评估(K线+止盈止损+情景预测+基本面+资金流)。全站标注非投资建议。
