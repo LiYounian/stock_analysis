@@ -14,6 +14,7 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from jinja2 import Environment, FileSystemLoader, select_autoescape
+from pydantic import BaseModel
 
 from web import data_access as da
 
@@ -95,3 +96,40 @@ def api_stock(code: str, date: str = "latest"):
     if rec is None:
         return JSONResponse({"error": "not found"}, status_code=404)
     return {"record": rec, "kline": da.get_kline(code, date)}
+
+
+# ———— 票池管理:页面 + 增删 API(写操作委托编排层 pool_service)————
+@app.get("/pool", response_class=HTMLResponse)
+def pool(request: Request):
+    return templates.TemplateResponse(
+        request=request, name="pool.html",
+        context={"p": da.pool_page(), **_nav("latest")})
+
+
+class PoolAdd(BaseModel):
+    code: str
+    name: str
+    industry: str = ""
+    sector: str
+
+
+@app.post("/api/pool")
+def api_pool_add(body: PoolAdd):
+    """新增一只票:入池 → 联网采集 → 重建产物。校验失败返回 400。"""
+    from tools import pool_service
+    try:
+        res = pool_service.add_and_collect(body.code, body.name, body.industry, body.sector)
+        return {"ok": True, **res}
+    except ValueError as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
+
+
+@app.post("/api/pool/{code}/delete")
+def api_pool_delete(code: str):
+    """删除一只票:出池 → 清缓存 → 重建产物。不存在返回 404。"""
+    from tools import pool_service
+    try:
+        res = pool_service.remove_and_cleanup(code)
+        return {"ok": True, **res}
+    except ValueError as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=404)

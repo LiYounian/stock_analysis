@@ -79,6 +79,18 @@ def screen_page(date: str = "latest") -> dict:
     return {"presets": detail, "aggregate": data.get("aggregate", {}), "as_of": as_of(date)}
 
 
+
+def pool_page(date: str = "latest") -> dict:
+    """票池管理页数据:当前票池(按板块归组)+ 每票在该日期下是否已有分析数据。"""
+    from tools.config import stock_pool
+    recs = _load_all(date)
+    rows = [{"code": s.code, "name": s.name, "industry": s.industry,
+             "sector": s.sector, "has_data": s.code in recs}
+            for s in stock_pool.get_pool()]
+    rows.sort(key=lambda x: (x["sector"], x["code"]))
+    return {"pool": rows, "count": len(rows), "as_of": as_of(date)}
+
+
 def news_page(date: str = "latest") -> list[dict]:
     """新闻页数据:全池公司行为公告(利好/利空),按日期倒序。"""
     recs = _load_all(date)
