@@ -39,6 +39,14 @@ def compute(target, benchmark, win: int = None) -> float:
     return round(_ret(_closes(target), win) - _ret(_closes(benchmark), win), 4)
 
 
+def period_return(x, win: int = None) -> float:
+    """标的近 win 日收益率(百分数)。供编排层算个股/合成板块(同业等权)收益。
+
+    x 可为 kline DataFrame / close Series / 收盘价序列;样本不足抛 ValueError。
+    """
+    return round(_ret(_closes(x), int(win or _RS["窗口"])), 4)
+
+
 def is_strong(rs_value: float, kind: str = "个股vs板块") -> bool:
     """RS 是否达标(≥ Config 阈值)。kind ∈ {个股vs板块, 板块vs沪深300}。"""
     key = "个股vs板块_达标" if kind == "个股vs板块" else "板块vs沪深300_达标"
