@@ -11,9 +11,8 @@ venv/
 # 系统
 .DS_Store
 
-# 生成产物(分析结果/报告/横向总表/Agent分析快照)——可重跑,不进库(本地保留)
-data/analysis/
-data/reports/
+# 注:data/analysis 与 data/reports 暂**保留跟踪**——合作者靠 git 拉取数据看网页,
+# 在"展示端 + DB"上线(见 计划/展示端与数据同步.md)前,数据仍走 git 传输。届时再移出。
 docs/报告/
 
 # 内部沟通/需求澄清文档(本地保留,不入库)
