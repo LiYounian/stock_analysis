@@ -3,7 +3,7 @@
 页面:/ 概览、/screen 选股、/news 新闻(公告流)、/news/{code} 个股新闻列表、
       /news/{code}/{idx} 新闻详情、/stock/{code} 个股评估。
 所有页面支持 `?date=YYYY-MM-DD` 查看历史(缺省最新);数据只读 data/analysis(离线 run.py 产出)。非投资建议。
-启动:uvicorn web.app:app --reload --port 8000
+启动:uvicorn web.app:app --reload --port 8801
 """
 from __future__ import annotations
 
