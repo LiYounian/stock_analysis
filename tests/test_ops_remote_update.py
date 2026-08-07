@@ -7,7 +7,8 @@ runner 与 health_check 全注入,不碰真实服务器 / systemd / 网络。
 import pytest
 
 from ops.remote_update import (Problem, RemoteConfig, Service, build_restart_cmd,
-                               build_rollback_cmd, check_env, parse_args, run_update)
+                               build_rollback_cmd, check_env, parse_args,
+                               parse_services, run_update)
 
 GOOD_ENV = {"STORE_BACKEND": "db", "SYNC_INGEST_TOKEN": "t", "SYNC_SIGNING_KEY": "k"}
 
@@ -104,13 +105,13 @@ def test_run_update_changed_installs_and_restarts(repo):
     assert runner.ran("systemctl", "restart", "stock-ingest")
 
 
-def test_run_update_no_change_skips_deps(repo):
+def test_run_update_no_change_does_nothing(repo):
     runner = FakeRunner(revs=["SAME", "SAME"])          # 无变更
     res = run_update(RemoteConfig(repo_dir=str(repo)), runner=runner,
                      health_check=lambda svc: True, env=GOOD_ENV)
-    assert res.ok and res.changed is False
+    assert res.ok and res.changed is False and res.step == "nochange"
     assert not runner.ran("pip", "install")             # 无变更→不装依赖
-    assert runner.ran("systemctl", "restart", "stock-web")   # 仍重启保活
+    assert not runner.ran("systemctl", "restart")       # 无变更→不重启(等下次检测)
 
 
 def test_run_update_env_blocker_aborts_before_git(repo):
@@ -150,3 +151,23 @@ def test_parse_args_defaults():
 def test_parse_args_overrides():
     a = parse_args(["--repo-dir", "/x", "--branch", "dev", "--mode", "nohup", "--dry-run"])
     assert a.repo_dir == "/x" and a.branch == "dev" and a.mode == "nohup" and a.dry_run is True
+
+
+# —— 可配置服务 / 必需 env(适配"只跑展示端、未部署 ingest"的机器)——
+def test_parse_services():
+    svcs = parse_services("stock-web:8801, stock-ingest:8802")
+    assert svcs == (Service("stock-web", 8801), Service("stock-ingest", 8802))
+    assert parse_services("stock-web:8801") == (Service("stock-web", 8801),)
+    assert parse_services("") == ()
+
+
+def test_run_update_a_phase_only_no_ingest(repo):
+    """只跑 stock-web、只需 STORE_BACKEND 的机器:缺 sync 密钥不应阻塞,且只重启 web。"""
+    cfg = RemoteConfig(repo_dir=str(repo), services=(Service("stock-web", 8801),),
+                       required_env=("STORE_BACKEND",))
+    runner = FakeRunner(revs=["BEFORE", "AFTER"])       # 有变更
+    res = run_update(cfg, runner=runner, health_check=lambda svc: True,
+                     env={"STORE_BACKEND": "db"})       # 无 SYNC_* 也 OK
+    assert res.ok and res.changed
+    assert runner.ran("systemctl", "restart", "stock-web")
+    assert not runner.ran("systemctl", "restart", "stock-ingest")   # 不碰未部署的 ingest
