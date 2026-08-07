@@ -7,10 +7,10 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from tools.analysis.v1 import pattern
+from tools.analysis.pattern_screener import pattern
 from tools.config.strategy import THRESHOLDS
 
-_CFG = THRESHOLDS["V1形态选股"]
+_CFG = THRESHOLDS["形态选股"]
 
 
 def mk(closes, vols=None):
