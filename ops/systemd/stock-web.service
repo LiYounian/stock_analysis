@@ -1,0 +1,16 @@
+# 展示端只读 web 常驻(systemd)。占位符按实际替换后拷到 /etc/systemd/system/
+# 说明:应用直接监听对外端口(A 期直连 8801);若前置 nginx 反代,可把 --host 改回 127.0.0.1。
+[Unit]
+Description=Stock Analysis Web (read-only display)
+After=network.target
+
+[Service]
+User=deploy
+WorkingDirectory=/srv/stock_analysis
+Environment=STORE_BACKEND=db
+ExecStart=/srv/stock_analysis/.venv/bin/python -m uvicorn web.app:app --host 0.0.0.0 --port 8801
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
