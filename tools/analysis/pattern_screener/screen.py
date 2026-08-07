@@ -47,15 +47,23 @@ def volume_ok(kline_df, cfg: dict = None) -> bool:
 
 
 # ———————————————————— 硬规则 AND 达标(F2.4)————————————————————
-def is_qualified(kline_df, rs_stock_vs_board: float, rs_board_vs_hs300: float,
+def is_qualified(kline_df, rs_stock_vs_board: float, rs_board_vs_hs300: float | None = None,
                  pe_percentile: float | None = None, net_profit_growth: float | None = None,
                  ann_titles: list[str] | None = None, cfg: dict = None) -> dict:
-    """单票硬规则 AND 达标判定。四项全过才达标;不达标给可追溯剔除原因。"""
+    """单票硬规则 AND 达标判定。四项全过才达标;不达标给可追溯剔除原因。
+
+    RS 分双层/单层(Config RS.启用板块层):
+      双层——个股vs板块 AND 板块vs沪深300 都达标(rs_board_vs_hs300 必传);
+      单层——只看 rs_stock_vs_board(此时其语义为「个股 vs 沪深300」),板块层降级不参与。
+    """
     cfg = cfg or _CFG
     pat = pattern.detect(kline_df, cfg)
     form_ok = pat["达标"]
-    rs_ok = rs.is_strong(rs_stock_vs_board, "个股vs板块") and \
-        rs.is_strong(rs_board_vs_hs300, "板块vs沪深300")
+    if cfg["RS"].get("启用板块层", True):
+        rs_ok = rs.is_strong(rs_stock_vs_board, "个股vs板块") and \
+            rs.is_strong(rs_board_vs_hs300, "板块vs沪深300")
+    else:
+        rs_ok = rs.is_strong(rs_stock_vs_board, "个股vs板块")   # 单层:个股 vs 沪深300
     vol_ok = volume_ok(kline_df, cfg)
     grd_ok, grd_reasons = guardrail(pe_percentile, net_profit_growth, ann_titles, cfg)
 
