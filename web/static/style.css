@@ -118,4 +118,13 @@ button:hover { filter: brightness(1.1); }
 button:disabled { opacity: .5; cursor: not-allowed; }
 .del-btn { background: #3a2020; color: #e89; padding: 4px 10px; }
 
+/* 专家合议(F5) */
+.council-experts { display: flex; flex-wrap: wrap; gap: 6px 16px; margin: 4px 0 12px; }
+.council-chk { display: inline-flex; align-items: center; gap: 5px; font-size: 13px;
+  color: var(--fg); cursor: pointer; user-select: none; }
+.council-chk input { cursor: pointer; }
+.council-summary { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin: 6px 0 12px; }
+.council-attr { width: 100%; }
+.council-attr td, .council-attr th { padding: 4px 8px; }
+
 @media (max-width: 760px) { .grid { grid-template-columns: 1fr; } }
