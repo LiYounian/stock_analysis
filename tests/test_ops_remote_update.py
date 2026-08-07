@@ -161,6 +161,20 @@ def test_parse_services():
     assert parse_services("") == ()
 
 
+def test_run_update_post_update_runs_only_when_changed(repo):
+    post = ("/x/.venv/bin/python3", "-m", "tools.sync.import_to_db")
+    cfg = RemoteConfig(repo_dir=str(repo), services=(Service("stock-web", 8801),),
+                       required_env=("STORE_BACKEND",), post_update=post)
+    # 有变更 → 更新后步骤(导入 DB)执行,且在重启之前
+    r1 = FakeRunner(revs=["A", "B"])
+    run_update(cfg, runner=r1, health_check=lambda svc: True, env={"STORE_BACKEND": "db"})
+    assert r1.ran("tools.sync.import_to_db")
+    # 无变更 → 更新后步骤不执行
+    r2 = FakeRunner(revs=["A", "A"])
+    run_update(cfg, runner=r2, health_check=lambda svc: True, env={"STORE_BACKEND": "db"})
+    assert not r2.ran("tools.sync.import_to_db")
+
+
 def test_run_update_a_phase_only_no_ingest(repo):
     """只跑 stock-web、只需 STORE_BACKEND 的机器:缺 sync 密钥不应阻塞,且只重启 web。"""
     cfg = RemoteConfig(repo_dir=str(repo), services=(Service("stock-web", 8801),),

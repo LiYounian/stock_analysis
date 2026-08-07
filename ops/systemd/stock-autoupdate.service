@@ -19,5 +19,7 @@ Environment=REMOTE_SERVICES=stock-web:8801
 # 必需环境变量名。未部署 ingest 的机器只需 STORE_BACKEND;
 # 部署了 ingest 再加 ,SYNC_INGEST_TOKEN,SYNC_SIGNING_KEY
 Environment=REMOTE_REQUIRED_ENV=STORE_BACKEND
-# 码仓有变更才装依赖+重启(失败回滚上一个 commit);没变更直接跳过
+# 有变更时、重启前执行的命令:把 git 带来的产物导入 DB(展示端读 DB,数据才会刷新)
+Environment=REMOTE_POST_UPDATE=/srv/stock_analysis/.venv/bin/python -m tools.sync.import_to_db
+# 码仓有变更才 装依赖→导入DB→重启(失败回滚上一个 commit);没变更直接跳过
 ExecStart=/srv/stock_analysis/.venv/bin/python -m ops.remote_update
