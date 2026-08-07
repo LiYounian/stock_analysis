@@ -73,6 +73,25 @@ def test_and_fails_if_no_pattern():
     assert r["达标"] is False and "无形态命中" in r["剔除原因"]
 
 
+# ---------- RS 单层/双层降级(启用板块层开关)----------
+def test_rs_single_layer_ignores_board(monkeypatch):
+    """默认单层:板块层再弱也不参与;只看个股 vs 沪深300(此处传入 rs_stock_vs_board)。"""
+    assert sv._CFG["RS"].get("启用板块层") is False        # 当前默认降级单层
+    r = sv.is_qualified(_breakout_df(), rs_stock_vs_board=5.0, rs_board_vs_hs300=-9.0,
+                        pe_percentile=0.5, net_profit_growth=10.0)
+    assert r["达标"] is True and r["各项"]["RS"] is True    # 板块 -9 被忽略
+
+
+def test_rs_double_layer_when_enabled():
+    """开启双层:板块 vs 沪深300 重新参与,板块弱则 RS 不达标。"""
+    import copy
+    cfg = copy.deepcopy(sv._CFG)
+    cfg["RS"]["启用板块层"] = True
+    r = sv.is_qualified(_breakout_df(), rs_stock_vs_board=5.0, rs_board_vs_hs300=-9.0,
+                        pe_percentile=0.5, net_profit_growth=10.0, cfg=cfg)
+    assert r["达标"] is False and "RS不达标" in r["剔除原因"]
+
+
 # ---------- 达标占比 F2.6 ----------
 def test_market_breadth():
     results = {
