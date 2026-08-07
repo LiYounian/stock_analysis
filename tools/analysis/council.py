@@ -191,7 +191,9 @@ def build_council_block(record: dict, kline=None) -> dict:
     experts_env = [experts.build(n, record, kline).to_dict() for n in names]
     return {
         "experts": experts_env,                 # 各专家信封(供前端勾选重合成 D7)
-        "default": convene_default(record, kline),
+        "default": convene_default(record, kline),   # 复用 convene → 与合议口径同一真源(含新分母)
+        # config 是前端重合成的口径真源:必须带「分母模式」,否则前端无从判分母 → 前后端漂移
         "config": {"tau": _C["tau"], "conflict_epsilon": _C["conflict_epsilon"],
+                   "分母模式": _C.get("分母模式", "置信度加权"),
                    "默认权重": dict(_C["默认权重"]), "默认专家组": names},
     }
