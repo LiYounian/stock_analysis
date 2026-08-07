@@ -66,4 +66,20 @@ td.title { color: var(--muted); }
 .chart-wrap.vol { height: 110px; }
 canvas { background: #111318; border-radius: 6px; }
 
+/* 日期下拉(顶栏历史选择) */
+.date-select { background: #1a1d24; color: #ddd; border: 1px solid #3a3f4b;
+  border-radius: 4px; padding: 2px 6px; font-size: 13px; cursor: pointer; }
+/* 小号次级链接 */
+.mini { font-size: 12px; color: var(--muted); margin-left: 6px; text-decoration: none; }
+.mini:hover { text-decoration: underline; }
+.badge.news-entry { text-decoration: none; background: #26343f; }
+/* 新闻详情页 */
+.news-detail h1 { font-size: 20px; line-height: 1.4; margin: 4px 0 8px; }
+.news-detail .meta { font-size: 13px; margin-bottom: 12px; }
+.news-body { white-space: pre-wrap; word-break: break-word; line-height: 1.75;
+  font-size: 14.5px; color: #cfd3da; margin: 10px 0 16px;
+  border-left: 3px solid #3a3f4b; padding: 4px 0 4px 14px; }
+.src-link { font-size: 13px; }
+.src-link a { word-break: break-all; }
+
 @media (max-width: 760px) { .grid { grid-template-columns: 1fr; } }

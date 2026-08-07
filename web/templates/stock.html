@@ -17,6 +17,7 @@
     <span class="badge">拐点 {{ sig.reversal.拐点标签 }}</span>{% endif %}
     {% if p %}<span class="badge big {{ 'buy' if p.买卖倾向.结论=='偏买入' else ('sell' if p.买卖倾向.结论=='偏卖出' else 'wait') }}">
       {{ p.买卖倾向.结论 }}</span>{% endif %}
+    <a class="badge news-entry" href="/news/{{ r.meta.code }}?date={{ _d }}">📰 新闻 {{ news_count }} 条 →</a>
   </div>
 </div>
 

@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+{% block title %}{{ item.title }} · A股策略辅助工具{% endblock %}
+{% block content %}
+<div class="stock-head">
+  <a class="mini" href="/news/{{ code }}?date={{ _d }}">← 返回 {{ name }} 新闻列表</a>
+</div>
+
+<section class="card wide news-detail">
+  <h1>{{ item.title }}</h1>
+  <p class="meta muted">
+    {% if item.time %}🕒 {{ item.time }}{% endif %}
+    {% if item.source %} · 来源:<b>{{ item.source }}</b>{% endif %}
+    · {{ name }}(<a href="/stock/{{ code }}?date={{ _d }}">{{ code }}</a>)
+  </p>
+
+  {% if item.content %}
+  <div class="news-body">{{ item.content }}</div>
+  {% else %}
+  <p class="muted">该条无正文内容(仅标题)。</p>
+  {% endif %}
+
+  {% if item.url %}
+  <p class="src-link">📎 原文链接:<a href="{{ item.url }}" target="_blank" rel="noopener noreferrer">{{ item.url }}</a>
+    <span class="muted">(将离开本站,跳转至原始来源)</span></p>
+  {% endif %}
+</section>
+{% endblock %}
