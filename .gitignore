@@ -4,6 +4,9 @@ data/raw/
 # 本地 DB 文件(SQLite 存储后端,不入库;线上库走 DB_URL 指向的独立实例)
 data/*.db
 
+# 上传回执(本地端运行态,不入库)
+data/sync_receipts/
+
 # Python
 __pycache__/
 *.py[cod]
