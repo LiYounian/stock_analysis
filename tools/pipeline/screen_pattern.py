@@ -9,11 +9,13 @@
       个股 vs 板块 = 个股 win 日收益 − 同业成分等权均值收益
       板块 vs 沪深300 = 同业等权均值收益 − 沪深300 收益
     (成分/板块基准都不走被墙的东财;板块基准用「同业等权均值」合成,全A扫描时精确)
-  → pattern_screener.screen.is_qualified(硬规则 AND + 负向护栏)
+  → pattern_screener.screen.is_qualified(硬规则 AND + 负向护栏 + 正向确认)
   → market_breadth(全市场达标占比)
   → store.put_view("形态选股", ...)
 
 负向护栏(F2.3,批次A 已接入):PE 近一年分位 >阈值 / 净利增速为负 / 近期监管类公告 → 剔除。
+正向确认(A股动量弱/反转强铁律):突破不裸用,达标须叠加基本面(净利增速)或事件(增持/回购/
+业绩预增等,取公告标题)确认;缺确认数据的票不计入达标(保守)。二者共用本层已取的基本面+公告。
 护栏输入缺数据(采集失败/未采)不误杀,并在 view「护栏覆盖」计数、缺失诚实声明。
 
 降级(诚实声明,写进 view「降级」,不静默):
@@ -172,14 +174,19 @@ def run_pattern_screen(codes: list[str], as_of: str | None = None,
         "扫描数": len(codes), "跳过数": skipped,
         "有效样本": breadth["有效样本"], "达标数": breadth["达标数"],
         "达标占比": breadth["达标占比"],
-        "达标清单": [{"code": c, "命中形态": results[c]["命中形态"]}
+        "达标清单": [{"code": c, "命中形态": results[c]["命中形态"],
+                      "正向确认依据": results[c].get("正向确认依据", [])}
                      for c in breadth["达标清单"]],
         "RS模式": rs_mode, "板块数": len(board_mean), "单层降级票数": degraded,
         "护栏覆盖": f"{guard_covered}/{len(loaded)}",
+        "纪律": "突破不裸用:达标须叠加基本面或事件正向确认(A股动量弱/反转强)",
         "降级": {
             "RS": rs_note,
             "护栏": ("已接入(PE近一年分位/净利增速/监管类公告);"
                      f"{len(loaded) - guard_covered} 票无基本面或公告数据→该票护栏缺数据不误杀"),
+            "正向确认": ("已接入(基本面净利增速或事件:增持/回购/业绩预增等,取公告标题);"
+                         "缺确认数据的票视为未确认→不计入达标(保守,不裸用)。"
+                         "事件源后续可升级 stock_yjyg_em/stock_ggcg_em"),
         },
     }
     p = store.put_view("形态选股", view)
