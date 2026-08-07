@@ -16,6 +16,7 @@
 | [选股策略.md](选股策略.md) | 5 预设选股 + 3 类可注册策略 | 从票池筛候选、供回测 | `tools/screener/` `tools/strategy/` | 按规则挑票、可插拔扩展 |
 | [回测策略.md](回测策略.md) | 信号回测(walk-forward) | 验策略历史表现 | `tools/backtest/` | 防未来函数地评估策略 |
 | [多因子选股.md](多因子选股.md) | 低换手多因子横截面打分(质量/价值/低波/成长/股息/北向,规避纯动量) | 全A横截面排序,产"多因子"专家供合议 | `tools/analysis/factor/` `experts.py` | 质地+估值+资金综合排序,合议一维 |
+| [板块轮动RRG.md](板块轮动RRG.md) | 行业相对轮动图(RS-Ratio + RS-Momentum 四象限) | 个股按所属行业象限给方向,产「板块轮动」专家供合议 | `tools/analysis/rrg.py` `experts.py` | 顶层"当前该配哪个板块"视角,合议一维 |
 
 ## 策略如何串起来(端到端)
 

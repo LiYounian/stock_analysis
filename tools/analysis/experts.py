@@ -205,6 +205,37 @@ def expert_事件驱动(record: dict, kline=None) -> ExpertVerdict:
     return ExpertVerdict(专家="事件驱动", 能力类型="方向", 方向=s["方向"], 强度=s["强度"],
                          置信度=s["置信度"], 默认权重=_w("事件驱动"),
                          依据=s["依据"], 数据充分度=s["数据充分度"], 原始=s["原始"])
+def expert_板块轮动(record: dict, kline=None) -> ExpertVerdict:
+    """所属行业 RRG 象限 → 方向(改善/领先→看多、落后→看空、走弱→中性);强度=RS 偏离归一。
+
+    行业取自 record.meta.industry(缺则回退 board.board_of(code));行业无 RRG 数据(名称口径
+    不一致 / 板块或基准 K 线缺)→ 弃权(中性+强度0+置信度0+数据充分度=缺失,弃权可见)。
+    计算内核在 tools/analysis/rrg.py(只经 store 读、不触网、恒不抛)。
+    """
+    from tools.analysis import rrg
+    meta = (record or {}).get("meta") or {}
+    industry = meta.get("industry") or meta.get("sector")
+    if not industry:
+        code = meta.get("code")
+        if code:
+            try:
+                from tools.collectors import board
+                industry = board.board_of(str(code))
+            except Exception:
+                industry = None
+    if not industry:
+        return _missing("板块轮动", 原因="无所属行业")
+    row = rrg.industry_row(str(industry))
+    if not row:
+        return _missing("板块轮动", 原因=f"行业「{industry}」无 RRG 数据(名称口径/数据缺)")
+    充分 = row["数据充分度"]
+    return ExpertVerdict(专家="板块轮动", 能力类型="方向", 方向=row["方向"],
+                         强度=_clamp(row["强度"]), 置信度=_SUFF.get(充分, 0.0),
+                         默认权重=_w("板块轮动"),
+                         依据=[f"{industry}·" + d for d in row["依据"]],
+                         数据充分度=充分,
+                         原始={"行业": industry, "象限": row["象限"],
+                               "RS_Ratio": row["RS_Ratio"], "RS_Momentum": row["RS_Momentum"]})
 
 
 # 内置专家名 → 适配器(record-shaped)
@@ -216,6 +247,7 @@ BUILTIN = {
     "情绪三层": expert_情绪三层,
     "多因子": expert_多因子,
     "事件驱动": expert_事件驱动,
+    "板块轮动": expert_板块轮动,      # F8 RRG 板块轮动专家
 }
 
 
