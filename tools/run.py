@@ -7,8 +7,10 @@
     python -m tools.run serialize    # 组装中心记录 + K线图表视图(读情绪并入决策)
     python -m tools.run panel        # 横向总表视图
     python -m tools.run screen       # 组合聚合 + 预设选股视图
+    python -m tools.run pattern      # 形态选股(模块二)扫描:RS+硬规则AND+达标占比
     python -m tools.run all          # 全链路(采集→情绪→组装→视图),一个日期
     # 追加 --all 用全池 32 只;默认开发子集 10 只(config/dev_sample.json)
+    # pattern 额外支持 --universe [N]:从全 A 票池取前 N 只(默认 50)扫描
 
 按日期:编排开始 store.set_active_date(今天),本次所有产出落 data/<日期>/。
 """
@@ -144,6 +146,22 @@ def cmd_panel(argv): run_panel(_prep(argv)[0])
 def cmd_screen(argv): run_screen(_prep(argv)[0])
 
 
+def cmd_pattern(argv):
+    """形态选股扫描。默认开发子集;--universe [N] 从全 A 票池取前 N 只。"""
+    from tools.pipeline import screen_pattern
+    as_of = _as_of()
+    store.set_active_date(as_of)
+    if argv and "--universe" in argv:
+        from tools.collectors import universe
+        i = argv.index("--universe")
+        n = int(argv[i + 1]) if i + 1 < len(argv) and argv[i + 1].isdigit() else 50
+        codes = universe.universe_codes(limit=n)
+        logger.info("票池:全 A 前 %d 只", len(codes))
+    else:
+        codes = _pool(argv)
+    screen_pattern.run_pattern_screen(codes, as_of)
+
+
 def cmd_analyze(argv):
     """读缓存算技术指标,打印评级排行(不落盘)。"""
     codes, _ = _prep(argv)
@@ -175,7 +193,7 @@ def cmd_all(argv):
 
 _CMDS = {"collect": cmd_collect, "message": cmd_message, "sentiment": cmd_sentiment,
          "serialize": cmd_serialize, "panel": cmd_panel, "screen": cmd_screen,
-         "analyze": cmd_analyze, "all": cmd_all}
+         "pattern": cmd_pattern, "analyze": cmd_analyze, "all": cmd_all}
 
 
 def main(argv: list[str]) -> int:

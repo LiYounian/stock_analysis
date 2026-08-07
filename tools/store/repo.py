@@ -11,8 +11,8 @@
   - 例外:`llm_cache` 不按日期(内容 hash,跨天复用免重复烧钱)。
 
 物理格式映射(kind → parquet/json):
-  - parquet(列式,时序数值):kline、fundflow
-  - json(半结构化):fundamental、announcement、news、ugc、policy、llm_cache
+  - parquet(列式,时序数值):kline、fundflow、index_kline、board_kline
+  - json(半结构化):fundamental、announcement、news、ugc、policy、llm_cache、board_membership
 
 职责边界(基座层):只依赖 config;不 import 采集/分析/展示。
 缺失约定:所有 get_* 缺数据抛 FileNotFoundError(与现有 load_X 一致)。
@@ -35,8 +35,9 @@ _RAW_DIR = settings.DATA_RAW                                   # data/raw
 _ANALYSIS_DIR = settings.PROJECT_ROOT / "data" / "analysis"   # data/analysis
 
 # —— kind → 物理格式 ——
-_PARQUET_KINDS = ("kline", "fundflow")
-_JSON_KINDS = ("fundamental", "announcement", "news", "ugc", "policy", "llm_cache")
+_PARQUET_KINDS = ("kline", "fundflow", "index_kline", "board_kline")
+_JSON_KINDS = ("fundamental", "announcement", "news", "ugc", "policy", "llm_cache",
+               "board_membership")
 _RAW_KINDS = _PARQUET_KINDS + _JSON_KINDS
 _FLAT_KINDS = ("llm_cache",)   # 不按日期分区的 raw kind
 
