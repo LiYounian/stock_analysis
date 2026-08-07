@@ -169,7 +169,9 @@ def fetch_ugc(codes: list[str], limit: int | None = None) -> dict[str, list[dict
 
     out: dict[str, list[dict]] = {}
     failed: list[str] = []
-    for code in codes:
+    n = len(codes)
+    for i, code in enumerate(codes, 1):
+        logger.info("[%d/%d] 股吧 %s 采集...", i, n, code)
         try:
             items = fetch_one(code, limit)
             store.put_raw("ugc", code, items, meta={"source": "eastmoney_guba"})

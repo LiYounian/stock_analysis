@@ -85,7 +85,9 @@ def fetch_announcements(codes: list[str], days: int = None) -> dict[str, list[di
 
     out: dict[str, list[dict]] = {}
     failed: list[str] = []
-    for code in codes:
+    n = len(codes)
+    for i, code in enumerate(codes, 1):
+        logger.info("[%d/%d] 公告 %s 采集...", i, n, code)
         try:
             df = _fetch_cninfo(code, start, end)
             items = []

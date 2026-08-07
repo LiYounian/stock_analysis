@@ -127,7 +127,9 @@ def fetch_kline(codes: list[str], start: str | None = None,
 
     out: dict[str, pd.DataFrame] = {}
     failed: list[str] = []
-    for code in codes:
+    n = len(codes)
+    for i, code in enumerate(codes, 1):
+        logger.info("[%d/%d] K线 %s 采集...", i, n, code)
         try:
             df, src = _fetch_one_with_source(code, start, end, adjust)
             store.put_raw("kline", code, df, meta={"source": src})
