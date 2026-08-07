@@ -5,7 +5,7 @@
 import pandas as pd
 import pytest
 
-from tools.analysis.v1 import screen as sv
+from tools.analysis.pattern_screener import screen as sv
 
 
 def _breakout_df():

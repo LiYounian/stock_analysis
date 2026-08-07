@@ -3,15 +3,15 @@
 达标(硬规则 AND,任一不满足即出局)= **形态完成 + RS 达标 + 量能配合 + 通过护栏**。
 复用同包 `pattern`(形态)、`rs`(相对强度);护栏借估值/公告思路。
 产出:每票达标结果 + 全市场「达标占比」(F2.6,供模块一当宽度信号)。
-参数走 Config `strategy.THRESHOLDS["V1形态选股"]`。
+参数走 Config `strategy.THRESHOLDS["形态选股"]`。
 需求见 docs/计划/V1_形态选股与市场状态系统.md F2.3/F2.4/F2.6。
 """
 from __future__ import annotations
 
-from tools.analysis.v1 import pattern, rs
+from tools.analysis.pattern_screener import pattern, rs
 from tools.config.strategy import THRESHOLDS
 
-_CFG = THRESHOLDS["V1形态选股"]
+_CFG = THRESHOLDS["形态选股"]
 
 
 # ———————————————————— 护栏(F2.3,仅负向剔除)————————————————————

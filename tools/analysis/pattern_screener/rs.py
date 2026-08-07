@@ -3,14 +3,14 @@
 定稿口径:**20 日收益率差**(标的收益 − 基准收益),用于:
   ① 个股 vs 所属行业板块;② 板块指数 vs 沪深 300。
 后续升级为 Rank(全市场分位)——接口预留 `rank_rs`,本轮 NotImplementedError。
-窗口/达标阈值走 Config(`strategy.THRESHOLDS["V1形态选股"]["RS"]`)。
+窗口/达标阈值走 Config(`strategy.THRESHOLDS["形态选股"]["RS"]`)。
 需求见 docs/计划/V1_形态选股与市场状态系统.md F2.2。
 """
 from __future__ import annotations
 
 from tools.config.strategy import THRESHOLDS
 
-_RS = THRESHOLDS["V1形态选股"]["RS"]
+_RS = THRESHOLDS["形态选股"]["RS"]
 
 
 def _closes(x) -> list[float]:

@@ -2,7 +2,7 @@
 
 四类经典形态的**可计算几何匹配**(不交给模型自由发挥,全部落特征):
   箱体/平台突破 · 欧奈尔杯柄 · 楔形(收敛)· 旗形(旗杆+旗面)。
-所有几何参数走 Config(`strategy.THRESHOLDS["V1形态选股"]`),可配可调。
+所有几何参数走 Config(`strategy.THRESHOLDS["形态选股"]`),可配可调。
 
 输入:kline DataFrame(列含 date/open/high/low/close/volume,时间升序)。
 输出:`detect()` → {命中形态:[...], 达标:bool, 明细:{形态名:{达标,特征}}}。
@@ -15,7 +15,7 @@ import pandas as pd
 
 from tools.config.strategy import THRESHOLDS
 
-_CFG = THRESHOLDS["V1形态选股"]
+_CFG = THRESHOLDS["形态选股"]
 
 
 def _pct(a: float, b: float) -> float:
