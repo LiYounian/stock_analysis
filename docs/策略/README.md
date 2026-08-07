@@ -15,6 +15,7 @@
 | [情绪三层策略.md](情绪三层策略.md) | 新闻/舆情/政策 三层加权净情绪 | 并入买卖倾向的一维输入 | `tools/analysis/event.py` | 把消息面量化成分数 |
 | [选股策略.md](选股策略.md) | 5 预设选股 + 3 类可注册策略 | 从票池筛候选、供回测 | `tools/screener/` `tools/strategy/` | 按规则挑票、可插拔扩展 |
 | [回测策略.md](回测策略.md) | 信号回测(walk-forward) | 验策略历史表现 | `tools/backtest/` | 防未来函数地评估策略 |
+| [板块轮动RRG.md](板块轮动RRG.md) | 行业相对轮动图(RS-Ratio + RS-Momentum 四象限) | 个股按所属行业象限给方向,产「板块轮动」专家供合议 | `tools/analysis/rrg.py` `experts.py` | 顶层"当前该配哪个板块"视角,合议一维 |
 
 ## 策略如何串起来(端到端)
 
