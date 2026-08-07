@@ -21,10 +21,11 @@
 依赖方向:分析层。依赖 config + collectors(只读 store);**不 import web/serialize/council/contracts**。
 本模块只产"分析结果 dict",由 experts.py 包装成 ExpertVerdict(职责分离,不在此引契约)。
 
-⚠️ 数据对齐说明(落地前需标定,见 docs/策略/板块轮动RRG.md):
-  - 行业名对齐:record.meta.industry / board_membership(baostock 证监会行业)/ board_kline(申万一级)
-    三处命名口径可能不一致;不一致时本专家**优雅弃权**(查不到该行业的 board_kline 即中性+置信度0),
-    绝不伪造信号。名称映射的标定属后续工作。
+⚠️ 数据对齐说明(见 docs/策略/板块轮动RRG.md):
+  - 行业名对齐:record.meta.industry(细分自由文本)/ board_of(baostock 证监会门类)/ 申万一级 三种口径,
+    统一经 tools/analysis/industry_map.to_sw() 归一到**申万一级**(board_kline 的键)后取数;
+    对不齐(无匹配)时**优雅弃权**(中性+置信度0),绝不伪造信号。证监会→申万为门类级近似多对一,
+    家用电器/美容护理等申万独立行业在证监会口径下会并入相邻行业(已知粒度损失,见 industry_map)。
   - 日期对齐:沿用 rs.py 既有约定——按尾部等长对齐(min 长度取尾),不做逐日 date-join(P3 骨架简化)。
 """
 from __future__ import annotations
@@ -189,25 +190,33 @@ def _bench_closes() -> list[float] | None:
 
 
 def industry_row(name: str) -> dict | None:
-    """查某行业的最新 RRG 状态(惰性 + 记忆)。数据缺/算不出 → None(→专家弃权)。
+    """查某行业的最新 RRG 状态(惰性 + 记忆)。数据缺/算不出/名称对不齐 → None(→专家弃权)。
 
-    绝不触网、绝不抛异常(所有 IO 包在 try 内);上层 experts.build 依赖它恒稳。
+    行业名口径对齐:入参可为 record.meta.industry(细分自由文本)/ board_of(证监会门类)/ 申万一级,
+    统一经 industry_map.to_sw() 归一到申万一级(board_kline 的键)再取数;对不齐即弃权,绝不硬凑。
+    绝不触网、绝不抛异常(所有 IO 包在 try 内);上层 experts.build 依赖它恒稳。缓存按原始入参名。
     """
     if not name:
         return None
     if name in _INDUSTRY_CACHE:
         return _INDUSTRY_CACHE[name]
     row = None
+    from tools.analysis import industry_map
+    sw = industry_map.to_sw(name)
+    if not sw:
+        logger.info("RRG 行业名「%s」无法对齐到申万一级,弃权", name)
+        _INDUSTRY_CACHE[name] = None
+        return None
     bench = _bench_closes()
     if bench:
         try:
             from tools.collectors import board
-            bdf = board.load_board_kline(name)
+            bdf = board.load_board_kline(sw)         # 用对齐后的申万一级名取 board_kline
             row = compute_series(_closes(bdf), bench)
         except FileNotFoundError:
-            row = None                               # 该行业无 board_kline(名称口径不一致亦落此)
+            row = None                               # 该申万行业无 board_kline(未采集)
         except Exception as e:                       # noqa: BLE001 —— 任何异常都降级为弃权,不炸批量
-            logger.warning("RRG 行业 %s 计算失败:%s;该行业弃权", name, e)
+            logger.warning("RRG 行业 %s(申万 %s)计算失败:%s;该行业弃权", name, sw, e)
             row = None
     _INDUSTRY_CACHE[name] = row
     return row
