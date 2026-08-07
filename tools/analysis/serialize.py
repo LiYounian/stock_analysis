@@ -146,3 +146,29 @@ def load_record(code: str, date: str | None = "latest") -> dict:
     """读单票中心记录(缺省最新日期)。缺失抛 FileNotFoundError。"""
     from tools.store import repo as store
     return store.get_record(code, date=date)
+
+
+def reattach_council(codes: list[str], as_of: str) -> int:
+    """(编排用)横截面/事件数据就绪**之后**,重算 council 块并回写各记录。
+
+    为什么二次附着:build_record 里首次附 council 时,多因子 code_view(横截面,需全池)
+    与事件驱动精数值尚未产出 → 那两个专家会弃权。编排在 factor.precompute + 事件采集之后
+    调本函数,council 重算即纳入全部专家(不再弃权)。council 块仍是唯一权威合成产物。
+
+    只用 store 公开 API + council(调用,不改)。缺记录的票跳过。返回回写只数。
+    """
+    from tools.analysis import council
+    from tools.collectors import market
+    from tools.store import repo as store
+
+    n = 0
+    for code in codes:
+        try:
+            rec = store.get_record(code, date=as_of)
+        except FileNotFoundError:
+            continue
+        kdf = _safe(lambda: market.load_kline(code))
+        rec["council"] = _safe(lambda: council.build_council_block(rec, kdf))
+        store.put_record(rec, date=as_of)
+        n += 1
+    return n
