@@ -73,6 +73,30 @@ def test_and_fails_if_no_pattern():
     assert r["达标"] is False and "无形态命中" in r["剔除原因"]
 
 
+# ---------- 正向确认(A股动量弱:突破不裸用,须叠加基本面或事件)----------
+def test_positive_confirm_fundamental_or_event():
+    assert sv.positive_confirm(10.0, [])[0] is True                    # 基本面(增速≥0)
+    assert sv.positive_confirm(None, ["关于控股股东增持公司股份的公告"])[0] is True  # 事件
+    assert sv.positive_confirm(None, ["关于召开股东大会的通知"])[0] is False   # 皆无→未确认
+    assert sv.positive_confirm(None, [])[0] is False                   # 缺数据→保守未确认
+
+
+def test_qualified_rejects_bare_breakout():
+    """形态/RS/量能/护栏都过,但无正向确认(净利增速缺 + 无正向事件)→ 不达标。"""
+    r = sv.is_qualified(_breakout_df(), rs_stock_vs_board=5.0, rs_board_vs_hs300=3.0,
+                        pe_percentile=0.5, net_profit_growth=None, ann_titles=[])
+    assert r["达标"] is False and any("正向确认" in x for x in r["剔除原因"])
+    assert r["各项"]["正向确认"] is False
+
+
+def test_qualified_event_confirms_passes():
+    """净利增速缺,但有增持事件 → 正向确认成立,其余过 → 达标。"""
+    r = sv.is_qualified(_breakout_df(), rs_stock_vs_board=5.0, rs_board_vs_hs300=3.0,
+                        pe_percentile=0.5, net_profit_growth=None,
+                        ann_titles=["关于回购公司股份的公告"])
+    assert r["达标"] is True and r["正向确认依据"]
+
+
 # ---------- RS 双层/单层(启用板块层开关)----------
 def test_rs_double_layer_default():
     """默认双层:板块 vs 沪深300 参与,板块弱(-9)则 RS 不达标。"""
