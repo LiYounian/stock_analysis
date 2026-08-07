@@ -157,6 +157,24 @@
       {% else %}<tr><td colspan="4">无</td></tr>{% endfor %}
     </table>
   </section>
+
+  <section class="card wide">
+    <h2>该股新闻(AI 分析)
+      <small><a class="mini" href="/news/{{ r.meta.code }}?date={{ _d }}">查看全部 {{ news_count }} 条 →</a></small></h2>
+    <table class="news-flow">
+      <tr><th>时间</th><th>来源</th><th>AI方向</th><th>标题(点击看详情)</th><th>AI 评论</th></tr>
+      {% for it in (news or [])[:8] %}
+      {% set ai = it.ai or {} %}
+      <tr>
+        <td class="nowrap">{{ (it.time or '')[:16] }}</td>
+        <td class="nowrap">{{ it.source or '-' }}</td>
+        <td class="nowrap"><span class="ai-dir {{ 'pos' if ai.方向=='利好' else ('neg' if ai.方向=='利空' else 'neu') }}">{{ ai.方向 or '—' }}{% if ai.强度 %}·{{ ai.强度 }}{% endif %}</span></td>
+        <td class="title"><a href="/news/{{ r.meta.code }}/{{ loop.index0 }}?date={{ _d }}">{{ it.title }} →</a></td>
+        <td class="ai-comment muted">{{ ai.评论 or '' }}</td>
+      </tr>
+      {% else %}<tr><td colspan="5">该日无新闻</td></tr>{% endfor %}
+    </table>
+  </section>
 </div>
 
 <script id="klineData" type="application/json">{{ kline|tojson }}</script>

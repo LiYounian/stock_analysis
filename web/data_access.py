@@ -139,9 +139,9 @@ def news_flow(date: str = "latest") -> list[dict]:
     out: list[dict] = []
     for code, r in recs.items():
         meta = r.get("meta") or {}
-        for item in news_list(code, date):
+        for i, item in enumerate(news_list(code, date)):
             out.append({"code": code, "name": meta.get("name", code),
-                        "sector": meta.get("sector", ""), **item})
+                        "sector": meta.get("sector", ""), "idx": i, **item})
     out.sort(key=lambda x: x.get("time") or "", reverse=True)
     return out
 

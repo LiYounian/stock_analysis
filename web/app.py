@@ -47,9 +47,11 @@ def screen(request: Request, date: str = "latest"):
 
 @app.get("/news", response_class=HTMLResponse)
 def news(request: Request, date: str = "latest"):
+    """每日信息流:全市场新闻流(含 AI 分析),标题可点进详情。"""
     return templates.TemplateResponse(
         request=request, name="news.html",
-        context={"news": da.news_page(date), "s": {"as_of": da.as_of(date)}, **_nav(date)})
+        context={"flow": da.news_flow(date), "anns": da.news_page(date),
+                 "s": {"as_of": da.as_of(date)}, **_nav(date)})
 
 
 @app.get("/news/{code}", response_class=HTMLResponse)
@@ -83,10 +85,11 @@ def stock(request: Request, code: str, date: str = "latest"):
     rec = da.get_record(code, date)
     if rec is None:
         return HTMLResponse(f"<h2>无此股票数据:{code}</h2>", status_code=404)
+    news = da.news_list(code, date)
     return templates.TemplateResponse(
         request=request, name="stock.html",
         context={"r": rec, "kline": da.get_kline(code, date),
-                 "news_count": len(da.news_list(code, date)), **_nav(date)})
+                 "news": news, "news_count": len(news), **_nav(date)})
 
 
 @app.get("/api/stock/{code}")
