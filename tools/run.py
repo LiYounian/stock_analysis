@@ -83,7 +83,9 @@ def run_sentiment(codes: list[str]) -> int:
     if not event.score_policy():
         logger.warning("政策打分为空(缺政策缓存?),政策层降级")
     ok = 0
-    for code in codes:
+    n = len(codes)
+    for i, code in enumerate(codes, 1):
+        logger.info("[%d/%d] %s — 新闻情绪(LLM)...", i, n, code)
         try:
             rec = event.analyze_stock(code)
         except FileNotFoundError:

@@ -75,7 +75,9 @@ def fetch_fundflow(codes: list[str], days: int | None = None) -> dict[str, pd.Da
     settings.ensure_dirs()
     out: dict[str, pd.DataFrame] = {}
     failed: list[str] = []
-    for code in codes:
+    n = len(codes)
+    for i, code in enumerate(codes, 1):
+        logger.info("[%d/%d] 资金流 %s 采集...", i, n, code)
         try:
             df = fetch_one(code, days)
             store.put_raw("fundflow", code, df, meta={"source": _SOURCE})
