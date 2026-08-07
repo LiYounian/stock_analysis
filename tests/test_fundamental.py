@@ -50,13 +50,33 @@ def test_baidu_latest_value(monkeypatch):
     _install_fake_ak(monkeypatch, baidu_val=47.98)
     b = fd._fetch_baidu("000021")
     assert b["PE_TTM"] == 47.98 and b["PB"] == 47.98    # 假源三项同值
+    assert b["PE分位"] == 1.0                           # 单点序列,末值即最大→分位 1.0
 
 
 def test_baidu_source_fail_degrades(monkeypatch):
-    """百度失败 → 估值字段 None,不抛错。"""
+    """百度失败 → 估值字段 None(含 PE分位),不抛错。"""
     _install_fake_ak(monkeypatch, baidu_raise=True)
     b = fd._fetch_baidu("000021")
-    assert b == {"PE_TTM": None, "PB": None, "总市值": None}
+    assert b == {"PE_TTM": None, "PB": None, "总市值": None, "PE分位": None}
+
+
+def test_percentile_pure():
+    """_percentile:≤x 占比;空序列 None。"""
+    assert fd._percentile([10, 20, 30, 40, 50], 25) == 0.4   # {10,20}/5
+    assert fd._percentile([10, 20, 30], 30) == 1.0
+    assert fd._percentile([], 5) is None
+
+
+def test_pe_percentile_from_series(monkeypatch):
+    """PE 近一年分位由整条 PE 序列算(末值在序列中的分位),非仅末值。"""
+    import types
+    def _baidu(symbol, indicator, period):
+        return pd.DataFrame({"date": list(range(5)), "value": [10.0, 50.0, 30.0, 40.0, 25.0]})
+    monkeypatch.setitem(__import__("sys").modules, "akshare",
+                        types.SimpleNamespace(stock_zh_valuation_baidu=_baidu))
+    b = fd._fetch_baidu("000021")
+    assert b["PE_TTM"] == 25.0                           # 末值
+    assert b["PE分位"] == 0.4                            # {10,25}/5,末值 25 的分位
 
 
 def test_missing_indicator_none(monkeypatch):
