@@ -1,0 +1,13 @@
+# 每天清理一次过期 nonce。安装:拷到 /etc/systemd/system/ → daemon-reload →
+# systemctl enable --now stock-nonce-cleanup.timer
+[Unit]
+Description=Run ingest nonce cleanup daily
+
+[Timer]
+OnBootSec=10min
+OnUnitActiveSec=24h
+Persistent=true
+Unit=stock-nonce-cleanup.service
+
+[Install]
+WantedBy=timers.target
