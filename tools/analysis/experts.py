@@ -151,13 +151,47 @@ def expert_情绪三层(record: dict, kline=None) -> ExpertVerdict:
                          原始={"净情绪分": net, "样本数": n})
 
 
-# 内置专家名 → 适配器(record-shaped)
+def expert_多因子(record: dict, kline=None) -> ExpertVerdict:
+    """多因子截面打分专家(F6):读预算的 factor code_view → 信封。
+
+    横截面性质:综合分需全票池,由 `tools.analysis.factor.score.precompute` 预算落 code_view
+    "factor",本适配器只读该票结果(经 store 公开 API 读,不改 store)。这是本模块唯一的
+    store 依赖(局部惰性导入)——因子分是横截面产物、无法由单票 record 现算,故走预算+读取。
+    方向=综合分位符号 · 强度=横截面分位映射[-1,1] · 置信度=因子齐全度 · 依据=各因子分位。
+    缺预算结果(未跑 precompute)→ 弃权(缺失),不崩。
+    """
+    code = ((record or {}).get("meta") or {}).get("code")
+    if not code:
+        return _missing("多因子", 能力类型="评级", 原因="记录缺 code")
+    from tools.store import repo as store          # 局部依赖:横截面产物存 code_view
+    try:
+        fv = store.get_code_view("factor", code)
+    except FileNotFoundError:
+        return _missing("多因子", 能力类型="评级", 原因="未预算多因子(先跑 factor.score.precompute)")
+    方向 = fv.get("方向", "中性")
+    强度 = _clamp(fv.get("强度", 0.0))
+    if 方向 == "看多":
+        强度 = abs(强度)
+    elif 方向 == "看空":
+        强度 = -abs(强度)
+    else:
+        强度 = 0.0
+    return ExpertVerdict(专家="多因子", 能力类型="评级", 方向=方向, 强度=强度,
+                         置信度=_clamp(float(fv.get("因子齐全度") or 0.0), 0.0, 1.0),
+                         默认权重=_w("多因子"), 依据=list(fv.get("依据") or []),
+                         数据充分度=fv.get("数据充分度", "缺失"),
+                         原始={"综合分": fv.get("综合分"), "综合分位": fv.get("综合分位"),
+                               "各因子分位": fv.get("各因子分位")})
+
+
+# 内置专家名 → 适配器(record-shaped;多因子读 factor code_view)
 BUILTIN = {
     "技术趋势": expert_技术趋势,
     "超买超卖": expert_超买超卖,
     "拐点": expert_拐点,
     "资金流": expert_资金流,
     "情绪三层": expert_情绪三层,
+    "多因子": expert_多因子,
 }
 
 
