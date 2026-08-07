@@ -150,30 +150,30 @@ def run_update(cfg: RemoteConfig, *, runner, health_check, env: dict | None = No
             logger.error("环境不满足(需人工):%s", b.message)
         return Result(ok=False, step="env", problems=[b.message for b in blockers])
 
-    # ② 更新
+    # ② 更新:码仓没变 → 直接返回,不重启(定时轮询只在有变更时动手)
     before = _rev(cfg, runner)
     runner(["git", "-C", cfg.repo_dir, "fetch", "origin"])
     runner(["git", "-C", cfg.repo_dir, "merge", "--ff-only", f"origin/{cfg.branch}"])
     after = _rev(cfg, runner)
     changed = before != after
-    if changed:
-        logger.info("代码更新 %s → %s,安装依赖", before[:8], after[:8])
-        _install_deps(cfg, runner)
+    if not changed:
+        return Result(ok=True, step="nochange", changed=False, before=before, after=after)
 
-    # ③ 重启 + 健康检查(失败回滚)
+    # ③ 有变更:装依赖 → 重启 + 健康检查(失败回滚到更新前)
+    logger.info("代码更新 %s → %s,安装依赖并重启", before[:8], after[:8])
+    _install_deps(cfg, runner)
     for svc in cfg.services:
         runner(build_restart_cmd(svc, cfg.mode))
         if not health_check(svc):
             logger.error("%s 重启后不健康,回滚到 %s", svc.name, before[:8])
             runner(build_rollback_cmd(cfg.repo_dir, before))
-            if changed:
-                _install_deps(cfg, runner)
+            _install_deps(cfg, runner)
             _restart_all(cfg, runner)
             return Result(ok=False, step="restart", before=before, after=after,
                           rolled_back_to=before,
                           alert=f"{svc.name} 重启失败,已回滚到 {before[:8]}")
 
-    return Result(ok=True, step="done", changed=changed, before=before, after=after)
+    return Result(ok=True, step="done", changed=True, before=before, after=after)
 
 
 # ————————————————————————————————————————————————
@@ -197,12 +197,29 @@ def http_health(svc: Service) -> bool:
     return False
 
 
+def parse_services(spec: str) -> tuple[Service, ...]:
+    """解析 "name:port,name2:port2" → Service 元组。端口缺省 0(仅按名重启,不健康检查端口)。"""
+    out: list[Service] = []
+    for part in spec.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        name, _, port = part.partition(":")
+        out.append(Service(name.strip(), int(port) if port.strip() else 0))
+    return tuple(out)
+
+
 def parse_args(argv=None) -> argparse.Namespace:
-    ap = argparse.ArgumentParser(description="展示端远端自动更新+自愈(拉取最新→装依赖→重启→失败回滚)")
+    ap = argparse.ArgumentParser(description="展示端远端自动更新+自愈(拉取最新→有变更装依赖+重启→失败回滚)")
     ap.add_argument("--repo-dir", default=os.getenv("REMOTE_REPO_DIR", "/srv/stock_analysis"))
     ap.add_argument("--branch", default=os.getenv("REMOTE_BRANCH", "main"))
     ap.add_argument("--python", default=os.getenv("REMOTE_PYTHON", ".venv/bin/python"))
     ap.add_argument("--mode", default=os.getenv("REMOTE_MODE", "systemd"), choices=["systemd", "nohup"])
+    # 要重启+健康检查的服务(逗号分隔 name:port);只跑展示端时设 "stock-web:8801"
+    ap.add_argument("--services", default=os.getenv("REMOTE_SERVICES", "stock-web:8801,stock-ingest:8802"))
+    # 必需环境变量名(逗号分隔);未部署 ingest 的机器设 "STORE_BACKEND" 即可
+    ap.add_argument("--required-env", default=os.getenv("REMOTE_REQUIRED_ENV",
+                    "STORE_BACKEND,SYNC_INGEST_TOKEN,SYNC_SIGNING_KEY"))
     ap.add_argument("--dry-run", action="store_true", help="只打印将执行的命令,不真正执行")
     return ap.parse_args(argv)
 
@@ -210,7 +227,9 @@ def parse_args(argv=None) -> argparse.Namespace:
 def main(argv=None) -> int:
     args = parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
-    cfg = RemoteConfig(repo_dir=args.repo_dir, branch=args.branch, python=args.python, mode=args.mode)
+    required = tuple(e.strip() for e in args.required_env.split(",") if e.strip())
+    cfg = RemoteConfig(repo_dir=args.repo_dir, branch=args.branch, python=args.python,
+                       mode=args.mode, services=parse_services(args.services), required_env=required)
 
     if args.dry_run:
         def runner(cmd):
