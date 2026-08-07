@@ -129,6 +129,36 @@ def fetch_membership(cons_fetcher=None, boards: list[dict] | None = None) -> dic
     return membership
 
 
+def fetch_membership_baostock() -> dict[str, str]:
+    """baostock 全市场「个股→证监会行业」映射(一次查询,不走东财/申万)并落盘。
+
+    baostock 自有协议(非东财 push2,不受本机路径墙影响),query_stock_industry 返回
+    全A行业分类;约 94% 覆盖(空的多为退市/僵尸股,跳过)。code 去 sh./sz. 前缀存 6 位。
+    """
+    settings.ensure_dirs()
+    import baostock as bs
+    import contextlib
+    import io
+    buf = io.StringIO()
+    membership: dict[str, str] = {}
+    with contextlib.redirect_stdout(buf):        # baostock 登录/登出会打印,吞掉
+        bs.login()
+        try:
+            rs = bs.query_stock_industry()
+            while rs.error_code == "0" and rs.next():
+                row = rs.get_row_data()          # [updateDate, code, code_name, industry, cls]
+                code, industry = row[1], (row[3] or "").strip()
+                if industry:
+                    membership[code.split(".")[-1]] = industry   # sh.600000 → 600000
+        finally:
+            bs.logout()
+    store.put_raw("board_membership", _MEMBERSHIP_CODE, membership,
+                  meta={"source": "baostock", "分类": "证监会行业",
+                        "mapped_stocks": len(membership)})
+    logger.info("个股→板块映射(baostock 证监会):%d 只", len(membership))
+    return membership
+
+
 def load_board_kline(name: str) -> pd.DataFrame:
     """读单板块指数日 K线(策略层用,不触网)。缺失抛 FileNotFoundError。"""
     return store.get_raw("board_kline", _safe(name))

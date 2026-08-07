@@ -61,3 +61,35 @@ def test_membership_default_source_empty(monkeypatch, tmp_path):
 def test_board_of_missing_returns_none(monkeypatch, tmp_path):
     monkeypatch.setattr(store, "_RAW_DIR", tmp_path)
     assert board.board_of("999999") is None       # 映射未落盘→兜底 None,不抛
+
+
+class _FakeRS:
+    """伪 baostock 结果集:逐行 next()/get_row_data()。"""
+    def __init__(self, rows):
+        self.error_code = "0"
+        self._rows, self._i = rows, -1
+
+    def next(self):
+        self._i += 1
+        return self._i < len(self._rows)
+
+    def get_row_data(self):
+        return self._rows[self._i]
+
+
+def test_fetch_membership_baostock(monkeypatch, tmp_path):
+    """baostock 证监会行业:去 sh./sz. 前缀、跳过空行业、落盘 source=baostock。"""
+    monkeypatch.setattr(store, "_RAW_DIR", tmp_path)
+    import baostock as bs
+    rows = [
+        ["2026-08-03", "sh.600000", "浦发银行", "J66货币金融服务", "证监会行业分类"],
+        ["2026-08-03", "sz.000002", "万科A", "K70房地产业", "证监会行业分类"],
+        ["2026-08-03", "sh.600001", "邯郸钢铁", "", "证监会行业分类"],   # 空行业→跳过
+    ]
+    monkeypatch.setattr(bs, "login", lambda *a, **k: None)
+    monkeypatch.setattr(bs, "logout", lambda *a, **k: None)
+    monkeypatch.setattr(bs, "query_stock_industry", lambda *a, **k: _FakeRS(rows))
+    m = board.fetch_membership_baostock()
+    assert m == {"600000": "J66货币金融服务", "000002": "K70房地产业"}   # 前缀去掉、空跳过
+    assert board.load_membership()["600000"] == "J66货币金融服务"
+    assert store.get_raw_meta("board_membership", "all")["source"] == "baostock"
