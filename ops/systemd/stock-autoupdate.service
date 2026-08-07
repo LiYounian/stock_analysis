@@ -1,0 +1,17 @@
+# 展示端自动更新(oneshot,由 stock-autoupdate.timer 周期触发)
+# 安装:占位符替换后拷到 /etc/systemd/system/,再 systemctl daemon-reload
+[Unit]
+Description=Stock Analysis remote auto-update (pull + restart + self-heal)
+After=network.target
+
+[Service]
+Type=oneshot
+User=deploy
+WorkingDirectory=/srv/stock_analysis
+# 环境检查用到的必需变量从受限文件注入(同 ingest 的 sync.env)
+EnvironmentFile=/etc/stock-analysis/sync.env
+Environment=STORE_BACKEND=db
+Environment=REMOTE_REPO_DIR=/srv/stock_analysis
+Environment=REMOTE_BRANCH=main
+# 拉取最新 → 有变更装依赖 → 重启 web+ingest → 健康检查失败自动回滚
+ExecStart=/srv/stock_analysis/.venv/bin/python -m ops.remote_update
