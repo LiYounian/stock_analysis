@@ -253,6 +253,41 @@ def iter_records(date: str | None = "latest"):
             yield _read_json(p)
 
 
+def delete_stock(code: str) -> list[str]:
+    """删除某票的全部落盘(遍历所有日期分区):raw 各 kind 数据+采集元数据、
+    中心记录、按票视图(chart/sentiment 等)。
+
+    供票池「删除」操作清理该票缓存(store 拥有文件布局,删除归此层)。
+    视图(panel/screen)是全池聚合,由上层重建覆盖,不在此删。
+    返回实际删除的文件路径列表(用于日志/回执)。
+    """
+    removed: list[str] = []
+
+    def _rm(p: Path) -> None:
+        if p.exists():
+            p.unlink()
+            removed.append(str(p))
+
+    # raw:扁平 kind(llm_cache)无日期;其余遍历所有日期分区
+    for kind in _RAW_KINDS:
+        if kind in _FLAT_KINDS:
+            _rm(_raw_path(kind, code, None))
+            _rm(_meta_path(kind, code, None))
+        else:
+            for d in list_dates("raw"):
+                _rm(_raw_path(kind, code, d))
+                _rm(_meta_path(kind, code, d))
+    # 中心记录 + 按票视图子目录(chart/sentiment…),遍历所有分析日期分区
+    for d in list_dates("analysis"):
+        _rm(_record_path(code, d))
+        daydir = _ANALYSIS_DIR / d
+        if daydir.exists():
+            for sub in daydir.iterdir():
+                if sub.is_dir():
+                    _rm(sub / f"{code}.json")
+    return removed
+
+
 # ————————————————————————————————————————————————
 # 视图 data/analysis/<日期>/{name}.json(panel / screen 等)
 # ————————————————————————————————————————————————

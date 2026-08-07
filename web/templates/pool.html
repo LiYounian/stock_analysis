@@ -1,0 +1,85 @@
+{% extends "base.html" %}
+{% block title %}票池管理 · A股策略辅助工具{% endblock %}
+{% block content %}
+<h1>票池管理 <small>当前 {{ p.count }} 只 · 增删即时联网采集/清理并重建</small></h1>
+
+<section class="card wide">
+  <h2>新增股票</h2>
+  <form id="add-form" class="pool-form" autocomplete="off">
+    <input name="code" placeholder="代码(6位)" maxlength="6" required>
+    <input name="name" placeholder="名称" required>
+    <input name="industry" placeholder="细分行业(可选)">
+    <input name="sector" placeholder="大类板块(如 半导体)" required>
+    <button type="submit">新增并采集</button>
+  </form>
+  <p id="add-msg" class="muted">新增会联网采集该票行情/基本面/公告,约需几秒,请稍候。</p>
+</section>
+
+<div class="grid">
+{% set groups = {} %}
+{% for x in p.pool %}{% set _ = groups.setdefault(x.sector, []).append(x) %}{% endfor %}
+{% for sector, rows in groups.items() %}
+  <section class="card">
+    <h2>{{ sector }} <small>{{ rows|length }} 只</small></h2>
+    <table>
+      <tr><th>股票</th><th>行业</th><th>数据</th><th></th></tr>
+      {% for x in rows %}
+      <tr>
+        <td><a href="/stock/{{ x.code }}">{{ x.name }}</a> <span class="muted">{{ x.code }}</span></td>
+        <td>{{ x.industry or '-' }}</td>
+        <td class="{{ '' if x.has_data else 'muted' }}">{{ '✓' if x.has_data else '缺' }}</td>
+        <td><button class="del-btn" data-code="{{ x.code }}" data-name="{{ x.name }}">删除</button></td>
+      </tr>
+      {% endfor %}
+    </table>
+  </section>
+{% endfor %}
+</div>
+
+<p class="muted">票池真源:config/stock_pool.json(增删经 tools/pool_service.py 编排,重建 data/analysis 产物)。删除会一并清除该票缓存。</p>
+{% endblock %}
+
+{% block scripts %}
+<script>
+async function postJSON(url, body) {
+  const r = await fetch(url, {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  return {ok: r.ok, data: await r.json().catch(() => ({}))};
+}
+
+document.getElementById("add-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const f = e.target, btn = f.querySelector("button"), msg = document.getElementById("add-msg");
+  const body = {
+    code: f.code.value.trim(), name: f.name.value.trim(),
+    industry: f.industry.value.trim(), sector: f.sector.value.trim(),
+  };
+  btn.disabled = true; msg.textContent = "采集中,请稍候…"; msg.className = "muted";
+  const {ok, data} = await postJSON("/api/pool", body);
+  if (ok && data.ok) {
+    location.reload();
+  } else {
+    msg.textContent = "新增失败:" + (data.error || "未知错误"); msg.className = "neg";
+    btn.disabled = false;
+  }
+});
+
+document.querySelectorAll(".del-btn").forEach((b) => {
+  b.addEventListener("click", async () => {
+    const code = b.dataset.code, name = b.dataset.name;
+    if (!confirm(`确认删除 ${name}(${code})?将一并清除其缓存数据。`)) return;
+    b.disabled = true; b.textContent = "删除中…";
+    const {ok, data} = await postJSON(`/api/pool/${code}/delete`, null);
+    if (ok && data.ok) {
+      location.reload();
+    } else {
+      alert("删除失败:" + (data.error || "未知错误"));
+      b.disabled = false; b.textContent = "删除";
+    }
+  });
+});
+</script>
+{% endblock %}
