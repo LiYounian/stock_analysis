@@ -70,6 +70,11 @@ SYNC_KEY_ID_OLD = os.getenv("SYNC_KEY_ID_OLD", "k0")            # 展示端:旧�
 SYNC_REPLAY_WINDOW_S = int(os.getenv("SYNC_REPLAY_WINDOW_S", "300"))   # 展示端:防重放时间窗口(秒)
 SYNC_MAX_AGE_DAYS = int(os.getenv("SYNC_MAX_AGE_DAYS", "90"))    # 展示端:时效保留窗口(天),更早的产物拒收
 SYNC_SOURCE_ID = os.getenv("SYNC_SOURCE_ID", "local")           # 本地端:来源标识(随信封上送)
+# —— ingest 硬化(展示端 ingest 服务用)——
+SYNC_RATE_MAX = int(os.getenv("SYNC_RATE_MAX", "120"))          # 速率限制:窗口内最大请求数(按 token 计)
+SYNC_RATE_WINDOW_S = int(os.getenv("SYNC_RATE_WINDOW_S", "60")) # 速率限制:滑动窗口(秒);超限 429
+SYNC_MAX_BODY_BYTES = int(os.getenv("SYNC_MAX_BODY_BYTES", str(32 * 1024 * 1024)))  # 请求体上限(默认 32MiB);超限 413
+SYNC_NONCE_KEEP_S = int(os.getenv("SYNC_NONCE_KEEP_S", "86400"))  # nonce 保留秒数(定时清理早于此的,>防重放窗口即安全)
 
 
 def ensure_dirs() -> None:

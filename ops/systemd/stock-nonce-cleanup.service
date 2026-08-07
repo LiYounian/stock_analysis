@@ -1,0 +1,13 @@
+# 定时清理 ingest 防重放表(seen_nonce)过期项,避免无限增长。占位符按实际替换。
+# 由 stock-nonce-cleanup.timer 周期触发(oneshot)。
+[Unit]
+Description=Stock ingest nonce table cleanup
+After=network.target
+
+[Service]
+Type=oneshot
+User=deploy
+WorkingDirectory=/srv/stock_analysis
+EnvironmentFile=/etc/stock-analysis/sync.env
+# 清理早于 SYNC_NONCE_KEEP_S(默认 1 天)的 nonce;只要 > 防重放窗口即安全
+ExecStart=/srv/stock_analysis/.venv/bin/python -m tools.sync.audit

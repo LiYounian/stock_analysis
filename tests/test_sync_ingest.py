@@ -51,12 +51,18 @@ def client(tmp_path, monkeypatch):
     monkeypatch.setattr(settings, "SYNC_KEY_ID_OLD", "k0")
     monkeypatch.setattr(settings, "SYNC_REPLAY_WINDOW_S", 300)
     monkeypatch.setattr(settings, "SYNC_MAX_AGE_DAYS", 90)
+    monkeypatch.setattr(settings, "SYNC_RATE_MAX", 120)          # 硬化:限流上限(单测内够宽)
+    monkeypatch.setattr(settings, "SYNC_RATE_WINDOW_S", 60)
+    monkeypatch.setattr(settings, "SYNC_MAX_BODY_BYTES", 32 * 1024 * 1024)
     backend_db.reset_engine()
     audit.reset_engine()
+    from tools.sync.ingest import _rate
+    _rate.reset()                                                # 隔离限流器状态
     from fastapi.testclient import TestClient
     from tools.sync.ingest import app
     with TestClient(app) as c:
         yield c
+    _rate.reset()
     backend_db.reset_engine()
     audit.reset_engine()
 
@@ -147,4 +153,52 @@ def test_every_request_audited(client):
     _post(client, _env(nonce="x1"))              # 成功
     _post(client, _env(), token="bad")           # 失败
     assert audit.audit_count() == before + 2     # 成功+失败各一条
+
+
+# —— 硬化:限流 429 ——
+def test_rate_limit_429(client, monkeypatch):
+    monkeypatch.setattr(settings, "SYNC_RATE_MAX", 3)            # 窗口内最多 3 次
+    from tools.sync.ingest import _rate
+    _rate.reset()
+    codes = [_post(client, _env(nonce=f"r{i}")).status_code for i in range(5)]
+    assert codes.count(429) >= 1                                 # 超过 3 次后被限流
+    assert codes[:3] == [200, 200, 200] or 429 in codes[3:]      # 前几次放行,后面 429
+
+
+def test_rate_limit_audited(client, monkeypatch):
+    monkeypatch.setattr(settings, "SYNC_RATE_MAX", 1)
+    from tools.sync.ingest import _rate
+    _rate.reset()
+    _post(client, _env(nonce="a"))                              # 放行
+    before = audit.audit_count()
+    r = _post(client, _env(nonce="b"))                         # 被限流
+    assert r.status_code == 429
+    assert audit.audit_count() == before + 1                    # 限流也审计
+    assert audit.last_audit()["result"] == "rate"
+
+
+# —— 硬化:请求体上限 413 ——
+def test_body_too_large_413(client, monkeypatch):
+    monkeypatch.setattr(settings, "SYNC_MAX_BODY_BYTES", 500)   # 上限 500 字节
+    big = _env(records={"000021": _valid_rec("000021")})
+    big["records"]["000021"]["padding"] = "x" * 2000            # 撑大 payload(签名前加,验签不影响 413 先判)
+    big["meta"]["sig"] = sign.sign_envelope(big, KEY)
+    r = _post(client, big)
+    assert r.status_code == 413
+
+
+# —— 硬化:只读审计查询 ——
+def test_audit_endpoint_requires_token(client):
+    assert client.get("/audit").status_code == 401              # 无 token
+    _post(client, _env(nonce="q1"))                            # 造一条审计
+    r = client.get("/audit", headers={"Authorization": f"Bearer {TOKEN}"})
+    assert r.status_code == 200 and r.json()["ok"] is True
+    assert len(r.json()["rows"]) >= 1
+
+
+def test_audit_view_html(client):
+    _post(client, _env(nonce="q2"))
+    assert client.get("/audit/view").status_code == 401         # 无 token
+    r = client.get(f"/audit/view?token={TOKEN}")               # 查询参数带 token
+    assert r.status_code == 200 and "<table" in r.text
     assert audit.last_audit()["result"] in ("ok", "auth_fail")
