@@ -56,6 +56,16 @@ def _name(recs, code):
     return r["meta"]["name"] if r else code
 
 
+def council_summary(rec: dict) -> dict | None:
+    """从中心记录抽合议默认组的摘要 {综合方向, 综合分, 是否冲突};无 council 块返回 None(向后兼容旧数据)。"""
+    c = (rec or {}).get("council") or {}
+    d = c.get("default")
+    if not isinstance(d, dict):
+        return None
+    return {"综合方向": d.get("综合方向"), "综合分": d.get("综合分", 0.0),
+            "是否冲突": bool(d.get("是否冲突"))}
+
+
 def screen_page(date: str = "latest") -> dict:
     """选股页数据:读 screen 视图 + 补每票关键字段。"""
     recs = _load_all(date)
@@ -68,13 +78,20 @@ def screen_page(date: str = "latest") -> dict:
         rows = []
         for c in codes:
             r = recs.get(c, {})
+            cs = council_summary(r) or {}
             rows.append({
                 "code": c, "name": _name(recs, c),
                 "sector": (r.get("meta") or {}).get("sector"),
                 "trend": ((r.get("signals") or {}).get("trend") or {}).get("评级"),
                 "tendency": ((r.get("prediction") or {}).get("买卖倾向") or {}).get("结论"),
                 "flow": (r.get("fundflow") or {}).get("今日主力净流入"),
+                "council_dir": cs.get("综合方向"),
+                "council_score": cs.get("综合分"),
+                "council_conflict": cs.get("是否冲突", False),
             })
+        # 综合分参与排序(D9):有合议分的按分降序在前,无的(None)沉底
+        rows.sort(key=lambda x: (x["council_score"] is not None, x["council_score"] or 0),
+                  reverse=True)
         detail[name] = rows
     return {"presets": detail, "aggregate": data.get("aggregate", {}), "as_of": as_of(date)}
 
