@@ -2,7 +2,7 @@
 
 数据源(本机实测可用,避开被指纹墙的东财):
   - 同花顺 `stock_financial_abstract`:营收/净利/增速/ROE/毛利率/净利率/负债率。
-  - 百度 `stock_zh_valuation_baidu`:PE(TTM)/PB/总市值。
+  - 百度 `stock_zh_valuation_baidu`:PE(TTM)/PB/总市值 + PE 近一年分位(供护栏判高估)。
 落盘:走 store 层(kind="fundamental",json),旁记 meta.source。
 契约见 docs/计划/P2_结构化情绪与基本面.md。
 """
@@ -55,18 +55,35 @@ def _fetch_abstract(code: str) -> dict:
     return out
 
 
+def _percentile(vals: list[float], x: float) -> float | None:
+    """x 在 vals 中的分位(≤x 占比,0~1)。vals 空→None。供 PE 分位护栏。"""
+    if not vals:
+        return None
+    return round(sum(1 for v in vals if v <= x) / len(vals), 4)
+
+
 def _fetch_baidu(code: str) -> dict:
-    """百度估值,取各 indicator 时间序列最新值。单项失败该字段 None。"""
+    """百度估值,取各 indicator 时间序列最新值。单项失败该字段 None。
+
+    额外产出 `PE分位`:最新 PE(TTM) 在近一年序列中的分位(0~1),供护栏判"极度高估",
+    复用同一次 PE 序列拉取、无额外网络。
+    """
     import akshare as ak
 
     out = {}
     for key, ind in _BAIDU_MAP.items():
         try:
             df = ak.stock_zh_valuation_baidu(symbol=code, indicator=ind, period="近一年")
-            out[key] = _to_float(df.iloc[-1]["value"]) if len(df) else None
+            vals = [v for v in (_to_float(x) for x in df["value"].tolist())
+                    if v is not None] if len(df) else []
+            out[key] = vals[-1] if vals else None
+            if key == "PE_TTM":
+                out["PE分位"] = _percentile(vals, vals[-1]) if vals else None
         except Exception as e:  # 单项估值失败不影响其他字段
             logger.debug("%s 百度 %s 失败: %s", code, ind, e)
             out[key] = None
+            if key == "PE_TTM":
+                out["PE分位"] = None
     return out
 
 
