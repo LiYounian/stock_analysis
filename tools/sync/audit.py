@@ -101,6 +101,16 @@ def last_audit() -> dict | None:
         return dict(row) if row else None
 
 
+def recent_audits(limit: int = 100) -> list[dict]:
+    """最近 N 条审计(时间倒序),供审计查询页/接口用。"""
+    limit = max(1, min(int(limit), 1000))
+    eng = _get_engine()
+    with eng.connect() as c:
+        rows = c.execute(select(ingest_audit_t).order_by(ingest_audit_t.c.id.desc())
+                         .limit(limit)).mappings().all()
+    return [dict(r) for r in rows]
+
+
 # —— 防重放 ——
 def nonce_seen(nonce: str) -> bool:
     eng = _get_engine()
@@ -121,6 +131,32 @@ def purge_old_nonces(before_iso: str) -> int:
     with eng.begin() as c:
         r = c.execute(delete(seen_nonce_t).where(seen_nonce_t.c.at < before_iso))
         return r.rowcount or 0
+
+
+def purge_expired(keep_s: int | None = None, now: datetime | None = None) -> int:
+    """清理早于 (now - keep_s) 的 nonce。keep_s 缺省取 settings.SYNC_NONCE_KEEP_S。
+    keep_s 只要 > 防重放窗口即安全(更早的 nonce 其时间戳已超窗,不可能再被接受)。"""
+    from datetime import timedelta
+    keep_s = keep_s if keep_s is not None else getattr(settings, "SYNC_NONCE_KEEP_S", 86400)
+    now = now or datetime.now().astimezone()
+    cutoff = (now - timedelta(seconds=keep_s)).isoformat(timespec="seconds")
+    return purge_old_nonces(cutoff)
+
+
+def main(argv=None) -> int:
+    """nonce 清理入口(供 systemd timer / cron 调用):python -m tools.sync.audit"""
+    import argparse
+    ap = argparse.ArgumentParser(description="清理过期 nonce(防重放表定期瘦身)")
+    ap.add_argument("--keep-seconds", type=int, default=None,
+                    help="保留多少秒内的 nonce;缺省取 SYNC_NONCE_KEEP_S")
+    args = ap.parse_args(argv)
+    n = purge_expired(keep_s=args.keep_seconds)
+    print(f"已清理过期 nonce:{n} 条")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
 
 
 # —— 快照(旧盖新判断)——
