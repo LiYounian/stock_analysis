@@ -1,6 +1,9 @@
 # 采集缓存(数据不进版本库)
 data/raw/
 
+# 本地 DB 文件(SQLite 存储后端,不入库;线上库走 DB_URL 指向的独立实例)
+data/*.db
+
 # Python
 __pycache__/
 *.py[cod]

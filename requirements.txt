@@ -18,6 +18,15 @@ httpx>=0.27              # FastAPI TestClient(测试用)
 # LLM(情绪/新闻抽取,OpenAI 兼容,走用户环境变量配置的网关)
 openai>=1.40
 
+# 存储 DB 后端(SQLite 起步,可换 Postgres/MySQL)+ 定时调度
+SQLAlchemy>=2.0
+APScheduler>=3.10
+# pymysql>=1.1         # 仅当 DB_URL 用 mysql+pymysql:// 时需装
+# psycopg[binary]>=3.1 # 仅当 DB_URL 用 postgresql+psycopg:// 时需装
+
+# 测试
+pytest>=8.0
+
 # 缺口备选(可选,按需装)
 # tushare>=1.4.0        # 需 token
 # baostock>=0.8.9       # 免费历史行情
