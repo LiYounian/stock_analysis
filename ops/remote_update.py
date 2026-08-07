@@ -39,6 +39,7 @@ class RemoteConfig:
     )
     required_env: tuple[str, ...] = ("STORE_BACKEND", "SYNC_INGEST_TOKEN", "SYNC_SIGNING_KEY")
     db_path: str = "data/app.db"              # 相对 repo_dir
+    post_update: tuple[str, ...] = ()        # 有变更时、重启前执行的命令(如把 git 带来的产物导入 DB)
 
     def python_path(self) -> Path:
         p = Path(self.python)
@@ -159,9 +160,12 @@ def run_update(cfg: RemoteConfig, *, runner, health_check, env: dict | None = No
     if not changed:
         return Result(ok=True, step="nochange", changed=False, before=before, after=after)
 
-    # ③ 有变更:装依赖 → 重启 + 健康检查(失败回滚到更新前)
-    logger.info("代码更新 %s → %s,安装依赖并重启", before[:8], after[:8])
+    # ③ 有变更:装依赖 →(更新后步骤,如导入 DB)→ 重启 + 健康检查(失败回滚到更新前)
+    logger.info("代码/数据更新 %s → %s,安装依赖并重启", before[:8], after[:8])
     _install_deps(cfg, runner)
+    if cfg.post_update:
+        logger.info("更新后步骤:%s", " ".join(cfg.post_update))
+        runner(list(cfg.post_update))
     for svc in cfg.services:
         runner(build_restart_cmd(svc, cfg.mode))
         if not health_check(svc):
@@ -220,16 +224,20 @@ def parse_args(argv=None) -> argparse.Namespace:
     # 必需环境变量名(逗号分隔);未部署 ingest 的机器设 "STORE_BACKEND" 即可
     ap.add_argument("--required-env", default=os.getenv("REMOTE_REQUIRED_ENV",
                     "STORE_BACKEND,SYNC_INGEST_TOKEN,SYNC_SIGNING_KEY"))
+    # 有变更时、重启前执行的命令(展示端:把 git 带来的产物导入 DB)。整条命令字符串,shlex 拆分
+    ap.add_argument("--post-update", default=os.getenv("REMOTE_POST_UPDATE", ""))
     ap.add_argument("--dry-run", action="store_true", help="只打印将执行的命令,不真正执行")
     return ap.parse_args(argv)
 
 
 def main(argv=None) -> int:
+    import shlex
     args = parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
     required = tuple(e.strip() for e in args.required_env.split(",") if e.strip())
     cfg = RemoteConfig(repo_dir=args.repo_dir, branch=args.branch, python=args.python,
-                       mode=args.mode, services=parse_services(args.services), required_env=required)
+                       mode=args.mode, services=parse_services(args.services), required_env=required,
+                       post_update=tuple(shlex.split(args.post_update)) if args.post_update else ())
 
     if args.dry_run:
         def runner(cmd):
