@@ -15,7 +15,7 @@
       <td>{{ a.sector }}</td>
       <td>{{ a.type }}</td>
       <td class="{{ 'pos' if a.impact=='利好' else ('neg' if a.impact=='利空' else '') }}">{{ a.impact }}</td>
-      <td class="title">{{ a.title }}</td>
+      <td class="title"><a href="/news/{{ a.code }}?date={{ _d }}">{{ a.title }} →</a></td>
     </tr>
     {% else %}<tr><td colspan="6">无公告数据</td></tr>{% endfor %}
   </table>
