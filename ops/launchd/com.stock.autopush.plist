@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  本地采集机(macOS)盘后定时闭环:工作日 15:30 跑全池流水线 + 签名上传到远端 ingest。
+  安装:把 __REPO__ 替换成本机仓库绝对路径,拷到 ~/Library/LaunchAgents/,再
+        launchctl load -w ~/Library/LaunchAgents/com.stock.autopush.plist
+  重要:launchd 只在"到点且已开机"时触发——盘后时段务必让 Mac 保持开机不休眠
+        (系统设置→电池/电源→防止自动进入睡眠;或用 caffeinate)。见 runbook。
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.stock.autopush</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>__REPO__/ops/launchd/autopush.sh</string>
+    </array>
+
+    <!-- 工作日(周一=1 … 周五=5)15:30 触发 -->
+    <key>StartCalendarInterval</key>
+    <array>
+        <dict><key>Weekday</key><integer>1</integer><key>Hour</key><integer>15</integer><key>Minute</key><integer>30</integer></dict>
+        <dict><key>Weekday</key><integer>2</integer><key>Hour</key><integer>15</integer><key>Minute</key><integer>30</integer></dict>
+        <dict><key>Weekday</key><integer>3</integer><key>Hour</key><integer>15</integer><key>Minute</key><integer>30</integer></dict>
+        <dict><key>Weekday</key><integer>4</integer><key>Hour</key><integer>15</integer><key>Minute</key><integer>30</integer></dict>
+        <dict><key>Weekday</key><integer>5</integer><key>Hour</key><integer>15</integer><key>Minute</key><integer>30</integer></dict>
+    </array>
+
+    <key>StandardOutPath</key>
+    <string>__REPO__/logs/autopush.log</string>
+    <key>StandardErrorPath</key>
+    <string>__REPO__/logs/autopush.err</string>
+
+    <key>RunAtLoad</key>
+    <false/>
+</dict>
+</plist>
