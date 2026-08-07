@@ -8,7 +8,7 @@
 import pandas as pd
 import pytest
 
-from tools.collectors import board, index, market
+from tools.collectors import announcement, board, fundamental, index, market
 from tools.pipeline import screen_pattern as sp
 from tools.store import repo as store
 
@@ -89,3 +89,36 @@ def test_skips_insufficient_kline(monkeypatch, tmp_path):
     monkeypatch.setattr(market, "load_kline", lambda code: _breakout_df().head(5))
     view = sp.run_pattern_screen(["AAA"], as_of="2024-06-01", fetch=False)
     assert view["跳过数"] == 1 and view["有效样本"] == 0 and view["达标占比"] == 0.0
+
+
+# ---------- 批次A:护栏接线（对照组见 test_single_layer_fallback：护栏缺数据→AAA 达标）----------
+def _guard(monkeypatch, tmp_path, fund, anns):
+    """隔离 + 单层(无成分) + 突破票 AAA;注入指定基本面/公告。"""
+    _isolate(monkeypatch, tmp_path)
+    monkeypatch.setattr(market, "load_kline", lambda code: _breakout_df())
+    monkeypatch.setattr(fundamental, "load_fundamental", lambda code: fund)
+    monkeypatch.setattr(announcement, "load_announcements", lambda code: anns)
+    return sp.run_pattern_screen(["AAA"], as_of="2024-06-01", fetch=False)
+
+
+def test_guardrail_rejects_negative_growth(monkeypatch, tmp_path):
+    v = _guard(monkeypatch, tmp_path, {"净利增速": -5.0, "PE分位": 0.5}, [])
+    assert v["达标数"] == 0                      # 形态+RS 过,净利增速<0 被护栏剔除
+    assert v["护栏覆盖"] == "1/1"
+
+
+def test_guardrail_rejects_extreme_pe(monkeypatch, tmp_path):
+    v = _guard(monkeypatch, tmp_path, {"净利增速": 10.0, "PE分位": 0.97}, [])
+    assert v["达标数"] == 0                      # PE 近一年分位 >0.90 被剔除
+
+
+def test_guardrail_rejects_regulatory_announcement(monkeypatch, tmp_path):
+    v = _guard(monkeypatch, tmp_path, {"净利增速": 10.0, "PE分位": 0.5},
+               [{"title": "关于收到中国证监会立案告知书的公告"}])
+    assert v["达标数"] == 0                      # 合规风险关键词"立案"被剔除
+
+
+def test_guardrail_clean_passes(monkeypatch, tmp_path):
+    v = _guard(monkeypatch, tmp_path, {"净利增速": 12.0, "PE分位": 0.4},
+               [{"title": "关于回购公司股份的公告"}])
+    assert v["达标数"] == 1 and v["护栏覆盖"] == "1/1"   # 干净票不被误杀
