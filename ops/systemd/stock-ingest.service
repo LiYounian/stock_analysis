@@ -1,0 +1,19 @@
+# 展示端 ingest 收录服务(B 期)。占位符按实际替换后拷到 /etc/systemd/system/
+# 独立端口 8802(与展示 web 8801 分开);读同一 DB(STORE_BACKEND=db)。
+# 密钥/令牌不写进本文件——用 EnvironmentFile 从受限权限文件(chmod 600)注入。
+[Unit]
+Description=Stock Analysis Ingest (signed upload receiver, port 8802)
+After=network.target
+
+[Service]
+User=deploy
+WorkingDirectory=/srv/stock_analysis
+Environment=STORE_BACKEND=db
+Environment=SYNC_INGEST_PORT=8802
+EnvironmentFile=/etc/stock-analysis/sync.env
+ExecStart=/srv/stock_analysis/.venv/bin/python -m tools.sync.ingest
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
