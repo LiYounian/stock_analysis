@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import sys
 from datetime import datetime
 from pathlib import Path
 
@@ -76,7 +77,8 @@ def main(argv=None) -> int:
         print(f"缺少必需环境变量:{', '.join(missing)}(见 settings.py 同步配置块 / launchd env 文件)")
         return 2
 
-    python = str(Path(settings.PROJECT_ROOT) / ".venv" / "bin" / "python3")
+    # 流水线用"当前正在运行本脚本的解释器"(conda 或 venv 都自动对),避免硬编 .venv
+    python = sys.executable
     res = run_local_push(
         args.date, python=python, url=settings.SYNC_INGEST_URL, token=settings.SYNC_INGEST_TOKEN,
         source=settings.SYNC_SOURCE_ID, key_id=settings.SYNC_KEY_ID, key=settings.SYNC_SIGNING_KEY,
