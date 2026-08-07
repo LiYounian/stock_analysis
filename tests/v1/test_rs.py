@@ -2,7 +2,7 @@
 import pandas as pd
 import pytest
 
-from tools.analysis import rs
+from tools.analysis.v1 import rs
 
 
 def test_rs_equals_return_diff():
