@@ -37,6 +37,18 @@
 
 ---
 
+## 🤝 协作约定
+
+多窗口/多人并行开发,遵守:
+
+1. **基座/基建改动先认领**:动 `tools/store/`、`tools/config/settings.py`、`tools/scheduler.py`、`web/` 框架、依赖(`requirements.txt`)等**多方共用的基座**前,先在 [任务看板.md](docs/工程进度.md) 认领(写明"谁 / 改哪块 / 分支名"),避免两边各写一版撞车。功能层(analysis/strategy/screener 各自新增文件)冲突风险低,可直接开。
+2. **分支开发,main 只做集成**:所有改动从 main 切分支(命名 `feat/` `fix/` `docs/` `research/`),开发完合并回 main,**不在 main 上直接开发**。
+3. **数据暂随 git**:`data/analysis`、`data/reports` 在展示端上线前保持跟踪(合作者靠 git 拉数据看网页),**勿擅自移出版本库**。
+4. **commit 署名**:commit / PR 不加 AI 协作署名(`Co-authored-by` / `Generated with` 等),除非明确要求标注。
+5. **脱敏**:提交前扫敏感字段(手机号/身份证/真名/API key/token/本机绝对路径/内部网关名)。
+
+---
+
 ## 代码结构(分层,依赖单向向下)
 
 | 路径 | 层 | 内容 |
