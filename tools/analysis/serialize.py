@@ -88,7 +88,7 @@ def build_record(code: str, as_of: str) -> dict:
     events = [{"date": a.get("date"), "type": a.get("type"),
                "impact": a.get("impact"), "title": a.get("title")} for a in anns[:20]]
 
-    return {
+    rec = {
         "schema_version": SCHEMA_VERSION,
         "meta": {"code": code, "name": s.name if s else code,
                  "sector": s.sector if s else None, "industry": s.industry if s else None,
@@ -109,6 +109,13 @@ def build_record(code: str, as_of: str) -> dict:
         "provenance": {"tech": bool(has_tech), "fundamental": bool(fund),
                        "announcements": len(anns), "fundflow": bool(flow)},
     }
+
+    # 多策略合议(F5·D7):后端预算各专家信封 + 默认组合议结果 + config(tau/权重),随记录落库。
+    # 默认组专家均 record-shaped(读上面已装好的 signals/fundflow/sentiment),故 kline 可选。
+    # 展示层只读本块;前端勾选按落库 config 权重重合成(不触发后端重算)。
+    from tools.analysis import council
+    rec["council"] = _safe(lambda: council.build_council_block(rec, kdf))
+    return rec
 
 
 def serialize_all(as_of: str | None = None, codes: list[str] | None = None) -> dict[str, str]:

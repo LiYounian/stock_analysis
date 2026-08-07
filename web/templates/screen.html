@@ -19,10 +19,13 @@
     <h2>{{ name }} <small>{{ rows|length }} 只</small></h2>
     {% if rows %}
     <table>
-      <tr><th>股票</th><th>板块</th><th>趋势</th><th>买卖倾向</th><th>主力(亿)</th></tr>
+      <tr><th>股票</th><th>板块</th><th>合议</th><th>综合分</th><th>趋势</th><th>买卖倾向</th><th>主力(亿)</th></tr>
       {% for x in rows %}
       <tr><td><a href="/stock/{{ x.code }}">{{ x.name }}</a></td>
-          <td>{{ x.sector }}</td><td>{{ x.trend }}</td>
+          <td>{{ x.sector }}</td>
+          <td>{% if x.council_dir %}<span class="badge {{ 'buy' if x.council_dir=='看多' else ('sell' if x.council_dir=='看空' else 'wait') }}">{{ x.council_dir }}</span>{% if x.council_conflict %} <span title="专家分歧">⚠️</span>{% endif %}{% else %}-{% endif %}</td>
+          <td>{% if x.council_score is not none %}{{ x.council_score }}{% else %}-{% endif %}</td>
+          <td>{{ x.trend }}</td>
           <td>{{ x.tendency or '-' }}</td>
           <td class="{{ 'pos' if x.flow and x.flow>0 else 'neg' }}">
             {% if x.flow is not none %}{{ '%.2f'|format(x.flow/1e8) }}{% else %}-{% endif %}</td></tr>
