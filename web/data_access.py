@@ -107,14 +107,19 @@ def selection_page(date: str = "latest") -> dict:
     recs = _load_all(date)
     # 达标池(形态选股 view);缺失 → 兜底
     qualified: dict[str, dict] = {}
+    qualified_items: list[dict] = []          # 保序 + 带板块 hint(供区块②分组)
     view_present = False
     view_meta: dict = {}
     try:
         v = store.get_view("形态选股", date=date)
         view_present = True
         for item in v.get("达标清单", []):
-            qualified[item.get("code")] = {"命中形态": item.get("命中形态"),
-                                           "正向确认依据": item.get("正向确认依据", [])}
+            code = item.get("code")
+            reason = {"命中形态": item.get("命中形态"), "正向确认依据": item.get("正向确认依据", [])}
+            qualified[code] = reason
+            # 行业/板块:优先 view 自带(未来 screen_pattern 可能补),否则回退中心记录 meta
+            qualified_items.append({"code": code, **reason,
+                                    "行业hint": item.get("行业") or item.get("板块") or item.get("sector")})
         view_meta = {"扫描数": v.get("扫描数"), "有效样本": v.get("有效样本"),
                      "达标数": v.get("达标数"), "达标占比": v.get("达标占比"),
                      "纪律": v.get("纪律"), "RS模式": v.get("RS模式")}
@@ -149,9 +154,50 @@ def selection_page(date: str = "latest") -> dict:
     qualified_n = (view_meta.get("达标数") if view_present else None)
     if qualified_n is None and view_present:
         qualified_n = sum(1 for x in rows if x["qualified"])
+
+    daily = _daily_sections(qualified_items, recs, view_present, view_meta, qualified_n)
     return {"rows": rows, "total": total, "qualified": qualified_n,
             "view_present": view_present, "view_meta": view_meta,
-            "config": config or {}, "as_of": as_of(date)}
+            "daily": daily, "config": config or {}, "as_of": as_of(date)}
+
+
+def _daily_sections(qualified_items: list[dict], recs: dict, view_present: bool,
+                    view_meta: dict, qualified_n, top_n: int = 5) -> dict:
+    """区块②「每日筛选」:全市场达标票按行业/板块分组,每组取合议分 top_n。
+
+    行业来源:view item 自带(未来增强)→ 中心记录 meta.industry/sector → 「未分类」(全A达标票可能无记录)。
+    view 缺失 → present=False(前端显示"待扫描生成",不空页)。
+    """
+    if not view_present:
+        return {"present": False, "total_scanned": None, "qualified_n": None,
+                "board_count": 0, "top_n": top_n, "groups": []}
+    from collections import defaultdict
+    buckets: dict[str, list] = defaultdict(list)
+    for it in qualified_items:
+        code = it["code"]
+        rec = recs.get(code)
+        meta = (rec or {}).get("meta") or {}
+        board = it.get("行业hint") or meta.get("industry") or meta.get("sector") or "未分类"
+        cs = council_summary(rec) or {}
+        cblk = (rec or {}).get("council") or {}
+        buckets[board].append({
+            "code": code, "name": meta.get("name", code),
+            "industry": meta.get("industry") or meta.get("sector"),
+            "命中形态": it.get("命中形态"), "正向确认依据": it.get("正向确认依据", []),
+            "council_dir": cs.get("综合方向"), "council_score": cs.get("综合分"),
+            "council_conflict": cs.get("是否冲突", False),
+            "experts": cblk.get("experts") or [],
+        })
+    groups = []
+    for board, items in buckets.items():
+        items.sort(key=lambda x: (x["council_score"] is not None, x["council_score"] or 0), reverse=True)
+        groups.append({"板块": board, "count": len(items), "rows": items[:top_n]})
+    # 板块排序:看好的板块在前(组内最高合议分降序),并列看 count
+    groups.sort(key=lambda g: (max((r["council_score"] or -9 for r in g["rows"]), default=-9), g["count"]),
+                reverse=True)
+    return {"present": True, "total_scanned": view_meta.get("扫描数"),
+            "qualified_n": qualified_n, "board_count": len(groups),
+            "top_n": top_n, "groups": groups}
 
 
 def pool_page(date: str = "latest") -> dict:
