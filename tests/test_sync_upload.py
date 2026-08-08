@@ -8,6 +8,30 @@ import json
 from tools.sync import upload
 
 
+def test_default_post_scopes_ca_to_upload(monkeypatch):
+    """上传用显式 verify=SYNC_INGEST_CA(仅约束上传),缺省 verify=True 走系统 CA。
+    绝不用全局 REQUESTS_CA_BUNDLE——那会把采集端 HTTPS 的 CA 也换掉、导致采集全线验签失败。"""
+    import requests
+    captured = {}
+
+    class _Resp:
+        status_code = 200
+        def json(self):
+            return {"ok": True}
+
+    def fake_post(url, json=None, verify=None, headers=None, timeout=None):
+        captured["verify"] = verify
+        return _Resp()
+
+    monkeypatch.setattr(requests, "post", fake_post)
+    monkeypatch.setenv("SYNC_INGEST_CA", "/tmp/ingest-ca.crt")
+    upload._default_post("https://host/ingest", "tok", {"a": 1})
+    assert captured["verify"] == "/tmp/ingest-ca.crt"      # 上传信任自签证书
+    monkeypatch.delenv("SYNC_INGEST_CA", raising=False)
+    upload._default_post("https://host/ingest", "tok", {"a": 1})
+    assert captured["verify"] is True                       # 未配则走系统/certifi 默认 CA
+
+
 def _payload():
     return {
         "records": {"000021": {"meta": {"code": "000021"}}, "600519": {"meta": {"code": "600519"}}},

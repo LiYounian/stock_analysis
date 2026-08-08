@@ -55,8 +55,14 @@ def build_shards(payload: dict) -> dict[str, dict]:
 # 签名 + POST(含退避重试)
 # ————————————————————————————————————————————————
 def _default_post(url: str, token: str, envelope: dict):
+    import os
+
     import requests
-    r = requests.post(url, json=envelope,
+    # 只让"上传"信任自签 ingest 证书,用显式 verify=<证书路径>(SYNC_INGEST_CA);
+    # 绝不用全局 REQUESTS_CA_BUNDLE——那会把采集端所有 HTTPS(sina/东财/巨潮…)的 CA 也换成
+    # 这张自签证书,导致采集全线 CERTIFICATE_VERIFY_FAILED。verify=True 时走系统/certifi 默认 CA。
+    ca = os.getenv("SYNC_INGEST_CA")
+    r = requests.post(url, json=envelope, verify=(ca or True),
                       headers={"Authorization": f"Bearer {token}"}, timeout=30)
     try:
         body = r.json()
