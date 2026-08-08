@@ -186,7 +186,15 @@ def selection_page(date: str = "latest") -> dict:
             # 行业/板块:优先 view 自带(未来 screen_pattern 可能补),否则回退中心记录 meta
             qualified_items.append({"code": code, **reason,
                                     "行业hint": item.get("行业") or item.get("板块") or item.get("sector")})
-        near_items = v.get("接近达标", []) or []   # 契约:[{code,行业,最接近形态,差距说明,合议分}](每板块top3)
+        # 接近达标:screen_pattern 产出为「{板块: [items]}」字典(每板块top3);拍平成扁平列表供下游用。
+        # 兼容旧/异常形状:dict→拍平 values;list→原样;其它→空。每 item 自带「行业」字段可再分组。
+        _near_raw = v.get("接近达标") or {}
+        if isinstance(_near_raw, dict):
+            near_items = [it for items in _near_raw.values() for it in (items or []) if isinstance(it, dict)]
+        elif isinstance(_near_raw, list):
+            near_items = [it for it in _near_raw if isinstance(it, dict)]
+        else:
+            near_items = []
         view_meta = {"扫描数": v.get("扫描数"), "有效样本": v.get("有效样本"),
                      "达标数": v.get("达标数"), "达标占比": v.get("达标占比"),
                      "纪律": v.get("纪律"), "RS模式": v.get("RS模式")}
