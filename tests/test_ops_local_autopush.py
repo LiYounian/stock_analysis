@@ -8,6 +8,7 @@ import plistlib
 from pathlib import Path
 
 from ops import local_autopush
+from tools.config import settings
 
 _PLIST = Path(__file__).resolve().parents[1] / "ops" / "launchd" / "com.stock.autopush.plist"
 
@@ -84,6 +85,30 @@ def test_upload_failure_reported():
 def test_today_format():
     import datetime
     assert local_autopush._today() == datetime.datetime.now().strftime("%Y-%m-%d")
+
+
+# —— 交易日守卫:非交易日跳过、退出码 0,不跑流水线/不上传 ——
+def test_non_trading_day_skips_with_rc0(monkeypatch):
+    from tools.collectors import calendar as trade_cal
+    monkeypatch.setattr(trade_cal, "is_trading_day", lambda d, **k: False)
+    ran = []
+    monkeypatch.setattr(local_autopush, "run_local_push",
+                        lambda *a, **k: ran.append(1) or {"ok": True, "step": "done"})
+    rc = local_autopush.main(["--date", "2026-08-08"])   # 周六
+    assert rc == 0 and ran == []                          # 跳过:退出码0、未跑闭环
+
+
+def test_ignore_calendar_forces_run(monkeypatch):
+    from tools.collectors import calendar as trade_cal
+    monkeypatch.setattr(trade_cal, "is_trading_day", lambda d, **k: False)
+    monkeypatch.setattr(settings, "SYNC_INGEST_URL", "u", raising=False)
+    monkeypatch.setattr(settings, "SYNC_INGEST_TOKEN", "t", raising=False)
+    monkeypatch.setattr(settings, "SYNC_SIGNING_KEY", "K", raising=False)
+    ran = []
+    monkeypatch.setattr(local_autopush, "run_local_push",
+                        lambda *a, **k: ran.append(1) or {"ok": True, "step": "done", "receipt": {}})
+    rc = local_autopush.main(["--date", "2026-08-08", "--ignore-calendar"])
+    assert rc == 0 and ran == [1]                          # 强制运行
 
 
 # —— launchd plist 合法性 ——

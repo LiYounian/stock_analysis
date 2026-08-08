@@ -32,6 +32,7 @@ from tools.collectors import announcement as an
 from tools.collectors import fundamental as fd
 from tools.collectors import fundflow as ff
 from tools.collectors import market
+from tools.collectors import master_sync
 from tools.collectors import news, policy, ugc
 from tools.config import stock_pool
 from tools.store import repo as store
@@ -73,12 +74,19 @@ def _as_of() -> str:
 # 采集:数值面 + 消息面
 # ————————————————————————————————————————————————
 def collect_values(codes: list[str]) -> None:
-    """采集数值面:每个源各自 try/except 降级,任一源失败都不中止整批。"""
+    """采集数值面:每个源各自 try/except 降级,任一源失败都不中止整批。
+
+    K线走「滚动主档」编排(master_sync:主档缺失/太旧→baostock 全量;否则 spot 当日增量;
+    失败回退逐只 akshare)。此步**不套** FETCH_TIMEOUT 短超时——spot 单请求返回全A较大、
+    baostock 为稳定数据 API,短超时会误伤;其内部 fallback 逐只路径自带短超时快速失败。
+    基本面/公告/资金流仍走 FETCH_TIMEOUT 短超时快速失败降级。
+    """
     logger.info("采集数值面 %d 只(K线/基本面/公告/资金流)...", len(codes))
+    r = _safe("K线主档同步", lambda: master_sync.sync_master(codes)) or {}
+    logger.info("K线主档同步:模式=%s 成功 %d", r.get("mode"), r.get("ok", 0))
     _old = socket.getdefaulttimeout()
     socket.setdefaulttimeout(FETCH_TIMEOUT)          # 采集期快速失败;finally 还原
     try:
-        logger.info("K线:成功 %d", len(_safe("K线", lambda: market.fetch_kline(codes)) or {}))
         logger.info("基本面:成功 %d", len(_safe("基本面", lambda: fd.fetch_fundamental(codes)) or {}))
         logger.info("公告:成功 %d", len(_safe("公告", lambda: an.fetch_announcements(codes)) or {}))
         logger.info("资金流:成功 %d", len(_safe("资金流", lambda: ff.fetch_fundflow(codes)) or {}))
@@ -401,6 +409,10 @@ def run_two_stage(codes_all: list[str], as_of: str, no_llm: bool = False) -> dic
     """
     from tools.pipeline import screen_pattern
     logger.info("===== 全A两阶段流水线开始(日期 %s,阶段①扫描 %d 只)=====", as_of, len(codes_all))
+    # —— 阶段①前:K线主档同步(主档缺失/太旧→baostock 全量;否则 spot 当日增量;失败回退逐只)——
+    # 同步后 screen_pattern 的 load-first 读主档命中,不再逐只重下(跨交易日不返工)。
+    ms = _safe("K线主档同步", lambda: master_sync.sync_master(codes_all, as_of=as_of)) or {}
+    logger.info("阶段①前 K线主档同步:模式=%s 成功 %d", ms.get("mode"), ms.get("ok", 0))
     # —— 阶段①:全A 便宜筛(只 K线)→ 达标池 + 接近达标 ——
     view = screen_pattern.run_pattern_screen(codes_all, as_of=as_of, fetch=True)
     qualified = [x["code"] for x in view.get("达标清单", [])]
