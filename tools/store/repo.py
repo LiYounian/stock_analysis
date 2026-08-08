@@ -35,7 +35,8 @@ _RAW_DIR = settings.DATA_RAW                                   # data/raw
 _ANALYSIS_DIR = settings.PROJECT_ROOT / "data" / "analysis"   # data/analysis
 
 # —— kind → 物理格式 ——
-_PARQUET_KINDS = ("kline", "fundflow", "index_kline", "board_kline")
+_PARQUET_KINDS = ("kline", "fundflow", "index_kline", "board_kline",
+                  "event_yjyg", "event_yjkb", "event_ggcg")   # 事件驱动采集缓存(业绩预告/快报/增减持)
 _JSON_KINDS = ("fundamental", "announcement", "news", "ugc", "policy", "llm_cache",
                "board_membership")
 _RAW_KINDS = _PARQUET_KINDS + _JSON_KINDS
