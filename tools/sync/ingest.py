@@ -13,6 +13,14 @@
 /audit/view(HTML,token 保护)——本服务自持,不碰主展示端 web。防重放表由
 `python -m tools.sync.audit` 定时清理(见 ops/ timer 模板)。
 
+另提供 GET `/pull`(远端数据仓库 Phase 1:本地按需增量拉取):
+  ① Bearer token 鉴权(与 /ingest 同一把)缺/错 → 401
+  ② 速率限制(按 token)                   超限 → 429
+  ③ HMAC 钢印验签(签 GET 请求要素)       不符/缺 → 403
+  ④ 签名时间戳时效(防重放旧签名)          超窗 → 409
+  → 通过:回该 kind 自 since 之后的**增量原始数据**(kline:主档中 date>since 的 bars),
+     NaN→null 后返 JSON。**只返原始数据,绝不返任何密钥/配置**。读只走 store 主档(文件)。
+
 展示端只读不算不触网——本服务不 import 任何分析器、不采集、不调 LLM,只写 DB。
 独立于展示 web(8801);不塞进 web/app.py。启动:python -m tools.sync.ingest。
 """
@@ -31,7 +39,7 @@ from fastapi.responses import HTMLResponse, JSONResponse
 
 from tools.config import settings
 from tools.contracts import validate_record
-from tools.store import backend_db
+from tools.store import backend_db, repo
 from tools.sync import audit, sign
 
 logger = logging.getLogger("sync.ingest")
@@ -182,6 +190,77 @@ def _persist(date: str, records: dict, views: dict, code_views: dict) -> int:
     return len(records)
 
 
+# —— /pull 支持的增量 kind(先只 kline;fundamental/fundflow/announcement 待扩展)——
+PULL_KINDS = ("kline",)
+
+
+def _check_pull_sig(headers, kind: str, since: str, codes: str) -> None:
+    """/pull 门禁③④:HMAC 验签(签 GET 请求要素,和 /ingest 同一把密钥)+ 签名时效。
+
+    未签名/错误密钥 → 403(安全红线:/pull 暴露原始数据,必须拒未授权);
+    签名时间戳超出防重放窗口 → 409(挡住被截获的旧签名 URL 无限重放)。
+    """
+    keys = sign.signing_keys(settings.SYNC_KEY_ID, settings.SYNC_SIGNING_KEY,
+                             settings.SYNC_KEY_ID_OLD, settings.SYNC_SIGNING_KEY_OLD)
+    if not keys:
+        raise _Reject(503, "misconfig", "ingest 未配置 SYNC_SIGNING_KEY")
+    ts = headers.get("x-sync-ts", "")
+    nonce = headers.get("x-sync-nonce", "")
+    key_id = headers.get("x-sync-key-id", "")
+    sig = headers.get("x-sync-sig", "")
+    if not sig:
+        raise _Reject(403, "sig_fail", "缺 X-Sync-Sig 签名头(未签名请求拒绝)")
+    env = sign.pull_envelope(kind, since, codes, ts, nonce, key_id)
+    env["meta"]["sig"] = sig
+    if not sign.verify_envelope(env, keys):
+        raise _Reject(403, "sig_fail", "钢印验签失败(请求要素被篡改或密钥不符)")
+    tsec = _ts_epoch(ts)
+    if tsec is None:
+        raise _Reject(409, "replay", "签名缺时间戳或不可解析")
+    if abs(datetime.now().astimezone().timestamp() - tsec) > settings.SYNC_REPLAY_WINDOW_S:
+        raise _Reject(409, "replay", "签名时间戳超出允许窗口")
+
+
+def _pull_kline(since: str, codes: str) -> tuple[dict, int]:
+    """返回主档中 date>since 的增量 bars:{code: [bar, ...]}, 总条数。
+
+    since 空 → 返全历史;codes 空 → 全A(所有已落主档的票)。date 出参统一为 YYYY-MM-DD 字符串。
+    经 df.to_json 序列化:numpy 标量→原生类型、NaN→null(避免非法 JSON / 无法序列化)。
+    只读 store 主档(文件),绝不触碰密钥/配置/DB。
+    """
+    import pandas as pd
+    if codes:
+        want = [c.strip().zfill(6) for c in codes.split(",") if c.strip()]
+    else:
+        want = repo.list_master_codes()
+    since_ts = None
+    if since:
+        try:
+            since_ts = pd.Timestamp(datetime.strptime(since, "%Y-%m-%d").date())
+        except ValueError:
+            raise _Reject(422, "invalid", f"since 非法(需 YYYY-MM-DD): {since!r}")
+    data: dict = {}
+    total = 0
+    for code in want:
+        if not repo.has_master_kline(code):
+            continue
+        df = repo.get_master_kline(code)
+        if df is None or len(df) == 0:
+            continue
+        df = df.copy()
+        df["date"] = pd.to_datetime(df["date"])
+        if since_ts is not None:
+            df = df[df["date"] > since_ts]
+        if len(df) == 0:
+            continue
+        df["date"] = df["date"].dt.strftime("%Y-%m-%d")
+        # to_json 处理 numpy 标量 + NaN→null;再 loads 回 Python 对象供 FastAPI 严格序列化
+        bars = json.loads(df.to_json(orient="records", force_ascii=False))
+        data[code] = bars
+        total += len(bars)
+    return data, total
+
+
 @app.get("/health")
 def health():
     return {"ok": True, "service": "ingest"}
@@ -216,6 +295,36 @@ async def ingest(request: Request):
     except _Reject as r:
         audit.record_audit(source=src, key_id=kid, date=date, rows=len(records) or None,
                            verify_ok=(r.result not in ("auth_fail", "sig_fail", "too_large")),
+                           result=r.result, msg=r.msg)
+        return JSONResponse(status_code=r.status, content={"ok": False, "error": r.msg})
+
+
+@app.get("/pull")
+def pull(request: Request, kind: str = "kline", since: str = "", codes: str = ""):
+    """本地按需增量拉取:回该 kind 自 since 之后的原始数据。门禁同 /ingest 一把密钥。
+
+    参数:kind(先支持 kline)、since(YYYY-MM-DD,增量水位;空=全历史)、
+    codes(逗号分隔 6 位码;空=全A)。鉴权头:Authorization: Bearer <token> +
+    X-Sync-Ts / X-Sync-Nonce / X-Sync-Key-Id / X-Sync-Sig(HMAC 钢印)。
+    """
+    kind = (kind or "").strip().lower()
+    since = (since or "").strip()
+    codes = (codes or "").strip()
+    try:
+        _check_token(request.headers)              # ① 鉴权(401)
+        _check_rate(_bearer(request.headers))      # ② 限流(429,按 token)
+        _check_pull_sig(request.headers, kind, since, codes)   # ③ 验签(403)④ 时效(409)
+        if kind not in PULL_KINDS:                 # kind 未支持 → 422
+            raise _Reject(422, "invalid", f"不支持的 kind: {kind!r}(支持 {PULL_KINDS})")
+        data, total = _pull_kline(since, codes)
+        audit.record_audit(source="pull", key_id=request.headers.get("x-sync-key-id"),
+                           date=since or None, rows=total, verify_ok=True,
+                           result="ok", msg=f"pull {kind} codes={len(data)}")
+        return {"ok": True, "kind": kind, "since": since, "count": total, "data": data}
+    except _Reject as r:
+        audit.record_audit(source="pull", key_id=request.headers.get("x-sync-key-id"),
+                           date=since or None, rows=None,
+                           verify_ok=(r.result not in ("auth_fail", "sig_fail")),
                            result=r.result, msg=r.msg)
         return JSONResponse(status_code=r.status, content={"ok": False, "error": r.msg})
 
