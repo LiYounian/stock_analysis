@@ -94,7 +94,9 @@ def fetch_news(codes: list[str], days: int | None = None) -> dict[str, list[dict
 
     out: dict[str, list[dict]] = {}
     failed: list[str] = []
-    for code in codes:
+    n = len(codes)
+    for i, code in enumerate(codes, 1):
+        logger.info("[%d/%d] 新闻 %s 采集...", i, n, code)
         src, items, err = _SOURCE, [], None
         # 主源:东财个股新闻
         try:

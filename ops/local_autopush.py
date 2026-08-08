@@ -13,12 +13,13 @@ from __future__ import annotations
 import argparse
 import logging
 import sys
+import time
 from datetime import datetime
 from pathlib import Path
 
 from tools.config import settings
 from tools.sync import upload
-from ops.remote_update import subprocess_runner
+from ops.progress_runner import streaming_runner
 
 logger = logging.getLogger("ops.local_autopush")
 
@@ -42,7 +43,7 @@ def build_pipeline_cmd(python: str, all_pool: bool = True) -> list[str]:
 def run_local_push(date: str, *, python: str, url: str, token: str, source: str,
                    key_id: str, key: str, analysis_dir: Path | None = None,
                    receipt_path: Path | None = None, run_pipeline: bool = True,
-                   all_pool: bool = True, runner=subprocess_runner, upload_fn=upload.upload_date,
+                   all_pool: bool = True, runner=streaming_runner, upload_fn=upload.upload_date,
                    retries: int = 5) -> dict:
     """跑流水线(可跳过)→ 上传当日产物。返回 {ok, step, receipt?}。流水线失败则不上传。"""
     if run_pipeline:
@@ -79,16 +80,20 @@ def main(argv=None) -> int:
 
     # 流水线用"当前正在运行本脚本的解释器"(conda 或 venv 都自动对),避免硬编 .venv
     python = sys.executable
+    t0 = time.monotonic()
     res = run_local_push(
         args.date, python=python, url=settings.SYNC_INGEST_URL, token=settings.SYNC_INGEST_TOKEN,
         source=settings.SYNC_SOURCE_ID, key_id=settings.SYNC_KEY_ID, key=settings.SYNC_SIGNING_KEY,
         receipt_path=_receipt_dir() / f"{args.date}.json",
         run_pipeline=not args.no_pipeline, all_pool=not args.dev_pool, retries=args.retries)
+    elapsed = int(time.monotonic() - t0)
 
+    s = (res.get("receipt") or {}).get("summary", {})
+    tail = f"上传 成功{s.get('ok', 0)}/失败{s.get('failed', 0)}" if s else ""
     if res["ok"]:
-        print(f"闭环完成 {args.date}:{res['receipt']['summary']}")
+        print(f"闭环完成 {args.date}:总耗时 {elapsed}s;{tail}")
         return 0
-    print(f"闭环未完成(step={res['step']}):{res.get('receipt', {}).get('summary', res)}")
+    print(f"闭环未完成(step={res['step']}):总耗时 {elapsed}s;{tail or res}")
     return 1
 
 
