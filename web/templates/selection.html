@@ -1,0 +1,106 @@
+{% extends "base.html" %}
+{% block title %}选股结果 · A股策略辅助工具{% endblock %}
+{% block content %}
+{% set expert_names = s.config.默认专家组 or (s.rows[0].experts | map(attribute='专家') | list if s.rows else []) %}
+
+<h1>选股结果 <small>选出哪些票 · 为什么 · 合议怎么看(非投资建议)</small></h1>
+
+<section class="card wide">
+  <p>
+    本页共分析 <b>{{ s.total }}</b> 只 ·
+    {% if s.view_present %}达标(形态选股)<b class="pos">{{ s.qualified }}</b> 只{% if s.view_meta.达标占比 is not none %}(占比 {{ (s.view_meta.达标占比*100)|round(1) }}%){% endif %}
+    {% else %}<span class="muted">形态选股达标池未生成(退化为按合议综合分排序展示全部分析票)</span>{% endif %}
+    · 数据日期 <b>{{ s.as_of }}</b>
+  </p>
+  {% if s.view_present and s.view_meta.纪律 %}<p class="muted tiny">达标纪律:{{ s.view_meta.纪律 }} · RS:{{ s.view_meta.RS模式 }}</p>{% endif %}
+</section>
+
+{% if expert_names %}
+<section class="card wide">
+  <h2>参与专家 <small>勾选后按落库权重实时重算综合分并重排(前端,不触网)</small></h2>
+  <div class="council-experts">
+    {% for n in expert_names %}
+    <label class="council-chk"><input type="checkbox" class="expert-cb" value="{{ n }}" checked> {{ n }}</label>
+    {% endfor %}
+  </div>
+</section>
+{% endif %}
+
+<section class="card wide">
+  <table>
+    <thead>
+      <tr><th>代码</th><th>名称</th><th>行业</th><th>达标</th><th>达标理由</th>
+          <th>合议</th><th>综合分</th><th>专家数</th></tr>
+    </thead>
+    <tbody id="selBody">
+    {% for x in s.rows %}
+      <tr data-code="{{ x.code }}">
+        <td>{{ x.code }}</td>
+        <td><a href="/stock/{{ x.code }}?date={{ s.as_of }}">{{ x.name }}</a></td>
+        <td class="muted">{{ x.industry or x.sector or '-' }}</td>
+        <td>{% if x.qualified is none %}<span class="muted" title="达标池未生成">—</span>
+            {% elif x.qualified %}<span class="pos">✓ 达标</span>
+            {% else %}<span class="muted">未达标</span>{% endif %}</td>
+        <td class="muted tiny">
+          {% if x.达标理由 %}命中形态:{{ x.达标理由.命中形态 or '-' }}{% if x.达标理由.正向确认依据 %} · 正向:{{ x.达标理由.正向确认依据|join('、') }}{% endif %}
+          {% else %}-{% endif %}</td>
+        <td><span class="sel-dir badge {{ 'buy' if x.council_dir=='看多' else ('sell' if x.council_dir=='看空' else 'wait') }}">{{ x.council_dir or '中性' }}</span>
+            <span class="sel-conflict" title="专家分歧" style="{{ '' if x.council_conflict else 'display:none' }}">⚠️</span></td>
+        <td class="sel-score">{{ x.council_score if x.council_score is not none else '-' }}</td>
+        <td class="muted">{{ x.参与专家数 }}</td>
+      </tr>
+    {% else %}
+      <tr><td colspan="8" class="muted">当日无分析记录</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  <p class="muted tiny">点名称进个股页看完整归因/K线。合议综合分口径与个股页一致(前端同 councilSynth 公式)。</p>
+</section>
+
+<script id="selectionExperts" type="application/json">{{ (s.rows|list)|tojson }}</script>
+<script id="selectionConfig" type="application/json">{{ s.config|tojson }}</script>
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/council.js"></script>
+<script>
+(function () {
+  var el = document.getElementById("selectionExperts");
+  var cfgEl = document.getElementById("selectionConfig");
+  if (!el || !window.councilSynth) return;
+  var rows, cfg;
+  try { rows = JSON.parse(el.textContent); cfg = JSON.parse(cfgEl.textContent) || {}; }
+  catch (e) { return; }
+  var expByCode = {};
+  rows.forEach(function (r) { expByCode[r.code] = r.experts || []; });
+
+  function checkedFn() {
+    var set = {};
+    document.querySelectorAll(".expert-cb").forEach(function (cb) { if (cb.checked) set[cb.value] = true; });
+    return function (n) { return !!set[n]; };
+  }
+
+  function rerank() {
+    var isChecked = checkedFn();
+    var tbody = document.getElementById("selBody");
+    var trs = [].slice.call(tbody.querySelectorAll("tr[data-code]"));
+    trs.forEach(function (tr) {
+      var code = tr.getAttribute("data-code");
+      var r = window.councilSynth(expByCode[code] || [], isChecked, cfg);
+      tr.querySelector(".sel-score").textContent = window.round4(r.S);
+      var dEl = tr.querySelector(".sel-dir");
+      dEl.textContent = r.dir;
+      dEl.className = "sel-dir badge " + (window.councilDirClass[r.dir] || "wait");
+      var cf = tr.querySelector(".sel-conflict");
+      if (cf) cf.style.display = r.conflict ? "" : "none";
+      tr._score = r.S;
+    });
+    trs.sort(function (a, b) { return (b._score == null ? -1e9 : b._score) - (a._score == null ? -1e9 : a._score); });
+    trs.forEach(function (tr) { tbody.appendChild(tr); });
+  }
+
+  document.querySelectorAll(".expert-cb").forEach(function (cb) { cb.addEventListener("change", rerank); });
+  rerank();   // 载入即按 councilSynth 重排,保证与后端 council 口径一致(默认全勾)
+})();
+</script>
+{% endblock %}
