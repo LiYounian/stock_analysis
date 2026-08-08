@@ -46,6 +46,14 @@ def screen(request: Request, date: str = "latest"):
         context={"s": da.screen_page(date), **_nav(date)})
 
 
+@app.get("/selection", response_class=HTMLResponse)
+def selection(request: Request, date: str = "latest"):
+    """选股结果页:选出哪些票/为什么(达标理由)/合议怎么看,可勾选专家实时重排。"""
+    return templates.TemplateResponse(
+        request=request, name="selection.html",
+        context={"s": da.selection_page(date), **_nav(date)})
+
+
 @app.get("/news", response_class=HTMLResponse)
 def news(request: Request, date: str = "latest"):
     """每日信息流:全市场新闻流(含 AI 分析),标题可点进详情。"""
