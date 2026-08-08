@@ -119,5 +119,42 @@ def test_predict_full_shape():
     tech = {"ob_os": {"结论": "中性"}, "reversal": {"拐点标签": "无"}, "signal": {"评级": "偏多"}}
     out = pr.predict(kl, tech)
     assert set(["现价", "近三次放量", "支撑位", "压力位", "持有期建议",
-                "情景预测", "买卖倾向", "免责"]).issubset(out.keys())
+                "情景预测", "买卖倾向", "免责", "结构位"]).issubset(out.keys())
     assert "1日" in out["持有期建议"] and "10日" in out["情景预测"]
+
+
+# ---------- L3:结构位 + 情景锚定 ----------
+def test_anchor_box_tp_above_sl_below():
+    """箱体:S/R 环绕现价 → 止损<现价<止盈,RR 有意义。"""
+    情景, sl, tp, _ = pr._anchor(100.0, 4.0, [95.0, 90.0], [108.0, 115.0],
+                                 "中性", "无", 5.0, 0.02, 2.0)
+    assert 情景 == "箱体震荡" and sl < 100.0 < tp
+
+
+def test_anchor_near_resistance_is_wait_breakout():
+    """价贴近压力(R1 仅高 0.3%)→ 止盈不得压到价下,判'待突破',看 R2。"""
+    情景, sl, tp, _ = pr._anchor(100.0, 4.0, [95.0], [100.3, 110.0],
+                                 "中性", "无", 5.0, 0.02, 2.0)
+    assert tp > 100.0 and 情景 == "贴近压力(待突破)"
+
+
+def test_anchor_breakout_and_bearish():
+    情景, sl, tp, _ = pr._anchor(100.0, 4.0, [95.0], [110.0], "偏多", "放量突破", 5.0, 0.02, 2.0)
+    assert 情景 == "放量突破上行" and sl < 100.0 < tp
+    情景2, sl2, tp2, _ = pr._anchor(100.0, 4.0, [95.0], [110.0], "偏空", "无", 5.0, 0.02, 2.0)
+    assert 情景2.startswith("跌破") and sl2 is None and tp2 is None    # 偏空不给多头目标
+
+
+def test_structure_anchor_invariants():
+    """structure_anchor:有止损止盈时必满足 止损<现价<止盈 且 盈亏比>0;放量/突破字段齐。"""
+    closes = [10.0] * 30 + [10.2, 10.5, 11.0, 11.6, 12.5]
+    vols = [1000.0] * 30 + [1500, 1800, 2200, 2600, 3200]
+    kl = _kline(closes, vols=vols)
+    sr = pr.support_resistance(kl)
+    price = closes[-1]
+    atr_pct = float(pr.atr(kl).iloc[-1]) / price * 100
+    sa = pr.structure_anchor(kl, price, atr_pct, sr, {"signal": {"评级": "偏多"}, "bias20": 5.0})
+    assert set(["支撑", "压力", "距支撑%", "距压力%", "区间位置%", "当日量比", "放量", "突破", "锚定"]).issubset(sa)
+    a = sa["锚定"]
+    if a["止损位"] is not None and a["止盈位"] is not None:
+        assert a["止损位"] < price < a["止盈位"] and a["盈亏比"] > 0

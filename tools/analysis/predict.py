@@ -171,6 +171,81 @@ def bias_recommendation_council(tech: dict, fundflow: dict | None = None,
     return council.bias_council(tech, fundflow, sentiment)
 
 
+# ---------- L3:结构位 + 突破 + 情景锚定(纯数据,无 LLM)----------
+def _anchor(price, atr_pct, S, R, rating, 突破, dist_sup, buf, near):
+    """按 情景 锚定止损/止盈(数据验证结论:支撑压力作锚点、放量作突破确认)。返回(情景,止损,止盈,依据)。
+
+    硬约束:止盈必须严格 > 现价、止损 < 现价(否则盈亏比无意义)。价已贴/触压力 → 判"待突破"。
+    """
+    band = (atr_pct / 100) if atr_pct == atr_pct else 0.03      # atr_pct 为 NaN 时退 3%
+    S1 = S[0] if S else None
+    R1 = R[0] if R else None
+    R2 = R[1] if len(R) > 1 else None
+    if S1 is None and R1 is None:
+        return "数据不足(无结构位)", None, None, ["无 swing 支撑/压力,退回波动率括号"]
+    if rating == "偏空" or 突破 == "放量跌破":
+        return "跌破/下降(观望)", None, None, ["趋势偏空或放量跌破,不给多头目标"]
+
+    def _tp_above(*prefer):
+        """选严格高于现价(留 0.5% 间隔)的止盈锚:依次试 prefer,再 R2,最后量度目标。"""
+        for c in (*prefer, R2):
+            if c and c > price * 1.005:
+                return round(c, 2)
+        return round(price * (1 + 1.6 * band), 2)               # 量度目标(无上方压力可锚)
+
+    sl_at = lambda lvl: round(lvl * (1 - buf), 2)
+    if 突破 == "放量突破":
+        return "放量突破上行", sl_at(S1 or price), _tp_above(R1), \
+            ["放量突破前高:止损放突破位下方、止盈看上一档压力/量度目标"]
+    if rating == "偏多" and S1 and dist_sup is not None and dist_sup <= near:
+        return "趋势回踩", sl_at(S1), _tp_above(R1), ["上升趋势回踩近支撑:止损支撑下方、止盈看前高"]
+    # 箱体 / 贴近压力
+    sl = sl_at(S1) if S1 else round(price * (1 - band), 2)
+    tp_pref = R1 * (1 - 0.3 * buf) if R1 else None              # 压力前留 0.3×缓冲
+    if tp_pref and tp_pref > price * 1.005:
+        return "箱体震荡", sl, round(tp_pref, 2), ["震荡区间:支撑下方止损、压力前止盈"]
+    return "贴近压力(待突破)", sl, _tp_above(R2, R1), ["价已贴近压力:突破前不追、止盈看上一档压力/量度"]
+
+
+def structure_anchor(kline: pd.DataFrame, price: float, atr_pct: float, sr: dict, tech: dict) -> dict:
+    """结构位(支撑/压力/距离%/区间位置%/放量/突破)+ 情景化止盈止损锚定。全部纯数据,无 LLM。
+
+    数据验证结论(L3 §4.1):放量=突破确认(降假突破)非收益预测;支撑压力=锚点非方向;τ=0.75~1%。
+    """
+    high, low, vol = kline["high"], kline["low"], kline["volume"]
+    n = len(kline)
+    S = sr.get("支撑位") or []
+    R = sr.get("压力位") or []
+    S1 = S[0] if S else None
+    R1 = R[0] if R else None
+    # 放量:当日量比(前 5 日均量,不含当日)
+    vma = vol.iloc[-6:-1].mean() if n >= 6 else float("nan")
+    vr = float(vol.iloc[-1] / vma) if (vma and not pd.isna(vma) and vma > 0) else float("nan")
+    放量 = bool(vr >= _P["放量_量比"]) if not pd.isna(vr) else False
+    # 突破:收盘超前 N 日高/低(带容差 + 放量确认)
+    lb, tau = _P["突破回看"], _P["突破容差%"] / 100
+    prior_hi = float(high.iloc[-(lb + 1):-1].max()) if n >= lb + 1 else float("nan")
+    prior_lo = float(low.iloc[-(lb + 1):-1].min()) if n >= lb + 1 else float("nan")
+    broke_up = (not pd.isna(prior_hi)) and price > prior_hi * (1 + tau)
+    broke_dn = (not pd.isna(prior_lo)) and price < prior_lo * (1 - tau)
+    突破 = ("放量突破" if 放量 else "疑似假突破(未放量)") if broke_up else \
+        (("放量跌破" if 放量 else "跌破(未放量)") if broke_dn else "无")
+    dist_sup = round((price - S1) / price * 100, 2) if S1 else None
+    dist_res = round((R1 - price) / price * 100, 2) if R1 else None
+    pos = round((price - S1) / (R1 - S1) * 100, 1) if (S1 and R1 and R1 > S1) else None
+    rating = (tech.get("signal") or {}).get("评级")
+    buf = max(_P["止损缓冲最小%"], _P["止损缓冲ATR倍数"] * atr_pct) / 100 if atr_pct == atr_pct else 0.01
+    情景, sl, tp, why = _anchor(price, atr_pct, S, R, rating, 突破, dist_sup, buf, _P["贴近带%"])
+    rr = round((tp - price) / (price - sl), 2) if (sl and tp and price > sl) else None
+    return {
+        "支撑": [round(float(x), 2) for x in S[:2]], "压力": [round(float(x), 2) for x in R[:2]],
+        "距支撑%": dist_sup, "距压力%": dist_res, "区间位置%": pos,
+        "当日量比": round(vr, 2) if not pd.isna(vr) else None, "放量": 放量,
+        "突破": 突破, "趋势": rating, "bias20": tech.get("bias20"),
+        "锚定": {"情景": 情景, "止损位": sl, "止盈位": tp, "盈亏比": rr, "依据": why},
+    }
+
+
 # ---------- 汇总 ----------
 def predict(kline: pd.DataFrame, tech: dict, fundflow: dict | None = None,
             sentiment: dict | None = None) -> dict:
@@ -183,14 +258,16 @@ def predict(kline: pd.DataFrame, tech: dict, fundflow: dict | None = None,
     price = float(kline["close"].iloc[-1])
     atr_val = float(atr(kline).iloc[-1])
     atr_pct = atr_val / price * 100 if price else float("nan")
+    sr = support_resistance(kline)
 
     return {
         "现价": round(price, 2),
         "atr": round(atr_val, 3),
         "atr_pct": round(atr_pct, 2),
         "近三次放量": recent_volume_spikes(kline),
-        **support_resistance(kline),
+        **sr,
         "持有期建议": stop_targets(price, atr_pct),
+        "结构位": structure_anchor(kline, price, atr_pct, sr, tech),  # L3:支撑压力/突破/情景锚定
         "情景预测": scenarios(kline),
         "买卖倾向": bias_recommendation(tech, fundflow, sentiment),
         "免责": DISCLAIMER,
