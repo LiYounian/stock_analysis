@@ -31,6 +31,7 @@ import collections
 import copy
 import logging
 
+from tools.analysis import industry_map
 from tools.analysis.pattern_screener import rs, screen as ps
 from tools.collectors import announcement, board, fundamental, index, market
 from tools.config.strategy import THRESHOLDS
@@ -50,6 +51,15 @@ def _load_or_fetch_kline(code: str, fetch: bool):
         if not fetch:
             return None
         return market.fetch_kline([code]).get(code)
+
+
+def _sector(code: str, membership: dict) -> str:
+    """达标票所属板块:证监会门类(baostock membership)→ 申万一级(industry_map),
+    对齐不上则回退证监会门类名,再拿不到 → 「未分类」(供选股页 region② 按板块分组)。"""
+    zjh = membership.get(code)
+    if not zjh:
+        return "未分类"
+    return industry_map.to_sw(zjh) or zjh
 
 
 def _benchmark_close(fetch: bool, win: int) -> list[float]:
@@ -104,13 +114,15 @@ def run_pattern_screen(codes: list[str], as_of: str | None = None,
     bench_close = _benchmark_close(fetch, win)
     hs300_ret = rs.period_return(bench_close, win)
 
-    membership = {}
-    if two_layer:
-        try:
-            membership = board.load_membership()
-        except FileNotFoundError:
+    # 成分映射(baostock 证监会门类):RS 双层用它,达标清单「行业」也用它(全A达标票无中心记录,
+    # 靠这张图给板块归属)。故无论单/双层都尝试加载;缺失且双层 → 降级单层告警。
+    try:
+        membership = board.load_membership()
+    except FileNotFoundError:
+        membership = {}
+        if two_layer:
             logger.warning("双层已开但成分映射缺失(先跑 collectors.board.fetch_membership_baostock),"
-                           "本次全体降级单层")
+                           "本次全体降级单层;达标清单行业将落「未分类」")
     cfg_single = copy.deepcopy(_CFG)
     cfg_single["RS"]["启用板块层"] = False        # 逐票降级用
 
@@ -174,7 +186,8 @@ def run_pattern_screen(codes: list[str], as_of: str | None = None,
         "扫描数": len(codes), "跳过数": skipped,
         "有效样本": breadth["有效样本"], "达标数": breadth["达标数"],
         "达标占比": breadth["达标占比"],
-        "达标清单": [{"code": c, "命中形态": results[c]["命中形态"],
+        "达标清单": [{"code": c, "行业": _sector(c, membership),
+                      "命中形态": results[c]["命中形态"],
                       "正向确认依据": results[c].get("正向确认依据", [])}
                      for c in breadth["达标清单"]],
         "RS模式": rs_mode, "板块数": len(board_mean), "单层降级票数": degraded,
