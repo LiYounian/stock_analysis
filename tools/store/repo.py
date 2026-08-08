@@ -32,6 +32,7 @@ logger = logging.getLogger("store.repo")
 
 # —— 路径根(可被测试 monkeypatch 指到临时目录)——
 _RAW_DIR = settings.DATA_RAW                                   # data/raw
+_MASTER_DIR = settings.DATA_MASTER                            # data/master(滚动主档)
 _ANALYSIS_DIR = settings.PROJECT_ROOT / "data" / "analysis"   # data/analysis
 
 # —— kind → 物理格式 ——
@@ -232,6 +233,104 @@ def is_stale(kind: str, code: str, max_days: float, date: str | None = "latest")
 
 
 # ————————————————————————————————————————————————
+# 滚动主档 data/master/kline/<code>.parquet
+# 每股一份长历史(date 升序、前复权),不按日期分区 → 跨交易日增量 append,
+# 根治按日期分区的跨日返工。列 schema 由采集层决定(store 只透传)。
+# ————————————————————————————————————————————————
+def _master_path(code: str) -> Path:
+    if not _CODE_RE.match(code):
+        raise ValueError(f"主档 code 需为 6 位数字: {code!r}")
+    return _MASTER_DIR / "kline" / f"{code}.parquet"
+
+
+def _master_meta_path(code: str) -> Path:
+    return _master_path(code).parent / f"{code}.meta.json"
+
+
+def has_master_kline(code: str) -> bool:
+    """主档是否存在该股。"""
+    return _master_path(code).exists()
+
+
+def get_master_kline(code: str):
+    """读单票主档 K线(全历史,date 升序)。缺失抛 FileNotFoundError。"""
+    p = _master_path(code)
+    if not p.exists():
+        raise FileNotFoundError(f"{code} 无主档 K线,请先落地主档: {p}")
+    import pandas as pd
+    return pd.read_parquet(p)
+
+
+def put_master_kline(code: str, df, meta: dict | None = None) -> str:
+    """全量覆盖写单票主档(原子写)+ meta sidecar。df 需含 date 列。
+
+    写入前按 date 去重(保留最后一条)+ 升序,保证主档规整。返回数据文件路径。
+    """
+    import pandas as pd
+    df = _dedup_sort_by_date(df)
+    p = _master_path(code)
+    data_path = _write_parquet(p, df)
+    _write_master_meta(code, df, meta)
+    return data_path
+
+
+def append_master_kline(code: str, df_new, meta: dict | None = None) -> str:
+    """增量 append 到主档:与现有合并 → 按 date 去重(同日以新数据覆盖,幂等)→
+    升序 → 原子写。主档不存在时等价于首次落地。返回数据文件路径。
+
+    幂等性:盘中/盘后多次跑同一天,同 date 只保留最后写入的一条,不产生重复行。
+    """
+    import pandas as pd
+    p = _master_path(code)
+    if p.exists():
+        old = pd.read_parquet(p)
+        merged = pd.concat([old, df_new], ignore_index=True)
+    else:
+        merged = df_new
+    return put_master_kline(code, merged, meta)
+
+
+def _dedup_sort_by_date(df):
+    """按 date 去重(保留最后一条,即同日新覆盖旧)+ 升序 + 重置索引。"""
+    import pandas as pd
+    out = df.copy()
+    out["date"] = pd.to_datetime(out["date"])
+    out = (out.drop_duplicates(subset=["date"], keep="last")
+              .sort_values("date").reset_index(drop=True))
+    return out
+
+
+def _write_master_meta(code: str, df, meta: dict | None) -> None:
+    m = {"fetched_at": _now_iso(), "code": code}
+    try:
+        m["rows"] = int(len(df))
+        if len(df):
+            import pandas as pd
+            d = pd.to_datetime(df["date"])
+            m["first_date"] = d.min().strftime("%Y-%m-%d")
+            m["last_date"] = d.max().strftime("%Y-%m-%d")
+    except (TypeError, KeyError):
+        pass
+    if meta:
+        m.update(meta)
+    _write_json(_master_meta_path(code), m)
+
+
+def get_master_kline_meta(code: str) -> dict | None:
+    """读主档 meta(fetched_at/rows/first_date/last_date/source);无则 None。"""
+    p = _master_meta_path(code)
+    return _read_json(p) if p.exists() else None
+
+
+def list_master_codes() -> list[str]:
+    """列出主档已落地的所有股票代码(升序)。"""
+    root = _MASTER_DIR / "kline"
+    if not root.exists():
+        return []
+    return sorted(p.stem for p in root.glob("*.parquet") if _CODE_RE.match(p.stem))
+
+
+# ————————————————————————————————————————————————
 # 中心记录 data/analysis/<日期>/{code}.json
 # ————————————————————————————————————————————————
 def get_record(code: str, date: str | None = "latest") -> dict:
@@ -289,6 +388,9 @@ def delete_stock(code: str) -> list[str]:
             p.unlink()
             removed.append(str(p))
 
+    # 滚动主档(每股一份长历史)
+    _rm(_master_path(code))
+    _rm(_master_meta_path(code))
     # raw:扁平 kind(llm_cache)无日期;其余遍历所有日期分区
     for kind in _RAW_KINDS:
         if kind in _FLAT_KINDS:
