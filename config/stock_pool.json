@@ -208,5 +208,47 @@
     "name": "新易盛",
     "industry": "光模块",
     "sector": "光模块"
+  },
+  {
+    "code": "000977",
+    "name": "浪潮信息",
+    "industry": "服务器/AI算力",
+    "sector": "AI算力"
+  },
+  {
+    "code": "000938",
+    "name": "紫光股份",
+    "industry": "ICT/网络设备(新华三)",
+    "sector": "AI算力"
+  },
+  {
+    "code": "300418",
+    "name": "昆仑万维",
+    "industry": "AI应用/游戏",
+    "sector": "传媒/AI应用"
+  },
+  {
+    "code": "300251",
+    "name": "光线传媒",
+    "industry": "影视传媒",
+    "sector": "传媒/AI应用"
+  },
+  {
+    "code": "600843",
+    "name": "上工申贝",
+    "industry": "缝制机械/智能制造",
+    "sector": "机械"
+  },
+  {
+    "code": "300209",
+    "name": "行云科技",
+    "industry": "信息服务(待确认)",
+    "sector": "AI算力"
+  },
+  {
+    "code": "301583",
+    "name": "托伦斯",
+    "industry": "待确认",
+    "sector": "其他"
   }
 ]
