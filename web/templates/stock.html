@@ -46,6 +46,33 @@
   </section>
   {% endif %}
 
+  {% if p and not p.error and p.结构位 %}
+  {% set st = p.结构位 %}{% set anc = st.锚定 or {} %}
+  <section class="card">
+    <h2>结构位 / 情景锚定 <small>支撑压力真实点位 · 盈亏比由点位算 · 非投资建议</small></h2>
+    <table>
+      <tr><td>支撑</td><td>{{ st.支撑|join('、') if st.支撑 else '—' }}</td>
+          <td>压力</td><td>{{ st.压力|join('、') if st.压力 else '—' }}</td></tr>
+      <tr><td>距支撑%</td><td>{% if st['距支撑%'] is not none %}{{ st['距支撑%'] }}%{% else %}—{% endif %}</td>
+          <td>距压力%</td><td>{% if st['距压力%'] is not none %}{{ st['距压力%'] }}%{% else %}—{% endif %}</td></tr>
+      <tr><td>区间位置%</td><td>{% if st['区间位置%'] is not none %}{{ st['区间位置%'] }}%{% else %}—{% endif %}</td>
+          <td>当日量比</td><td>{{ st.当日量比 if st.当日量比 is not none else '—' }}{% if st.放量 %} <span class="pos">(放量)</span>{% endif %}</td></tr>
+      <tr><td>突破</td><td>{{ st.突破 or '—' }}</td>
+          <td>趋势 / BIAS20</td><td>{{ st.趋势 or '—' }}{% if st.bias20 is not none %} · {{ st.bias20 }}{% endif %}</td></tr>
+    </table>
+    {% if anc %}
+    <h3 class="sub">情景锚定</h3>
+    <table>
+      <tr><td>情景</td><td>{{ anc.情景 or '—' }}</td></tr>
+      <tr><td>止损位</td><td class="neg">{{ anc.止损位 if anc.止损位 is not none else '—' }}</td>
+          <td>止盈位</td><td class="pos">{{ anc.止盈位 if anc.止盈位 is not none else '—' }}</td>
+          <td>盈亏比</td><td>{{ anc.盈亏比 if anc.盈亏比 is not none else '—' }}</td></tr>
+    </table>
+    {% if anc.依据 %}<p class="muted tiny">依据:{{ anc.依据|join('、') }}</p>{% endif %}
+    {% endif %}
+  </section>
+  {% endif %}
+
   <section class="card wide">
     <h2>K线走势(蜡烛图+成交量+MA5/20/60,叠加支撑/压力/止盈止损)</h2>
     <div id="klineChart" style="height:460px;"></div>

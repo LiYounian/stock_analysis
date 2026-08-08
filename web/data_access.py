@@ -89,6 +89,48 @@ def stops_view(rec: dict) -> dict:
     }
 
 
+def structure_view(rec: dict) -> dict | None:
+    """L3 结构位/情景锚定完整视图(供个股页小卡)。只读透传,不计算。
+
+    防空:prediction 缺失 / 为 error 块(次新股 K线<30)/ 无「结构位」子块(老数据)→ None。
+    有则原样透传 结构位(含 支撑/压力/距离%/区间位置%/量比/放量/突破/趋势/bias20/锚定)。
+    """
+    p = (rec or {}).get("prediction")
+    if not p or p.get("error"):
+        return None
+    s = p.get("结构位")
+    return s if isinstance(s, dict) else None
+
+
+def anchor_stops(rec: dict) -> dict:
+    """L3 止盈止损(区块①/③ 统一口径)。回退链:结构位.锚定 → 5日 ATR(stops_view)→ 全 None。
+
+    优先「结构位.锚定」(真实盈亏比由点位算,带情景/突破/区间位置%);
+    结构位缺失但有 5日 ATR 建议 → 退回 stops_view 的止损/止盈/风险收益比(带最大亏损%/目标盈利%);
+    再缺 → 全 None(前端渲染「—」)。source 标注取数来源,便于前端区分展示。
+    """
+    empty = {"情景": None, "止损位": None, "止盈位": None, "盈亏比": None,
+             "突破": None, "区间位置%": None, "最大亏损%": None, "目标盈利%": None,
+             "source": None}
+    p = (rec or {}).get("prediction")
+    if not p or p.get("error"):
+        return empty
+    s = p.get("结构位")
+    if isinstance(s, dict) and isinstance(s.get("锚定"), dict):
+        a = s["锚定"]
+        return {"情景": a.get("情景"), "止损位": a.get("止损位"),
+                "止盈位": a.get("止盈位"), "盈亏比": a.get("盈亏比"),
+                "突破": s.get("突破"), "区间位置%": s.get("区间位置%"),
+                "最大亏损%": None, "目标盈利%": None, "source": "结构位"}
+    st = stops_view(rec)
+    if st.get("止损位") is not None:
+        return {"情景": None, "止损位": st["止损位"], "止盈位": st["止盈位"],
+                "盈亏比": st["风险收益比"], "突破": None, "区间位置%": None,
+                "最大亏损%": st["最大亏损%"], "目标盈利%": st["目标盈利%"],
+                "source": "5日ATR"}
+    return empty
+
+
 def screen_page(date: str = "latest") -> dict:
     """选股页数据:读 screen 视图 + 补每票关键字段。"""
     recs = _load_all(date)
@@ -172,6 +214,7 @@ def selection_page(date: str = "latest") -> dict:
             "参与专家数": len(cblk.get("default", {}).get("参与专家", []) or []),
             "experts": experts_env,                      # 供前端勾选重合成
             "stops": stops_view(r),                      # 5日止盈止损+上涨概率(L1 展示,已防空)
+            "anchor": anchor_stops(r),                   # L3 结构位锚定止盈止损(缺则回退 5日ATR,已防空)
         })
     # 默认按合议综合分降序;无合议分(None)沉底
     rows.sort(key=lambda x: (x["council_score"] is not None, x["council_score"] or 0), reverse=True)
@@ -182,9 +225,49 @@ def selection_page(date: str = "latest") -> dict:
         qualified_n = sum(1 for x in rows if x["qualified"])
 
     daily = _daily_sections(qualified_items, near_items, recs, view_present, view_meta, qualified_n)
+    top_picks = _top_picks(qualified_items, near_items, recs)
     return {"rows": rows, "total": total, "qualified": qualified_n,
             "view_present": view_present, "view_meta": view_meta,
-            "daily": daily, "config": config or {}, "as_of": as_of(date)}
+            "daily": daily, "top_picks": top_picks, "config": config or {}, "as_of": as_of(date)}
+
+
+def _top_picks(qualified_items: list[dict], near_items: list[dict], recs: dict,
+               top_n: int = 15) -> list[dict]:
+    """区块③「今日精选(数据策略综合)」:达标清单 ∪ 接近达标 ∪ 自选池,按合议综合分降序 Top N。
+
+    纯数据策略(技术趋势/超买超卖/拐点/资金流/多因子/板块轮动的合议),未用新闻/大模型。
+    取数来源三并集去重;合议分优先取中心记录 council.default.综合分,无记录(全A接近达标票)取契约「合议分」。
+    每行带 anchor(L3 止盈止损,已防空回退)+ experts(供前端勾选实时重排 Top N)。
+    达标池 view 缺失时 qualified_items/near_items 为空,仍以自选池(recs)兜底出 Top N。
+    """
+    near_score = {it.get("code"): it.get("合议分") for it in (near_items or []) if it.get("code")}
+    qualified_codes = {it.get("code") for it in (qualified_items or []) if it.get("code")}
+    codes: set[str] = set(recs.keys())
+    codes |= qualified_codes
+    codes |= {it.get("code") for it in (near_items or []) if it.get("code")}
+    rows = []
+    for code in codes:
+        r = recs.get(code)
+        cs = council_summary(r) or {}
+        score = cs.get("综合分")
+        if score is None:
+            score = near_score.get(code)
+        meta = (r or {}).get("meta") or {}
+        cblk = (r or {}).get("council") or {}
+        a = anchor_stops(r)
+        rows.append({
+            "code": code, "name": meta.get("name", code),
+            "industry": meta.get("industry") or meta.get("sector"),
+            "情景": a["情景"], "止损位": a["止损位"], "止盈位": a["止盈位"],
+            "盈亏比": a["盈亏比"], "突破": a["突破"], "区间位置%": a["区间位置%"],
+            "council_dir": cs.get("综合方向"), "council_score": score,
+            "council_conflict": cs.get("是否冲突", False),
+            "qualified": code in qualified_codes,
+            "experts": cblk.get("experts") or [],
+        })
+    # 合议综合分降序;无合议分(None)沉底
+    rows.sort(key=lambda x: (x["council_score"] is not None, x["council_score"] or 0), reverse=True)
+    return rows[:top_n]
 
 
 def _group_by_board(items: list[dict], recs: dict, row_builder, top_n: int) -> list[dict]:

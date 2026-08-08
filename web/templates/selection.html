@@ -22,23 +22,28 @@
     <small>本页共分析 <b>{{ s.total }}</b> 只 ·
       {% if s.view_present %}其中达标 <b class="pos">{{ s.qualified }}</b> 只{% else %}<span class="muted">形态达标池未生成(按合议综合分排序)</span>{% endif %}
       · 数据日期 <b>{{ s.as_of }}</b></small></h2>
+  <p class="muted tiny">止盈止损优先按 <b>结构位·情景锚定</b>(支撑/压力真实点位,盈亏比由点位算);无结构位(老数据/次新股)回退 5 日 ATR 版,再缺显「—」。</p>
   <table>
     <thead>
       <tr><th>代码</th><th>名称</th><th>行业</th>
-          <th>现价</th><th>止损位</th><th>止盈位</th><th>盈亏比</th><th>5日涨概率</th>
+          <th>现价</th><th>情景</th><th>止损位</th><th>止盈位</th><th>盈亏比</th><th>突破</th><th>区间位置</th><th>5日涨概率</th>
           <th>达标</th><th>达标理由</th>
           <th>合议</th><th>综合分</th><th>专家数</th></tr>
     </thead>
     <tbody id="selBody">
     {% for x in s.rows %}
+      {% set a = x.anchor %}
       <tr data-code="{{ x.code }}">
         <td>{{ x.code }}</td>
         <td><a href="/stock/{{ x.code }}?date={{ s.as_of }}">{{ x.name }}</a></td>
         <td class="muted">{{ x.industry or x.sector or '-' }}</td>
         <td>{{ x.stops.现价 if x.stops.现价 is not none else '—' }}</td>
-        <td>{% if x.stops.止损位 is not none %}<span class="neg">{{ x.stops.止损位 }} (-{{ x.stops['最大亏损%'] }}%)</span>{% else %}—{% endif %}</td>
-        <td>{% if x.stops.止盈位 is not none %}<span class="pos">{{ x.stops.止盈位 }} (+{{ x.stops['目标盈利%'] }}%)</span>{% else %}—{% endif %}</td>
-        <td>{{ x.stops.风险收益比 if x.stops.风险收益比 is not none else '—' }}</td>
+        <td class="muted tiny">{{ a.情景 or '—' }}</td>
+        <td>{% if a.止损位 is not none %}<span class="neg">{{ a.止损位 }}{% if a['最大亏损%'] is not none %} (-{{ a['最大亏损%'] }}%){% endif %}</span>{% else %}—{% endif %}</td>
+        <td>{% if a.止盈位 is not none %}<span class="pos">{{ a.止盈位 }}{% if a['目标盈利%'] is not none %} (+{{ a['目标盈利%'] }}%){% endif %}</span>{% else %}—{% endif %}</td>
+        <td>{{ a.盈亏比 if a.盈亏比 is not none else '—' }}</td>
+        <td class="muted tiny">{{ a.突破 if (a.突破 and a.突破 != '无') else '—' }}</td>
+        <td class="muted tiny">{% if a['区间位置%'] is not none %}{{ a['区间位置%'] }}%{% else %}—{% endif %}</td>
         <td>{% if x.stops['上涨概率%'] is not none %}{{ x.stops['上涨概率%'] }}%{% else %}—{% endif %}</td>
         <td>{% if x.qualified is none %}<span class="muted" title="达标池未生成">—</span>
             {% elif x.qualified %}<span class="pos">✓ 达标</span>
@@ -52,7 +57,38 @@
         <td class="muted">{{ x.参与专家数 }}</td>
       </tr>
     {% else %}
-      <tr><td colspan="13" class="muted">当日无分析记录</td></tr>
+      <tr><td colspan="16" class="muted">当日无分析记录</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</section>
+
+<!-- 区块③:今日精选(数据策略综合)Top N -->
+<section class="card wide">
+  <h2>③ 今日精选(数据策略综合)Top {{ s.top_picks|length }}
+    <small>达标池 ∪ 接近达标 ∪ 自选池,按合议综合分降序 · 数据日期 <b>{{ s.as_of }}</b></small></h2>
+  <p class="muted tiny">综合所勾选的<b>数据策略</b>(技术趋势 / 超买超卖 / 拐点 / 资金流 / 多因子 / 板块轮动)筛选,<b>纯数据、未用新闻 / 大模型</b>;非投资建议。勾选专家变化会实时重算合议分并重排。</p>
+  <table>
+    <thead>
+      <tr><th>代码</th><th>名称</th><th>行业</th><th>情景</th><th>止损</th><th>止盈</th><th>盈亏比</th><th>突破</th><th>合议</th><th>合议分</th></tr>
+    </thead>
+    <tbody id="topBody">
+    {% for x in s.top_picks %}
+      <tr data-code="{{ x.code }}">
+        <td>{{ x.code }}</td>
+        <td><a href="/stock/{{ x.code }}?date={{ s.as_of }}">{{ x.name }}</a></td>
+        <td class="muted">{{ x.industry or '-' }}</td>
+        <td class="muted tiny">{{ x.情景 or '—' }}</td>
+        <td>{% if x.止损位 is not none %}<span class="neg">{{ x.止损位 }}</span>{% else %}—{% endif %}</td>
+        <td>{% if x.止盈位 is not none %}<span class="pos">{{ x.止盈位 }}</span>{% else %}—{% endif %}</td>
+        <td>{{ x.盈亏比 if x.盈亏比 is not none else '—' }}</td>
+        <td class="muted tiny">{{ x.突破 if (x.突破 and x.突破 != '无') else '—' }}</td>
+        <td><span class="sel-dir badge {{ 'buy' if x.council_dir=='看多' else ('sell' if x.council_dir=='看空' else 'wait') }}">{{ x.council_dir or '中性' }}</span>
+            <span class="sel-conflict" title="专家分歧" style="{{ '' if x.council_conflict else 'display:none' }}">⚠️</span></td>
+        <td class="sel-score">{{ x.council_score if x.council_score is not none else '-' }}</td>
+      </tr>
+    {% else %}
+      <tr><td colspan="10" class="muted">当日无可精选标的(自选池与达标池均无数据)。</td></tr>
     {% endfor %}
     </tbody>
   </table>
@@ -123,6 +159,7 @@
 
 <script id="selectionExperts" type="application/json">{{ (s.rows|list)|tojson }}</script>
 <script id="dailyGroups" type="application/json">{{ (s.daily.groups|list)|tojson }}</script>
+<script id="topPicks" type="application/json">{{ (s.top_picks|list)|tojson }}</script>
 <script id="selectionConfig" type="application/json">{{ s.config|tojson }}</script>
 {% endblock %}
 
@@ -131,18 +168,20 @@
 <script>
 (function () {
   if (!window.councilSynth) return;
-  var cfg = {}, selRows = [], dailyGroups = [];
+  var cfg = {}, selRows = [], dailyGroups = [], topPicks = [];
   try {
     cfg = JSON.parse(document.getElementById("selectionConfig").textContent) || {};
     selRows = JSON.parse(document.getElementById("selectionExperts").textContent) || [];
     dailyGroups = JSON.parse(document.getElementById("dailyGroups").textContent) || [];
+    topPicks = JSON.parse(document.getElementById("topPicks").textContent) || [];
   } catch (e) { return; }
 
-  // 合并 ①② 的专家信封(同 code 信封一致)
+  // 合并 ①②③ 的专家信封(同 code 信封一致)
   var expByCode = {};
   selRows.forEach(function (r) { expByCode[r.code] = r.experts || []; });
   dailyGroups.forEach(function (g) { (g.rows || []).forEach(function (r) {
     if (!expByCode[r.code]) expByCode[r.code] = r.experts || []; }); });
+  topPicks.forEach(function (r) { if (!expByCode[r.code]) expByCode[r.code] = r.experts || []; });
 
   function checkedFn() {
     var set = {};
@@ -168,6 +207,8 @@
     var isChecked = checkedFn();
     var sel = document.getElementById("selBody");
     if (sel) rerankTbody(sel, isChecked);
+    var top = document.getElementById("topBody");
+    if (top) rerankTbody(top, isChecked);
     document.querySelectorAll("tbody.daily-group").forEach(function (tb) { rerankTbody(tb, isChecked); });
   }
 
