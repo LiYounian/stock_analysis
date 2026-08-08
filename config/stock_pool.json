@@ -250,5 +250,35 @@
     "name": "托伦斯",
     "industry": "待确认",
     "sector": "其他"
+  },
+  {
+    "code": "601975",
+    "name": "招商南油",
+    "industry": "航运/油运",
+    "sector": "航运"
+  },
+  {
+    "code": "002222",
+    "name": "福晶科技",
+    "industry": "光学元件/激光",
+    "sector": "光学元件"
+  },
+  {
+    "code": "000625",
+    "name": "长安汽车",
+    "industry": "汽车整车",
+    "sector": "汽车"
+  },
+  {
+    "code": "002129",
+    "name": "TCL中环",
+    "industry": "光伏硅片/半导体材料",
+    "sector": "光伏"
+  },
+  {
+    "code": "601288",
+    "name": "农业银行",
+    "industry": "国有大型银行",
+    "sector": "银行"
   }
 ]
