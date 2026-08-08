@@ -10,10 +10,13 @@
 from __future__ import annotations
 
 import logging
+import random
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import pandas as pd
 
+from tools.collectors import baostock_src
 from tools.config import settings
 from tools.store import repo as store
 
@@ -110,40 +113,176 @@ def fetch_one(code: str, start: str, end: str, adjust: str,
     return df
 
 
-def fetch_kline(codes: list[str], start: str | None = None,
-                end: str | None = None, adjust: str = settings.KLINE_ADJUST
-                ) -> dict[str, pd.DataFrame]:
-    """拉取多票 K线并落盘 parquet。
-
-    start/end 为 None 时:end=今天,start≈今天往前 KLINE_DAYS×2 自然日(覆盖非交易日)。
-    单票失败记 logger 并跳过,不中断整批;返回成功票的 {code: DataFrame}。
-    """
-    settings.ensure_dirs()
+def _default_range(start: str | None, end: str | None) -> tuple[str, str]:
+    """缺省日期区间:end=今天,start≈今天往前 KLINE_DAYS×2 自然日(覆盖非交易日)。"""
     if start is None:
         start = (pd.Timestamp.today() - pd.Timedelta(days=settings.KLINE_DAYS * 2)
                  ).strftime("%Y%m%d")
     if end is None:
         end = pd.Timestamp.today().strftime("%Y%m%d")
+    return start, end
 
+
+def fetch_kline(codes: list[str], start: str | None = None,
+                end: str | None = None, adjust: str = settings.KLINE_ADJUST,
+                workers: int | None = None) -> dict[str, pd.DataFrame]:
+    """拉取多票 K线并落盘 parquet(逐只 akshare 多源 fallback;主档缺失时的兜底路径)。
+
+    start/end 为 None 时:end=今天,start≈今天往前 KLINE_DAYS×2 自然日(覆盖非交易日)。
+    单票失败记 logger 并跳过,不中断整批;返回成功票的 {code: DataFrame}。
+
+    workers(方案B 并发兜底):None→取 settings.FETCH_WORKERS。
+      =1 串行(默认,含 FETCH_SLEEP_SEC 节流);
+      >1 有界线程池 + 每请求 jitter(不 sleep,靠并发度而非节流控速)。
+    """
+    settings.ensure_dirs()
+    start, end = _default_range(start, end)
+    workers = settings.FETCH_WORKERS if workers is None else workers
+    n = len(codes)
     out: dict[str, pd.DataFrame] = {}
     failed: list[str] = []
-    n = len(codes)
-    for i, code in enumerate(codes, 1):
-        logger.info("[%d/%d] K线 %s 采集...", i, n, code)
-        try:
-            df, src = _fetch_one_with_source(code, start, end, adjust)
-            store.put_raw("kline", code, df, meta={"source": src})
-            out[code] = df
-            logger.info("K线 %s 落盘 %d 根(源 %s)", code, len(df), src)
-        except Exception as e:
-            failed.append(code)
-            logger.error("K线 %s 失败: %s", code, e)
-        time.sleep(settings.FETCH_SLEEP_SEC)
+
+    def _do(code: str) -> tuple[pd.DataFrame, str]:
+        if workers > 1 and settings.FETCH_JITTER_SEC:
+            time.sleep(random.uniform(0, settings.FETCH_JITTER_SEC))
+        df, src = _fetch_one_with_source(code, start, end, adjust)
+        store.put_raw("kline", code, df, meta={"source": src})
+        return df, src
+
+    if workers and workers > 1:
+        with ThreadPoolExecutor(max_workers=workers) as ex:
+            futs = {ex.submit(_do, c): c for c in codes}
+            for done, f in enumerate(as_completed(futs), 1):
+                code = futs[f]
+                try:
+                    df, src = f.result()
+                    out[code] = df
+                    logger.info("[%d/%d] K线 %s 落盘 %d 根(源 %s)", done, n, code, len(df), src)
+                except Exception as e:
+                    failed.append(code)
+                    logger.error("K线 %s 失败: %s", code, e)
+    else:
+        for i, code in enumerate(codes, 1):
+            logger.info("[%d/%d] K线 %s 采集...", i, n, code)
+            try:
+                df, src = _do(code)
+                out[code] = df
+                logger.info("K线 %s 落盘 %d 根(源 %s)", code, len(df), src)
+            except Exception as e:
+                failed.append(code)
+                logger.error("K线 %s 失败: %s", code, e)
+            time.sleep(settings.FETCH_SLEEP_SEC)
     if failed:
         logger.warning("拉取失败票(%d): %s", len(failed), failed)
     return out
 
 
+# ————————————————————————————————————————————————
+# 滚动主档:①全量历史落地(baostock) ②每日增量(akshare spot)
+# ————————————————————————————————————————————————
+def backfill_master(codes: list[str], start: str | None = None, end: str | None = None,
+                    adjust: str = settings.KLINE_ADJUST) -> dict[str, int]:
+    """用 baostock 逐只拉全历史日K(前复权)→ 全量覆盖写滚动主档。
+
+    baostock 不封 → 无 sleep 快速循环。start/end 用 YYYYMMDD 或 YYYY-MM-DD(缺省同 fetch_kline)。
+    返回 {"ok": n, "failed": n};单只失败记 logger 跳过,不中断整批。
+    """
+    settings.ensure_dirs()
+    start, end = _default_range(start, end)
+    s = _to_dash(start)
+    e = _to_dash(end)
+    n = len(codes)
+    ok = 0
+    failed: list[str] = []
+    with baostock_src.session():
+        for i, code in enumerate(codes, 1):
+            try:
+                df = baostock_src.fetch_one(code, s, e, adjust=adjust)
+                store.put_master_kline(code, df, meta={"source": "baostock", "adjust": adjust})
+                ok += 1
+                if i % 200 == 0 or i == n:
+                    logger.info("[%d/%d] 主档落地进行中(最新 %s %d 根)", i, n, code, len(df))
+            except Exception as ex:
+                failed.append(code)
+                logger.error("主档 %s 失败: %s", code, ex)
+    if failed:
+        logger.warning("主档落地失败票(%d): %s", len(failed), failed[:50])
+    return {"ok": ok, "failed": len(failed)}
+
+
+# 东财 spot 中文列 → 标准列
+_SPOT_COL_MAP = {
+    "代码": "code", "今开": "open", "最高": "high", "最低": "low",
+    "最新价": "close", "成交量": "volume", "成交额": "amount",
+    "换手率": "turnover", "涨跌幅": "pct_chg",
+}
+
+
+def fetch_spot_all() -> pd.DataFrame:
+    """akshare stock_zh_a_spot_em():一次请求拿全A当日 bar。返回标准列(含 code)。"""
+    import akshare as ak
+    df = ak.stock_zh_a_spot_em()
+    if df is None or len(df) == 0:
+        raise ConnectionError("akshare spot 全A当日行情为空")
+    df = df.rename(columns=_SPOT_COL_MAP)
+    keep = [c for c in ("code", "open", "high", "low", "close",
+                        "volume", "amount", "turnover", "pct_chg") if c in df.columns]
+    df = df[keep].copy()
+    for c in keep:
+        if c != "code":
+            df[c] = pd.to_numeric(df[c], errors="coerce")
+    df["code"] = df["code"].astype(str).str.zfill(6)
+    return df
+
+
+def update_master_from_spot(codes: list[str] | None = None, date: str | None = None,
+                            spot: pd.DataFrame | None = None) -> dict[str, int]:
+    """每日增量:一次 spot 拿全A当日 bar → 逐股按 date 去重 append 到主档(幂等)。
+
+    codes=None → 更新所有已有主档的股票(spot 缺该股=停牌,跳过)+ 新股首次落。
+    date=None → 用今天(YYYY-MM-DD)。spot 可传入(测试/复用),否则实时拉。
+
+    幂等:同日多次跑,append_master_kline 按 date 覆盖,不产生重复行。
+    注:spot 为未复权当日价;前复权主档在无新除权时"最新 bar 的 qfq 值=其实际价",
+    故追加正确;发生除权后需 backfill_master 全量重算(见方案文档 §4)。
+    """
+    if spot is None:
+        spot = fetch_spot_all()
+    d = date or pd.Timestamp.today().strftime("%Y-%m-%d")
+    spot = spot.set_index("code")
+    if codes is None:
+        codes = sorted(set(store.list_master_codes()) | set(spot.index))
+    ok = 0
+    skipped = 0
+    for code in codes:
+        if code not in spot.index:
+            skipped += 1              # 停牌/无当日 bar
+            continue
+        row = spot.loc[code]
+        bar = pd.DataFrame([{
+            "date": pd.Timestamp(d),
+            "open": row.get("open"), "high": row.get("high"), "low": row.get("low"),
+            "close": row.get("close"), "volume": row.get("volume"),
+            "amount": row.get("amount"), "turnover": row.get("turnover"),
+            "pct_chg": row.get("pct_chg"),
+        }])
+        store.append_master_kline(code, bar, meta={"source": "akshare_spot"})
+        ok += 1
+    logger.info("spot 增量 append:更新 %d 只,跳过(停牌/无 bar)%d 只 @ %s", ok, skipped, d)
+    return {"ok": ok, "skipped": skipped}
+
+
+def _to_dash(d: str) -> str:
+    """YYYYMMDD → YYYY-MM-DD(已带 - 则原样)。"""
+    return f"{d[:4]}-{d[4:6]}-{d[6:8]}" if d and "-" not in d else d
+
+
 def load_kline(code: str) -> pd.DataFrame:
-    """从本地缓存读单票 K线(分析层用,不触网)。缓存缺失抛 FileNotFoundError。"""
+    """读单票 K线(分析层用,不触网)。**优先读滚动主档**,回退当日 raw 分区。
+
+    对外签名不变(向后兼容);内部读取源:主档存在→主档全历史;否则→现有 raw。
+    两处皆缺抛 FileNotFoundError。
+    """
+    if store.has_master_kline(code):
+        return store.get_master_kline(code)
     return store.get_raw("kline", code)

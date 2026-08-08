@@ -36,7 +36,11 @@ LLM_ROUTE = {"extract": "openai_compat", "sentiment": "qwen", "summary": "openai
 LLM_CACHE = DATA_RAW / "llm_cache"             # 抽取结果缓存,改下游免重复调用
 
 # —— 采集限频(防封)——
-FETCH_SLEEP_SEC = 0.5       # 单次请求间隔
+FETCH_SLEEP_SEC = 0.5       # 单次请求间隔(串行兜底路径)
+# 方案B 兜底并发(仅主档缺失时逐只 akshare 回退用):有界线程池 + jitter。
+# 默认 1 = 保持串行(不激进并发,避免打封);需要提速时调 8–12。
+FETCH_WORKERS = int(os.getenv("FETCH_WORKERS", "1"))
+FETCH_JITTER_SEC = 0.2      # 并发路径每请求前随机抖动上限(秒)
 
 # —— 数据新鲜度(store 层用)——
 RAW_STALE_DAYS = 3          # raw 缓存超过此天数(或无采集元数据)视为陈旧,促使重采
