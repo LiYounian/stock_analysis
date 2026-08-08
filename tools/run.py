@@ -13,8 +13,10 @@
     python -m tools.run screen       # 组合聚合 + 预设选股视图
     python -m tools.run pattern      # 形态选股(模块二)扫描:RS+硬规则AND+达标占比
     python -m tools.run all          # 全链路(采集→情绪→组装→事件→多因子→合议回写→视图),一个日期
+    python -m tools.run pipeline     # 全A 两阶段流水线:全A便宜筛得达标池,再只对(达标∪自选)做新闻/LLM/合议
     # 追加 --all 用全池 32 只;默认开发子集 10 只(config/dev_sample.json)
     # pattern 额外支持 --universe [N]:从全 A 票池取前 N 只(默认 50)扫描
+    # pipeline 额外支持 --universe [N]:阶段①只扫全A前 N 只(默认全量);贵活只对候选(达标∪自选)
 
 按日期:编排开始 store.set_active_date(今天),本次所有产出落 data/<日期>/。
 """
@@ -80,6 +82,44 @@ def collect_values(codes: list[str]) -> None:
         logger.info("基本面:成功 %d", len(_safe("基本面", lambda: fd.fetch_fundamental(codes)) or {}))
         logger.info("公告:成功 %d", len(_safe("公告", lambda: an.fetch_announcements(codes)) or {}))
         logger.info("资金流:成功 %d", len(_safe("资金流", lambda: ff.fetch_fundflow(codes)) or {}))
+    finally:
+        socket.setdefaulttimeout(_old)
+
+
+def _load_ok(loader, code: str) -> bool:
+    """本地缓存是否已有该票该源(load 成功=有;FileNotFoundError/损坏=无,交给重采覆盖)。"""
+    try:
+        loader(code)
+        return True
+    except FileNotFoundError:
+        return False
+    except Exception:
+        return False
+
+
+def collect_values_missing(codes: list[str]) -> None:
+    """数值面**只补缺失**(skip-if-cached,幂等):分别取尚无缓存的子集采 K线/基本面/公告/资金流。
+
+    供两阶段流水线阶段②——阶段①已为全A采过 K线、为候选采过基本面/公告,这里只补自选池等
+    尚未覆盖的票,不重采已采的(省网络、可反复跑)。各源独立 _safe 降级,不中止整批。
+    """
+    need_k = [c for c in codes if not _load_ok(market.load_kline, c)]
+    need_f = [c for c in codes if not _load_ok(fd.load_fundamental, c)]
+    need_a = [c for c in codes if not _load_ok(an.load_announcements, c)]
+    need_ff = [c for c in codes if not _load_ok(ff.load_fundflow, c)]
+    logger.info("数值面补缺(%d 候选,已缓存跳过):K线 %d / 基本面 %d / 公告 %d / 资金流 %d",
+                len(codes), len(need_k), len(need_f), len(need_a), len(need_ff))
+    _old = socket.getdefaulttimeout()
+    socket.setdefaulttimeout(FETCH_TIMEOUT)
+    try:
+        if need_k:
+            _safe("K线", lambda: market.fetch_kline(need_k))
+        if need_f:
+            _safe("基本面", lambda: fd.fetch_fundamental(need_f))
+        if need_a:
+            _safe("公告", lambda: an.fetch_announcements(need_a))
+        if need_ff:
+            _safe("资金流", lambda: ff.fetch_fundflow(need_ff))
     finally:
         socket.setdefaulttimeout(_old)
 
@@ -308,10 +348,69 @@ def cmd_all(argv):
     logger.info("===== 全链路完成 → data/analysis/%s/(record 含完整 council)=====", as_of)
 
 
+# ————————————————————————————————————————————————
+# 全A 两阶段流水线:先便宜筛(全A)、再只对候选做贵活(新闻/LLM/事件/合议)
+# ————————————————————————————————————————————————
+def run_two_stage(codes_all: list[str], as_of: str) -> dict:
+    """全A 两阶段流水线:先便宜筛全A得达标池,再只对(达标∪自选)做贵活。
+
+    阶段①(可全A,便宜):形态选股两阶段扫描——内部全A 只采 K线 → 形态/RS/量能筛候选 →
+      候选采护栏 → 达标池(达标清单带行业)。
+    候选 = 达标池 ∪ 自选池(自选池必进:日常盯的票始终有完整分析)。
+    阶段②(只对候选,通常数十~数百只):补缺数值面(skip-if-cached)→ 新闻/舆情 → LLM 情绪 →
+      组装 → 事件精数值 → 多因子截面 → 合议回写 → 视图。
+    **关键**:最贵的新闻采集 + LLM 情绪调用量 = 候选数,而非全A(全A 可扩展前提)。
+    合议不改内核:非候选票不进阶段②,情绪/事件专家对未跑候选自然弃权(council 已支持)。
+    """
+    from tools.pipeline import screen_pattern
+    logger.info("===== 全A两阶段流水线开始(日期 %s,阶段①扫描 %d 只)=====", as_of, len(codes_all))
+    # —— 阶段①:全A 便宜筛(只 K线)→ 达标池 ——
+    view = screen_pattern.run_pattern_screen(codes_all, as_of=as_of, fetch=True)
+    qualified = [x["code"] for x in view.get("达标清单", [])]
+    watch = stock_pool.get_codes()
+    seen: set[str] = set()
+    candidates = [c for c in (qualified + watch) if not (c in seen or seen.add(c))]
+    logger.info("阶段①完成:全A扫描 %d / 有效 %d / 便宜门候选 %d / 达标 %d → 阶段②候选(达标∪自选)= %d 只",
+                len(codes_all), view.get("有效样本"), view.get("候选数"),
+                view.get("达标数"), len(candidates))
+    # —— 阶段②:只对候选做贵活 ——
+    collect_values_missing(candidates)   # 补自选等尚未缓存的数值面(不重采已采的)
+    collect_message(candidates)          # 新闻/舆情 只对候选
+    collect_market_context()             # 全市场指数(每轮一次、非逐票)→ RRG 专家
+    run_sentiment(candidates)            # LLM 情绪 只对候选 ← 关键省 token
+    run_serialize(candidates, as_of)
+    run_events(candidates, as_of)
+    run_factor(candidates, as_of)
+    run_council(candidates, as_of)
+    run_panel(candidates)
+    run_screen(candidates)
+    logger.info("===== 全A两阶段流水线完成 → data/analysis/%s/;候选 %d 只含完整合议 =====",
+                as_of, len(candidates))
+    return {"as_of": as_of, "扫描": len(codes_all), "达标": len(qualified),
+            "候选": len(candidates), "candidates": candidates}
+
+
+def cmd_pipeline(argv):
+    """全A 两阶段流水线入口:python -m tools.run pipeline [--universe N]。
+
+    默认全A(不传 --universe);--universe N 取全A前 N 只做阶段①(小规模验证/试跑)。
+    """
+    as_of = _as_of()
+    store.set_active_date(as_of)
+    from tools.collectors import universe
+    n = None
+    if argv and "--universe" in argv:
+        i = argv.index("--universe")
+        n = int(argv[i + 1]) if i + 1 < len(argv) and argv[i + 1].isdigit() else None
+    codes_all = universe.universe_codes(limit=n)
+    logger.info("两阶段流水线票池(阶段①):全A%s共 %d 只", f"前{n}只" if n else "全量", len(codes_all))
+    run_two_stage(codes_all, as_of)
+
+
 _CMDS = {"collect": cmd_collect, "message": cmd_message, "sentiment": cmd_sentiment,
          "serialize": cmd_serialize, "panel": cmd_panel, "screen": cmd_screen,
          "events": cmd_events, "factor": cmd_factor, "council": cmd_council,
-         "context": cmd_context,
+         "context": cmd_context, "pipeline": cmd_pipeline,
          "pattern": cmd_pattern, "analyze": cmd_analyze, "all": cmd_all}
 
 
