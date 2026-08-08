@@ -109,6 +109,78 @@ def test_daily_top_n_per_board(monkeypatch):
     assert g["板块"] == "半导体" and g["count"] == 8 and len(g["rows"]) == d["top_n"] == 5
 
 
+def test_daily_near_when_zero_qualified(monkeypatch):
+    """达标0但有接近达标 → mode=near、按板块分组(组内合议分降序、板块按最高分降序),不空页。"""
+    recs = {}  # 全A票可无中心记录:合议分取契约自带
+    _patch_records(monkeypatch, recs)
+    view = {"扫描数": 4800, "有效样本": 4600, "达标数": 0, "达标清单": [],
+            "接近达标": [
+                {"code": "000001", "行业": "半导体", "最接近形态": "杯柄", "差距说明": "颈线差1.2%", "合议分": 60},
+                {"code": "000002", "行业": "半导体", "最接近形态": "箱体", "差距说明": "量能不足", "合议分": 80},
+                {"code": "000003", "行业": "电力", "最接近形态": "旗形", "差距说明": "回踩未确认", "合议分": 90},
+            ]}
+    monkeypatch.setattr(da.store, "get_view", lambda name, date="latest": view)
+    d = da.selection_page()["daily"]
+    assert d["present"] is True and d["mode"] == "near"
+    assert d["qualified_n"] == 0 and d["near_n"] == 3 and d["top_n"] == 3
+    # 电力(90)组内最高分 > 半导体(80)→ 电力在前
+    assert [g["板块"] for g in d["groups"]] == ["电力", "半导体"]
+    semi = next(g for g in d["groups"] if g["板块"] == "半导体")
+    assert [r["code"] for r in semi["rows"]] == ["000002", "000001"]   # 组内合议分降序
+    assert semi["rows"][0]["最接近形态"] == "箱体" and semi["rows"][0]["差距说明"] == "量能不足"
+
+
+def test_daily_near_top3_per_board(monkeypatch):
+    """接近达标每板块只取 top3(按合议分)。"""
+    _patch_records(monkeypatch, {})
+    near = [{"code": f"0001{i}", "行业": "半导体", "最接近形态": "杯柄",
+             "差距说明": "d", "合议分": i} for i in range(6)]
+    view = {"扫描数": 5000, "达标数": 0, "达标清单": [], "接近达标": near}
+    monkeypatch.setattr(da.store, "get_view", lambda name, date="latest": view)
+    d = da.selection_page()["daily"]
+    g = d["groups"][0]
+    assert g["count"] == 6 and len(g["rows"]) == 3           # 取 top3
+    assert [r["合议分"] if "合议分" in r else r["council_score"] for r in g["rows"]] == [5, 4, 3]
+
+
+def test_daily_zero_qualified_and_no_near(monkeypatch):
+    """达标0且无接近达标 → present、groups 空(前端显示"无达标且无接近达标"),不报错。"""
+    _patch_records(monkeypatch, {})
+    view = {"扫描数": 5000, "达标数": 0, "达标清单": []}   # 无「接近达标」字段
+    monkeypatch.setattr(da.store, "get_view", lambda name, date="latest": view)
+    d = da.selection_page()["daily"]
+    assert d["present"] is True and d["groups"] == [] and d["near_n"] == 0
+
+
+def test_daily_qualified_takes_priority_over_near(monkeypatch):
+    """达标>0 时即使有接近达标也走达标分组(mode=qualified)。"""
+    r1 = _rec("000001", bull=True); r1["meta"]["industry"] = "半导体"
+    _patch_records(monkeypatch, {"000001": r1})
+    view = {"扫描数": 500, "达标数": 1,
+            "达标清单": [{"code": "000001", "命中形态": "杯柄", "正向确认依据": []}],
+            "接近达标": [{"code": "000009", "行业": "电力", "最接近形态": "旗形", "差距说明": "x", "合议分": 99}]}
+    monkeypatch.setattr(da.store, "get_view", lambda name, date="latest": view)
+    d = da.selection_page()["daily"]
+    assert d["mode"] == "qualified" and d["near_n"] == 1 and d["top_n"] == 5
+    assert [g["板块"] for g in d["groups"]] == ["半导体"]
+
+
+def test_selection_route_renders_near(monkeypatch):
+    """路由:达标0+有接近达标 → 渲染"仅提示"标注 + 接近达标分组,不空页。"""
+    monkeypatch.setattr(da, "_load_all", lambda date="latest": {})
+    monkeypatch.setattr(da, "as_of", lambda date="latest": "2026-08-08")
+    monkeypatch.setattr(da, "available_dates", lambda: ["2026-08-08"])
+    view = {"扫描数": 4800, "达标数": 0, "达标清单": [],
+            "接近达标": [{"code": "000001", "行业": "半导体", "最接近形态": "杯柄",
+                        "差距说明": "颈线差1.2%", "合议分": 60}]}
+    monkeypatch.setattr(da.store, "get_view", lambda name, date="latest": view)
+    r = client.get("/selection")
+    assert r.status_code == 200
+    assert "仅提示,非达标信号" in r.text and "接近达标" in r.text
+    assert "000001" in r.text and "颈线差1.2%" in r.text
+    assert "待扫描生成" not in r.text                          # 有接近达标 → 不落兜底
+
+
 def test_selection_route_renders(monkeypatch):
     recs = {"000001": _rec("000001", bull=True)}
     monkeypatch.setattr(da, "_load_all", lambda date="latest": recs)
