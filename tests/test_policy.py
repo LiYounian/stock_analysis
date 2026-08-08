@@ -178,9 +178,9 @@ def test_fetch_policy_falls_back_to_cctv(store_dir, monkeypatch):
     assert m["source"] == "cctv"
 
 
-def test_fetch_policy_both_sources_empty_raises(store_dir, monkeypatch):
-    """主源东财 + 备源联播 均无结果 → 抛错不静默。"""
+def test_fetch_policy_both_sources_empty_degrades(store_dir, monkeypatch):
+    """主源东财 + 备源联播 均无结果 → 降级为空(不再 raise 中止流水线)。"""
     monkeypatch.setattr(pol, "_fetch_em", lambda kw: _fake_df([]))
     monkeypatch.setattr(pol, "_fetch_cctv", lambda date: _cctv_df([]))
-    with pytest.raises(RuntimeError):
-        pol.fetch_policy(keywords=["半导体 补贴"], days=7)
+    out = pol.fetch_policy(keywords=["半导体 补贴"], days=7)
+    assert out == []                                    # 降级为空,数据源无 SLA 不硬抛

@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 import time
 from datetime import date, timedelta
@@ -31,6 +32,8 @@ from tools.config import settings
 from tools.store import repo as store
 
 logger = logging.getLogger("collectors.ugc")
+
+_TIMEOUT = float(os.getenv("FETCH_TIMEOUT", "10"))  # 被墙机快速失败降级(curl_cffi 单独传参)
 
 # 东财股吧列表页(SSR 内联帖子 JSON,curl_cffi 可直取,见模块 docstring)
 _LIST_URL = "https://guba.eastmoney.com/list,{code}.html"
@@ -45,7 +48,7 @@ def _http_get(code: str) -> str:
     """curl_cffi 伪装 chrome 拉东财股吧列表页 HTML。抽出便于测试 mock。"""
     from curl_cffi import requests as creq
 
-    r = creq.get(_LIST_URL.format(code=code), impersonate="chrome", timeout=20)
+    r = creq.get(_LIST_URL.format(code=code), impersonate="chrome", timeout=_TIMEOUT)
     r.raise_for_status()
     return r.text
 

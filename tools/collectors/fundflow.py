@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import time
 
 import pandas as pd
@@ -17,6 +18,7 @@ from tools.store import repo as store
 
 logger = logging.getLogger("collectors.fundflow")
 
+_TIMEOUT = float(os.getenv("FETCH_TIMEOUT", "10"))  # 被墙机快速失败降级(curl_cffi 走 libcurl,单独传参)
 _SOURCE = "eastmoney"  # 东财
 _FF_URL = "https://push2his.eastmoney.com/api/qt/stock/fflow/daykline/get"
 # fflow/daykline 的 klines 字段顺序(东财固定):日期,主力,小单,中单,大单,超大单,主力占比...
@@ -37,7 +39,7 @@ def _http_get(secid: str) -> dict:
 
     params = {"lmt": "0", "klt": "101", "secid": secid,
               "fields1": "f1,f2,f3,f7", "fields2": _FIELDS2}
-    r = creq.get(_FF_URL, params=params, impersonate="chrome", timeout=20)
+    r = creq.get(_FF_URL, params=params, impersonate="chrome", timeout=_TIMEOUT)
     r.raise_for_status()
     return r.json()
 
