@@ -1,8 +1,14 @@
 """F2 单测:experts 适配器。锁语义:4+1 内置专家映射、缺数据弃权、通用三类适配、恒过契约。"""
 import pandas as pd
+import pytest
 
 from tools.analysis import experts as ex
 from tools.contracts.expert import validate_verdict
+
+# 去环境依赖(hermetic):板块轮动/多因子/事件驱动会从 data/analysis 读盘,有缓存时不弃权,
+# 使 test_missing_blocks_abstain 这类"缺数据即弃权"红线在有缓存环境误挂。统一让这三位在无
+# 显式 record 数据时确定性走各自的弃权分支(见 tests/conftest.py::hermetic_experts)。
+pytestmark = pytest.mark.usefixtures("hermetic_experts")
 
 
 def _rec(**blocks) -> dict:

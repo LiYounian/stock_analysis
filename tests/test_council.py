@@ -1,10 +1,17 @@
 """F3 单测:council 合议层。锁语义:加权求和方向、权重覆盖、冲突仅标注、归因自洽、依赖守卫。"""
 import inspect
 
+import pytest
+
 from tools.analysis import council
 from tools.config.strategy import THRESHOLDS
 
 _C = THRESHOLDS["合议"]
+
+# 去环境依赖(hermetic):板块轮动/多因子/事件驱动会从 data/analysis 读盘,有缓存时不弃权、
+# 稀释合议分母,使"弃权不稀释"等红线时灵时不灵。整个模块统一让这三位在无显式 record 数据时
+# 确定性弃权(见 tests/conftest.py::hermetic_experts),使断言只受构造的 record 字段驱动。
+pytestmark = pytest.mark.usefixtures("hermetic_experts")
 
 
 def _rec(**blocks) -> dict:
