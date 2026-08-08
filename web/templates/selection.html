@@ -55,13 +55,37 @@
 <section class="card wide">
   <h2>② 每日筛选(全市场 · 按板块)
     {% if s.daily.present %}
-    <small>全市场扫描 <b>{{ s.daily.total_scanned }}</b> 只 · 达标 <b class="pos">{{ s.daily.qualified_n }}</b> 只 ·
-      覆盖 <b>{{ s.daily.board_count }}</b> 个板块 · 每板块显示 top {{ s.daily.top_n }} · 数据日期 <b>{{ s.as_of }}</b></small>
+    <small>扫描 <b>{{ s.daily.total_scanned }}</b> 只 · 达标 <b class="pos">{{ s.daily.qualified_n }}</b> 只 ·
+      接近达标 <b>{{ s.daily.near_n }}</b> 只 · 覆盖 <b>{{ s.daily.board_count }}</b> 个板块 · 数据日期 <b>{{ s.as_of }}</b></small>
     {% endif %}</h2>
   {% if not s.daily.present %}
   <p class="muted">全市场每日筛选待扫描生成(运行 <code>python -m tools.pipeline.screen_pattern</code> 产出「形态选股」达标池后自动显示)。</p>
+  {% elif s.daily.mode == 'near' %}
+  <p class="muted">今日无达标,以下为各板块<b>接近达标 / 形态最强</b>(仅提示,非达标信号)。</p>
+  <div class="grid">
+    {% for g in s.daily.groups %}
+    <section class="card">
+      <h2>{{ g.板块 }} <small>接近达标 {{ g.count }} 只{% if g.count > s.daily.top_n %} · 显示 top {{ s.daily.top_n }}{% endif %}</small></h2>
+      <table>
+        <thead><tr><th>代码</th><th>名称</th><th>最接近形态</th><th>差距说明</th><th>合议</th><th>合议分</th></tr></thead>
+        <tbody class="daily-near">
+        {% for x in g.rows %}
+          <tr data-code="{{ x.code }}">
+            <td>{{ x.code }}</td>
+            <td><a href="/stock/{{ x.code }}?date={{ s.as_of }}">{{ x.name }}</a></td>
+            <td class="muted tiny">{{ x.最接近形态 or '-' }}</td>
+            <td class="muted tiny">{{ x.差距说明 or '-' }}</td>
+            <td><span class="badge {{ 'buy' if x.council_dir=='看多' else ('sell' if x.council_dir=='看空' else 'wait') }}">{{ x.council_dir or '中性' }}</span></td>
+            <td>{{ x.council_score if x.council_score is not none else '-' }}</td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </section>
+    {% endfor %}
+  </div>
   {% elif not s.daily.groups %}
-  <p class="muted">本日无达标票。</p>
+  <p class="muted">本日无达标票,且无接近达标数据。</p>
   {% else %}
   <div class="grid">
     {% for g in s.daily.groups %}
