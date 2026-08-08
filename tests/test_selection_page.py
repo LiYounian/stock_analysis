@@ -47,6 +47,26 @@ def test_selection_fallback_no_view_ranks_by_council(monkeypatch):
     assert page["config"]                                          # 带共享 config(分母模式等)
 
 
+def test_near_miss_dict_shape_flattened_not_crash(monkeypatch):
+    """回归:screen_pattern 的「接近达标」真实形状是 {板块:[items]} 字典,selection_page 须拍平。
+
+    此前 _top_picks/_daily_sections 按扁平列表假设写,遇字典会 AttributeError('str' has no 'get')炸整页。
+    锁死:字典形状下 selection_page 正常返回,top_picks 为列表且含接近达标票。
+    """
+    recs = {"000001": _rec("000001", bull=True)}
+    _patch_records(monkeypatch, recs)
+    view = {"扫描数": 5539, "达标数": 1,
+            "达标清单": [{"code": "000001", "行业": "芯片", "命中形态": "箱体", "正向确认依据": []}],
+            "接近达标": {                                   # ← 字典:板块→列表(真实形状)
+                "电子": [{"code": "300001", "行业": "电子", "最接近形态": ["杯柄"], "差距说明": "待突破", "合议分": 0.2}],
+                "银行": [{"code": "600000", "行业": "银行", "最接近形态": ["旗形"], "差距说明": "待放量", "合议分": 0.1}]}}
+    monkeypatch.setattr(da.store, "get_view", lambda name, date="latest": view)
+    page = da.selection_page()                              # 不得抛异常
+    assert isinstance(page["top_picks"], list)
+    picks = {p["code"] for p in page["top_picks"]}
+    assert "000001" in picks and ("300001" in picks or "600000" in picks)   # 达标∪接近∪自选 都进候选
+
+
 def test_selection_with_view_marks_qualified(monkeypatch):
     """有形态选股 view → 标达标 + 达标理由(命中形态/正向确认)。"""
     recs = {"000001": _rec("000001", bull=True), "000002": _rec("000002", bull=False)}
