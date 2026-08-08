@@ -76,7 +76,8 @@
   <h2>全池速览(按趋势得分)</h2>
   <table class="pool">
     <tr><th>股票</th><th>代码</th><th>板块</th><th>现价</th><th>涨跌%</th>
-        <th>趋势</th><th>超买超卖</th><th>拐点</th><th>买卖倾向</th><th>主力(亿)</th></tr>
+        <th>趋势</th><th>超买超卖</th><th>拐点</th><th>买卖倾向</th><th>主力(亿)</th>
+        <th>止损位</th><th>止盈位</th><th>盈亏比</th><th>5日涨概率</th></tr>
     {% for r in records %}
     {% set sig = r.signals %}
     <tr>
@@ -91,6 +92,11 @@
       <td>{% if r.prediction and not r.prediction.error %}{{ r.prediction.买卖倾向.结论 }}{% else %}-{% endif %}</td>
       <td>{% if r.fundflow and r.fundflow.今日主力净流入 is not none %}
         {{ '%.2f'|format(r.fundflow.今日主力净流入/1e8) }}{% else %}-{% endif %}</td>
+      {% set p = r.prediction if (r.prediction and not r.prediction.error) else None %}
+      <td>{% if p %}<span class="neg">{{ p.持有期建议['5日'].止损位 }} (-{{ p.持有期建议['5日']['最大亏损%'] }}%)</span>{% else %}—{% endif %}</td>
+      <td>{% if p %}<span class="pos">{{ p.持有期建议['5日'].止盈位 }} (+{{ p.持有期建议['5日']['目标盈利%'] }}%)</span>{% else %}—{% endif %}</td>
+      <td>{% if p %}{{ p.持有期建议['5日'].风险收益比 }}{% else %}—{% endif %}</td>
+      <td>{% if p and p.情景预测['5日']['上涨概率%'] is not none %}{{ p.情景预测['5日']['上涨概率%'] }}%{% else %}—{% endif %}</td>
     </tr>
     {% endfor %}
   </table>
