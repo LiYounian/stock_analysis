@@ -382,8 +382,12 @@ def _enrich_near_miss(as_of: str) -> int:
     return filled
 
 
-def run_two_stage(codes_all: list[str], as_of: str) -> dict:
+def run_two_stage(codes_all: list[str], as_of: str, no_llm: bool = False) -> dict:
     """全A 两阶段流水线:先便宜筛全A得达标池,再只对(达标∪自选)做贵活(新闻/LLM)。
+
+    no_llm=True(数据-only 快速选股):跳过新闻采集 + LLM 情绪,全程纯数据运算(技术/拐点/资金流/
+      多因子/板块轮动/形态 均无需大模型),情绪三层专家因无数据自然弃权。用于"快、不烧 token"的
+      数据策略选股(用户口径:纯数据、无需大模型)。事件驱动走公告数值,仍是数据、保留。
 
     阶段①(可全A,便宜):形态选股两阶段扫描——内部全A 只采 K线 → 形态/RS/量能筛候选 →
       候选采护栏 → 达标池(达标清单带行业)+ 接近达标(平盘日区块②降级数据)。
@@ -411,9 +415,13 @@ def run_two_stage(codes_all: list[str], as_of: str) -> dict:
                 len(qualified), len(near_codes), len(llm_subset), len(analysis_set))
     # —— 阶段②:新闻/LLM 只对 llm_subset;组装/合议 对 analysis_set(接近达标获技术/因子类合议分)——
     collect_values_missing(analysis_set)  # 补 K线/基本面/公告/资金流(无 LLM,skip-if-cached)
-    collect_message(llm_subset)           # 新闻/舆情 只对达标∪自选 ← 关键省 token
+    if not no_llm:
+        collect_message(llm_subset)       # 新闻/舆情 只对达标∪自选 ← 关键省 token
     collect_market_context()              # 全市场指数(每轮一次、非逐票)→ RRG 专家
-    run_sentiment(llm_subset)             # LLM 情绪 只对达标∪自选 ← 关键省 token
+    if no_llm:
+        logger.info("数据-only 模式:跳过新闻采集 + LLM 情绪(情绪三层专家将弃权)")
+    else:
+        run_sentiment(llm_subset)         # LLM 情绪 只对达标∪自选 ← 关键省 token
     run_serialize(analysis_set, as_of)    # 记录含接近达标(其情绪为空,情绪专家弃权)
     run_events(analysis_set, as_of)
     run_factor(analysis_set, as_of)
@@ -440,9 +448,11 @@ def cmd_pipeline(argv):
     if argv and "--universe" in argv:
         i = argv.index("--universe")
         n = int(argv[i + 1]) if i + 1 < len(argv) and argv[i + 1].isdigit() else None
+    no_llm = bool(argv and "--no-llm" in argv)
     codes_all = universe.universe_codes(limit=n)
-    logger.info("两阶段流水线票池(阶段①):全A%s共 %d 只", f"前{n}只" if n else "全量", len(codes_all))
-    run_two_stage(codes_all, as_of)
+    logger.info("两阶段流水线票池(阶段①):全A%s共 %d 只%s",
+                f"前{n}只" if n else "全量", len(codes_all), "(数据-only)" if no_llm else "")
+    run_two_stage(codes_all, as_of, no_llm=no_llm)
 
 
 _CMDS = {"collect": cmd_collect, "message": cmd_message, "sentiment": cmd_sentiment,
