@@ -351,43 +351,81 @@ def cmd_all(argv):
 # ————————————————————————————————————————————————
 # 全A 两阶段流水线:先便宜筛(全A)、再只对候选做贵活(新闻/LLM/事件/合议)
 # ————————————————————————————————————————————————
+def _dedup(seq: list[str]) -> list[str]:
+    """去重保序。"""
+    s: set[str] = set()
+    return [c for c in seq if not (c in s or s.add(c))]
+
+
+def _enrich_near_miss(as_of: str) -> int:
+    """council 后:回填「接近达标」各票的 `合议分`(读记录 council 综合分),并按合议分重排每板块 top3。
+
+    只读记录 council 块(唯一权威合成产物)+ 重排展示顺序,**不改任何打分逻辑**。缺记录/缺 council
+    的票 `合议分` 留 None(排末)。回写「形态选股」view。返回成功回填只数。
+    """
+    from tools.analysis import serialize
+    view = store.get_view("形态选股", date=as_of)
+    near = view.get("接近达标") or {}
+    filled = 0
+    for _sector, items in near.items():
+        for x in items:
+            try:
+                rec = serialize.load_record(x["code"])
+            except FileNotFoundError:
+                continue
+            s = ((rec.get("council") or {}).get("default") or {}).get("综合分")
+            if s is not None:
+                x["合议分"] = round(float(s), 4)
+                filled += 1
+        items.sort(key=lambda x: (x.get("合议分") is not None, x.get("合议分") or 0.0), reverse=True)
+    store.put_view("形态选股", view)
+    return filled
+
+
 def run_two_stage(codes_all: list[str], as_of: str) -> dict:
-    """全A 两阶段流水线:先便宜筛全A得达标池,再只对(达标∪自选)做贵活。
+    """全A 两阶段流水线:先便宜筛全A得达标池,再只对(达标∪自选)做贵活(新闻/LLM)。
 
     阶段①(可全A,便宜):形态选股两阶段扫描——内部全A 只采 K线 → 形态/RS/量能筛候选 →
-      候选采护栏 → 达标池(达标清单带行业)。
-    候选 = 达标池 ∪ 自选池(自选池必进:日常盯的票始终有完整分析)。
-    阶段②(只对候选,通常数十~数百只):补缺数值面(skip-if-cached)→ 新闻/舆情 → LLM 情绪 →
-      组装 → 事件精数值 → 多因子截面 → 合议回写 → 视图。
-    **关键**:最贵的新闻采集 + LLM 情绪调用量 = 候选数,而非全A(全A 可扩展前提)。
-    合议不改内核:非候选票不进阶段②,情绪/事件专家对未跑候选自然弃权(council 已支持)。
+      候选采护栏 → 达标池(达标清单带行业)+ 接近达标(平盘日区块②降级数据)。
+    两个子集(命门:最贵的新闻/LLM 只对 llm_subset):
+      · llm_subset = 达标 ∪ 自选:新闻采集 + LLM 情绪 只对这批(几十~数百);
+      · analysis_set = 达标 ∪ 自选 ∪ 接近达标(展示 top3/板块):serialize/factor/council 对这批,
+        让接近达标票拿到「技术/因子类」合议分——其情绪/事件专家因无新闻/LLM 数据**自然弃权**
+        (council 已支持弃权,内核不改),故不额外烧 token。
+    阶段②:补缺数值面(skip-if-cached)→ 新闻(llm_subset)→ LLM 情绪(llm_subset)→ 组装/事件/
+      多因子/合议(analysis_set)→ 回填接近达标合议分并重排 → 视图。
     """
     from tools.pipeline import screen_pattern
     logger.info("===== 全A两阶段流水线开始(日期 %s,阶段①扫描 %d 只)=====", as_of, len(codes_all))
-    # —— 阶段①:全A 便宜筛(只 K线)→ 达标池 ——
+    # —— 阶段①:全A 便宜筛(只 K线)→ 达标池 + 接近达标 ——
     view = screen_pattern.run_pattern_screen(codes_all, as_of=as_of, fetch=True)
     qualified = [x["code"] for x in view.get("达标清单", [])]
     watch = stock_pool.get_codes()
-    seen: set[str] = set()
-    candidates = [c for c in (qualified + watch) if not (c in seen or seen.add(c))]
-    logger.info("阶段①完成:全A扫描 %d / 有效 %d / 便宜门候选 %d / 达标 %d → 阶段②候选(达标∪自选)= %d 只",
+    near_codes = [x["code"] for items in (view.get("接近达标") or {}).values() for x in items]
+
+    llm_subset = _dedup(qualified + watch)                 # 新闻/LLM 只对这批(省 token 命门)
+    analysis_set = _dedup(qualified + watch + near_codes)  # serialize/factor/council(含接近达标,无 LLM)
+    logger.info("阶段①完成:全A %d / 有效 %s / 候选 %s / 达标 %d / 接近达标(展示)%d → "
+                "LLM子集(达标∪自选)=%d,合议集(+接近达标)=%d",
                 len(codes_all), view.get("有效样本"), view.get("候选数"),
-                view.get("达标数"), len(candidates))
-    # —— 阶段②:只对候选做贵活 ——
-    collect_values_missing(candidates)   # 补自选等尚未缓存的数值面(不重采已采的)
-    collect_message(candidates)          # 新闻/舆情 只对候选
-    collect_market_context()             # 全市场指数(每轮一次、非逐票)→ RRG 专家
-    run_sentiment(candidates)            # LLM 情绪 只对候选 ← 关键省 token
-    run_serialize(candidates, as_of)
-    run_events(candidates, as_of)
-    run_factor(candidates, as_of)
-    run_council(candidates, as_of)
-    run_panel(candidates)
-    run_screen(candidates)
-    logger.info("===== 全A两阶段流水线完成 → data/analysis/%s/;候选 %d 只含完整合议 =====",
-                as_of, len(candidates))
+                len(qualified), len(near_codes), len(llm_subset), len(analysis_set))
+    # —— 阶段②:新闻/LLM 只对 llm_subset;组装/合议 对 analysis_set(接近达标获技术/因子类合议分)——
+    collect_values_missing(analysis_set)  # 补 K线/基本面/公告/资金流(无 LLM,skip-if-cached)
+    collect_message(llm_subset)           # 新闻/舆情 只对达标∪自选 ← 关键省 token
+    collect_market_context()              # 全市场指数(每轮一次、非逐票)→ RRG 专家
+    run_sentiment(llm_subset)             # LLM 情绪 只对达标∪自选 ← 关键省 token
+    run_serialize(analysis_set, as_of)    # 记录含接近达标(其情绪为空,情绪专家弃权)
+    run_events(analysis_set, as_of)
+    run_factor(analysis_set, as_of)
+    run_council(analysis_set, as_of)      # 接近达标获合议分(情绪/事件专家自然弃权)
+    filled = _enrich_near_miss(as_of)     # 回填接近达标合议分 + 按合议分重排 top3
+    run_panel(analysis_set)
+    run_screen(analysis_set)
+    logger.info("===== 全A两阶段流水线完成 → data/analysis/%s/;LLM子集 %d 只含完整合议,"
+                "接近达标合议分回填 %d 只 =====", as_of, len(llm_subset), filled)
     return {"as_of": as_of, "扫描": len(codes_all), "达标": len(qualified),
-            "候选": len(candidates), "candidates": candidates}
+            "接近达标": len(near_codes), "LLM子集": len(llm_subset), "合议集": len(analysis_set),
+            "llm_subset": llm_subset, "analysis_set": analysis_set}
 
 
 def cmd_pipeline(argv):

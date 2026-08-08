@@ -121,6 +121,94 @@ def _cheap_gate(kdf, rs_stock_vs_board: float, rs_board_vs_hs300: float | None,
     return bool(pat["达标"] and rs_ok and ps.volume_ok(kdf, cfg)), pat
 
 
+# —— 接近达标(达标0降级数据:平盘日区块②不空页)——
+# 每板块保留的「接近达标」条数(按合议分/接近度 top-N);pipeline 阶段会用合议分重排。
+_NEAR_TOP_PER_SECTOR = 3
+
+
+def _pattern_gap(name: str, feat: dict) -> tuple[str, int] | None:
+    """某形态未达标时,判断其结构是否「已成、只差突破/放量」→ 返回 (差距说明, 接近度) 或 None。
+
+    接近度越大越接近达标(结构成型且仅差临门一脚的放量确认最高)。仅用 K线形态明细,不触网。
+    """
+    if name == "箱体" and feat.get("窄幅"):
+        if not feat.get("突破"):
+            return "箱体窄幅已成,待向上突破箱顶", 2
+        if not feat.get("放量"):
+            return "箱体已突破箱顶,待放量确认", 3
+    if name == "楔形" and feat.get("收敛"):
+        if not feat.get("突破"):
+            return "楔形收敛已成,待向上突破", 2
+        if not feat.get("放量"):
+            return "楔形已突破,待放量确认", 3
+    if name == "杯柄" and feat.get("回补"):
+        if not feat.get("突破"):
+            return "杯柄杯体回补,待突破左沿", 2
+        if not feat.get("放量"):
+            return "杯柄已突破左沿,待放量确认", 3
+    if name == "旗形":
+        if feat.get("旗杆") and not feat.get("旗面"):
+            return "旗杆急涨已成,待旗面横盘收敛", 1
+        if feat.get("旗面") and not feat.get("旗杆"):
+            return "旗面横盘已成,待旗杆动能确认", 1
+    return None
+
+
+def _near_miss(code: str, membership: dict, pat: dict,
+               cand_result: dict | None) -> dict | None:
+    """票未达标时判定是否「接近达标」,是则返回条目(合议分留 None,pipeline 后填),否则 None。
+
+    两类接近(取更接近者):
+      · 达标接近:形态+突破+RS 均命中(过便宜门)但护栏/正向确认未过(cand_result 提供各项);
+      · 形态接近:某形态结构已成、只差突破/放量(_pattern_gap,不需基本面/公告)。
+    """
+    # 达标接近(候选票:已过便宜门,仅差护栏/正向确认这道门)
+    if cand_result is not None and pat["达标"] and not cand_result.get("达标"):
+        items = cand_result.get("各项", {})
+        if items.get("形态") and items.get("RS") and items.get("量能"):
+            if not items.get("正向确认"):
+                gap, score = "形态+突破+RS 已成,待基本面或事件正向确认", 5
+            elif not items.get("护栏"):
+                gap, score = "形态+突破+RS 已成,受负向护栏压制(高估/业绩/合规)", 4
+            else:
+                gap, score = "接近达标", 4
+            return {"code": code, "行业": _sector(code, membership),
+                    "最接近形态": pat["命中形态"], "差距说明": gap,
+                    "合议分": None, "_接近度": score}
+    # 形态接近(结构已成、待突破/放量;RS 是否达标不影响"形态接近"的展示价值)
+    best: tuple[str, str, int] | None = None
+    for name, r in pat.get("明细", {}).items():
+        if r.get("达标"):
+            continue
+        g = _pattern_gap(name, r.get("特征", {}))
+        if g and (best is None or g[1] > best[2]):
+            best = (name, g[0], g[1])
+    if best:
+        return {"code": code, "行业": _sector(code, membership),
+                "最接近形态": [best[0]], "差距说明": best[1],
+                "合议分": None, "_接近度": best[2]}
+    return None
+
+
+def _group_near_miss(near: list[dict], top: int = _NEAR_TOP_PER_SECTOR) -> dict[str, list[dict]]:
+    """接近达标按板块分组,每板块按 (合议分, 接近度) 降序取 top;剔除内部排序键 _接近度。
+
+    合议分为 None(screen 独立跑、pipeline 未回填)时退化为按接近度排序。恒返回(可能为空 dict)。
+    """
+    by: dict[str, list[dict]] = collections.defaultdict(list)
+    for x in near:
+        by[x["行业"]].append(x)
+
+    def key(x):
+        return (x.get("合议分") if x.get("合议分") is not None else -1.0, x.get("_接近度", 0))
+
+    out: dict[str, list[dict]] = {}
+    for sector, xs in by.items():
+        ranked = sorted(xs, key=key, reverse=True)[:top]
+        out[sector] = [{k: v for k, v in x.items() if k != "_接近度"} for x in ranked]
+    return out
+
+
 def run_pattern_screen(codes: list[str], as_of: str | None = None,
                        fetch: bool = True) -> dict:
     """扫描 codes,落 view「形态选股」。返回 summary(达标池 + 达标占比 + 降级声明)。
@@ -173,6 +261,7 @@ def run_pattern_screen(codes: list[str], as_of: str | None = None,
     degraded = 0
     candidates: list[str] = []
     guard_covered = 0
+    near: list[dict] = []            # 接近达标(达标0降级数据):形态匹配但突破/正向确认门未过
     for code, (kdf, sret, ind) in loaded.items():
         if two_layer and ind in board_mean:
             bmean = board_mean[ind]
@@ -184,17 +273,26 @@ def run_pattern_screen(codes: list[str], as_of: str | None = None,
         passed, pat = _cheap_gate(kdf, rs_sb, rs_bh, cfg)
         if not passed:
             results[code] = {"达标": False, "命中形态": pat["命中形态"]}   # 便宜门淘汰,不采贵数据
+            nm = _near_miss(code, membership, pat, None)                 # 形态接近(结构成型待突破)
+            if nm:
+                near.append(nm)
             continue
         candidates.append(code)
         grd = _guardrail_inputs(code, fetch)          # 阶段②:只对候选采基本面/公告
         if grd["有数据"]:
             guard_covered += 1
-        results[code] = ps.is_qualified(
+        r = ps.is_qualified(
             kdf, rs_stock_vs_board=rs_sb, rs_board_vs_hs300=rs_bh,
             pe_percentile=grd["pe_percentile"], net_profit_growth=grd["净利增速"],
             ann_titles=grd["ann_titles"], cfg=cfg)
+        results[code] = r
+        if not r.get("达标"):
+            nm = _near_miss(code, membership, pat, r)                    # 达标接近(仅差护栏/正向确认)
+            if nm:
+                near.append(nm)
 
     breadth = ps.market_breadth(results)
+    near_by_sector = _group_near_miss(near)          # 按板块 top-N(合议分待 pipeline 回填后重排)
     # RS模式反映**实际**:双层已开且真用到板块→双层;否则(未开/成分缺/全样本不足)→等效单层
     if two_layer and board_mean:
         rs_mode = "双层(同业等权均值)"
@@ -217,6 +315,10 @@ def run_pattern_screen(codes: list[str], as_of: str | None = None,
                      for c in breadth["达标清单"]],
         "RS模式": rs_mode, "板块数": len(board_mean), "单层降级票数": degraded,
         "候选数": len(candidates),
+        # 接近达标(达标0降级数据):形态匹配但突破/正向确认门未过,按板块 top3,恒输出(达标>0 也给)。
+        # 平盘日达标0时,前端区块②靠此有内容可展示。合议分此刻为 None,pipeline 阶段回填并按合议分重排。
+        "接近达标": near_by_sector,
+        "接近达标数": len(near),
         "护栏覆盖": f"{guard_covered}/{len(candidates)}",
         "采集": (f"两阶段:阶段①全A只采K线({len(loaded)}只有效)→便宜门筛候选({len(candidates)}只)"
                  "→阶段②只对候选采基本面/公告(护栏+正向确认)。K线/基本面/公告均skip-if-cached"),
@@ -231,9 +333,10 @@ def run_pattern_screen(codes: list[str], as_of: str | None = None,
         },
     }
     p = store.put_view("形态选股", view)
-    logger.info("形态选股:扫描 %d / 有效 %d / 候选 %d / 达标 %d(占比 %.2f%%)/ 板块 %d / 降级 %d / 护栏覆盖 %d → %s",
+    logger.info("形态选股:扫描 %d / 有效 %d / 候选 %d / 达标 %d(占比 %.2f%%)/ 接近达标 %d(%d板块)/ 板块 %d / 降级 %d / 护栏覆盖 %d → %s",
                 len(codes), breadth["有效样本"], len(candidates), breadth["达标数"],
-                breadth["达标占比"] * 100, len(board_mean), degraded, guard_covered, p)
+                breadth["达标占比"] * 100, len(near), len(near_by_sector),
+                len(board_mean), degraded, guard_covered, p)
     return view
 
 
