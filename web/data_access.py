@@ -97,6 +97,63 @@ def screen_page(date: str = "latest") -> dict:
 
 
 
+def selection_page(date: str = "latest") -> dict:
+    """选股结果页:当日全部记录一张表——是否达标(形态选股)+ 达标理由 + 合议综合方向/分 + 参与专家数。
+
+    数据源 + 兜底:优先读 store view「形态选股」达标池(标达标/命中形态/正向确认);
+    该视图缺失时**退化为"读当日全部记录、按合议综合分排序展示"**(页面永不空,dev 10 只也立即可见)。
+    默认按合议综合分降序;每行带该票 council 专家信封 + 共享 config,供前端勾选实时重排(复用 council.js)。
+    """
+    recs = _load_all(date)
+    # 达标池(形态选股 view);缺失 → 兜底
+    qualified: dict[str, dict] = {}
+    view_present = False
+    view_meta: dict = {}
+    try:
+        v = store.get_view("形态选股", date=date)
+        view_present = True
+        for item in v.get("达标清单", []):
+            qualified[item.get("code")] = {"命中形态": item.get("命中形态"),
+                                           "正向确认依据": item.get("正向确认依据", [])}
+        view_meta = {"扫描数": v.get("扫描数"), "有效样本": v.get("有效样本"),
+                     "达标数": v.get("达标数"), "达标占比": v.get("达标占比"),
+                     "纪律": v.get("纪律"), "RS模式": v.get("RS模式")}
+    except FileNotFoundError:
+        view_present = False
+
+    config = None
+    rows = []
+    for code, r in recs.items():
+        cs = council_summary(r) or {}
+        cblk = (r.get("council") or {})
+        experts_env = cblk.get("experts") or []
+        if config is None and cblk.get("config"):
+            config = cblk["config"]
+        q = qualified.get(code)
+        rows.append({
+            "code": code, "name": _name(recs, code),
+            "sector": (r.get("meta") or {}).get("sector"),
+            "industry": (r.get("meta") or {}).get("industry"),
+            "qualified": (code in qualified) if view_present else None,
+            "达标理由": q,                               # {命中形态, 正向确认依据} 或 None
+            "council_dir": cs.get("综合方向"),
+            "council_score": cs.get("综合分"),
+            "council_conflict": cs.get("是否冲突", False),
+            "参与专家数": len(cblk.get("default", {}).get("参与专家", []) or []),
+            "experts": experts_env,                      # 供前端勾选重合成
+        })
+    # 默认按合议综合分降序;无合议分(None)沉底
+    rows.sort(key=lambda x: (x["council_score"] is not None, x["council_score"] or 0), reverse=True)
+
+    total = len(rows)
+    qualified_n = (view_meta.get("达标数") if view_present else None)
+    if qualified_n is None and view_present:
+        qualified_n = sum(1 for x in rows if x["qualified"])
+    return {"rows": rows, "total": total, "qualified": qualified_n,
+            "view_present": view_present, "view_meta": view_meta,
+            "config": config or {}, "as_of": as_of(date)}
+
+
 def pool_page(date: str = "latest") -> dict:
     """票池管理页数据:当前票池(按板块归组)+ 每票在该日期下是否已有分析数据。"""
     from tools.config import stock_pool
