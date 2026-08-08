@@ -110,6 +110,34 @@ def test_sign_and_post_no_retry_on_4xx():
     assert len(calls) == 1 and sleeps == []              # 4xx 永久失败,不重试
 
 
+def test_sign_and_post_sanitizes_nan_to_valid_json():
+    """回归:分片含 NaN/Inf(如 panel 视图 89 个 NaN)时,签名前须清成 null。
+
+    Python json.dump 默认把 NaN 写成非法字面量 `NaN`,严格解析的远端 ingest 拒收致整片失败。
+    锁死:发到 post_fn 的 env 严格 JSON 可序列化(allow_nan=False 不抛)且无残留 NaN/Inf。
+    """
+    captured = {}
+
+    def post(url, token, env):
+        captured["env"] = env
+        return 200, {"ok": True}
+
+    nan, inf = float("nan"), float("inf")
+    payload = {"records": {}, "code_views": {},
+               "views": {"panel": [{"code": "301583", "atr_pct": nan, "bias20": inf,
+                                    "5日止盈%": 12.5, "备注": "正常字段"}]}}
+    ok, status, _ = upload.sign_and_post(
+        payload, {"date": "2026-08-08", "source": "s", "key_id": "k1", "sig_alg": "HMAC-SHA256"},
+        "K", "http://x", "t", post, retries=0, base_delay=0, sleep_fn=lambda s: None)
+    assert ok is True and status == 200
+    env = captured["env"]
+    # 严格 JSON(不容忍 NaN/Inf)必须能序列化,否则远端拒收
+    json.dumps(env, allow_nan=False)
+    row = env["views"]["panel"][0]
+    assert row["atr_pct"] is None and row["bias20"] is None   # NaN/Inf → null
+    assert row["5日止盈%"] == 12.5 and row["备注"] == "正常字段"  # 正常值不动
+
+
 def test_partial_resend_via_receipt(tmp_path):
     analysis = tmp_path / "analysis"
     _seed_analysis(analysis, "2026-08-07")

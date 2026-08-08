@@ -17,6 +17,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import math
 import time
 import uuid
 from datetime import datetime
@@ -34,6 +35,24 @@ def _now_iso() -> str:
 
 def _nonce() -> str:
     return uuid.uuid4().hex
+
+
+def _json_safe(obj):
+    """递归把 NaN/Infinity 替换为 None。
+
+    根因:Python json.dump 默认把浮点 NaN/Inf 写成 `NaN`/`Infinity`——**非法 JSON 字面量**。
+    本地(Python)ingest 用宽松 json.loads 能容忍,但严格 JSON 解析的真实远端 ingest 会拒收,
+    致整个分片 POST 断连(status=0)。实测 panel 视图含 89 个 NaN(次新股/短历史的 ATR/MA 等),
+    故 __view__:panel 稳定失败,而无 NaN 的 sentiment_policy(体积更大)反而成功——真因是 NaN,非体积。
+    在签名前统一清洗,保证签名字节与 wire payload 都是合法 JSON。
+    """
+    if isinstance(obj, float):
+        return obj if math.isfinite(obj) else None
+    if isinstance(obj, dict):
+        return {k: _json_safe(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_json_safe(v) for v in obj]
+    return obj
 
 
 def _receipt_dir() -> Path:
@@ -97,6 +116,7 @@ def sign_and_post(shard_payload: dict, meta_base: dict, key: str, url: str, toke
                   post_fn, retries: int, base_delay: float, sleep_fn) -> tuple[bool, int, str]:
     """对一个分片:每次尝试都新签(新 ts/nonce,防重放),失败按指数退避重试。
     返回 (成功?, 最后状态码, 说明)。4xx 永久失败不重试;网络(0)/5xx 才重试。"""
+    shard_payload = _json_safe(shard_payload)   # 清 NaN/Inf → null,防非法 JSON 被远端拒收(签名前)
     status, msg = 0, "no attempt"
     for attempt in range(retries + 1):
         meta = {**meta_base, "ts": _now_iso(), "nonce": _nonce()}
