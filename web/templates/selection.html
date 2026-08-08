@@ -3,21 +3,11 @@
 {% block content %}
 {% set expert_names = s.config.默认专家组 or (s.rows[0].experts | map(attribute='专家') | list if s.rows else []) %}
 
-<h1>选股结果 <small>选出哪些票 · 为什么 · 合议怎么看(非投资建议)</small></h1>
-
-<section class="card wide">
-  <p>
-    本页共分析 <b>{{ s.total }}</b> 只 ·
-    {% if s.view_present %}达标(形态选股)<b class="pos">{{ s.qualified }}</b> 只{% if s.view_meta.达标占比 is not none %}(占比 {{ (s.view_meta.达标占比*100)|round(1) }}%){% endif %}
-    {% else %}<span class="muted">形态选股达标池未生成(退化为按合议综合分排序展示全部分析票)</span>{% endif %}
-    · 数据日期 <b>{{ s.as_of }}</b>
-  </p>
-  {% if s.view_present and s.view_meta.纪律 %}<p class="muted tiny">达标纪律:{{ s.view_meta.纪律 }} · RS:{{ s.view_meta.RS模式 }}</p>{% endif %}
-</section>
+<h1>选股结果 <small>持续关注(自选池) + 每日筛选(全市场看好票);合议怎么看 · 非投资建议</small></h1>
 
 {% if expert_names %}
 <section class="card wide">
-  <h2>参与专家 <small>勾选后按落库权重实时重算综合分并重排(前端,不触网)</small></h2>
+  <h2>参与专家 <small>勾选后按落库权重实时重算综合分并重排两栏(前端,不触网)</small></h2>
   <div class="council-experts">
     {% for n in expert_names %}
     <label class="council-chk"><input type="checkbox" class="expert-cb" value="{{ n }}" checked> {{ n }}</label>
@@ -26,7 +16,12 @@
 </section>
 {% endif %}
 
+<!-- 区块①:持续关注(自选池) -->
 <section class="card wide">
+  <h2>① 持续关注(自选池)
+    <small>本页共分析 <b>{{ s.total }}</b> 只 ·
+      {% if s.view_present %}其中达标 <b class="pos">{{ s.qualified }}</b> 只{% else %}<span class="muted">形态达标池未生成(按合议综合分排序)</span>{% endif %}
+      · 数据日期 <b>{{ s.as_of }}</b></small></h2>
   <table>
     <thead>
       <tr><th>代码</th><th>名称</th><th>行业</th><th>达标</th><th>达标理由</th>
@@ -54,10 +49,49 @@
     {% endfor %}
     </tbody>
   </table>
-  <p class="muted tiny">点名称进个股页看完整归因/K线。合议综合分口径与个股页一致(前端同 councilSynth 公式)。</p>
 </section>
 
+<!-- 区块②:每日筛选(全市场·按板块分组) -->
+<section class="card wide">
+  <h2>② 每日筛选(全市场 · 按板块)
+    {% if s.daily.present %}
+    <small>全市场扫描 <b>{{ s.daily.total_scanned }}</b> 只 · 达标 <b class="pos">{{ s.daily.qualified_n }}</b> 只 ·
+      覆盖 <b>{{ s.daily.board_count }}</b> 个板块 · 每板块显示 top {{ s.daily.top_n }} · 数据日期 <b>{{ s.as_of }}</b></small>
+    {% endif %}</h2>
+  {% if not s.daily.present %}
+  <p class="muted">全市场每日筛选待扫描生成(运行 <code>python -m tools.pipeline.screen_pattern</code> 产出「形态选股」达标池后自动显示)。</p>
+  {% elif not s.daily.groups %}
+  <p class="muted">本日无达标票。</p>
+  {% else %}
+  <div class="grid">
+    {% for g in s.daily.groups %}
+    <section class="card">
+      <h2>{{ g.板块 }} <small>{{ g.count }} 只达标{% if g.count > s.daily.top_n %} · 显示 top {{ s.daily.top_n }}{% endif %}</small></h2>
+      <table>
+        <thead><tr><th>代码</th><th>名称</th><th>命中形态</th><th>合议</th><th>综合分</th></tr></thead>
+        <tbody class="daily-group">
+        {% for x in g.rows %}
+          <tr data-code="{{ x.code }}">
+            <td>{{ x.code }}</td>
+            <td><a href="/stock/{{ x.code }}?date={{ s.as_of }}">{{ x.name }}</a></td>
+            <td class="muted tiny">{{ x.命中形态 or '-' }}{% if x.正向确认依据 %} · {{ x.正向确认依据|join('、') }}{% endif %}</td>
+            <td><span class="sel-dir badge {{ 'buy' if x.council_dir=='看多' else ('sell' if x.council_dir=='看空' else 'wait') }}">{{ x.council_dir or '中性' }}</span>
+                <span class="sel-conflict" title="专家分歧" style="{{ '' if x.council_conflict else 'display:none' }}">⚠️</span></td>
+            <td class="sel-score">{{ x.council_score if x.council_score is not none else '-' }}</td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </section>
+    {% endfor %}
+  </div>
+  {% endif %}
+</section>
+
+<p class="muted tiny">点名称进个股页看完整归因/K线。两栏合议综合分同口径(前端同 councilSynth 公式,勾选专家实时重排)。</p>
+
 <script id="selectionExperts" type="application/json">{{ (s.rows|list)|tojson }}</script>
+<script id="dailyGroups" type="application/json">{{ (s.daily.groups|list)|tojson }}</script>
 <script id="selectionConfig" type="application/json">{{ s.config|tojson }}</script>
 {% endblock %}
 
@@ -65,14 +99,19 @@
 <script src="/static/council.js"></script>
 <script>
 (function () {
-  var el = document.getElementById("selectionExperts");
-  var cfgEl = document.getElementById("selectionConfig");
-  if (!el || !window.councilSynth) return;
-  var rows, cfg;
-  try { rows = JSON.parse(el.textContent); cfg = JSON.parse(cfgEl.textContent) || {}; }
-  catch (e) { return; }
+  if (!window.councilSynth) return;
+  var cfg = {}, selRows = [], dailyGroups = [];
+  try {
+    cfg = JSON.parse(document.getElementById("selectionConfig").textContent) || {};
+    selRows = JSON.parse(document.getElementById("selectionExperts").textContent) || [];
+    dailyGroups = JSON.parse(document.getElementById("dailyGroups").textContent) || [];
+  } catch (e) { return; }
+
+  // 合并 ①② 的专家信封(同 code 信封一致)
   var expByCode = {};
-  rows.forEach(function (r) { expByCode[r.code] = r.experts || []; });
+  selRows.forEach(function (r) { expByCode[r.code] = r.experts || []; });
+  dailyGroups.forEach(function (g) { (g.rows || []).forEach(function (r) {
+    if (!expByCode[r.code]) expByCode[r.code] = r.experts || []; }); });
 
   function checkedFn() {
     var set = {};
@@ -80,27 +119,29 @@
     return function (n) { return !!set[n]; };
   }
 
-  function rerank() {
-    var isChecked = checkedFn();
-    var tbody = document.getElementById("selBody");
+  function rerankTbody(tbody, isChecked) {
     var trs = [].slice.call(tbody.querySelectorAll("tr[data-code]"));
     trs.forEach(function (tr) {
-      var code = tr.getAttribute("data-code");
-      var r = window.councilSynth(expByCode[code] || [], isChecked, cfg);
-      tr.querySelector(".sel-score").textContent = window.round4(r.S);
+      var r = window.councilSynth(expByCode[tr.getAttribute("data-code")] || [], isChecked, cfg);
+      var sc = tr.querySelector(".sel-score"); if (sc) sc.textContent = window.round4(r.S);
       var dEl = tr.querySelector(".sel-dir");
-      dEl.textContent = r.dir;
-      dEl.className = "sel-dir badge " + (window.councilDirClass[r.dir] || "wait");
-      var cf = tr.querySelector(".sel-conflict");
-      if (cf) cf.style.display = r.conflict ? "" : "none";
+      if (dEl) { dEl.textContent = r.dir; dEl.className = "sel-dir badge " + (window.councilDirClass[r.dir] || "wait"); }
+      var cf = tr.querySelector(".sel-conflict"); if (cf) cf.style.display = r.conflict ? "" : "none";
       tr._score = r.S;
     });
     trs.sort(function (a, b) { return (b._score == null ? -1e9 : b._score) - (a._score == null ? -1e9 : a._score); });
     trs.forEach(function (tr) { tbody.appendChild(tr); });
   }
 
-  document.querySelectorAll(".expert-cb").forEach(function (cb) { cb.addEventListener("change", rerank); });
-  rerank();   // 载入即按 councilSynth 重排,保证与后端 council 口径一致(默认全勾)
+  function rerankAll() {
+    var isChecked = checkedFn();
+    var sel = document.getElementById("selBody");
+    if (sel) rerankTbody(sel, isChecked);
+    document.querySelectorAll("tbody.daily-group").forEach(function (tb) { rerankTbody(tb, isChecked); });
+  }
+
+  document.querySelectorAll(".expert-cb").forEach(function (cb) { cb.addEventListener("change", rerankAll); });
+  rerankAll();   // 载入即按 councilSynth 重排,与后端 council 口径一致
 })();
 </script>
 {% endblock %}
