@@ -51,12 +51,30 @@ def _seed_analysis(root, date):
 
 def test_build_shards():
     shards = upload.build_shards(_payload())
-    assert set(shards) == {"000021", "600519", "__views__"}
+    # 每票一片 + 每个池级视图各自独立成片(__view__:<name>)
+    assert set(shards) == {"000021", "600519", "__view__:panel"}
     # 每票带自己的记录 + 其按票视图
     assert shards["000021"]["records"] == {"000021": {"meta": {"code": "000021"}}}
     assert shards["000021"]["code_views"] == {"chart": {"000021": {"close": [1.0]}}}
     assert shards["600519"]["code_views"] == {}          # 该票无 chart
-    assert shards["__views__"]["views"] == {"panel": {"rows": []}}
+    # 池级视图独立成片:片内只含自己那一个视图
+    assert shards["__view__:panel"]["views"] == {"panel": {"rows": []}}
+    assert shards["__view__:panel"]["records"] == {}
+
+
+def test_build_shards_one_shard_per_view():
+    """多个池级视图各自独立成片,单片只含一个视图(规避合并大 payload 超时)。"""
+    payload = {
+        "records": {},
+        "views": {"panel": {"a": 1}, "screen": {"b": 2}, "sentiment_policy": {"c": 3}},
+        "code_views": {},
+    }
+    shards = upload.build_shards(payload)
+    assert set(shards) == {"__view__:panel", "__view__:screen", "__view__:sentiment_policy"}
+    for name in ("panel", "screen", "sentiment_policy"):
+        sp = shards[f"__view__:{name}"]
+        assert set(sp["views"]) == {name}                # 每片恰好一个视图,互不裹挟
+        assert sp["records"] == {} and sp["code_views"] == {}
 
 
 def test_sign_and_post_retries_on_5xx():
@@ -100,7 +118,7 @@ def test_partial_resend_via_receipt(tmp_path):
     calls = []
 
     def post(url, token, env):
-        code = next(iter(env["records"]), "__views__")
+        code = next(iter(env["records"]), None) or f"__view__:{next(iter(env['views']))}"
         calls.append(code)
         return (500, {"e": "boom"}) if code in fail else (200, {"ok": True})
 
@@ -117,3 +135,75 @@ def test_partial_resend_via_receipt(tmp_path):
                             post_fn=post, retries=1, base_delay=0, sleep_fn=lambda s: None)
     assert set(calls) == {"000021"}                      # 只补失败项,不重发已成功的
     assert r2["summary"]["failed"] == 0
+
+
+def _seed_multi_views(root, date):
+    """播种:1 票 + 3 个池级视图(含一个"大"视图),验证按视图独立分片/续传。"""
+    d = root / date
+    d.mkdir(parents=True)
+    (d / "000021.json").write_text(json.dumps({"meta": {"code": "000021"}}), encoding="utf-8")
+    (d / "panel.json").write_text(json.dumps({"rows": [1, 2]}), encoding="utf-8")
+    (d / "screen.json").write_text(json.dumps({"rows": []}), encoding="utf-8")
+    # 模拟撑大 __views__ 的元凶:大的 sentiment_policy 视图
+    (d / "sentiment_policy.json").write_text(
+        json.dumps([{"code": f"{i:06d}", "text": "x" * 200} for i in range(50)]), encoding="utf-8")
+
+
+def test_each_view_is_own_shard_and_independently_resumable(tmp_path):
+    """池级视图按视图分片:大 sentiment_policy 独立成片,失败只补它,其它视图不受牵连。"""
+    analysis = tmp_path / "analysis"
+    _seed_multi_views(analysis, "2026-08-07")
+    rp = tmp_path / "receipt.json"
+    fail = {"__view__:sentiment_policy"}                  # 首轮只让大视图那片失败
+    calls = []
+
+    def post(url, token, env):
+        key = next(iter(env["records"]), None) or f"__view__:{next(iter(env['views']))}"
+        calls.append(key)
+        # 单片只含一个视图 → 天然规避合并大 payload
+        assert len(env["views"]) <= 1
+        return (500, {"e": "boom"}) if key in fail else (200, {"ok": True})
+
+    r1 = upload.upload_date("2026-08-07", url="http://x", token="t", source="s",
+                            key_id="k1", key="K", analysis_dir=analysis, receipt_path=rp,
+                            post_fn=post, retries=1, base_delay=0, sleep_fn=lambda s: None)
+    # 4 分片:1 票 + panel + screen + sentiment_policy,唯独大视图那片失败
+    assert r1["summary"] == {"total": 4, "ok": 3, "failed": 1}
+    assert r1["shards"]["__view__:sentiment_policy"]["ok"] is False
+    assert r1["shards"]["__view__:panel"]["ok"] is True
+
+    fail.clear()                                         # 远端恢复
+    calls.clear()
+    r2 = upload.upload_date("2026-08-07", url="http://x", token="t", source="s",
+                            key_id="k1", key="K", analysis_dir=analysis, receipt_path=rp,
+                            post_fn=post, retries=1, base_delay=0, sleep_fn=lambda s: None)
+    assert set(calls) == {"__view__:sentiment_policy"}   # 断点续传:只补失败的那个视图
+    assert r2["summary"]["failed"] == 0
+
+
+def test_upload_timeout_configurable(monkeypatch):
+    """POST 超时可经 SYNC_UPLOAD_TIMEOUT_S 覆盖,缺省放宽到 120s(兜底大视图慢)。"""
+    import requests
+    captured = {}
+
+    class _Resp:
+        status_code = 200
+        def json(self):
+            return {"ok": True}
+
+    def fake_post(url, json=None, verify=None, headers=None, timeout=None):
+        captured["timeout"] = timeout
+        return _Resp()
+
+    monkeypatch.setattr(requests, "post", fake_post)
+    monkeypatch.delenv("SYNC_UPLOAD_TIMEOUT_S", raising=False)
+    upload._default_post("https://h/ingest", "tok", {"a": 1})
+    assert captured["timeout"] == 120.0                  # 缺省放宽到 120s
+
+    monkeypatch.setenv("SYNC_UPLOAD_TIMEOUT_S", "45")
+    upload._default_post("https://h/ingest", "tok", {"a": 1})
+    assert captured["timeout"] == 45.0                   # 可按环境覆盖
+
+    monkeypatch.setenv("SYNC_UPLOAD_TIMEOUT_S", "not-a-number")
+    upload._default_post("https://h/ingest", "tok", {"a": 1})
+    assert captured["timeout"] == 120.0                  # 非法值回落默认
