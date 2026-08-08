@@ -32,6 +32,22 @@ def test_stock_page_ok():
     assert "止盈止损" in r.text
 
 
+@skip_no_data
+def test_error_prediction_pages_do_not_crash():
+    """回归:次新股 K线不足时 predict() 返回 {"error":...}(真值但无 买卖倾向/持有期建议 键)。
+
+    dashboard.html / stock.html 必须防空(not prediction.error),否则 jinja UndefinedError 炸整页。
+    锁死语义:凡 error-prediction 记录,首页 + 个股页均须 200。
+    """
+    err_codes = [r["meta"]["code"] for r in _RECS
+                 if isinstance(r.get("prediction"), dict) and r["prediction"].get("error")]
+    if not err_codes:
+        pytest.skip("当前缓存无 error-prediction(次新股)记录")
+    assert client.get("/").status_code == 200          # 首页含全部记录
+    for code in err_codes:
+        assert client.get(f"/stock/{code}").status_code == 200, f"error-prediction 个股页炸了: {code}"
+
+
 def test_stock_404():
     r = client.get("/stock/000000")
     assert r.status_code == 404
