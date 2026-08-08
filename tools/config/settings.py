@@ -8,6 +8,7 @@ from pathlib import Path
 # —— 路径 ——
 PROJECT_ROOT = Path(__file__).resolve().parents[2]   # 股票分析/
 DATA_RAW = PROJECT_ROOT / "data" / "raw"              # 采集缓存根目录
+DATA_MASTER = PROJECT_ROOT / "data" / "master"        # 滚动主档(每股一份长历史,非按日期分区)
 REPORT_DIR = PROJECT_ROOT / "data" / "reports"        # 报告/产物产出目录(不入库)
 
 # —— 行情采集参数 ——
