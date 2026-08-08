@@ -14,6 +14,7 @@ import argparse
 import logging
 import os
 import subprocess
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -188,16 +189,24 @@ def subprocess_runner(cmd: list[str]) -> tuple[int, str]:
     return p.returncode, (p.stdout or "") + (p.stderr or "")
 
 
-def http_health(svc: Service) -> bool:
-    """本机健康检查:/health 或 / 返回 <500 视为存活。"""
+def http_health(svc: Service, *, retries: int = 15, delay: float = 2.0, sleep_fn=time.sleep) -> bool:
+    """本机健康检查:/health 或 / 返回 <500 视为存活。
+
+    关键:`systemctl restart` 返回后 uvicorn 仍需时间 import app + bind 端口。若重启后立刻探测,
+    端口尚未监听 → 连接被拒 → 误判"不健康" → 触发错误回滚。实测远端每轮自动更新都因此把新代码
+    回滚到旧 commit、永远停在旧版。故重启后**轮询重试**(默认最多 ~30s:15 次 × 2s),端口就绪即
+    通过;真的起不来才在耗尽重试后判失败。"""
     import urllib.request
-    for path in ("/health", "/"):
-        try:
-            with urllib.request.urlopen(f"http://127.0.0.1:{svc.port}{path}", timeout=5) as r:
-                if r.status < 500:
-                    return True
-        except Exception:
-            continue
+    for attempt in range(retries + 1):
+        for path in ("/health", "/"):
+            try:
+                with urllib.request.urlopen(f"http://127.0.0.1:{svc.port}{path}", timeout=5) as r:
+                    if r.status < 500:
+                        return True
+            except Exception:
+                continue
+        if attempt < retries:
+            sleep_fn(delay)
     return False
 
 
