@@ -22,7 +22,7 @@ def test_safe_returns_value_or_none():
 
 # —— P1:单源抛错时 collect_* 不中止 ——
 def test_collect_values_degrades_on_source_error(monkeypatch):
-    monkeypatch.setattr(run.market, "fetch_kline", lambda c: {"x": 1})
+    monkeypatch.setattr(run.master_sync, "sync_master", lambda c, **k: {"mode": "spot", "ok": 1})
     def boom(c):
         raise RuntimeError("东财被墙")
     monkeypatch.setattr(run.fd, "fetch_fundamental", boom)      # 基本面炸
@@ -54,13 +54,15 @@ def test_fetch_policy_empty_degrades_no_raise(monkeypatch, tmp_path):
 
 
 # —— P2:采集期设 socket 超时,结束还原 ——
+# 注:K线走 master_sync(主档/spot,不套此短超时——见 collect_values 注释),故超时语义
+#     现由基本面/公告/资金流承载;这里在 fetch_fundamental 内捕获当时的 socket 超时。
 def test_collect_values_sets_and_restores_socket_timeout(monkeypatch):
     captured = {}
     def cap(c):
         captured["t"] = socket.getdefaulttimeout()
         return {}
-    monkeypatch.setattr(run.market, "fetch_kline", cap)
-    monkeypatch.setattr(run.fd, "fetch_fundamental", lambda c: {})
+    monkeypatch.setattr(run.master_sync, "sync_master", lambda c, **k: {"mode": "spot", "ok": 1})
+    monkeypatch.setattr(run.fd, "fetch_fundamental", cap)
     monkeypatch.setattr(run.an, "fetch_announcements", lambda c: {})
     monkeypatch.setattr(run.ff, "fetch_fundflow", lambda c: {})
     socket.setdefaulttimeout(None)
@@ -72,8 +74,8 @@ def test_collect_values_sets_and_restores_socket_timeout(monkeypatch):
 def test_collect_values_restores_timeout_even_on_error(monkeypatch):
     def boom(c):
         raise RuntimeError("x")
-    monkeypatch.setattr(run.market, "fetch_kline", boom)      # 首个源就炸
-    monkeypatch.setattr(run.fd, "fetch_fundamental", lambda c: {})
+    monkeypatch.setattr(run.master_sync, "sync_master", lambda c, **k: {"mode": "spot", "ok": 1})
+    monkeypatch.setattr(run.fd, "fetch_fundamental", boom)    # 基本面炸(在超时块内)
     monkeypatch.setattr(run.an, "fetch_announcements", lambda c: {})
     monkeypatch.setattr(run.ff, "fetch_fundflow", lambda c: {})
     socket.setdefaulttimeout(None)

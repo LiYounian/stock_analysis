@@ -17,6 +17,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 
+from tools.collectors import calendar as trade_cal
 from tools.config import settings
 from tools.sync import upload
 from ops.progress_runner import streaming_runner
@@ -69,8 +70,16 @@ def main(argv=None) -> int:
     ap.add_argument("--no-pipeline", action="store_true", help="跳过流水线,只上传已有产物")
     ap.add_argument("--dev-pool", action="store_true", help="流水线只跑 10 只开发子集(默认全池 --all)")
     ap.add_argument("--retries", type=int, default=5, help="每分片最大重试次数(指数退避)")
+    ap.add_argument("--ignore-calendar", action="store_true",
+                    help="忽略交易日守卫强制运行(手动补跑用)")
     args = ap.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
+
+    # —— 交易日守卫:非交易日(周末/节假日)直接跳过,退出码 0(不算失败,不采集/不上传)——
+    if not args.ignore_calendar and not trade_cal.is_trading_day(args.date):
+        logger.info("交易日守卫:%s 非交易日,跳过盘后闭环(不采集/不上传)", args.date)
+        print(f"跳过 {args.date}:非交易日(周末/节假日),盘后闭环不运行")
+        return 0
 
     missing = [n for n in ("SYNC_INGEST_URL", "SYNC_INGEST_TOKEN", "SYNC_SIGNING_KEY")
                if not getattr(settings, n)]
