@@ -108,6 +108,7 @@ def selection_page(date: str = "latest") -> dict:
     # 达标池(形态选股 view);缺失 → 兜底
     qualified: dict[str, dict] = {}
     qualified_items: list[dict] = []          # 保序 + 带板块 hint(供区块②分组)
+    near_items: list[dict] = []               # 接近达标(平盘无达标时区块②降级展示)
     view_present = False
     view_meta: dict = {}
     try:
@@ -120,6 +121,7 @@ def selection_page(date: str = "latest") -> dict:
             # 行业/板块:优先 view 自带(未来 screen_pattern 可能补),否则回退中心记录 meta
             qualified_items.append({"code": code, **reason,
                                     "行业hint": item.get("行业") or item.get("板块") or item.get("sector")})
+        near_items = v.get("接近达标", []) or []   # 契约:[{code,行业,最接近形态,差距说明,合议分}](每板块top3)
         view_meta = {"扫描数": v.get("扫描数"), "有效样本": v.get("有效样本"),
                      "达标数": v.get("达标数"), "达标占比": v.get("达标占比"),
                      "纪律": v.get("纪律"), "RS模式": v.get("RS模式")}
@@ -155,49 +157,97 @@ def selection_page(date: str = "latest") -> dict:
     if qualified_n is None and view_present:
         qualified_n = sum(1 for x in rows if x["qualified"])
 
-    daily = _daily_sections(qualified_items, recs, view_present, view_meta, qualified_n)
+    daily = _daily_sections(qualified_items, near_items, recs, view_present, view_meta, qualified_n)
     return {"rows": rows, "total": total, "qualified": qualified_n,
             "view_present": view_present, "view_meta": view_meta,
             "daily": daily, "config": config or {}, "as_of": as_of(date)}
 
 
-def _daily_sections(qualified_items: list[dict], recs: dict, view_present: bool,
-                    view_meta: dict, qualified_n, top_n: int = 5) -> dict:
-    """区块②「每日筛选」:全市场达标票按行业/板块分组,每组取合议分 top_n。
+def _group_by_board(items: list[dict], recs: dict, row_builder, top_n: int) -> list[dict]:
+    """通用:按板块分组 → 组内按合议分降序取 top_n → 板块按组内最高分降序(并列看 count)。
 
-    行业来源:view item 自带(未来增强)→ 中心记录 meta.industry/sector → 「未分类」(全A达标票可能无记录)。
-    view 缺失 → present=False(前端显示"待扫描生成",不空页)。
+    row_builder(item, rec) → (板块名, 行字典);行字典须含 council_score(可 None,沉底)。
     """
-    if not view_present:
-        return {"present": False, "total_scanned": None, "qualified_n": None,
-                "board_count": 0, "top_n": top_n, "groups": []}
     from collections import defaultdict
     buckets: dict[str, list] = defaultdict(list)
-    for it in qualified_items:
-        code = it["code"]
-        rec = recs.get(code)
-        meta = (rec or {}).get("meta") or {}
-        board = it.get("行业hint") or meta.get("industry") or meta.get("sector") or "未分类"
-        cs = council_summary(rec) or {}
-        cblk = (rec or {}).get("council") or {}
-        buckets[board].append({
-            "code": code, "name": meta.get("name", code),
-            "industry": meta.get("industry") or meta.get("sector"),
-            "命中形态": it.get("命中形态"), "正向确认依据": it.get("正向确认依据", []),
-            "council_dir": cs.get("综合方向"), "council_score": cs.get("综合分"),
-            "council_conflict": cs.get("是否冲突", False),
-            "experts": cblk.get("experts") or [],
-        })
+    for it in items:
+        board, row = row_builder(it, recs.get(it.get("code")))
+        buckets[board].append(row)
     groups = []
-    for board, items in buckets.items():
-        items.sort(key=lambda x: (x["council_score"] is not None, x["council_score"] or 0), reverse=True)
-        groups.append({"板块": board, "count": len(items), "rows": items[:top_n]})
-    # 板块排序:看好的板块在前(组内最高合议分降序),并列看 count
+    for board, rows in buckets.items():
+        rows.sort(key=lambda x: (x["council_score"] is not None, x["council_score"] or 0), reverse=True)
+        groups.append({"板块": board, "count": len(rows), "rows": rows[:top_n]})
     groups.sort(key=lambda g: (max((r["council_score"] or -9 for r in g["rows"]), default=-9), g["count"]),
                 reverse=True)
-    return {"present": True, "total_scanned": view_meta.get("扫描数"),
-            "qualified_n": qualified_n, "board_count": len(groups),
-            "top_n": top_n, "groups": groups}
+    return groups
+
+
+def _qual_row(it: dict, rec: dict | None):
+    """达标票行:命中形态 + 正向确认 + 该票 council(复用中心记录)+ 专家信封(供前端重排)。"""
+    code = it["code"]
+    meta = (rec or {}).get("meta") or {}
+    board = it.get("行业hint") or meta.get("industry") or meta.get("sector") or "未分类"
+    cs = council_summary(rec) or {}
+    cblk = (rec or {}).get("council") or {}
+    return board, {
+        "code": code, "name": meta.get("name", code),
+        "industry": meta.get("industry") or meta.get("sector"),
+        "命中形态": it.get("命中形态"), "正向确认依据": it.get("正向确认依据", []),
+        "council_dir": cs.get("综合方向"), "council_score": cs.get("综合分"),
+        "council_conflict": cs.get("是否冲突", False),
+        "experts": cblk.get("experts") or [],
+    }
+
+
+def _near_row(it: dict, rec: dict | None):
+    """接近达标行(仅提示,非达标信号):最接近形态 + 差距说明 + 合议分(优先契约自带,回退中心记录)。
+
+    合议分取 view 契约的「合议分」(全A票可能无中心记录);有记录时补方向。**不带 experts**——
+    静态提示,不参与前端勾选重排(前端只重排 tbody.daily-group,接近达标用 daily-near 类跳过)。
+    """
+    code = it.get("code")
+    meta = (rec or {}).get("meta") or {}
+    board = it.get("行业") or meta.get("industry") or meta.get("sector") or "未分类"
+    cs = council_summary(rec) or {}
+    score = it.get("合议分")
+    if score is None:
+        score = cs.get("综合分")
+    return board, {
+        "code": code, "name": meta.get("name", code),
+        "industry": it.get("行业") or meta.get("industry") or meta.get("sector"),
+        "最接近形态": it.get("最接近形态"), "差距说明": it.get("差距说明"),
+        "council_dir": cs.get("综合方向"), "council_score": score,
+        "council_conflict": cs.get("是否冲突", False),
+    }
+
+
+def _daily_sections(qualified_items: list[dict], near_items: list[dict], recs: dict,
+                    view_present: bool, view_meta: dict, qualified_n,
+                    top_n: int = 5, near_top_n: int = 3) -> dict:
+    """区块②「每日筛选」:全市场按行业/板块分组,永不空页。三态:
+
+    - view 缺失          → present=False(前端"待扫描生成")。
+    - 达标数>0           → mode=qualified,展示达标票(每板块 top_n)。
+    - 达标数==0 有接近达标 → mode=near,展示各板块接近达标 top(前端加"仅提示"标注)。
+    - 达标==0 且无接近达标 → mode=qualified、groups 空(前端"本日无达标且无接近达标")。
+
+    行业来源:view item 自带 → 中心记录 meta.industry/sector → 「未分类」(全A票可能无记录)。
+    """
+    if not view_present:
+        return {"present": False, "mode": None, "total_scanned": None,
+                "qualified_n": None, "near_n": None, "board_count": 0,
+                "top_n": top_n, "groups": []}
+    near_items = near_items or []
+    near_n = len(near_items)
+    if qualified_n and qualified_n > 0:
+        groups, mode, used_top = _group_by_board(qualified_items, recs, _qual_row, top_n), "qualified", top_n
+    elif near_items:
+        groups, mode, used_top = _group_by_board(near_items, recs, _near_row, near_top_n), "near", near_top_n
+    else:
+        groups, mode, used_top = [], "qualified", top_n
+    return {"present": True, "mode": mode, "total_scanned": view_meta.get("扫描数"),
+            "qualified_n": qualified_n, "near_n": near_n, "board_count": len(groups),
+            "top_n": used_top, "groups": groups}
 
 
 def pool_page(date: str = "latest") -> dict:
