@@ -3,6 +3,7 @@
 用法:
     python -m tools.run collect      # 采集数值面(K线/基本面/公告/资金流)
     python -m tools.run message      # 采集消息面(新闻/舆情/政策)
+    python -m tools.run context      # 全市场指数(沪深300+申万一级行业)→ 供板块轮动 RRG 专家
     python -m tools.run sentiment    # LLM 三层情绪打分(需 LLM 配置)
     python -m tools.run serialize    # 组装中心记录 + K线图表视图(读情绪并入决策)
     python -m tools.run events       # 采集事件精数值(业绩预告/快报+增减持),供事件驱动专家
@@ -93,6 +94,30 @@ def collect_message(codes: list[str]) -> None:
         logger.info("舆情(股吧):成功 %d", len(_safe("舆情(股吧)", lambda: ugc.fetch_ugc(codes)) or {}))
         pol = _safe("政策", lambda: policy.fetch_policy())      # 政策按行业关键词(全池共用)
         logger.info("政策:%d 条", len(pol or []))
+    finally:
+        socket.setdefaulttimeout(_old)
+
+
+def collect_market_context() -> None:
+    """采集板块轮动(RRG)所需的全市场指数——**每轮一次、非逐票**:
+      - 沪深300 基准指数(index_kline/000300)
+      - 全部申万一级行业指数(board_kline/<申万一级>)
+    落 store(复用 collectors.index / collectors.board,只调不改)。无此数据时 RRG 专家整体弃权。
+    健壮性:每步 _safe 降级(采不到→WARNING+跳过,绝不中止流水线),走统一 FETCH_TIMEOUT。
+    """
+    from tools.collectors import board, index
+    logger.info("采集板块轮动指数(沪深300 基准 + 申万一级行业)...")
+    _old = socket.getdefaulttimeout()
+    socket.setdefaulttimeout(FETCH_TIMEOUT)
+    try:
+        idx = _safe("沪深300 基准指数", lambda: index.fetch_index(["沪深300"]))
+        logger.info("基准指数:成功 %d", len(idx or {}))
+        names = _safe("申万一级清单", lambda: [b["name"] for b in board.fetch_board_list()])
+        if names:
+            bk = _safe("申万一级行业指数", lambda: board.fetch_board_kline(names))
+            logger.info("行业指数:成功 %d/%d", len(bk or {}), len(names))
+        else:
+            logger.warning("申万一级清单为空/失败,板块指数跳过(RRG 将弃权)")
     finally:
         socket.setdefaulttimeout(_old)
 
@@ -226,6 +251,7 @@ def cmd_screen(argv): run_screen(_prep(argv)[0])
 def cmd_events(argv): codes, as_of = _prep(argv); run_events(codes, as_of)
 def cmd_factor(argv): codes, as_of = _prep(argv); run_factor(codes, as_of)
 def cmd_council(argv): codes, as_of = _prep(argv); run_council(codes, as_of)
+def cmd_context(argv): store.set_active_date(_as_of()); collect_market_context()
 
 
 def cmd_pattern(argv):
@@ -271,6 +297,7 @@ def cmd_all(argv):
     logger.info("===== 全链路开始(日期 %s,%d 只)=====", as_of, len(codes))
     collect_values(codes)
     collect_message(codes)
+    collect_market_context()             # 全市场指数(沪深300+申万一级)→ 供板块轮动 RRG 专家
     run_sentiment(codes)                 # LLM 未配置则内部跳过
     run_serialize(codes, as_of)          # 组装 record(首次 council:多因子/事件驱动此时弃权)
     run_events(codes, as_of)             # 事件精数值(降级不炸)→ 供事件驱动专家
@@ -284,6 +311,7 @@ def cmd_all(argv):
 _CMDS = {"collect": cmd_collect, "message": cmd_message, "sentiment": cmd_sentiment,
          "serialize": cmd_serialize, "panel": cmd_panel, "screen": cmd_screen,
          "events": cmd_events, "factor": cmd_factor, "council": cmd_council,
+         "context": cmd_context,
          "pattern": cmd_pattern, "analyze": cmd_analyze, "all": cmd_all}
 
 
