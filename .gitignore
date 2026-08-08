@@ -30,3 +30,6 @@ docs/报告/
 
 # Claude Code 本地配置,不入库
 .claude/
+
+# 滚动主档(全A历史,几百MB,本地/远端各自维护,不入库)
+data/master/
