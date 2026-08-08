@@ -88,7 +88,7 @@
       <td>{{ sig.trend.评级 if sig else '-' }}</td>
       <td>{{ sig.ob_os.结论 if sig else '-' }}</td>
       <td>{{ sig.reversal.拐点标签 if sig else '-' }}</td>
-      <td>{% if r.prediction %}{{ r.prediction.买卖倾向.结论 }}{% else %}-{% endif %}</td>
+      <td>{% if r.prediction and not r.prediction.error %}{{ r.prediction.买卖倾向.结论 }}{% else %}-{% endif %}</td>
       <td>{% if r.fundflow and r.fundflow.今日主力净流入 is not none %}
         {{ '%.2f'|format(r.fundflow.今日主力净流入/1e8) }}{% else %}-{% endif %}</td>
     </tr>

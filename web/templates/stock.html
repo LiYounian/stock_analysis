@@ -15,7 +15,7 @@
     {% if sig %}<span class="badge">趋势 {{ sig.trend.评级 }}({{ sig.trend.得分 }})</span>
     <span class="badge">超买超卖 {{ sig.ob_os.结论 }}</span>
     <span class="badge">拐点 {{ sig.reversal.拐点标签 }}</span>{% endif %}
-    {% if p %}<span class="badge big {{ 'buy' if p.买卖倾向.结论=='偏买入' else ('sell' if p.买卖倾向.结论=='偏卖出' else 'wait') }}">
+    {% if p and not p.error %}<span class="badge big {{ 'buy' if p.买卖倾向.结论=='偏买入' else ('sell' if p.买卖倾向.结论=='偏卖出' else 'wait') }}">
       {{ p.买卖倾向.结论 }}</span>{% endif %}
     <a class="badge news-entry" href="/news/{{ r.meta.code }}?date={{ _d }}">📰 新闻 {{ news_count }} 条 →</a>
   </div>
@@ -51,7 +51,7 @@
     <div id="klineChart" style="height:460px;"></div>
   </section>
 
-  {% if p %}
+  {% if p and not p.error %}
   <section class="card">
     <h2>止盈止损(百分比,按持有期)</h2>
     <table>
@@ -202,7 +202,7 @@
 </div>
 
 <script id="klineData" type="application/json">{{ kline|tojson }}</script>
-{% if p %}<script id="predData" type="application/json">{{ {"支撑位": p.支撑位, "压力位": p.压力位, "止损": p.持有期建议['5日'].止损位, "止盈": p.持有期建议['5日'].止盈位}|tojson }}</script>{% endif %}
+{% if p and not p.error %}<script id="predData" type="application/json">{{ {"支撑位": p.支撑位, "压力位": p.压力位, "止损": p.持有期建议['5日'].止损位, "止盈": p.持有期建议['5日'].止盈位}|tojson }}</script>{% endif %}
 {% endblock %}
 
 {% block scripts %}
