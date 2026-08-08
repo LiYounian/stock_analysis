@@ -1,8 +1,11 @@
 """本地端上传工具:把某日 analysis 产物打包 → 钢印签名 → HTTPS POST 到展示端 ingest。
 
 - 产物枚举复用 import_to_db.collect_date(同一口径,不另写一套)。
-- **按票分片**:每只股票(中心记录 + 其按票视图)是一个分片,池级视图(panel/screen…)
-  合为一个 `__views__` 分片。每个分片独立签名(带 key_id/ts/nonce)、独立 POST。
+- **按票分片**:每只股票(中心记录 + 其按票视图)是一个分片;**每个池级视图各自
+  独立成片**(键 `__view__:<name>`,如 __view__:panel / __view__:sentiment_policy)。
+  历史上池级视图曾合为单个 `__views__` 大分片,42 池 + 完整分析把它撑到 ~118K 后远端
+  稳定超时;按视图拆片后单片更小、可独立签名 / POST / 断点续传,规避大 payload 超时。
+  每个分片独立签名(带 key_id/ts/nonce)、独立 POST。
 - **失败指数退避重试**;网络错误 / 5xx 退避重试,4xx 视为永久失败不重试。
 - **断点续传**:回执记录每个分片成败,重跑跳过已成功分片,只补失败项(可 --force 全重发)。
 - 回执落 data/sync_receipts/<date>.json(本地运行态,不入库)。
@@ -40,14 +43,26 @@ def _receipt_dir() -> Path:
 # ————————————————————————————————————————————————
 # 打包分片
 # ————————————————————————————————————————————————
+VIEW_SHARD_PREFIX = "__view__:"   # 池级视图分片键前缀:__view__:panel / __view__:sentiment_policy …
+
+
 def build_shards(payload: dict) -> dict[str, dict]:
-    """把某日产物切成分片:每票一个(记录+其按票视图),池级视图合为 __views__。"""
+    """把某日产物切成分片:
+    - 每票一个分片:中心记录 + 该票的按票视图;
+    - **每个池级视图各自独立成片**(键 `__view__:<name>`),独立签名 / POST / 断点续传。
+
+    早期把所有池级视图合成单个 `__views__` 分片,42 池后该片被 sentiment_policy(~96K)
+    + panel(~45K)撑到 ~118K,远端稳定 POST 超时(单个个股分片最大仅 ~47K,均成功)。
+    按视图拆片后:panel/screen 各自变成与个股同量级的小片、可独立重试;最大的
+    sentiment_policy 也单独成片,失败可精确定位并单独续传,不再拖累其它视图。
+    远端 ingest 天然按信封里的 `views` 字典处理,分片键与视图数量对它透明,无需改动。
+    """
     shards: dict[str, dict] = {}
     for code, rec in payload["records"].items():
         cv = {name: {code: per[code]} for name, per in payload["code_views"].items() if code in per}
         shards[code] = {"records": {code: rec}, "views": {}, "code_views": cv}
-    if payload["views"]:
-        shards["__views__"] = {"records": {}, "views": payload["views"], "code_views": {}}
+    for name, obj in payload["views"].items():
+        shards[f"{VIEW_SHARD_PREFIX}{name}"] = {"records": {}, "views": {name: obj}, "code_views": {}}
     return shards
 
 
@@ -62,8 +77,15 @@ def _default_post(url: str, token: str, envelope: dict):
     # 绝不用全局 REQUESTS_CA_BUNDLE——那会把采集端所有 HTTPS(sina/东财/巨潮…)的 CA 也换成
     # 这张自签证书,导致采集全线 CERTIFICATE_VERIFY_FAILED。verify=True 时走系统/certifi 默认 CA。
     ca = os.getenv("SYNC_INGEST_CA")
+    # POST 超时可经 SYNC_UPLOAD_TIMEOUT_S 调,默认放宽到 120s:按视图拆片后单片已很小,
+    # 但最大的 sentiment_policy(~96K)单独成片时仍可能偏慢,给足余量避免误判超时(治本
+    # 是拆片,这里是兜底;非法值回落默认)。
+    try:
+        timeout = float(os.getenv("SYNC_UPLOAD_TIMEOUT_S", "") or 120)
+    except ValueError:
+        timeout = 120.0
     r = requests.post(url, json=envelope, verify=(ca or True),
-                      headers={"Authorization": f"Bearer {token}"}, timeout=30)
+                      headers={"Authorization": f"Bearer {token}"}, timeout=timeout)
     try:
         body = r.json()
     except ValueError:
