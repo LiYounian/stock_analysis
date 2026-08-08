@@ -131,6 +131,30 @@ def test_build_council_block_shape():
     assert all(validate_verdict(e) == [] for e in blk["experts"])
 
 
+def test_build_council_block_default_reuses_convene():
+    """落库 default 必须 == convene_default(同一分母口径真源,防落库与合议漂移)。"""
+    rec = _all_bull_rec()
+    blk = council.build_council_block(rec)
+    ref = council.convene_default(rec)
+    assert blk["default"]["综合分"] == ref["综合分"]
+    assert blk["default"]["综合方向"] == ref["综合方向"]
+    assert "Σ(权重×置信度)" in blk["default"]["口径"]      # 新分母口径
+
+
+def test_build_council_block_config_carries_denominator_mode():
+    """落库 config 必须带「分母模式」——前端 council.js 据此重合成,单一真源、防漂移。"""
+    blk = council.build_council_block(_all_bull_rec())
+    assert blk["config"]["分母模式"] == _C.get("分母模式", "置信度加权")
+
+
+def test_build_council_block_abstain_not_diluted():
+    """只有技术趋势有数据、其余弃权 → 落库 default 综合分 == 该专家强度(未被弃权者稀释)。"""
+    rec = _rec(signals={"trend": {"评级": "偏多", "得分": 80, "依据": ["多头"]}})
+    blk = council.build_council_block(rec)
+    tv = next(a for a in blk["default"]["归因"] if a["专家"] == "技术趋势")
+    assert abs(blk["default"]["综合分"] - tv["强度"]) < 1e-6
+
+
 def test_council_does_not_import_web_or_store():
     """依赖守卫:解析实际 import 语句(不看文档字符串),禁止依赖 web/store/report/serialize。"""
     import ast
