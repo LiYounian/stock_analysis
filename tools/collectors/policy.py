@@ -257,8 +257,10 @@ def fetch_policy(keywords: list[str] | None = None, days: int | None = None) -> 
         source = "cctv"
 
     if not raw_items:
-        raise RuntimeError(
-            "政策采集拉到空:主源东财(全部关键词无结果/失败)+ 备源新闻联播 均无结果,疑接口异常")
+        # 数据源无 SLA:两源皆空/被墙 → 降级为空(仍落空盘,保证下游 load_policy 不缺文件),
+        # 绝不 raise 中止整条流水线(政策层此时降级,情绪的政策层为空)。
+        logger.warning("政策采集两源均无结果(东财+联播,疑被墙/接口异常),降级为空,不中止流水线")
+        return tag_and_dump([], days=days, source="none")
     return tag_and_dump(raw_items, days=days, source=source)
 
 

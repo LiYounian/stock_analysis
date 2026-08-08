@@ -18,6 +18,8 @@
 按日期:编排开始 store.set_active_date(今天),本次所有产出落 data/<日期>/。
 """
 import logging
+import os
+import socket
 import sys
 
 import pandas as pd
@@ -35,6 +37,19 @@ logging.basicConfig(level=logging.INFO, format="%(name)s %(levelname)s %(message
 logger = logging.getLogger("run")
 
 DEV_N = 10   # 开发期默认样本数
+# 单次网络请求上限(秒):被墙机上让东财等源"秒级失败降级",而非分钟级挂在超时/重试。
+# 采集阶段临时设为进程级 socket 默认超时(约束 akshare/requests 这类无 timeout 参数的调用),
+# 采集结束即还原,不影响后续 LLM 长调用。curl_cffi 走 libcurl、不认 socket 超时,单独传参(见各采集器)。
+FETCH_TIMEOUT = float(os.getenv("FETCH_TIMEOUT", "10"))
+
+
+def _safe(label: str, fn):
+    """跑单个数据源采集;失败/异常 → WARNING + 返回 None + 继续(绝不让整条流水线中止)。"""
+    try:
+        return fn()
+    except Exception as e:
+        logger.warning("%s 采集失败,降级跳过(不中止流水线): %s", label, e)
+        return None
 
 
 def _pool(argv: list[str] | None = None) -> list[str]:
@@ -55,19 +70,31 @@ def _as_of() -> str:
 # 采集:数值面 + 消息面
 # ————————————————————————————————————————————————
 def collect_values(codes: list[str]) -> None:
+    """采集数值面:每个源各自 try/except 降级,任一源失败都不中止整批。"""
     logger.info("采集数值面 %d 只(K线/基本面/公告/资金流)...", len(codes))
-    logger.info("K线:成功 %d", len(market.fetch_kline(codes)))
-    logger.info("基本面:成功 %d", len(fd.fetch_fundamental(codes)))
-    logger.info("公告:成功 %d", len(an.fetch_announcements(codes)))
-    logger.info("资金流:成功 %d", len(ff.fetch_fundflow(codes)))
+    _old = socket.getdefaulttimeout()
+    socket.setdefaulttimeout(FETCH_TIMEOUT)          # 采集期快速失败;finally 还原
+    try:
+        logger.info("K线:成功 %d", len(_safe("K线", lambda: market.fetch_kline(codes)) or {}))
+        logger.info("基本面:成功 %d", len(_safe("基本面", lambda: fd.fetch_fundamental(codes)) or {}))
+        logger.info("公告:成功 %d", len(_safe("公告", lambda: an.fetch_announcements(codes)) or {}))
+        logger.info("资金流:成功 %d", len(_safe("资金流", lambda: ff.fetch_fundflow(codes)) or {}))
+    finally:
+        socket.setdefaulttimeout(_old)
 
 
 def collect_message(codes: list[str]) -> None:
+    """采集消息面:每个源各自 try/except 降级,任一源(含政策)失败都不中止整批。"""
     logger.info("采集消息面 %d 只(新闻/舆情/政策)...", len(codes))
-    logger.info("新闻:成功 %d", len(news.fetch_news(codes)))
-    logger.info("舆情(股吧):成功 %d", len(ugc.fetch_ugc(codes)))
-    pol = policy.fetch_policy()          # 政策按行业关键词(全池共用)
-    logger.info("政策:%d 条", len(pol))
+    _old = socket.getdefaulttimeout()
+    socket.setdefaulttimeout(FETCH_TIMEOUT)
+    try:
+        logger.info("新闻:成功 %d", len(_safe("新闻", lambda: news.fetch_news(codes)) or {}))
+        logger.info("舆情(股吧):成功 %d", len(_safe("舆情(股吧)", lambda: ugc.fetch_ugc(codes)) or {}))
+        pol = _safe("政策", lambda: policy.fetch_policy())      # 政策按行业关键词(全池共用)
+        logger.info("政策:%d 条", len(pol or []))
+    finally:
+        socket.setdefaulttimeout(_old)
 
 
 # ————————————————————————————————————————————————
@@ -83,7 +110,9 @@ def run_sentiment(codes: list[str]) -> int:
     if not event.score_policy():
         logger.warning("政策打分为空(缺政策缓存?),政策层降级")
     ok = 0
-    for code in codes:
+    n = len(codes)
+    for i, code in enumerate(codes, 1):
+        logger.info("[%d/%d] %s — 新闻情绪(LLM)...", i, n, code)
         try:
             rec = event.analyze_stock(code)
         except FileNotFoundError:

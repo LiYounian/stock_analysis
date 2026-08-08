@@ -95,7 +95,9 @@ def fetch_fundamental(codes: list[str]) -> dict[str, dict]:
     settings.ensure_dirs()
     out: dict[str, dict] = {}
     failed: list[str] = []
-    for code in codes:
+    n = len(codes)
+    for i, code in enumerate(codes, 1):
+        logger.info("[%d/%d] 基本面 %s 采集...", i, n, code)
         try:
             rec = _fetch_abstract(code)
             rec.update(_fetch_baidu(code))
