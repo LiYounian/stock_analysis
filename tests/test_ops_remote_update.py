@@ -185,3 +185,42 @@ def test_run_update_a_phase_only_no_ingest(repo):
     assert res.ok and res.changed
     assert runner.ran("systemctl", "restart", "stock-web")
     assert not runner.ran("systemctl", "restart", "stock-ingest")   # 不碰未部署的 ingest
+
+
+def test_http_health_retries_until_port_ready(monkeypatch):
+    """回归:重启后端口未就绪不能立刻判失败——轮询重试,端口起来即通过。
+
+    真因:旧版 http_health 无重试,systemctl restart 一返回就探测,uvicorn 还没 bind 端口 →
+    连接被拒 → 误判不健康 → 自愈错误回滚,远端每轮更新都栽在这。
+    """
+    from ops.remote_update import http_health
+
+    class _Resp:
+        status = 200
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+
+    n = {"c": 0}
+    def fake_urlopen(url, timeout=5):
+        n["c"] += 1
+        if n["c"] < 3:                       # 前两轮:端口还没起来
+            raise ConnectionRefusedError("not up yet")
+        return _Resp()                        # 第三轮:起来了,200
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    sleeps = []
+    ok = http_health(Service("stock-web", 8801), retries=15, delay=2.0, sleep_fn=sleeps.append)
+    assert ok is True
+    assert len(sleeps) >= 1                    # 确实等待重试过,而非一探就放弃
+
+
+def test_http_health_fails_after_exhausting_retries(monkeypatch):
+    """端口始终起不来 → 耗尽重试后才判失败(真炸才回滚,不误伤)。"""
+    from ops.remote_update import http_health
+
+    def fake_urlopen(url, timeout=5):
+        raise ConnectionRefusedError("down")
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    sleeps = []
+    ok = http_health(Service("stock-web", 8801), retries=3, delay=1.0, sleep_fn=sleeps.append)
+    assert ok is False
+    assert len(sleeps) == 3                     # 3 次重试间隔后才放弃
