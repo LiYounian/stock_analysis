@@ -143,3 +143,28 @@ def test_event_alone_confirms(monkeypatch, tmp_path):
                [{"title": "关于控股股东增持公司股份的公告"}])
     assert v["达标数"] == 1
     assert v["达标清单"][0]["正向确认依据"]                # 依据非空(事件)
+
+
+# ---------- 达标清单「行业」字段(供选股页 region② 按板块分组)----------
+def test_sector_helper_maps_zjh_to_sw():
+    m = {"A": "C39计算机、通信和其他电子设备制造业", "B": "某不存在门类xyz"}
+    assert sp._sector("A", m) == "电子"           # 证监会 C39 → 申万一级 电子
+    assert sp._sector("B", m) == "某不存在门类xyz"  # 对齐不上→回退证监会名
+    assert sp._sector("C", m) == "未分类"          # 不在映射→未分类
+
+
+def test_达标清单_carries_sector(monkeypatch, tmp_path):
+    _isolate(monkeypatch, tmp_path)
+    monkeypatch.setattr(market, "load_kline", lambda c: _breakout_df())
+    monkeypatch.setattr(board, "load_membership",
+                        lambda: {"AAA": "C39计算机、通信和其他电子设备制造业"})
+    v = sp.run_pattern_screen(["AAA"], as_of="2024-06-01", fetch=False)
+    assert v["达标清单"][0]["code"] == "AAA" and v["达标清单"][0]["行业"] == "电子"
+
+
+def test_达标清单_sector_未分类_when_no_membership(monkeypatch, tmp_path):
+    _isolate(monkeypatch, tmp_path)
+    monkeypatch.setattr(market, "load_kline", lambda c: _breakout_df())
+    monkeypatch.setattr(board, "load_membership", lambda: {})     # 空映射
+    v = sp.run_pattern_screen(["AAA"], as_of="2024-06-01", fetch=False)
+    assert v["达标清单"][0]["行业"] == "未分类"
