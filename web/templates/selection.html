@@ -24,7 +24,9 @@
       · 数据日期 <b>{{ s.as_of }}</b></small></h2>
   <table>
     <thead>
-      <tr><th>代码</th><th>名称</th><th>行业</th><th>达标</th><th>达标理由</th>
+      <tr><th>代码</th><th>名称</th><th>行业</th>
+          <th>现价</th><th>止损位</th><th>止盈位</th><th>盈亏比</th><th>5日涨概率</th>
+          <th>达标</th><th>达标理由</th>
           <th>合议</th><th>综合分</th><th>专家数</th></tr>
     </thead>
     <tbody id="selBody">
@@ -33,6 +35,11 @@
         <td>{{ x.code }}</td>
         <td><a href="/stock/{{ x.code }}?date={{ s.as_of }}">{{ x.name }}</a></td>
         <td class="muted">{{ x.industry or x.sector or '-' }}</td>
+        <td>{{ x.stops.现价 if x.stops.现价 is not none else '—' }}</td>
+        <td>{% if x.stops.止损位 is not none %}<span class="neg">{{ x.stops.止损位 }} (-{{ x.stops['最大亏损%'] }}%)</span>{% else %}—{% endif %}</td>
+        <td>{% if x.stops.止盈位 is not none %}<span class="pos">{{ x.stops.止盈位 }} (+{{ x.stops['目标盈利%'] }}%)</span>{% else %}—{% endif %}</td>
+        <td>{{ x.stops.风险收益比 if x.stops.风险收益比 is not none else '—' }}</td>
+        <td>{% if x.stops['上涨概率%'] is not none %}{{ x.stops['上涨概率%'] }}%{% else %}—{% endif %}</td>
         <td>{% if x.qualified is none %}<span class="muted" title="达标池未生成">—</span>
             {% elif x.qualified %}<span class="pos">✓ 达标</span>
             {% else %}<span class="muted">未达标</span>{% endif %}</td>
@@ -45,7 +52,7 @@
         <td class="muted">{{ x.参与专家数 }}</td>
       </tr>
     {% else %}
-      <tr><td colspan="8" class="muted">当日无分析记录</td></tr>
+      <tr><td colspan="13" class="muted">当日无分析记录</td></tr>
     {% endfor %}
     </tbody>
   </table>
