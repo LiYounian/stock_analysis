@@ -48,6 +48,19 @@ def verify_envelope(envelope: dict, keys: dict[str, str]) -> bool:
     return False
 
 
+def pull_envelope(kind: str, since: str, codes: str,
+                  ts: str, nonce: str, key_id: str) -> dict:
+    """构造 /pull 请求的可签信封(拉取端 GET 无 body,故把请求要素塞进 meta 一起签名)。
+
+    两端(pull 客户端签、ingest 服务端验)必须用**同一个**构造器得到同构 meta,
+    否则确定性字节不一致、验签必失败。签名后把 sig 写回 meta.sig 即可复用
+    sign_envelope / verify_envelope,与 /ingest 走同一把 HMAC 密钥。
+    """
+    return {"meta": {"kind": kind or "", "since": since or "", "codes": codes or "",
+                     "ts": ts or "", "nonce": nonce or "", "key_id": key_id or "",
+                     "sig_alg": SIG_ALG}}
+
+
 def signing_keys(current_id: str, current_key: str,
                  old_id: str = "", old_key: str = "") -> dict[str, str]:
     """从"当前+旧"密钥拼出 {key_id: key} 表(空值忽略),供 verify_envelope 用。"""

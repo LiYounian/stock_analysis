@@ -1,0 +1,22 @@
+# 远端数据仓库常驻采集(oneshot,由 stock-fetch.timer 周期触发)
+# 远端机跑:交易日守卫 → 全A 当日增量落滚动主档;本地端再经 ingest /pull 增量拉走。
+# 安装:占位符替换后拷到 /etc/systemd/system/ → systemctl daemon-reload
+[Unit]
+Description=Stock Analysis remote fetch (trading-day guarded full-A master update)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=deploy
+WorkingDirectory=/srv/stock_analysis
+# 远端采集写文件主档(data/master),不依赖 DB;如同机部署 ingest 可共用同一 sync.env
+EnvironmentFile=-/etc/stock-analysis/sync.env
+# 采集只写文件主档,主库后端与本采集无关(留默认即可)
+# 交易日守卫 + 全A 增量:非交易日自动跳过(不触网、不写库),交易日一次 spot 拿全A当日 bar
+ExecStart=/srv/stock_analysis/.venv/bin/python -m ops.remote_fetch
+# 首次部署全量回填全历史主档,手动跑一次(baostock,耗时较久):
+#   /srv/stock_analysis/.venv/bin/python -m ops.remote_fetch --backfill
+
+[Install]
+WantedBy=multi-user.target

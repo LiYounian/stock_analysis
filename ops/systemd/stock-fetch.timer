@@ -1,0 +1,14 @@
+# 周期触发远端采集(示例:每 30 分钟一次,开机后 3 分钟首跑)
+# 采集入口自带交易日守卫 + 幂等 append,故盘中多跑无害;盘后一两次即可拿到当日收盘 bar。
+# 安装:拷到 /etc/systemd/system/ → systemctl daemon-reload → systemctl enable --now stock-fetch.timer
+[Unit]
+Description=Run stock remote fetch periodically
+
+[Timer]
+OnBootSec=3min
+OnUnitActiveSec=30min
+Persistent=true
+Unit=stock-fetch.service
+
+[Install]
+WantedBy=timers.target
