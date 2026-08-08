@@ -198,6 +198,82 @@ def test_selection_route_renders(monkeypatch):
     assert "待扫描生成" in r.text                                 # 区块② 兜底(无 view)
 
 
+def _pred_full():
+    """一份有效 prediction 块(含 5日止盈止损 + 上涨概率),口径同 predict.py 产出。"""
+    return {
+        "现价": 12.34,
+        "持有期建议": {"5日": {"止损位": 11.50, "最大亏损%": 6.8,
+                              "止盈位": 13.60, "目标盈利%": 10.2, "风险收益比": 1.5}},
+        "情景预测": {"5日": {"上涨概率%": 58.0, "样本数": 120}},
+        "买卖倾向": {"结论": "偏买入", "依据": ["多头"]},
+    }
+
+
+def test_stops_view_guards_missing_and_error():
+    """防空口径单测:prediction 缺失/None/error → 全字段 None;有效 → 透传 5日字段。"""
+    assert da.stops_view({})["止损位"] is None
+    assert da.stops_view({"prediction": None})["现价"] is None
+    err = da.stops_view({"prediction": {"error": "数据不足", "n": 5}})   # 次新股
+    assert all(v is None for v in err.values())
+    ok = da.stops_view({"prediction": _pred_full()})
+    assert ok["现价"] == 12.34 and ok["止损位"] == 11.50 and ok["最大亏损%"] == 6.8
+    assert ok["止盈位"] == 13.60 and ok["目标盈利%"] == 10.2 and ok["风险收益比"] == 1.5
+    assert ok["上涨概率%"] == 58.0
+
+
+def test_selection_row_carries_stops_and_renders(monkeypatch):
+    """自选票行带 5日止盈止损列;路由渲染含止损/止盈数值与新列表头。"""
+    r = _rec("000001", bull=True)
+    r["prediction"] = _pred_full()
+    recs = {"000001": r}
+    monkeypatch.setattr(da, "_load_all", lambda date="latest": recs)
+    monkeypatch.setattr(da, "as_of", lambda date="latest": "2026-08-08")
+    monkeypatch.setattr(da, "available_dates", lambda: ["2026-08-08"])
+    monkeypatch.setattr(da.store, "get_view",
+                        lambda name, date="latest": (_ for _ in ()).throw(FileNotFoundError()))
+    page = da.selection_page()
+    assert page["rows"][0]["stops"]["止损位"] == 11.50
+    assert page["rows"][0]["stops"]["上涨概率%"] == 58.0
+    resp = client.get("/selection")
+    assert resp.status_code == 200
+    assert "现价" in resp.text and "止损位" in resp.text and "5日涨概率" in resp.text   # 新列表头
+    assert "11.5" in resp.text and "13.6" in resp.text                              # 止损/止盈数值
+    assert "58.0%" in resp.text                                                     # 5日上涨概率
+
+
+def test_selection_error_prediction_renders_dash_no_crash(monkeypatch):
+    """次新股 error-prediction 行不炸,相关列为「—」(不抛 UndefinedError)。"""
+    r = _rec("301583", bull=True)
+    r["prediction"] = {"error": "数据不足", "n": 12}       # K线<30
+    recs = {"301583": r}
+    monkeypatch.setattr(da, "_load_all", lambda date="latest": recs)
+    monkeypatch.setattr(da, "as_of", lambda date="latest": "2026-08-08")
+    monkeypatch.setattr(da, "available_dates", lambda: ["2026-08-08"])
+    monkeypatch.setattr(da.store, "get_view",
+                        lambda name, date="latest": (_ for _ in ()).throw(FileNotFoundError()))
+    page = da.selection_page()
+    assert all(v is None for v in page["rows"][0]["stops"].values())
+    resp = client.get("/selection")
+    assert resp.status_code == 200 and "—" in resp.text                             # 占位符,未炸页
+
+
+def test_dashboard_stops_columns_and_error_guard(monkeypatch):
+    """首页全池速览带 5日止盈止损列;有效票显数值,error-prediction 票显「—」,不炸页。"""
+    ok = _rec("000001", bull=True); ok["prediction"] = _pred_full()
+    ok["snapshot"] = {"close": 12.34, "pct_chg": 1.2}
+    err = _rec("301583", bull=True); err["prediction"] = {"error": "数据不足", "n": 12}
+    err["snapshot"] = {"close": 20.0, "pct_chg": 0.5}
+    recs = {"000001": ok, "301583": err}
+    monkeypatch.setattr(da, "_load_all", lambda date="latest": recs)
+    monkeypatch.setattr(da, "as_of", lambda date="latest": "2026-08-08")
+    monkeypatch.setattr(da, "available_dates", lambda: ["2026-08-08"])
+    resp = client.get("/")
+    assert resp.status_code == 200
+    assert "止损位" in resp.text and "5日涨概率" in resp.text     # 新列表头
+    assert "11.5" in resp.text and "13.6" in resp.text          # 有效票止损/止盈
+    assert "—" in resp.text                                     # error 票占位,未炸
+
+
 def test_selection_empty_day_no_crash(monkeypatch):
     monkeypatch.setattr(da, "_load_all", lambda date="latest": {})
     monkeypatch.setattr(da, "as_of", lambda date="latest": "2026-08-08")

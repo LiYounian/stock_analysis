@@ -66,6 +66,29 @@ def council_summary(rec: dict) -> dict | None:
             "是否冲突": bool(d.get("是否冲突"))}
 
 
+def stops_view(rec: dict) -> dict:
+    """从中心记录抽 5 日止盈止损 + 上涨概率,供选股页/首页榜单 L1 展示。
+
+    防空口径(同 dashboard.html / stock.html):prediction 缺失或为 error 块(次新股 K线<30)时,
+    全字段返回 None → 前端渲染「—」,绝不抛 UndefinedError。字段口径同个股页(predict.py 产出)。
+    上涨概率% 即使 prediction 有效也可能为 None(样本不足),原样透传。
+    """
+    empty = {"现价": None, "止损位": None, "最大亏损%": None,
+             "止盈位": None, "目标盈利%": None, "风险收益比": None, "上涨概率%": None}
+    p = (rec or {}).get("prediction")
+    if not p or p.get("error"):
+        return empty
+    hold5 = (p.get("持有期建议") or {}).get("5日") or {}
+    scen5 = (p.get("情景预测") or {}).get("5日") or {}
+    return {
+        "现价": p.get("现价"),
+        "止损位": hold5.get("止损位"), "最大亏损%": hold5.get("最大亏损%"),
+        "止盈位": hold5.get("止盈位"), "目标盈利%": hold5.get("目标盈利%"),
+        "风险收益比": hold5.get("风险收益比"),
+        "上涨概率%": scen5.get("上涨概率%"),
+    }
+
+
 def screen_page(date: str = "latest") -> dict:
     """选股页数据:读 screen 视图 + 补每票关键字段。"""
     recs = _load_all(date)
@@ -148,6 +171,7 @@ def selection_page(date: str = "latest") -> dict:
             "council_conflict": cs.get("是否冲突", False),
             "参与专家数": len(cblk.get("default", {}).get("参与专家", []) or []),
             "experts": experts_env,                      # 供前端勾选重合成
+            "stops": stops_view(r),                      # 5日止盈止损+上涨概率(L1 展示,已防空)
         })
     # 默认按合议综合分降序;无合议分(None)沉底
     rows.sort(key=lambda x: (x["council_score"] is not None, x["council_score"] or 0), reverse=True)
