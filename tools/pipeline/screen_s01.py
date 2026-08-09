@@ -107,6 +107,29 @@ def screen_latest(kdf: pd.DataFrame, cfg: dict | None = None) -> dict:
     return signal_at(kdf, n - 1, cfg)
 
 
+# ———————————————————— 可选入场确认(向后兼容,不改默认行为)————————————————————
+# 默认 confirm=None → 信号日 t 即入场(原行为)。开启后减少「接飞刀」。
+def confirm_entry(kdf: pd.DataFrame, t: int, mode: str | None = None) -> int | None:
+    """信号日 t 已满足 C1..C4 后,按 mode 决定真正入场的整数索引;不满足确认→None(放弃该信号)。
+
+    mode:
+      None       : 无确认——信号日 t 当日入场(返回 t,保持原行为)。
+      "t1_nobreak": T+1 确认——次日(t+1)最低价不跌破信号日 T 的最低价才入场;
+                    满足→返回 t+1(在 T+1 建仓,P0=T+1 收盘);t+1 越界或破低→None。
+
+    只读价格、不改任何离场逻辑。未知 mode 按无确认处理(向后兼容)。
+    """
+    if mode is None or mode == "" or mode == "none":
+        return t
+    n = len(kdf)
+    if mode == "t1_nobreak":
+        if t + 1 >= n:
+            return None                                # 无次日数据,无法确认
+        low = kdf["low"].to_numpy(dtype=float)
+        return (t + 1) if low[t + 1] >= low[t] else None
+    return t                                            # 未知 mode → 退回无确认
+
+
 def _load_or_fetch_kline(code: str, fetch: bool):
     try:
         return market.load_kline(code)

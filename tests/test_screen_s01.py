@@ -195,3 +195,41 @@ def test_run_s01_screen_writes_view(monkeypatch, tmp_path):
     # 落库可回读
     got = store.get_view("趋势深跌反包", date="2024-06-01")
     assert got["入选数"] == 1
+
+
+# ———————————————————— 可选入场确认 confirm_entry(向后兼容)————————————————————
+def test_confirm_entry_none_returns_signal_day():
+    """无确认(mode=None)→ 返回信号日 t 本身(保持原行为)。"""
+    d = _uptrend()
+    df = _df(d)
+    t = len(df) - 2                                     # 留一根做次日
+    assert s01.confirm_entry(df, t, None) == t
+    assert s01.confirm_entry(df, t, "none") == t
+
+
+def test_confirm_entry_t1_nobreak_pass():
+    """T+1 不破低 → 返回 t+1(在次日入场)。构造次日 low ≥ 信号日 low。"""
+    d = _uptrend()
+    t = len(d["close"]) - 2
+    d["low"][t] = d["close"][t] - 2.0                   # 信号日低点
+    d["low"][t + 1] = d["low"][t] + 0.5                 # 次日不破低
+    df = _df(d)
+    assert s01.confirm_entry(df, t, "t1_nobreak") == t + 1
+
+
+def test_confirm_entry_t1_nobreak_reject_on_break():
+    """T+1 跌破信号日最低价 → 放弃该信号(返回 None),避免接飞刀。"""
+    d = _uptrend()
+    t = len(d["close"]) - 2
+    d["low"][t] = d["close"][t] - 2.0
+    d["low"][t + 1] = d["low"][t] - 0.5                 # 次日破低
+    df = _df(d)
+    assert s01.confirm_entry(df, t, "t1_nobreak") is None
+
+
+def test_confirm_entry_t1_no_next_day_returns_none():
+    """信号日是最后一根、无次日数据 → 无法确认 → None。"""
+    d = _uptrend()
+    df = _df(d)
+    t = len(df) - 1
+    assert s01.confirm_entry(df, t, "t1_nobreak") is None
