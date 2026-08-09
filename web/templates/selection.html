@@ -3,7 +3,7 @@
 {% block content %}
 {% set expert_names = s.config.默认专家组 or (s.rows[0].experts | map(attribute='专家') | list if s.rows else []) %}
 
-<h1>选股结果 <small>持续关注(自选池) + 每日筛选(全市场看好票);合议怎么看 · 非投资建议</small></h1>
+<h1>选股结果 <small>自选股 + 每日筛选(全市场看好票);合议怎么看 · 非投资建议</small></h1>
 
 {% if expert_names %}
 <section class="card wide">
@@ -16,9 +16,9 @@
 </section>
 {% endif %}
 
-<!-- 区块①:持续关注(自选池) -->
+<!-- 区块①:自选股(仅当前自选池成员) -->
 <section class="card wide">
-  <h2>① 持续关注(自选池)
+  <h2>① 自选股
     <small>本页共分析 <b>{{ s.total }}</b> 只 ·
       {% if s.view_present %}其中达标 <b class="pos">{{ s.qualified }}</b> 只{% else %}<span class="muted">形态达标池未生成(按合议综合分排序)</span>{% endif %}
       · 数据日期 <b>{{ s.as_of }}</b></small></h2>
@@ -67,7 +67,11 @@
 <section class="card wide">
   <h2>③ 今日精选(数据策略综合)Top {{ s.top_picks|length }}
     <small>达标池 ∪ 接近达标 ∪ 自选池,按合议综合分降序 · 数据日期 <b>{{ s.as_of }}</b></small></h2>
-  <p class="muted tiny">综合所勾选的<b>数据策略</b>(技术趋势 / 超买超卖 / 拐点 / 资金流 / 多因子 / 板块轮动)筛选,<b>纯数据、未用新闻 / 大模型</b>;非投资建议。勾选专家变化会实时重算合议分并重排。</p>
+  <p class="muted tiny"><b>候选池</b>:形态选股达标票 ∪ 接近达标票 ∪ 自选股。</p>
+  <p class="muted tiny"><b>排序</b>:按「多策略合议 · 综合分」降序取 Top {{ s.top_picks|length }}。</p>
+  <p class="muted tiny"><b>用到的策略</b>(数据类专家,纯数据 · 未用新闻 / 大模型):技术趋势 / 超买超卖 / 拐点 / 资金流 / 多因子 / 板块轮动(情绪三层、事件驱动因无新闻 / LLM 数据自动弃权)。</p>
+  <p class="muted tiny">顶部「参与专家」勾选面板即这些策略,勾选变化实时重算合议分并重排 Top {{ s.top_picks|length }}。</p>
+  <p class="muted tiny">非投资建议。</p>
   <table>
     <thead>
       <tr><th>代码</th><th>名称</th><th>行业</th><th>情景</th><th>止损</th><th>止盈</th><th>盈亏比</th><th>突破</th><th>合议</th><th>合议分</th></tr>
