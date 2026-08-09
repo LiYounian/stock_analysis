@@ -1,13 +1,13 @@
 {% extends "base.html" %}
 {% block title %}选股结果 · A股策略辅助工具{% endblock %}
 {% block content %}
-{% set expert_names = s.config.默认专家组 or (s.rows[0].experts | map(attribute='专家') | list if s.rows else []) %}
+{% set expert_names = s.config.默认专家组 or (s.strategy0.rows[0].experts | map(attribute='专家') | list if s.strategy0.rows else (s.rows[0].experts | map(attribute='专家') | list if s.rows else [])) %}
 
-<h1>选股结果 <small>自选股 + 每日筛选(全市场看好票);合议怎么看 · 非投资建议</small></h1>
+<h1>选股结果 <small>自选股 · 综合选股 · 多策略合议;纯数据 · 非投资建议</small></h1>
 
 {% if expert_names %}
 <section class="card wide">
-  <h2>参与专家 <small>勾选后按落库权重实时重算综合分并重排两栏(前端,不触网)</small></h2>
+  <h2>参与专家 <small>勾选后按落库权重实时重算综合分并重排(前端,不触网)</small></h2>
   <div class="council-experts">
     {% for n in expert_names %}
     <label class="council-chk"><input type="checkbox" class="expert-cb" value="{{ n }}" checked> {{ n }}</label>
@@ -19,15 +19,12 @@
 <!-- 区块①:自选股(仅当前自选池成员) -->
 <section class="card wide">
   <h2>① 自选股
-    <small>本页共分析 <b>{{ s.total }}</b> 只 ·
-      {% if s.view_present %}其中达标 <b class="pos">{{ s.qualified }}</b> 只{% else %}<span class="muted">形态达标池未生成(按合议综合分排序)</span>{% endif %}
-      · 数据日期 <b>{{ s.as_of }}</b></small></h2>
+    <small>本页共分析 <b>{{ s.total }}</b> 只 · 数据日期 <b>{{ s.as_of }}</b></small></h2>
   <p class="muted tiny">止盈止损优先按 <b>结构位·情景锚定</b>(支撑/压力真实点位,盈亏比由点位算);无结构位(老数据/次新股)回退 5 日 ATR 版,再缺显「—」。</p>
   <table>
     <thead>
       <tr><th>代码</th><th>名称</th><th>行业</th>
           <th>现价</th><th>情景</th><th>止损位</th><th>止盈位</th><th>盈亏比</th><th>突破</th><th>区间位置</th><th>5日涨概率</th>
-          <th>达标</th><th>达标理由</th>
           <th>合议</th><th>综合分</th><th>专家数</th></tr>
     </thead>
     <tbody id="selBody">
@@ -45,73 +42,86 @@
         <td class="muted tiny">{{ a.突破 if (a.突破 and a.突破 != '无') else '—' }}</td>
         <td class="muted tiny">{% if a['区间位置%'] is not none %}{{ a['区间位置%'] }}%{% else %}—{% endif %}</td>
         <td>{% if x.stops['上涨概率%'] is not none %}{{ x.stops['上涨概率%'] }}%{% else %}—{% endif %}</td>
-        <td>{% if x.qualified is none %}<span class="muted" title="达标池未生成">—</span>
-            {% elif x.qualified %}<span class="pos">✓ 达标</span>
-            {% else %}<span class="muted">未达标</span>{% endif %}</td>
-        <td class="muted tiny">
-          {% if x.达标理由 %}命中形态:{{ x.达标理由.命中形态 or '-' }}{% if x.达标理由.正向确认依据 %} · 正向:{{ x.达标理由.正向确认依据|join('、') }}{% endif %}
-          {% else %}-{% endif %}</td>
         <td><span class="sel-dir badge {{ 'buy' if x.council_dir=='看多' else ('sell' if x.council_dir=='看空' else 'wait') }}">{{ x.council_dir or '中性' }}</span>
             <span class="sel-conflict" title="专家分歧" style="{{ '' if x.council_conflict else 'display:none' }}">⚠️</span></td>
         <td class="sel-score">{{ x.council_score if x.council_score is not none else '-' }}</td>
         <td class="muted">{{ x.参与专家数 }}</td>
       </tr>
     {% else %}
-      <tr><td colspan="16" class="muted">当日无分析记录</td></tr>
+      <tr><td colspan="14" class="muted">当日自选池无分析记录</td></tr>
     {% endfor %}
     </tbody>
   </table>
 </section>
 
-<!-- 区块③:今日精选(数据策略综合)Top N -->
+<!-- 综合选股:勾选策略 → 各策略入选代码并集(前端实时重算) -->
 <section class="card wide">
-  <h2>③ 今日精选(数据策略综合)Top {{ s.top_picks|length }}
-    <small>达标池 ∪ 接近达标 ∪ 自选池,按合议综合分降序 · 数据日期 <b>{{ s.as_of }}</b></small></h2>
-  <p class="muted tiny"><b>候选池</b>:形态选股达标票 ∪ 接近达标票 ∪ 自选股。</p>
-  <p class="muted tiny"><b>排序</b>:按「多策略合议 · 综合分」降序取 Top {{ s.top_picks|length }}。</p>
-  <p class="muted tiny"><b>用到的策略</b>(数据类专家,纯数据 · 未用新闻 / 大模型):技术趋势 / 超买超卖 / 拐点 / 资金流 / 多因子 / 板块轮动(情绪三层、事件驱动因无新闻 / LLM 数据自动弃权)。</p>
-  <p class="muted tiny">顶部「参与专家」勾选面板即这些策略,勾选变化实时重算合议分并重排 Top {{ s.top_picks|length }}。</p>
-  <p class="muted tiny">非投资建议。</p>
+  <h2>综合选股 <small>勾选策略 → 展示所选策略入选股票代码的<b>并集</b>(去重);前端实时重算,不触网</small></h2>
+  <div class="council-experts">
+    {% for st in s.combined.strategies %}
+    <label class="council-chk">
+      <input type="checkbox" class="strat-cb" value="{{ st.key }}"
+             {% if st.available %}checked{% else %}disabled{% endif %}> {{ st.label }}
+    </label>
+    {% endfor %}
+  </div>
+  <p class="muted tiny">默认全勾(展示全并集)。命中来源标出被哪几个策略选中(如「策略0+策略1」)。一个都没勾 → 显示「无」。纯数据 · 非投资建议。</p>
   <table>
-    <thead>
-      <tr><th>代码</th><th>名称</th><th>行业</th><th>情景</th><th>止损</th><th>止盈</th><th>盈亏比</th><th>突破</th><th>合议</th><th>合议分</th></tr>
-    </thead>
-    <tbody id="topBody">
-    {% for x in s.top_picks %}
+    <thead><tr><th>代码</th><th>名称</th><th>行业</th><th>命中来源</th></tr></thead>
+    <tbody id="combinedBody">
+      <tr id="combinedEmpty" style="display:none"><td colspan="4" class="muted">无</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<!-- 策略0:多专家合议(全A) -->
+<section class="card wide">
+  <h2>策略0 · 多专家合议(全A)
+    {% if s.strategy0.present %}
+    <small>扫描 <b>{{ s.strategy0.扫描数 if s.strategy0.扫描数 is not none else '—' }}</b> ·
+      有效 <b>{{ s.strategy0.有效 if s.strategy0.有效 is not none else '—' }}</b> ·
+      Top <b class="pos">{{ s.strategy0.top_n if s.strategy0.top_n is not none else (s.strategy0.rows|length) }}</b> ·
+      数据日期 <b>{{ s.strategy0.as_of }}</b></small>
+    {% endif %}</h2>
+  <p class="muted tiny">全A 按 6 类数据专家合议分排序(资金流 / 多因子 / 情绪 / 事件等无全A数据时弃权),纯数据 · 非投资建议。</p>
+  <p class="muted tiny">顶部「参与专家」勾选面板即这些策略,勾选变化实时重算合议分并重排 Top {{ s.strategy0.rows|length }}。</p>
+  {% if not s.strategy0.present %}
+  <p class="muted">策略0 待运行(<code>python -m tools.pipeline.screen_council --no-fetch</code>)。</p>
+  {% elif not s.strategy0.rows %}
+  <p class="muted">本日策略0 无入选标的。</p>
+  {% else %}
+  <table>
+    <thead><tr><th>代码</th><th>名称</th><th>行业</th><th>合议</th><th>综合分</th></tr></thead>
+    <tbody id="strat0Body">
+    {% for x in s.strategy0.rows %}
       <tr data-code="{{ x.code }}">
         <td>{{ x.code }}</td>
         <td><a href="/stock/{{ x.code }}?date={{ s.as_of }}">{{ x.name }}</a></td>
         <td class="muted">{{ x.industry or '-' }}</td>
-        <td class="muted tiny">{{ x.情景 or '—' }}</td>
-        <td>{% if x.止损位 is not none %}<span class="neg">{{ x.止损位 }}</span>{% else %}—{% endif %}</td>
-        <td>{% if x.止盈位 is not none %}<span class="pos">{{ x.止盈位 }}</span>{% else %}—{% endif %}</td>
-        <td>{{ x.盈亏比 if x.盈亏比 is not none else '—' }}</td>
-        <td class="muted tiny">{{ x.突破 if (x.突破 and x.突破 != '无') else '—' }}</td>
         <td><span class="sel-dir badge {{ 'buy' if x.council_dir=='看多' else ('sell' if x.council_dir=='看空' else 'wait') }}">{{ x.council_dir or '中性' }}</span>
             <span class="sel-conflict" title="专家分歧" style="{{ '' if x.council_conflict else 'display:none' }}">⚠️</span></td>
         <td class="sel-score">{{ x.council_score if x.council_score is not none else '-' }}</td>
       </tr>
-    {% else %}
-      <tr><td colspan="10" class="muted">当日无可精选标的(自选池与达标池均无数据)。</td></tr>
     {% endfor %}
     </tbody>
   </table>
+  {% endif %}
 </section>
 
-<!-- S01:趋势深跌反包(单日触发·纯数据) -->
+<!-- 策略1:趋势深跌反包(单日触发·纯数据) -->
 <section class="card wide">
-  <h2>S01 · 趋势深跌反包
-    {% if s.s01.present %}
-    <small>扫描 <b>{{ s.s01.扫描数 if s.s01.扫描数 is not none else '—' }}</b> ·
-      有效 <b>{{ s.s01.有效 if s.s01.有效 is not none else '—' }}</b> ·
-      入选 <b class="pos">{{ s.s01.入选数 if s.s01.入选数 is not none else (s.s01.rows|length) }}</b> ·
-      日期 <b>{{ s.s01.as_of }}</b></small>
+  <h2>策略1 · 趋势深跌反包
+    {% if s.strategy1.present %}
+    <small>扫描 <b>{{ s.strategy1.扫描数 if s.strategy1.扫描数 is not none else '—' }}</b> ·
+      有效 <b>{{ s.strategy1.有效 if s.strategy1.有效 is not none else '—' }}</b> ·
+      入选 <b class="pos">{{ s.strategy1.入选数 if s.strategy1.入选数 is not none else (s.strategy1.rows|length) }}</b> ·
+      日期 <b>{{ s.strategy1.as_of }}</b></small>
     {% endif %}</h2>
   <p class="muted tiny">均线完整多头 + 贴近 52 周高 + 近 10 日偏强 + 当日深跌收阳(≥4%);单日触发,纯数据。非投资建议。</p>
-  {% if not s.s01.present %}
-  <p class="muted">S01 待运行(<code>python -m tools.pipeline.screen_s01</code>)。</p>
-  {% elif not s.s01.rows %}
-  <p class="muted">本日 S01 无入选标的。</p>
+  {% if not s.strategy1.present %}
+  <p class="muted">策略1 待运行(<code>python -m tools.pipeline.screen_s01</code>)。</p>
+  {% elif not s.strategy1.rows %}
+  <p class="muted">本日策略1 无入选标的。</p>
   {% else %}
   <table>
     <thead>
@@ -119,7 +129,7 @@
           <th>当日跌幅</th><th>近强(涨/跌)</th><th>均线多头</th><th>收阳</th></tr>
     </thead>
     <tbody>
-    {% for x in s.s01.rows %}
+    {% for x in s.strategy1.rows %}
       <tr data-code="{{ x.code }}">
         <td>{{ x.code }}</td>
         <td><a href="/stock/{{ x.code }}?date={{ s.as_of }}">{{ x.name }}</a></td>
@@ -136,72 +146,11 @@
   {% endif %}
 </section>
 
-<!-- 区块②:每日筛选(全市场·按板块分组) -->
-<section class="card wide">
-  <h2>② 每日筛选(全市场 · 按板块)
-    {% if s.daily.present %}
-    <small>扫描 <b>{{ s.daily.total_scanned }}</b> 只 · 达标 <b class="pos">{{ s.daily.qualified_n }}</b> 只 ·
-      接近达标 <b>{{ s.daily.near_n }}</b> 只 · 覆盖 <b>{{ s.daily.board_count }}</b> 个板块 · 数据日期 <b>{{ s.as_of }}</b></small>
-    {% endif %}</h2>
-  {% if not s.daily.present %}
-  <p class="muted">全市场每日筛选待扫描生成(运行 <code>python -m tools.pipeline.screen_pattern</code> 产出「形态选股」达标池后自动显示)。</p>
-  {% elif s.daily.mode == 'near' %}
-  <p class="muted">今日无达标,以下为各板块<b>接近达标 / 形态最强</b>(仅提示,非达标信号)。</p>
-  <div class="grid">
-    {% for g in s.daily.groups %}
-    <section class="card">
-      <h2>{{ g.板块 }} <small>接近达标 {{ g.count }} 只{% if g.count > s.daily.top_n %} · 显示 top {{ s.daily.top_n }}{% endif %}</small></h2>
-      <table>
-        <thead><tr><th>代码</th><th>名称</th><th>最接近形态</th><th>差距说明</th><th>合议</th><th>合议分</th></tr></thead>
-        <tbody class="daily-near">
-        {% for x in g.rows %}
-          <tr data-code="{{ x.code }}">
-            <td>{{ x.code }}</td>
-            <td><a href="/stock/{{ x.code }}?date={{ s.as_of }}">{{ x.name }}</a></td>
-            <td class="muted tiny">{{ x.最接近形态 or '-' }}</td>
-            <td class="muted tiny">{{ x.差距说明 or '-' }}</td>
-            <td><span class="badge {{ 'buy' if x.council_dir=='看多' else ('sell' if x.council_dir=='看空' else 'wait') }}">{{ x.council_dir or '中性' }}</span></td>
-            <td>{{ x.council_score if x.council_score is not none else '-' }}</td>
-          </tr>
-        {% endfor %}
-        </tbody>
-      </table>
-    </section>
-    {% endfor %}
-  </div>
-  {% elif not s.daily.groups %}
-  <p class="muted">本日无达标票,且无接近达标数据。</p>
-  {% else %}
-  <div class="grid">
-    {% for g in s.daily.groups %}
-    <section class="card">
-      <h2>{{ g.板块 }} <small>{{ g.count }} 只达标{% if g.count > s.daily.top_n %} · 显示 top {{ s.daily.top_n }}{% endif %}</small></h2>
-      <table>
-        <thead><tr><th>代码</th><th>名称</th><th>命中形态</th><th>合议</th><th>综合分</th></tr></thead>
-        <tbody class="daily-group">
-        {% for x in g.rows %}
-          <tr data-code="{{ x.code }}">
-            <td>{{ x.code }}</td>
-            <td><a href="/stock/{{ x.code }}?date={{ s.as_of }}">{{ x.name }}</a></td>
-            <td class="muted tiny">{{ x.命中形态 or '-' }}{% if x.正向确认依据 %} · {{ x.正向确认依据|join('、') }}{% endif %}</td>
-            <td><span class="sel-dir badge {{ 'buy' if x.council_dir=='看多' else ('sell' if x.council_dir=='看空' else 'wait') }}">{{ x.council_dir or '中性' }}</span>
-                <span class="sel-conflict" title="专家分歧" style="{{ '' if x.council_conflict else 'display:none' }}">⚠️</span></td>
-            <td class="sel-score">{{ x.council_score if x.council_score is not none else '-' }}</td>
-          </tr>
-        {% endfor %}
-        </tbody>
-      </table>
-    </section>
-    {% endfor %}
-  </div>
-  {% endif %}
-</section>
-
-<p class="muted tiny">点名称进个股页看完整归因/K线。两栏合议综合分同口径(前端同 councilSynth 公式,勾选专家实时重排)。</p>
+<p class="muted tiny">点名称进个股页看完整归因/K线。合议综合分同口径(前端同 councilSynth 公式,勾选专家实时重排)。</p>
 
 <script id="selectionExperts" type="application/json">{{ (s.rows|list)|tojson }}</script>
-<script id="dailyGroups" type="application/json">{{ (s.daily.groups|list)|tojson }}</script>
-<script id="topPicks" type="application/json">{{ (s.top_picks|list)|tojson }}</script>
+<script id="strat0Rows" type="application/json">{{ (s.strategy0.rows|list)|tojson }}</script>
+<script id="combinedRows" type="application/json">{{ (s.combined.rows|list)|tojson }}</script>
 <script id="selectionConfig" type="application/json">{{ s.config|tojson }}</script>
 {% endblock %}
 
@@ -209,21 +158,58 @@
 <script src="/static/council.js"></script>
 <script>
 (function () {
+  // —— 综合选股:勾选策略 → 并集实时重算(不依赖 councilSynth,独立即可运行)——
+  var combinedRows = [];
+  try { combinedRows = JSON.parse(document.getElementById("combinedRows").textContent) || []; } catch (e) { combinedRows = []; }
+  var combinedBody = document.getElementById("combinedBody");
+  var combinedEmpty = document.getElementById("combinedEmpty");
+
+  function checkedStrategies() {
+    var set = {};
+    document.querySelectorAll(".strat-cb").forEach(function (cb) { if (cb.checked) set[cb.value] = true; });
+    return set;
+  }
+
+  function renderCombined() {
+    if (!combinedBody) return;
+    var checked = checkedStrategies();
+    // 清空(保留占位行)
+    [].slice.call(combinedBody.querySelectorAll("tr[data-code]")).forEach(function (tr) { tr.remove(); });
+    var any = false;
+    combinedRows.forEach(function (r) {
+      var hits = (r.sources || []).filter(function (k) { return checked[k]; });
+      if (!hits.length) return;                         // 该票无被勾选策略命中 → 跳过
+      any = true;
+      var tr = document.createElement("tr");
+      tr.setAttribute("data-code", r.code);
+      var name = r.name || r.code;
+      tr.innerHTML =
+        "<td>" + r.code + "</td>" +
+        "<td><a href='/stock/" + r.code + "'>" + name + "</a></td>" +
+        "<td class='muted'>" + (r.industry || "-") + "</td>" +
+        "<td class='muted tiny'>" + hits.join("+") + "</td>";
+      combinedBody.appendChild(tr);
+    });
+    if (combinedEmpty) combinedEmpty.style.display = any ? "none" : "";
+  }
+
+  document.querySelectorAll(".strat-cb").forEach(function (cb) { cb.addEventListener("change", renderCombined); });
+  renderCombined();   // 默认全勾 → 全并集
+})();
+
+(function () {
+  // —— 自选股 + 策略0:参与专家勾选 → councilSynth 实时重算并重排 ——
   if (!window.councilSynth) return;
-  var cfg = {}, selRows = [], dailyGroups = [], topPicks = [];
+  var cfg = {}, selRows = [], strat0 = [];
   try {
     cfg = JSON.parse(document.getElementById("selectionConfig").textContent) || {};
     selRows = JSON.parse(document.getElementById("selectionExperts").textContent) || [];
-    dailyGroups = JSON.parse(document.getElementById("dailyGroups").textContent) || [];
-    topPicks = JSON.parse(document.getElementById("topPicks").textContent) || [];
+    strat0 = JSON.parse(document.getElementById("strat0Rows").textContent) || [];
   } catch (e) { return; }
 
-  // 合并 ①②③ 的专家信封(同 code 信封一致)
   var expByCode = {};
   selRows.forEach(function (r) { expByCode[r.code] = r.experts || []; });
-  dailyGroups.forEach(function (g) { (g.rows || []).forEach(function (r) {
-    if (!expByCode[r.code]) expByCode[r.code] = r.experts || []; }); });
-  topPicks.forEach(function (r) { if (!expByCode[r.code]) expByCode[r.code] = r.experts || []; });
+  strat0.forEach(function (r) { if (!expByCode[r.code]) expByCode[r.code] = r.experts || []; });
 
   function checkedFn() {
     var set = {};
@@ -247,11 +233,8 @@
 
   function rerankAll() {
     var isChecked = checkedFn();
-    var sel = document.getElementById("selBody");
-    if (sel) rerankTbody(sel, isChecked);
-    var top = document.getElementById("topBody");
-    if (top) rerankTbody(top, isChecked);
-    document.querySelectorAll("tbody.daily-group").forEach(function (tb) { rerankTbody(tb, isChecked); });
+    var sel = document.getElementById("selBody"); if (sel) rerankTbody(sel, isChecked);
+    var s0 = document.getElementById("strat0Body"); if (s0) rerankTbody(s0, isChecked);
   }
 
   document.querySelectorAll(".expert-cb").forEach(function (cb) { cb.addEventListener("change", rerankAll); });
