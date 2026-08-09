@@ -272,3 +272,116 @@ def _state(n: int, min_sample: int) -> str:
     if n < min_sample:
         return f"样本少(N={n}),统计力弱,待积累"
     return f"可用(N={n})"
+
+
+# ———————————————————— 回测汇总报告接线(模块③)————————————————————
+_MIN_SAMPLE = 10
+_VIEW = "趋势深跌反包回测"                                # → data/analysis/<date>/趋势深跌反包回测.json
+
+
+def _load_bench(fetch: bool):
+    """沪深300 基准 K线(只读缓存,fetch=True 缺则采集)。取不到→None(Alpha 不计,诚实标注)。"""
+    from tools.collectors import index
+    try:
+        return index.load_index(_BENCH)
+    except FileNotFoundError:
+        try:
+            return index.fetch_index(["沪深300"]).get(_BENCH) if fetch else None
+        except Exception:  # noqa: BLE001 采集失败不阻塞回测主流程
+            return None
+
+
+def summarize(codes: list[str] | None = None, fetch: bool = False,
+              min_sample: int = _MIN_SAMPLE, generated_at: str | None = None) -> dict:
+    """跨票跑 S01 持仓回测并汇总(纯计算,不落库)。
+
+    codes=None → 用本地所有滚动主档(store.list_master_codes)。缺 K线的票诚实跳过。
+    数据不足(无主档 / 无信号 / 前瞻未到期)时优雅标注,不报错、不编造。
+    """
+    from tools.collectors import market
+
+    codes = codes if codes is not None else store.list_master_codes()
+    bench = _load_bench(fetch)
+    all_trades: list[dict] = []
+    scanned = skipped = signal_codes = 0
+    for code in codes:
+        try:
+            kdf = market.load_kline(code)
+        except FileNotFoundError:
+            kdf = market.fetch_kline([code]).get(code) if fetch else None
+        if kdf is None or len(kdf) < screen_s01.min_history():
+            skipped += 1
+            continue
+        scanned += 1
+        trades = backtest_one(kdf, code=code, bench=bench)
+        if trades:
+            signal_codes += 1
+        all_trades.extend(trades)
+
+    summary = summarize_trades(all_trades, min_sample=min_sample)
+    result = {
+        "策略": "趋势深跌反包(S01)",
+        "扫描票数": len(codes), "有效样本票": scanned,
+        "跳过票数(历史不足/无K线)": skipped, "出信号票数": signal_codes,
+        "有基准": bench is not None and len(bench) > 0,
+        "汇总": summary,
+        "口径": ("每个历史信号日建仓(P0=信号日收盘)→ 逐日 5 条离场状态机撮合 → "
+                 "胜率/中位收益/盈亏比/最大回撤/平均持有天数 + 同持有期相对沪深300 Alpha;"
+                 "防未来函数(H52不含当日、离场只用当日及之前);一字板不可成交顺延标注"),
+        "免责声明": "历史回测证据,非投资建议;样本随主档积累与信号出现而增长,统计力逐步增强。",
+    }
+    if not result["有基准"]:
+        result["Alpha说明"] = "缺沪深300指数K线 → Alpha 未计算(--fetch 采集后可得)"
+    if generated_at:
+        result["生成时间"] = generated_at
+    return result
+
+
+def run_and_store(codes: list[str] | None = None, fetch: bool = False,
+                  no_view: bool = False, min_sample: int = _MIN_SAMPLE,
+                  generated_at: str | None = None) -> dict:
+    """算汇总并落 view「趋势深跌反包回测」(当前运行日期)。no_view=True 只算不落。"""
+    result = summarize(codes=codes, fetch=fetch, min_sample=min_sample,
+                       generated_at=generated_at)
+    if not no_view:
+        store.put_view(_VIEW, result)
+    return result
+
+
+# ———————————————————— CLI ————————————————————
+def _main(argv: list[str] | None = None) -> int:
+    import argparse
+    import datetime as _dt
+    import json
+
+    logging.basicConfig(level=logging.INFO, format="%(name)s %(levelname)s %(message)s")
+    ap = argparse.ArgumentParser(description="策略 S01 趋势深跌反包 持仓回测汇总")
+    ap.add_argument("--codes", help="逗号分隔代码(默认=本地所有滚动主档)")
+    ap.add_argument("--universe", type=int, metavar="N", help="全A票池前 N 只(--codes 优先)")
+    ap.add_argument("--fetch", action="store_true", help="缺 K线/基准时采集(默认只读缓存)")
+    ap.add_argument("--no-view", action="store_true", help="只算不落库(打印汇总)")
+    ap.add_argument("--min-sample", type=int, default=_MIN_SAMPLE, help="统计力阈值")
+    a = ap.parse_args(argv)
+
+    if a.codes:
+        codes = [c.strip() for c in a.codes.split(",") if c.strip()]
+    elif a.universe:
+        from tools.collectors import universe
+        codes = universe.universe_codes(limit=a.universe)
+    else:
+        codes = None                                     # 默认:本地所有主档
+    stamp = _dt.datetime.now().isoformat(timespec="seconds")
+    r = run_and_store(codes=codes, fetch=a.fetch, no_view=a.no_view,
+                      min_sample=a.min_sample, generated_at=stamp)
+    logger.info("扫描 %d / 有效 %d / 出信号 %d;汇总:%s",
+                r["扫描票数"], r["有效样本票"], r["出信号票数"], r["汇总"]["状态"])
+    print(json.dumps({"扫描票数": r["扫描票数"], "有效样本票": r["有效样本票"],
+                      "出信号票数": r["出信号票数"], "汇总": r["汇总"]},
+                     ensure_ascii=False, indent=2))
+    return 0
+
+
+if __name__ == "__main__":
+    import sys
+
+    sys.exit(_main(sys.argv[1:]))
