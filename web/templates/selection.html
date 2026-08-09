@@ -94,6 +94,44 @@
   </table>
 </section>
 
+<!-- S01:趋势深跌反包(单日触发·纯数据) -->
+<section class="card wide">
+  <h2>S01 · 趋势深跌反包
+    {% if s.s01.present %}
+    <small>扫描 <b>{{ s.s01.扫描数 if s.s01.扫描数 is not none else '—' }}</b> ·
+      有效 <b>{{ s.s01.有效 if s.s01.有效 is not none else '—' }}</b> ·
+      入选 <b class="pos">{{ s.s01.入选数 if s.s01.入选数 is not none else (s.s01.rows|length) }}</b> ·
+      日期 <b>{{ s.s01.as_of }}</b></small>
+    {% endif %}</h2>
+  <p class="muted tiny">均线完整多头 + 贴近 52 周高 + 近 10 日偏强 + 当日深跌收阳(≥4%);单日触发,纯数据。非投资建议。</p>
+  {% if not s.s01.present %}
+  <p class="muted">S01 待运行(<code>python -m tools.pipeline.screen_s01</code>)。</p>
+  {% elif not s.s01.rows %}
+  <p class="muted">本日 S01 无入选标的。</p>
+  {% else %}
+  <table>
+    <thead>
+      <tr><th>代码</th><th>名称</th><th>收盘</th><th>H52</th>
+          <th>当日跌幅</th><th>近强(涨/跌)</th><th>均线多头</th><th>收阳</th></tr>
+    </thead>
+    <tbody>
+    {% for x in s.s01.rows %}
+      <tr data-code="{{ x.code }}">
+        <td>{{ x.code }}</td>
+        <td><a href="/stock/{{ x.code }}?date={{ s.as_of }}">{{ x.name }}</a></td>
+        <td>{{ x.close if x.close is not none else '—' }}</td>
+        <td>{% if x.H52 is not none %}{{ x.H52 }}{% if x.突破前高 %} <span class="pos tiny">突破前高</span>{% endif %}{% else %}—{% endif %}</td>
+        <td>{% if x['当日跌幅%'] is not none %}<span class="neg">{{ x['当日跌幅%'] }}%</span>{% else %}—{% endif %}</td>
+        <td class="muted tiny">{{ x.近强_涨 if x.近强_涨 is not none else '—' }} / {{ x.近强_跌 if x.近强_跌 is not none else '—' }}</td>
+        <td>{% if x.均线多头 %}<span class="pos">✓</span>{% elif x.均线多头 is none %}—{% else %}<span class="muted">—</span>{% endif %}</td>
+        <td>{% if x.收阳 %}<span class="pos">✓</span>{% elif x.收阳 is none %}—{% else %}<span class="muted">—</span>{% endif %}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+</section>
+
 <!-- 区块②:每日筛选(全市场·按板块分组) -->
 <section class="card wide">
   <h2>② 每日筛选(全市场 · 按板块)

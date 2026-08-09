@@ -234,9 +234,68 @@ def selection_page(date: str = "latest") -> dict:
 
     daily = _daily_sections(qualified_items, near_items, recs, view_present, view_meta, qualified_n)
     top_picks = _top_picks(qualified_items, near_items, recs)
+    s01 = _s01_section(recs, date)
     return {"rows": rows, "total": total, "qualified": qualified_n,
             "view_present": view_present, "view_meta": view_meta,
-            "daily": daily, "top_picks": top_picks, "config": config or {}, "as_of": as_of(date)}
+            "daily": daily, "top_picks": top_picks, "s01": s01,
+            "config": config or {}, "as_of": as_of(date)}
+
+
+def _s01_section(recs: dict, date: str = "latest") -> dict:
+    """S01「趋势深跌反包」区块:读 store view「趋势深跌反包」(screen_s01 产出),逐票扁平化。
+
+    防空(同页其它区块口径):view 缺失 → present=False(前端"S01 待运行");
+    单票明细缺字段 → 对应值 None(前端渲染「—」),绝不抛异常。
+    schema:{扫描数, 有效样本, 跳过数(历史不足), 入选数, 入选清单:[{code, 明细:{MA{5..200}, close,
+    H52, 近强_涨/跌:[涨,跌], 当日跌幅(小数), 收阳}}]}。字段名兼容契约的两种写法(有效样本/有效 等)。
+    个股名从中心记录 meta 取(_name),取不到显代码。
+    """
+    empty = {"present": False, "扫描数": None, "有效": None, "跳过": None,
+             "入选数": None, "as_of": as_of(date), "rows": []}
+    try:
+        v = store.get_view("趋势深跌反包", date=date)
+    except FileNotFoundError:
+        return empty
+    if not isinstance(v, dict):
+        return empty
+
+    rows = []
+    for item in v.get("入选清单", []) or []:
+        if not isinstance(item, dict):
+            continue
+        code = item.get("code")
+        d = item.get("明细") or {}
+        ma = d.get("MA") or {}
+        seq = [ma.get(k) for k in ("5", "10", "20", "30", "60", "200")]
+        close = d.get("close")
+        # 均线完整多头:MA5>MA10>...>MA200 且 close>=MA5(缺 MA 时置 None→前端「—」)
+        bull = None
+        if all(x is not None for x in seq):
+            desc = all(seq[i] > seq[i + 1] for i in range(len(seq) - 1))
+            bull = bool(desc and (close is not None and close >= seq[0]))
+        h52 = d.get("H52")
+        # 是否突破前高:收盘超 52 周高(不含当日)→ 创新高
+        broke = (close is not None and h52 is not None and close > h52)
+        drop = d.get("当日跌幅")                       # 小数,如 -0.1257
+        drop_pct = round(drop * 100, 2) if isinstance(drop, (int, float)) else None
+        near = d.get("近强_涨/跌") or [None, None]
+        up = near[0] if len(near) > 0 else None
+        down = near[1] if len(near) > 1 else None
+        rows.append({
+            "code": code, "name": _name(recs, code),
+            "close": close, "H52": h52, "突破前高": broke,
+            "当日跌幅%": drop_pct, "近强_涨": up, "近强_跌": down,
+            "均线多头": bull, "收阳": d.get("收阳"),
+        })
+    return {
+        "present": True,
+        "扫描数": v.get("扫描数"),
+        "有效": v.get("有效样本", v.get("有效")),
+        "跳过": v.get("跳过数(历史不足)", v.get("跳过(历史不足)")),
+        "入选数": v.get("入选数"),
+        "as_of": v.get("as_of") or as_of(date),
+        "rows": rows,
+    }
 
 
 def _top_picks(qualified_items: list[dict], near_items: list[dict], recs: dict,
