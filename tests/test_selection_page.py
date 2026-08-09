@@ -29,6 +29,10 @@ def _rec(code, bull=True):
 def _patch_records(monkeypatch, recs):
     monkeypatch.setattr(da, "_load_all", lambda date="latest": recs)
     monkeypatch.setattr(da, "as_of", lambda date="latest": "2026-08-08")
+    # 区块①「自选股」过滤到自选池:测试里把合成票全部视作自选池成员,行为与旧口径一致
+    monkeypatch.setattr(da, "_pool_codes", lambda: set(recs.keys()))
+    # 隔离全A名映射(config/code_name.json),保持"无中心记录 → 回退 code"的断言与环境无关
+    monkeypatch.setattr(da, "_code_name_map", lambda: {})
 
 
 def test_selection_fallback_no_view_ranks_by_council(monkeypatch):
@@ -206,12 +210,13 @@ def test_selection_route_renders(monkeypatch):
     monkeypatch.setattr(da, "_load_all", lambda date="latest": recs)
     monkeypatch.setattr(da, "as_of", lambda date="latest": "2026-08-08")
     monkeypatch.setattr(da, "available_dates", lambda: ["2026-08-08"])
+    monkeypatch.setattr(da, "_pool_codes", lambda: {"000001"})   # 区块①自选池含该票
     monkeypatch.setattr(da.store, "get_view",
                         lambda name, date="latest": (_ for _ in ()).throw(FileNotFoundError()))
     r = client.get("/selection")
     assert r.status_code == 200
     assert "选股结果" in r.text
-    assert "持续关注" in r.text and "每日筛选" in r.text          # 两栏
+    assert "自选股" in r.text and "每日筛选" in r.text            # 区块①改名「自选股」+ 区块②
     assert "/static/council.js" in r.text                         # 复用合议公式
     assert 'id="selBody"' in r.text
     assert "T000001" in r.text                                    # 票名渲染
@@ -249,6 +254,7 @@ def test_selection_row_carries_stops_and_renders(monkeypatch):
     monkeypatch.setattr(da, "_load_all", lambda date="latest": recs)
     monkeypatch.setattr(da, "as_of", lambda date="latest": "2026-08-08")
     monkeypatch.setattr(da, "available_dates", lambda: ["2026-08-08"])
+    monkeypatch.setattr(da, "_pool_codes", lambda: {"000001"})
     monkeypatch.setattr(da.store, "get_view",
                         lambda name, date="latest": (_ for _ in ()).throw(FileNotFoundError()))
     page = da.selection_page()
@@ -269,6 +275,7 @@ def test_selection_error_prediction_renders_dash_no_crash(monkeypatch):
     monkeypatch.setattr(da, "_load_all", lambda date="latest": recs)
     monkeypatch.setattr(da, "as_of", lambda date="latest": "2026-08-08")
     monkeypatch.setattr(da, "available_dates", lambda: ["2026-08-08"])
+    monkeypatch.setattr(da, "_pool_codes", lambda: {"301583"})
     monkeypatch.setattr(da.store, "get_view",
                         lambda name, date="latest": (_ for _ in ()).throw(FileNotFoundError()))
     page = da.selection_page()
@@ -342,6 +349,7 @@ def test_selection_row_carries_anchor_and_renders_structure(monkeypatch):
     monkeypatch.setattr(da, "_load_all", lambda date="latest": {"000001": r})
     monkeypatch.setattr(da, "as_of", lambda date="latest": "2026-08-08")
     monkeypatch.setattr(da, "available_dates", lambda: ["2026-08-08"])
+    monkeypatch.setattr(da, "_pool_codes", lambda: {"000001"})
     monkeypatch.setattr(da.store, "get_view",
                         lambda name, date="latest": (_ for _ in ()).throw(FileNotFoundError()))
     page = da.selection_page()
@@ -359,6 +367,7 @@ def test_selection_row_anchor_falls_back_when_no_structure(monkeypatch):
     monkeypatch.setattr(da, "_load_all", lambda date="latest": {"000001": r})
     monkeypatch.setattr(da, "as_of", lambda date="latest": "2026-08-08")
     monkeypatch.setattr(da, "available_dates", lambda: ["2026-08-08"])
+    monkeypatch.setattr(da, "_pool_codes", lambda: {"000001"})
     monkeypatch.setattr(da.store, "get_view",
                         lambda name, date="latest": (_ for _ in ()).throw(FileNotFoundError()))
     page = da.selection_page()
@@ -374,6 +383,7 @@ def test_selection_error_prediction_anchor_dash(monkeypatch):
     monkeypatch.setattr(da, "_load_all", lambda date="latest": {"301583": r})
     monkeypatch.setattr(da, "as_of", lambda date="latest": "2026-08-08")
     monkeypatch.setattr(da, "available_dates", lambda: ["2026-08-08"])
+    monkeypatch.setattr(da, "_pool_codes", lambda: {"301583"})
     monkeypatch.setattr(da.store, "get_view",
                         lambda name, date="latest": (_ for _ in ()).throw(FileNotFoundError()))
     page = da.selection_page()
@@ -553,3 +563,72 @@ def test_selection_route_s01_missing_shows_hint(monkeypatch):
     r = client.get("/selection")
     assert r.status_code == 200
     assert "S01 待运行" in r.text and "screen_s01" in r.text
+
+
+# ————————————————————————————————————————————————
+# 名称回退链(_name / _resolve_name):中心记录 → code_name.json → code
+# ————————————————————————————————————————————————
+def test_name_fallback_three_levels(monkeypatch):
+    """三级回退:有记录取 meta.name;无记录但 code_name 命中取映射名;都无回退 code。"""
+    monkeypatch.setattr(da, "_code_name_map", lambda: {"600519": "贵州茅台"})
+    recs = {"000001": {"meta": {"code": "000001", "name": "平安银行"}}}
+    assert da._name(recs, "000001") == "平安银行"      # ① 记录名优先
+    assert da._name(recs, "600519") == "贵州茅台"      # ② 无记录 → code_name 映射
+    assert da._name(recs, "999999") == "999999"        # ③ 都无 → code
+    # 记录存在但 meta.name 为空 → 继续回退 code_name
+    assert da._resolve_name({"meta": {"name": ""}}, "600519") == "贵州茅台"
+
+
+def test_code_name_map_missing_file_graceful(monkeypatch):
+    """code_name.json 缺失/损坏 → _code_name_map 空 dict,_name 优雅退回 records/code,不报错。"""
+    monkeypatch.setattr(da, "_code_name_map", lambda: {})
+    assert da._name({}, "600519") == "600519"
+    assert da._name({"600519": {"meta": {"name": "贵州茅台"}}}, "600519") == "贵州茅台"
+
+
+def test_selection_block1_filters_to_pool(monkeypatch):
+    """区块①「自选股」只展示自选池成员;区块③Top 仍含全A票;total 为全量扫描口径。"""
+    recs = {"000001": _rec("000001", bull=True),
+            "000002": _rec("000002", bull=True),
+            "000003": _rec("000003", bull=True)}
+    monkeypatch.setattr(da, "_load_all", lambda date="latest": recs)
+    monkeypatch.setattr(da, "as_of", lambda date="latest": "2026-08-08")
+    monkeypatch.setattr(da, "_pool_codes", lambda: {"000001"})    # 仅 000001 属自选池
+    monkeypatch.setattr(da.store, "get_view",
+                        lambda name, date="latest": (_ for _ in ()).throw(FileNotFoundError()))
+    page = da.selection_page()
+    assert {r["code"] for r in page["rows"]} == {"000001"}         # 区块① 过滤到 1 只
+    assert page["total"] == 3                                      # "本页共分析" 仍为全量
+    assert {p["code"] for p in page["top_picks"]} == {"000001", "000002", "000003"}  # Top 不受过滤
+
+
+def test_selection_block1_empty_pool_no_crash(monkeypatch):
+    """自选池空(或读取失败)→ 区块① rows 空,不炸页;total/top_picks 仍按全量。"""
+    recs = {"000001": _rec("000001", bull=True)}
+    monkeypatch.setattr(da, "_load_all", lambda date="latest": recs)
+    monkeypatch.setattr(da, "as_of", lambda date="latest": "2026-08-08")
+    monkeypatch.setattr(da, "_pool_codes", lambda: set())
+    monkeypatch.setattr(da.store, "get_view",
+                        lambda name, date="latest": (_ for _ in ()).throw(FileNotFoundError()))
+    page = da.selection_page()
+    assert page["rows"] == [] and page["total"] == 1
+    assert {p["code"] for p in page["top_picks"]} == {"000001"}
+
+
+def test_selection_route_block1_title_and_topn_strategy_note(monkeypatch):
+    """路由:区块①标题为「自选股」(不再是「持续关注」);区块③今日精选带候选池/排序/策略说明。"""
+    r = _rec("000001", bull=True); r["prediction"] = _pred_with_structure()
+    monkeypatch.setattr(da, "_load_all", lambda date="latest": {"000001": r})
+    monkeypatch.setattr(da, "as_of", lambda date="latest": "2026-08-08")
+    monkeypatch.setattr(da, "available_dates", lambda: ["2026-08-08"])
+    monkeypatch.setattr(da, "_pool_codes", lambda: {"000001"})
+    monkeypatch.setattr(da.store, "get_view",
+                        lambda name, date="latest": (_ for _ in ()).throw(FileNotFoundError()))
+    resp = client.get("/selection")
+    assert resp.status_code == 200
+    assert "① 自选股" in resp.text and "持续关注" not in resp.text        # 区块①改名
+    # 区块③ Top15 说明:候选池 / 排序 / 用到的策略 / 弃权说明 / 非投资建议
+    assert "候选池" in resp.text and "接近达标票" in resp.text
+    assert "多策略合议" in resp.text
+    assert "技术趋势" in resp.text and "板块轮动" in resp.text
+    assert "自动弃权" in resp.text and "非投资建议" in resp.text
