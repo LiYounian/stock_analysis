@@ -29,8 +29,10 @@ def run_fetch(date: str | None = None, *, backfill: bool = False, force: bool = 
     """跑一次远端采集。非交易日(且未 --force)→ 跳过。返回 {skipped|ok, mode, ...}。"""
     from tools.collectors import calendar as cal
     date = date or _today()
-    if not force and not cal.is_trading_day(date):
-        logger.info("非交易日 %s,跳过采集", date)
+    # 交易日守卫只拦"当日增量"(spot 拿今天的 bar);--backfill 是历史全量,与今天是否交易日无关,
+    # 故 backfill 自动绕过守卫(免得首次部署撞上周末/节假日被跳过、还得手动 --force)。
+    if not force and not backfill and not cal.is_trading_day(date):
+        logger.info("非交易日 %s,跳过当日增量采集", date)
         return {"skipped": True, "reason": "not_trading_day", "date": date}
 
     from tools.collectors.universe import universe_codes
