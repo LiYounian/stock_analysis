@@ -67,7 +67,13 @@ def _today_str():
 
 # ---------- default_keywords ----------
 
-def test_default_keywords_covers_pool_industries():
+def test_default_keywords_covers_pool_industries(monkeypatch):
+    # 池无关:default_keywords 从自选池 sector 派生,若耦合 live 池,砍池就误挂。
+    # 固定一个覆盖核心行业的测试池,只验"池行业→关键词"的派生逻辑本身。
+    from tools.config.stock_pool import Stock
+    fake = [Stock(f"00000{i}", "n", "x", sec) for i, sec in
+            enumerate(("半导体", "机器人/自动化", "AI算力", "新能源材料"))]
+    monkeypatch.setattr(pol.stock_pool, "get_pool", lambda: fake)
     kws = pol.default_keywords()
     joined = " ".join(kws)
     # 票池核心行业词都应出现在检索词里

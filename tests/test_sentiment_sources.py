@@ -130,6 +130,11 @@ def test_ugc_sentiment_clamps(isolate, monkeypatch):
 # ---------- analyze_stock 三层整合 ----------
 def test_analyze_stock_three_layers(isolate, monkeypatch):
     code = "002156"                                    # 半导体
+    # 池无关:analyze_stock 用 stock_pool.get(code).sector 匹配政策行业;002156 已不在 live 自选池,
+    # 固定它的行业为半导体(否则砍池后取不到行业→政策层空→三层断言挂)。
+    from tools.config.stock_pool import Stock
+    monkeypatch.setattr(ev.stock_pool, "get",
+                        lambda c: Stock("002156", "通富微电", "半导体封测", "半导体") if c == code else None)
     _fake_news(monkeypatch, {code: [
         {"title": "公司中标5亿", "content": "利好业绩", "time": "2026-08-01",
          "source": "东财", "url": "n1"},
