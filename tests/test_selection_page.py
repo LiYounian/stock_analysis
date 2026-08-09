@@ -1,4 +1,12 @@
-"""选股结果页单测:达标标注、兜底(无形态视图→按合议排序)、路由渲染。data-independent(monkeypatch)。"""
+"""选股结果页单测(重构后:① 自选股 →【综合选股】→ 策略0(合议全A)→ 策略1(趋势深跌反包))。
+
+锁死:
+  - 区块② 每日筛选(形态选股)已移除;页面不再出现「每日筛选」「今日精选」「S01」字样。
+  - 策略0 读 view「策略0合议」top;缺失走兜底(present=False)。
+  - 综合选股 = 各策略入选代码并集(后端给全并集 + 命中来源,前端按勾选实时重算)。
+  - 策略1 读 view「趋势深跌反包」;区块顺序;名称回退。
+data-independent(monkeypatch)。
+"""
 from fastapi.testclient import TestClient
 
 from tools.analysis import council
@@ -26,609 +34,228 @@ def _rec(code, bull=True):
     return rec
 
 
-def _patch_records(monkeypatch, recs):
-    monkeypatch.setattr(da, "_load_all", lambda date="latest": recs)
-    monkeypatch.setattr(da, "as_of", lambda date="latest": "2026-08-08")
-    # 区块①「自选股」过滤到自选池:测试里把合成票全部视作自选池成员,行为与旧口径一致
-    monkeypatch.setattr(da, "_pool_codes", lambda: set(recs.keys()))
-    # 隔离全A名映射(config/code_name.json),保持"无中心记录 → 回退 code"的断言与环境无关
-    monkeypatch.setattr(da, "_code_name_map", lambda: {})
+def _strategy0_view(codes=("000001", "000002")):
+    """一份「策略0合议」view(每项带 council 信封),字段口径同 screen_council 产出。"""
+    top = []
+    for i, c in enumerate(codes):
+        rec = _rec(c, bull=(i == 0))
+        top.append({"code": c, "行业": "芯片", "综合方向": rec["council"]["default"]["综合方向"],
+                    "综合分": rec["council"]["default"]["综合分"], "council": rec["council"]})
+    return {"as_of": "2026-08-08", "策略": "策略0 · 多专家合议(全A)",
+            "扫描数": 5206, "有效": 5191, "top_n": len(top), "top": top}
 
 
-def test_selection_fallback_no_view_ranks_by_council(monkeypatch):
-    """无形态选股 view → 兜底:展示全部记录,按合议综合分降序,qualified=None。"""
-    recs = {"000001": _rec("000001", bull=True), "000002": _rec("000002", bull=False)}
-    _patch_records(monkeypatch, recs)
-    monkeypatch.setattr(da.store, "get_view",
-                        lambda name, date="latest": (_ for _ in ()).throw(FileNotFoundError()))
-    page = da.selection_page()
-    assert page["view_present"] is False and page["total"] == 2
-    assert all(r["qualified"] is None for r in page["rows"])       # 无视图 → 达标未知
-    # 看多(综合分高)排在看空前
-    assert page["rows"][0]["code"] == "000001"
-    assert page["rows"][0]["council_score"] >= page["rows"][1]["council_score"]
-    assert page["rows"][0]["experts"]                              # 带专家信封供前端重排
-    assert page["config"]                                          # 带共享 config(分母模式等)
-
-
-def test_near_miss_dict_shape_flattened_not_crash(monkeypatch):
-    """回归:screen_pattern 的「接近达标」真实形状是 {板块:[items]} 字典,selection_page 须拍平。
-
-    此前 _top_picks/_daily_sections 按扁平列表假设写,遇字典会 AttributeError('str' has no 'get')炸整页。
-    锁死:字典形状下 selection_page 正常返回,top_picks 为列表且含接近达标票。
-    """
-    recs = {"000001": _rec("000001", bull=True)}
-    _patch_records(monkeypatch, recs)
-    view = {"扫描数": 5539, "达标数": 1,
-            "达标清单": [{"code": "000001", "行业": "芯片", "命中形态": "箱体", "正向确认依据": []}],
-            "接近达标": {                                   # ← 字典:板块→列表(真实形状)
-                "电子": [{"code": "300001", "行业": "电子", "最接近形态": ["杯柄"], "差距说明": "待突破", "合议分": 0.2}],
-                "银行": [{"code": "600000", "行业": "银行", "最接近形态": ["旗形"], "差距说明": "待放量", "合议分": 0.1}]}}
-    monkeypatch.setattr(da.store, "get_view", lambda name, date="latest": view)
-    page = da.selection_page()                              # 不得抛异常
-    assert isinstance(page["top_picks"], list)
-    picks = {p["code"] for p in page["top_picks"]}
-    assert "000001" in picks and ("300001" in picks or "600000" in picks)   # 达标∪接近∪自选 都进候选
-
-
-def test_selection_with_view_marks_qualified(monkeypatch):
-    """有形态选股 view → 标达标 + 达标理由(命中形态/正向确认)。"""
-    recs = {"000001": _rec("000001", bull=True), "000002": _rec("000002", bull=False)}
-    _patch_records(monkeypatch, recs)
-    view = {"扫描数": 2, "有效样本": 2, "达标数": 1, "达标占比": 0.5,
-            "纪律": "突破不裸用", "RS模式": "单层",
-            "达标清单": [{"code": "000001", "命中形态": "杯柄", "正向确认依据": ["净利增速+"]}]}
-    monkeypatch.setattr(da.store, "get_view", lambda name, date="latest": view)
-    page = da.selection_page()
-    assert page["view_present"] is True and page["qualified"] == 1
-    byc = {r["code"]: r for r in page["rows"]}
-    assert byc["000001"]["qualified"] is True
-    assert byc["000001"]["达标理由"]["命中形态"] == "杯柄"
-    assert byc["000002"]["qualified"] is False and byc["000002"]["达标理由"] is None
-
-
-def test_daily_section_groups_by_board(monkeypatch):
-    """区块②:达标票按行业分组(取自中心记录 meta.industry),每组带合议 + 专家信封。"""
-    r1 = _rec("000001", bull=True); r1["meta"]["industry"] = "半导体"
-    r2 = _rec("000002", bull=True); r2["meta"]["industry"] = "电力"
-    recs = {"000001": r1, "000002": r2}
-    _patch_records(monkeypatch, recs)
-    view = {"扫描数": 500, "有效样本": 480, "达标数": 2, "达标占比": 0.004,
-            "达标清单": [{"code": "000001", "命中形态": "杯柄", "正向确认依据": []},
-                        {"code": "000002", "命中形态": "箱体", "正向确认依据": []}]}
-    monkeypatch.setattr(da.store, "get_view", lambda name, date="latest": view)
-    d = da.selection_page()["daily"]
-    assert d["present"] is True and d["total_scanned"] == 500 and d["board_count"] == 2
-    boards = {g["板块"] for g in d["groups"]}
-    assert boards == {"半导体", "电力"}
-    g0 = d["groups"][0]
-    assert g0["rows"][0]["experts"]                              # 带专家信封供前端重排
-    assert g0["rows"][0]["council_dir"] in ("看多", "看空", "中性")
-
-
-def test_daily_section_absent_when_no_view(monkeypatch):
-    """区块② 兜底:无 view → present=False、groups 空,不报错。"""
-    recs = {"000001": _rec("000001", bull=True)}
-    _patch_records(monkeypatch, recs)
-    monkeypatch.setattr(da.store, "get_view",
-                        lambda name, date="latest": (_ for _ in ()).throw(FileNotFoundError()))
-    d = da.selection_page()["daily"]
-    assert d["present"] is False and d["groups"] == []
-
-
-def test_daily_top_n_per_board(monkeypatch):
-    """每板块只取 top_n(按合议分)。"""
-    recs = {}
-    clist = []
-    for i in range(8):
-        c = f"00010{i}"
-        r = _rec(c, bull=True); r["meta"]["industry"] = "半导体"
-        recs[c] = r
-        clist.append({"code": c, "命中形态": "杯柄", "正向确认依据": []})
-    _patch_records(monkeypatch, recs)
-    view = {"扫描数": 8, "达标数": 8, "达标清单": clist}
-    monkeypatch.setattr(da.store, "get_view", lambda name, date="latest": view)
-    d = da.selection_page()["daily"]
-    g = d["groups"][0]
-    assert g["板块"] == "半导体" and g["count"] == 8 and len(g["rows"]) == d["top_n"] == 5
-
-
-def test_daily_near_when_zero_qualified(monkeypatch):
-    """达标0但有接近达标 → mode=near、按板块分组(组内合议分降序、板块按最高分降序),不空页。"""
-    recs = {}  # 全A票可无中心记录:合议分取契约自带
-    _patch_records(monkeypatch, recs)
-    view = {"扫描数": 4800, "有效样本": 4600, "达标数": 0, "达标清单": [],
-            "接近达标": [
-                {"code": "000001", "行业": "半导体", "最接近形态": "杯柄", "差距说明": "颈线差1.2%", "合议分": 60},
-                {"code": "000002", "行业": "半导体", "最接近形态": "箱体", "差距说明": "量能不足", "合议分": 80},
-                {"code": "000003", "行业": "电力", "最接近形态": "旗形", "差距说明": "回踩未确认", "合议分": 90},
-            ]}
-    monkeypatch.setattr(da.store, "get_view", lambda name, date="latest": view)
-    d = da.selection_page()["daily"]
-    assert d["present"] is True and d["mode"] == "near"
-    assert d["qualified_n"] == 0 and d["near_n"] == 3 and d["top_n"] == 3
-    # 电力(90)组内最高分 > 半导体(80)→ 电力在前
-    assert [g["板块"] for g in d["groups"]] == ["电力", "半导体"]
-    semi = next(g for g in d["groups"] if g["板块"] == "半导体")
-    assert [r["code"] for r in semi["rows"]] == ["000002", "000001"]   # 组内合议分降序
-    assert semi["rows"][0]["最接近形态"] == "箱体" and semi["rows"][0]["差距说明"] == "量能不足"
-
-
-def test_daily_near_top3_per_board(monkeypatch):
-    """接近达标每板块只取 top3(按合议分)。"""
-    _patch_records(monkeypatch, {})
-    near = [{"code": f"0001{i}", "行业": "半导体", "最接近形态": "杯柄",
-             "差距说明": "d", "合议分": i} for i in range(6)]
-    view = {"扫描数": 5000, "达标数": 0, "达标清单": [], "接近达标": near}
-    monkeypatch.setattr(da.store, "get_view", lambda name, date="latest": view)
-    d = da.selection_page()["daily"]
-    g = d["groups"][0]
-    assert g["count"] == 6 and len(g["rows"]) == 3           # 取 top3
-    assert [r["合议分"] if "合议分" in r else r["council_score"] for r in g["rows"]] == [5, 4, 3]
-
-
-def test_daily_zero_qualified_and_no_near(monkeypatch):
-    """达标0且无接近达标 → present、groups 空(前端显示"无达标且无接近达标"),不报错。"""
-    _patch_records(monkeypatch, {})
-    view = {"扫描数": 5000, "达标数": 0, "达标清单": []}   # 无「接近达标」字段
-    monkeypatch.setattr(da.store, "get_view", lambda name, date="latest": view)
-    d = da.selection_page()["daily"]
-    assert d["present"] is True and d["groups"] == [] and d["near_n"] == 0
-
-
-def test_daily_qualified_takes_priority_over_near(monkeypatch):
-    """达标>0 时即使有接近达标也走达标分组(mode=qualified)。"""
-    r1 = _rec("000001", bull=True); r1["meta"]["industry"] = "半导体"
-    _patch_records(monkeypatch, {"000001": r1})
-    view = {"扫描数": 500, "达标数": 1,
-            "达标清单": [{"code": "000001", "命中形态": "杯柄", "正向确认依据": []}],
-            "接近达标": [{"code": "000009", "行业": "电力", "最接近形态": "旗形", "差距说明": "x", "合议分": 99}]}
-    monkeypatch.setattr(da.store, "get_view", lambda name, date="latest": view)
-    d = da.selection_page()["daily"]
-    assert d["mode"] == "qualified" and d["near_n"] == 1 and d["top_n"] == 5
-    assert [g["板块"] for g in d["groups"]] == ["半导体"]
-
-
-def test_selection_route_renders_near(monkeypatch):
-    """路由:达标0+有接近达标 → 渲染"仅提示"标注 + 接近达标分组,不空页。"""
-    monkeypatch.setattr(da, "_load_all", lambda date="latest": {})
-    monkeypatch.setattr(da, "as_of", lambda date="latest": "2026-08-08")
-    monkeypatch.setattr(da, "available_dates", lambda: ["2026-08-08"])
-    view = {"扫描数": 4800, "达标数": 0, "达标清单": [],
-            "接近达标": [{"code": "000001", "行业": "半导体", "最接近形态": "杯柄",
-                        "差距说明": "颈线差1.2%", "合议分": 60}]}
-    monkeypatch.setattr(da.store, "get_view", lambda name, date="latest": view)
-    r = client.get("/selection")
-    assert r.status_code == 200
-    assert "仅提示,非达标信号" in r.text and "接近达标" in r.text
-    assert "000001" in r.text and "颈线差1.2%" in r.text
-    assert "待扫描生成" not in r.text                          # 有接近达标 → 不落兜底
-
-
-def test_selection_route_renders(monkeypatch):
-    recs = {"000001": _rec("000001", bull=True)}
-    monkeypatch.setattr(da, "_load_all", lambda date="latest": recs)
-    monkeypatch.setattr(da, "as_of", lambda date="latest": "2026-08-08")
-    monkeypatch.setattr(da, "available_dates", lambda: ["2026-08-08"])
-    monkeypatch.setattr(da, "_pool_codes", lambda: {"000001"})   # 区块①自选池含该票
-    monkeypatch.setattr(da.store, "get_view",
-                        lambda name, date="latest": (_ for _ in ()).throw(FileNotFoundError()))
-    r = client.get("/selection")
-    assert r.status_code == 200
-    assert "选股结果" in r.text
-    assert "自选股" in r.text and "每日筛选" in r.text            # 区块①改名「自选股」+ 区块②
-    assert "/static/council.js" in r.text                         # 复用合议公式
-    assert 'id="selBody"' in r.text
-    assert "T000001" in r.text                                    # 票名渲染
-    assert "待扫描生成" in r.text                                 # 区块② 兜底(无 view)
-
-
-def _pred_full():
-    """一份有效 prediction 块(含 5日止盈止损 + 上涨概率),口径同 predict.py 产出。"""
-    return {
-        "现价": 12.34,
-        "持有期建议": {"5日": {"止损位": 11.50, "最大亏损%": 6.8,
-                              "止盈位": 13.60, "目标盈利%": 10.2, "风险收益比": 1.5}},
-        "情景预测": {"5日": {"上涨概率%": 58.0, "样本数": 120}},
-        "买卖倾向": {"结论": "偏买入", "依据": ["多头"]},
-    }
-
-
-def test_stops_view_guards_missing_and_error():
-    """防空口径单测:prediction 缺失/None/error → 全字段 None;有效 → 透传 5日字段。"""
-    assert da.stops_view({})["止损位"] is None
-    assert da.stops_view({"prediction": None})["现价"] is None
-    err = da.stops_view({"prediction": {"error": "数据不足", "n": 5}})   # 次新股
-    assert all(v is None for v in err.values())
-    ok = da.stops_view({"prediction": _pred_full()})
-    assert ok["现价"] == 12.34 and ok["止损位"] == 11.50 and ok["最大亏损%"] == 6.8
-    assert ok["止盈位"] == 13.60 and ok["目标盈利%"] == 10.2 and ok["风险收益比"] == 1.5
-    assert ok["上涨概率%"] == 58.0
-
-
-def test_selection_row_carries_stops_and_renders(monkeypatch):
-    """自选票行带 5日止盈止损列;路由渲染含止损/止盈数值与新列表头。"""
-    r = _rec("000001", bull=True)
-    r["prediction"] = _pred_full()
-    recs = {"000001": r}
-    monkeypatch.setattr(da, "_load_all", lambda date="latest": recs)
-    monkeypatch.setattr(da, "as_of", lambda date="latest": "2026-08-08")
-    monkeypatch.setattr(da, "available_dates", lambda: ["2026-08-08"])
-    monkeypatch.setattr(da, "_pool_codes", lambda: {"000001"})
-    monkeypatch.setattr(da.store, "get_view",
-                        lambda name, date="latest": (_ for _ in ()).throw(FileNotFoundError()))
-    page = da.selection_page()
-    assert page["rows"][0]["stops"]["止损位"] == 11.50
-    assert page["rows"][0]["stops"]["上涨概率%"] == 58.0
-    resp = client.get("/selection")
-    assert resp.status_code == 200
-    assert "现价" in resp.text and "止损位" in resp.text and "5日涨概率" in resp.text   # 新列表头
-    assert "11.5" in resp.text and "13.6" in resp.text                              # 止损/止盈数值
-    assert "58.0%" in resp.text                                                     # 5日上涨概率
-
-
-def test_selection_error_prediction_renders_dash_no_crash(monkeypatch):
-    """次新股 error-prediction 行不炸,相关列为「—」(不抛 UndefinedError)。"""
-    r = _rec("301583", bull=True)
-    r["prediction"] = {"error": "数据不足", "n": 12}       # K线<30
-    recs = {"301583": r}
-    monkeypatch.setattr(da, "_load_all", lambda date="latest": recs)
-    monkeypatch.setattr(da, "as_of", lambda date="latest": "2026-08-08")
-    monkeypatch.setattr(da, "available_dates", lambda: ["2026-08-08"])
-    monkeypatch.setattr(da, "_pool_codes", lambda: {"301583"})
-    monkeypatch.setattr(da.store, "get_view",
-                        lambda name, date="latest": (_ for _ in ()).throw(FileNotFoundError()))
-    page = da.selection_page()
-    assert all(v is None for v in page["rows"][0]["stops"].values())
-    resp = client.get("/selection")
-    assert resp.status_code == 200 and "—" in resp.text                             # 占位符,未炸页
-
-
-def test_dashboard_stops_columns_and_error_guard(monkeypatch):
-    """首页全池速览带 5日止盈止损列;有效票显数值,error-prediction 票显「—」,不炸页。"""
-    ok = _rec("000001", bull=True); ok["prediction"] = _pred_full()
-    ok["snapshot"] = {"close": 12.34, "pct_chg": 1.2}
-    err = _rec("301583", bull=True); err["prediction"] = {"error": "数据不足", "n": 12}
-    err["snapshot"] = {"close": 20.0, "pct_chg": 0.5}
-    recs = {"000001": ok, "301583": err}
-    monkeypatch.setattr(da, "_load_all", lambda date="latest": recs)
-    monkeypatch.setattr(da, "as_of", lambda date="latest": "2026-08-08")
-    monkeypatch.setattr(da, "available_dates", lambda: ["2026-08-08"])
-    resp = client.get("/")
-    assert resp.status_code == 200
-    assert "止损位" in resp.text and "5日涨概率" in resp.text     # 新列表头
-    assert "11.5" in resp.text and "13.6" in resp.text          # 有效票止损/止盈
-    assert "—" in resp.text                                     # error 票占位,未炸
-
-
-def _pred_with_structure():
-    """一份含 L3「结构位 / 情景锚定」的 prediction 块(口径同 predict.py 产出)。"""
-    return {
-        "现价": 12.34,
-        "持有期建议": {"5日": {"止损位": 11.50, "最大亏损%": 6.8,
-                              "止盈位": 13.60, "目标盈利%": 10.2, "风险收益比": 1.5}},
-        "情景预测": {"5日": {"上涨概率%": 58.0, "样本数": 120}},
-        "买卖倾向": {"结论": "偏买入", "依据": ["多头"]},
-        "结构位": {
-            "支撑": [11.8, 11.2], "压力": [13.0, 13.8],
-            "距支撑%": 4.6, "距压力%": 5.3, "区间位置%": 47.0,
-            "当日量比": 1.8, "放量": True, "突破": "放量突破", "趋势": "偏多", "bias20": 3.2,
-            "锚定": {"情景": "突破回踩企稳", "止损位": 11.80, "止盈位": 13.60,
-                    "盈亏比": 3.3, "依据": ["放量突破颈线", "距支撑近"]},
-        },
-    }
-
-
-def test_structure_view_and_anchor_stops():
-    """L3 取数 + 回退链单测:结构位存在→透传+锚定优先;缺失→回退 5日ATR;error→全 None。"""
-    # 结构位存在
-    r = {"prediction": _pred_with_structure()}
-    sv = da.structure_view(r)
-    assert sv is not None and sv["突破"] == "放量突破" and sv["锚定"]["盈亏比"] == 3.3
-    a = da.anchor_stops(r)
-    assert a["source"] == "结构位" and a["情景"] == "突破回踩企稳"
-    assert a["止损位"] == 11.80 and a["止盈位"] == 13.60 and a["盈亏比"] == 3.3
-    assert a["区间位置%"] == 47.0 and a["突破"] == "放量突破"
-    # 结构位缺失(仅 5日 ATR)→ 回退
-    r2 = {"prediction": _pred_full()}
-    assert da.structure_view(r2) is None
-    a2 = da.anchor_stops(r2)
-    assert a2["source"] == "5日ATR" and a2["止损位"] == 11.50 and a2["盈亏比"] == 1.5
-    assert a2["最大亏损%"] == 6.8 and a2["情景"] is None
-    # error / 缺失 prediction → 全 None、None 视图
-    assert da.structure_view({"prediction": {"error": "数据不足", "n": 5}}) is None
-    err = da.anchor_stops({"prediction": {"error": "数据不足"}})
-    assert err["止损位"] is None and err["source"] is None
-    assert da.anchor_stops({})["source"] is None
-
-
-def test_selection_row_carries_anchor_and_renders_structure(monkeypatch):
-    """区块①:结构位存在→行带 anchor(锚定优先),路由渲染情景/突破/区间位置。"""
-    r = _rec("000001", bull=True)
-    r["prediction"] = _pred_with_structure()
-    monkeypatch.setattr(da, "_load_all", lambda date="latest": {"000001": r})
-    monkeypatch.setattr(da, "as_of", lambda date="latest": "2026-08-08")
-    monkeypatch.setattr(da, "available_dates", lambda: ["2026-08-08"])
-    monkeypatch.setattr(da, "_pool_codes", lambda: {"000001"})
-    monkeypatch.setattr(da.store, "get_view",
-                        lambda name, date="latest": (_ for _ in ()).throw(FileNotFoundError()))
-    page = da.selection_page()
-    row = page["rows"][0]
-    assert row["anchor"]["source"] == "结构位" and row["anchor"]["盈亏比"] == 3.3
-    resp = client.get("/selection")
-    assert resp.status_code == 200
-    assert "突破回踩企稳" in resp.text and "放量突破" in resp.text and "47.0%" in resp.text
-
-
-def test_selection_row_anchor_falls_back_when_no_structure(monkeypatch):
-    """区块①:无结构位(老数据)→ anchor 回退 5日ATR,渲染止损/止盈点位不炸。"""
-    r = _rec("000001", bull=True)
-    r["prediction"] = _pred_full()               # 无结构位
-    monkeypatch.setattr(da, "_load_all", lambda date="latest": {"000001": r})
-    monkeypatch.setattr(da, "as_of", lambda date="latest": "2026-08-08")
-    monkeypatch.setattr(da, "available_dates", lambda: ["2026-08-08"])
-    monkeypatch.setattr(da, "_pool_codes", lambda: {"000001"})
-    monkeypatch.setattr(da.store, "get_view",
-                        lambda name, date="latest": (_ for _ in ()).throw(FileNotFoundError()))
-    page = da.selection_page()
-    assert page["rows"][0]["anchor"]["source"] == "5日ATR"
-    resp = client.get("/selection")
-    assert resp.status_code == 200 and "11.5" in resp.text and "13.6" in resp.text
-
-
-def test_selection_error_prediction_anchor_dash(monkeypatch):
-    """区块①:次新股 error-prediction → anchor 全 None,渲染「—」不抛。"""
-    r = _rec("301583", bull=True)
-    r["prediction"] = {"error": "数据不足", "n": 12}
-    monkeypatch.setattr(da, "_load_all", lambda date="latest": {"301583": r})
-    monkeypatch.setattr(da, "as_of", lambda date="latest": "2026-08-08")
-    monkeypatch.setattr(da, "available_dates", lambda: ["2026-08-08"])
-    monkeypatch.setattr(da, "_pool_codes", lambda: {"301583"})
-    monkeypatch.setattr(da.store, "get_view",
-                        lambda name, date="latest": (_ for _ in ()).throw(FileNotFoundError()))
-    page = da.selection_page()
-    assert page["rows"][0]["anchor"]["source"] is None
-    resp = client.get("/selection")
-    assert resp.status_code == 200 and "—" in resp.text
-
-
-def test_top_picks_ranks_and_dedup(monkeypatch):
-    """区块③ Top N:达标∪接近达标∪自选池去重,按合议综合分降序;结构位存在带锚定。"""
-    r1 = _rec("000001", bull=True); r1["prediction"] = _pred_with_structure()
-    r2 = _rec("000002", bull=False)                      # 看空 → 综合分低
-    recs = {"000001": r1, "000002": r2}
-    _patch_records(monkeypatch, recs)
-    view = {"扫描数": 2, "达标数": 1,
-            "达标清单": [{"code": "000001", "命中形态": "杯柄", "正向确认依据": []}],
-            "接近达标": [{"code": "000009", "行业": "电力", "最接近形态": "旗形",
-                        "差距说明": "x", "合议分": 5.0}]}    # 全A票无中心记录,取契约合议分
-    monkeypatch.setattr(da.store, "get_view", lambda name, date="latest": view)
-    tp = da.selection_page()["top_picks"]
-    codes = [x["code"] for x in tp]
-    assert codes.count("000001") == 1                    # 去重(既在达标清单又在自选池)
-    assert "000009" in codes                             # 接近达标票并入
-    # 降序:综合分非空在前;000001(看多+结构位)在 000002(看空)前
-    assert codes.index("000001") < codes.index("000002")
-    pick1 = next(x for x in tp if x["code"] == "000001")
-    assert pick1["情景"] == "突破回踩企稳" and pick1["盈亏比"] == 3.3 and pick1["experts"]
-    pick9 = next(x for x in tp if x["code"] == "000009")
-    assert pick9["council_score"] == 5.0 and pick9["止损位"] is None   # 无记录→无锚定
-
-
-def test_top_picks_fallback_no_view(monkeypatch):
-    """区块③ 兜底:无达标池 view → 仅用自选池仍能出 Top N。"""
-    recs = {"000001": _rec("000001", bull=True), "000002": _rec("000002", bull=False)}
-    _patch_records(monkeypatch, recs)
-    monkeypatch.setattr(da.store, "get_view",
-                        lambda name, date="latest": (_ for _ in ()).throw(FileNotFoundError()))
-    tp = da.selection_page()["top_picks"]
-    assert {x["code"] for x in tp} == {"000001", "000002"}
-    assert tp[0]["code"] == "000001"                     # 综合分降序(看多在前)
-
-
-def test_top_picks_caps_at_15(monkeypatch):
-    """区块③:候选超过 15 只 → 只取 Top 15。"""
-    recs = {f"0001{i:02d}": _rec(f"0001{i:02d}", bull=True) for i in range(20)}
-    _patch_records(monkeypatch, recs)
-    monkeypatch.setattr(da.store, "get_view",
-                        lambda name, date="latest": (_ for _ in ()).throw(FileNotFoundError()))
-    tp = da.selection_page()["top_picks"]
-    assert len(tp) == 15
-
-
-def test_top_picks_empty_day_no_crash(monkeypatch):
-    """区块③:完全无数据 → 空列表,路由渲染友好占位不空页。"""
-    monkeypatch.setattr(da, "_load_all", lambda date="latest": {})
-    monkeypatch.setattr(da, "as_of", lambda date="latest": "2026-08-08")
-    monkeypatch.setattr(da, "available_dates", lambda: ["2026-08-08"])
-    monkeypatch.setattr(da.store, "get_view",
-                        lambda name, date="latest": (_ for _ in ()).throw(FileNotFoundError()))
-    assert da.selection_page()["top_picks"] == []
-    resp = client.get("/selection")
-    assert resp.status_code == 200 and "今日精选" in resp.text
-
-
-def test_selection_route_renders_topn_section_and_disclaimer(monkeypatch):
-    """区块③ 路由:标题 + 数据策略说明(纯数据、未用新闻/大模型)渲染。"""
-    r = _rec("000001", bull=True); r["prediction"] = _pred_with_structure()
-    monkeypatch.setattr(da, "_load_all", lambda date="latest": {"000001": r})
-    monkeypatch.setattr(da, "as_of", lambda date="latest": "2026-08-08")
-    monkeypatch.setattr(da, "available_dates", lambda: ["2026-08-08"])
-    monkeypatch.setattr(da.store, "get_view",
-                        lambda name, date="latest": (_ for _ in ()).throw(FileNotFoundError()))
-    resp = client.get("/selection")
-    assert resp.status_code == 200
-    assert "今日精选" in resp.text and 'id="topBody"' in resp.text
-    assert "未用新闻" in resp.text and "非投资建议" in resp.text
-
-
-def test_selection_empty_day_no_crash(monkeypatch):
-    monkeypatch.setattr(da, "_load_all", lambda date="latest": {})
-    monkeypatch.setattr(da, "as_of", lambda date="latest": "2026-08-08")
-    monkeypatch.setattr(da.store, "get_view",
-                        lambda name, date="latest": (_ for _ in ()).throw(FileNotFoundError()))
-    page = da.selection_page()
-    assert page["total"] == 0 and page["rows"] == []
-
-
-# ————————————————————————————————————————————————
-# S01「趋势深跌反包」区块(screen_s01 产出 view → selection_page.s01 + 路由渲染)
-# ————————————————————————————————————————————————
 def _s01_view():
-    """一份「趋势深跌反包」view(3 只入选),字段口径同 tools/pipeline/screen_s01 产出。"""
     return {
         "as_of": "2026-08-08", "策略": "趋势深跌反包(S01)",
-        "扫描数": 5539, "有效样本": 5124, "跳过数(历史不足)": 415, "入选数": 3,
+        "扫描数": 5539, "有效样本": 5124, "跳过数(历史不足)": 415, "入选数": 2,
         "入选清单": [
             {"code": "300311", "明细": {
                 "MA": {"5": 6.16, "10": 5.649, "20": 5.414, "30": 5.3593, "60": 5.3325, "200": 5.1149},
                 "close": 6.69, "H52": 7.16, "近强_涨/跌": [9, 1], "当日跌幅": -0.1257, "收阳": True}},
-            {"code": "300951", "明细": {
-                "MA": {"5": 62.704, "10": 58.218, "20": 49.957, "30": 49.222, "60": 46.2617, "200": 38.5521},
-                "close": 68.5, "H52": 70.59, "近强_涨/跌": [8, 2], "当日跌幅": -0.0419, "收阳": True}},
-            {"code": "603221", "明细": {   # close > H52 → 突破前高
+            {"code": "603221", "明细": {
                 "MA": {"5": 22.254, "10": 18.191, "20": 14.6835, "30": 13.3203, "60": 12.8087, "200": 12.5568},
                 "close": 24.82, "H52": 24.79, "近强_涨/跌": [1, 0], "当日跌幅": -0.0891, "收阳": True}},
         ],
     }
 
 
-def _view_dispatch(s01=None, other=None):
-    """按 view 名分派:S01 名返回 s01(或抛 FNF);其它名返回 other(或抛 FNF)。"""
+def _dispatch(strategy0=None, s01=None):
+    """按 view 名分派:策略0合议 / 趋势深跌反包;None → 抛 FileNotFoundError。"""
     def _fn(name, date="latest"):
-        v = s01 if name == "趋势深跌反包" else other
+        v = strategy0 if name == "策略0合议" else (s01 if name == "趋势深跌反包" else None)
         if v is None:
             raise FileNotFoundError(name)
         return v
     return _fn
 
 
-def test_s01_section_parses_view(monkeypatch):
-    """S01 view 存在 → s01 块 present + 规模字段 + 每票扁平化(跌幅%/突破前高/均线多头/收阳)。"""
-    recs = {"300311": _rec("300311", bull=True)}          # 一只有中心记录 → 取到名字
-    _patch_records(monkeypatch, recs)
-    monkeypatch.setattr(da.store, "get_view", _view_dispatch(s01=_s01_view()))
-    s01 = da.selection_page()["s01"]
-    assert s01["present"] is True
-    assert s01["扫描数"] == 5539 and s01["有效"] == 5124 and s01["跳过"] == 415 and s01["入选数"] == 3
-    assert [r["code"] for r in s01["rows"]] == ["300311", "300951", "603221"]
-    byc = {r["code"]: r for r in s01["rows"]}
-    assert byc["300311"]["name"] == "T300311"             # 有记录取 meta 名
-    assert byc["300951"]["name"] == "300951"              # 无记录回退代码
-    assert byc["300311"]["当日跌幅%"] == -12.57            # 小数→百分比
-    assert byc["300311"]["均线多头"] is True and byc["300311"]["收阳"] is True
-    assert byc["300311"]["近强_涨"] == 9 and byc["300311"]["近强_跌"] == 1
-    assert byc["603221"]["突破前高"] is True               # close 24.82 > H52 24.79
-    assert byc["300311"]["突破前高"] is False              # close 6.69 < H52 7.16
-
-
-def test_s01_section_missing_view_fallback(monkeypatch):
-    """S01 view 缺失 → present=False,不空页不抛(其它 view 可正常存在)。"""
-    _patch_records(monkeypatch, {})
-    monkeypatch.setattr(da.store, "get_view", _view_dispatch(s01=None, other=None))
-    s01 = da.selection_page()["s01"]
-    assert s01["present"] is False and s01["rows"] == [] and s01["入选数"] is None
-
-
-def test_s01_section_guards_missing_fields(monkeypatch):
-    """S01 单票明细缺 MA/字段 → 均线多头/收阳/跌幅 置 None,不抛(前端渲染「—」)。"""
-    _patch_records(monkeypatch, {})
-    view = {"扫描数": 10, "入选数": 1, "入选清单": [{"code": "000001", "明细": {"close": 5.0}}]}
-    monkeypatch.setattr(da.store, "get_view", _view_dispatch(s01=view))
-    r = da.selection_page()["s01"]["rows"][0]
-    assert r["均线多头"] is None and r["收阳"] is None
-    assert r["当日跌幅%"] is None and r["H52"] is None and r["突破前高"] is False
-
-
-def test_selection_route_renders_s01(monkeypatch):
-    """路由:S01 view 存在 → 渲染「趋势深跌反包」区块 + 说明 + 入选票代码。"""
-    monkeypatch.setattr(da, "_load_all", lambda date="latest": {})
+def _patch(monkeypatch, recs, pool=None, get_view=None):
+    monkeypatch.setattr(da, "_load_all", lambda date="latest": recs)
     monkeypatch.setattr(da, "as_of", lambda date="latest": "2026-08-08")
     monkeypatch.setattr(da, "available_dates", lambda: ["2026-08-08"])
-    monkeypatch.setattr(da.store, "get_view", _view_dispatch(s01=_s01_view()))
-    r = client.get("/selection")
-    assert r.status_code == 200
-    assert "趋势深跌反包" in r.text and "当日深跌收阳" in r.text
-    assert "300311" in r.text and "603221" in r.text
-    assert "突破前高" in r.text                                    # 603221 close>H52
-    assert "-12.57%" in r.text                                    # 跌幅百分比
-
-
-def test_selection_route_s01_missing_shows_hint(monkeypatch):
-    """路由:S01 view 缺失 → 显示「S01 待运行」提示,不空页不报错。"""
-    monkeypatch.setattr(da, "_load_all", lambda date="latest": {})
-    monkeypatch.setattr(da, "as_of", lambda date="latest": "2026-08-08")
-    monkeypatch.setattr(da, "available_dates", lambda: ["2026-08-08"])
-    monkeypatch.setattr(da.store, "get_view", _view_dispatch(s01=None, other=None))
-    r = client.get("/selection")
-    assert r.status_code == 200
-    assert "S01 待运行" in r.text and "screen_s01" in r.text
-
-
-# ————————————————————————————————————————————————
-# 名称回退链(_name / _resolve_name):中心记录 → code_name.json → code
-# ————————————————————————————————————————————————
-def test_name_fallback_three_levels(monkeypatch):
-    """三级回退:有记录取 meta.name;无记录但 code_name 命中取映射名;都无回退 code。"""
-    monkeypatch.setattr(da, "_code_name_map", lambda: {"600519": "贵州茅台"})
-    recs = {"000001": {"meta": {"code": "000001", "name": "平安银行"}}}
-    assert da._name(recs, "000001") == "平安银行"      # ① 记录名优先
-    assert da._name(recs, "600519") == "贵州茅台"      # ② 无记录 → code_name 映射
-    assert da._name(recs, "999999") == "999999"        # ③ 都无 → code
-    # 记录存在但 meta.name 为空 → 继续回退 code_name
-    assert da._resolve_name({"meta": {"name": ""}}, "600519") == "贵州茅台"
-
-
-def test_code_name_map_missing_file_graceful(monkeypatch):
-    """code_name.json 缺失/损坏 → _code_name_map 空 dict,_name 优雅退回 records/code,不报错。"""
+    monkeypatch.setattr(da, "_pool_codes", lambda: set(recs.keys()) if pool is None else pool)
     monkeypatch.setattr(da, "_code_name_map", lambda: {})
-    assert da._name({}, "600519") == "600519"
-    assert da._name({"600519": {"meta": {"name": "贵州茅台"}}}, "600519") == "贵州茅台"
+    monkeypatch.setattr(da.store, "get_view", get_view or _dispatch())
 
 
-def test_selection_block1_filters_to_pool(monkeypatch):
-    """区块①「自选股」只展示自选池成员;区块③Top 仍含全A票;total 为全量扫描口径。"""
-    recs = {"000001": _rec("000001", bull=True),
-            "000002": _rec("000002", bull=True),
-            "000003": _rec("000003", bull=True)}
-    monkeypatch.setattr(da, "_load_all", lambda date="latest": recs)
-    monkeypatch.setattr(da, "as_of", lambda date="latest": "2026-08-08")
-    monkeypatch.setattr(da, "_pool_codes", lambda: {"000001"})    # 仅 000001 属自选池
-    monkeypatch.setattr(da.store, "get_view",
-                        lambda name, date="latest": (_ for _ in ()).throw(FileNotFoundError()))
-    page = da.selection_page()
-    assert {r["code"] for r in page["rows"]} == {"000001"}         # 区块① 过滤到 1 只
-    assert page["total"] == 3                                      # "本页共分析" 仍为全量
-    assert {p["code"] for p in page["top_picks"]} == {"000001", "000002", "000003"}  # Top 不受过滤
+# ————————————————————————————————————————————————
+# 策略0(全A合议)区块
+# ————————————————————————————————————————————————
+def test_strategy0_reads_view_ranked(monkeypatch):
+    """策略0 读 view「策略0合议」top:present + 规模字段 + 每行带 experts(供前端重排)。"""
+    _patch(monkeypatch, {}, get_view=_dispatch(strategy0=_strategy0_view()))
+    s0 = da.selection_page()["strategy0"]
+    assert s0["present"] is True and s0["扫描数"] == 5206 and s0["有效"] == 5191
+    assert [r["code"] for r in s0["rows"]] == ["000001", "000002"]
+    assert s0["rows"][0]["experts"]                         # 专家信封供前端勾选重排
+    assert s0["rows"][0]["council_dir"] in ("看多", "看空", "中性")
+    assert s0["rows"][0]["industry"] == "芯片"
+    assert s0["config"]                                     # 带合议 config(前端合成口径)
 
 
-def test_selection_block1_empty_pool_no_crash(monkeypatch):
-    """自选池空(或读取失败)→ 区块① rows 空,不炸页;total/top_picks 仍按全量。"""
-    recs = {"000001": _rec("000001", bull=True)}
-    monkeypatch.setattr(da, "_load_all", lambda date="latest": recs)
+def test_strategy0_missing_view_fallback(monkeypatch):
+    """策略0 view 缺失 → present=False、rows 空,不空页不抛。"""
+    _patch(monkeypatch, {}, get_view=_dispatch(strategy0=None))
+    s0 = da.selection_page()["strategy0"]
+    assert s0["present"] is False and s0["rows"] == []
+
+
+def test_strategy0_name_fallback(monkeypatch):
+    """策略0 名称回退:无中心记录 → code_name.json → code。"""
+    monkeypatch.setattr(da, "_code_name_map", lambda: {"000001": "平安银行"})
+    monkeypatch.setattr(da, "_load_all", lambda date="latest": {})
     monkeypatch.setattr(da, "as_of", lambda date="latest": "2026-08-08")
     monkeypatch.setattr(da, "_pool_codes", lambda: set())
-    monkeypatch.setattr(da.store, "get_view",
-                        lambda name, date="latest": (_ for _ in ()).throw(FileNotFoundError()))
+    monkeypatch.setattr(da.store, "get_view", _dispatch(strategy0=_strategy0_view(("000001", "999999"))))
+    rows = {r["code"]: r for r in da.selection_page()["strategy0"]["rows"]}
+    assert rows["000001"]["name"] == "平安银行"             # code_name 命中
+    assert rows["999999"]["name"] == "999999"              # 都无 → code
+
+
+# ————————————————————————————————————————————————
+# 综合选股(并集)
+# ————————————————————————————————————————————————
+def test_combined_union_and_sources(monkeypatch):
+    """综合选股:策略0∪策略1 去重,每票命中来源标注;策略2 available=False。"""
+    _patch(monkeypatch, {}, get_view=_dispatch(
+        strategy0=_strategy0_view(("000001", "300311")), s01=_s01_view()))
+    combined = da.selection_page()["combined"]
+    rows = {r["code"]: r for r in combined["rows"]}
+    # 000001 只在策略0;300311 在策略0∪策略1;603221 只在策略1
+    assert rows["000001"]["sources"] == ["策略0"]
+    assert set(rows["300311"]["sources"]) == {"策略0", "策略1"}
+    assert rows["603221"]["sources"] == ["策略1"]
+    strat = {s["key"]: s for s in combined["strategies"]}
+    assert strat["策略0"]["available"] and strat["策略1"]["available"]
+    assert strat["策略2"]["available"] is False and strat["策略2"]["codes"] == []
+    # 全并集去重:000001, 300311, 603221
+    assert set(rows.keys()) == {"000001", "300311", "603221"}
+
+
+def test_combined_empty_when_no_strategies(monkeypatch):
+    """两策略 view 均缺 → 并集 rows 空,strategies 仍在(available=False),不炸。"""
+    _patch(monkeypatch, {}, get_view=_dispatch())
+    combined = da.selection_page()["combined"]
+    assert combined["rows"] == []
+    assert all(not s["available"] for s in combined["strategies"])
+
+
+# ————————————————————————————————————————————————
+# 策略1(趋势深跌反包,原 S01)
+# ————————————————————————————————————————————————
+def test_strategy1_parses_view(monkeypatch):
+    """策略1 读 view「趋势深跌反包」:present + 扁平化(跌幅%/突破前高/均线多头/收阳)。"""
+    _patch(monkeypatch, {"300311": _rec("300311", bull=True)},
+           pool=set(), get_view=_dispatch(s01=_s01_view()))
+    s1 = da.selection_page()["strategy1"]
+    assert s1["present"] is True and s1["入选数"] == 2
+    byc = {r["code"]: r for r in s1["rows"]}
+    assert byc["300311"]["name"] == "T300311"              # 有记录取 meta 名
+    assert byc["300311"]["当日跌幅%"] == -12.57
+    assert byc["603221"]["突破前高"] is True                # close 24.82 > H52 24.79
+
+
+def test_strategy1_missing_view_fallback(monkeypatch):
+    """策略1 view 缺失 → present=False,不空页不抛。"""
+    _patch(monkeypatch, {}, get_view=_dispatch(s01=None))
+    s1 = da.selection_page()["strategy1"]
+    assert s1["present"] is False and s1["rows"] == []
+
+
+# ————————————————————————————————————————————————
+# 区块① 自选股 + 全页兜底
+# ————————————————————————————————————————————————
+def test_block1_filters_to_pool(monkeypatch):
+    """区块①「自选股」只展示自选池成员;total 为全量记录口径。"""
+    recs = {"000001": _rec("000001", bull=True), "000002": _rec("000002", bull=True)}
+    _patch(monkeypatch, recs, pool={"000001"})
     page = da.selection_page()
-    assert page["rows"] == [] and page["total"] == 1
-    assert {p["code"] for p in page["top_picks"]} == {"000001"}
+    assert {r["code"] for r in page["rows"]} == {"000001"}
+    assert page["total"] == 2
 
 
-def test_selection_route_block1_title_and_topn_strategy_note(monkeypatch):
-    """路由:区块①标题为「自选股」(不再是「持续关注」);区块③今日精选带候选池/排序/策略说明。"""
-    r = _rec("000001", bull=True); r["prediction"] = _pred_with_structure()
-    monkeypatch.setattr(da, "_load_all", lambda date="latest": {"000001": r})
-    monkeypatch.setattr(da, "as_of", lambda date="latest": "2026-08-08")
-    monkeypatch.setattr(da, "available_dates", lambda: ["2026-08-08"])
-    monkeypatch.setattr(da, "_pool_codes", lambda: {"000001"})
-    monkeypatch.setattr(da.store, "get_view",
-                        lambda name, date="latest": (_ for _ in ()).throw(FileNotFoundError()))
+def test_block1_ranks_by_council_desc(monkeypatch):
+    """区块① 按合议综合分降序;带专家信封 + config。"""
+    recs = {"000001": _rec("000001", bull=True), "000002": _rec("000002", bull=False)}
+    _patch(monkeypatch, recs)
+    page = da.selection_page()
+    assert page["rows"][0]["code"] == "000001"
+    assert page["rows"][0]["council_score"] >= page["rows"][1]["council_score"]
+    assert page["rows"][0]["experts"] and page["config"]
+
+
+def test_empty_day_no_crash(monkeypatch):
+    """全空(无记录 + 无 view)→ 各区块兜底,不炸。"""
+    _patch(monkeypatch, {})
+    page = da.selection_page()
+    assert page["total"] == 0 and page["rows"] == []
+    assert page["strategy0"]["present"] is False and page["strategy1"]["present"] is False
+    assert page["combined"]["rows"] == []
+
+
+# ————————————————————————————————————————————————
+# 路由渲染:区块顺序 + 无「每日筛选/S01/今日精选」+ 策略1 命名
+# ————————————————————————————————————————————————
+def test_route_renders_order_and_no_removed_blocks(monkeypatch):
+    _patch(monkeypatch, {"000001": _rec("000001", bull=True)}, pool={"000001"},
+           get_view=_dispatch(strategy0=_strategy0_view(), s01=_s01_view()))
+    r = client.get("/selection")
+    assert r.status_code == 200
+    t = r.text
+    # 区块顺序:① 自选股 → 综合选股 → 策略0 → 策略1
+    i_pool = t.find("<!-- 区块①")
+    i_comb = t.find("<!-- 综合选股")
+    i_s0 = t.find("<!-- 策略0")
+    i_s1 = t.find("<!-- 策略1")
+    assert -1 < i_pool < i_comb < i_s0 < i_s1
+    # 移除的区块 / 旧字样不再出现
+    assert "每日筛选" not in t and "今日精选" not in t and "S01" not in t
+    # 策略1 命名(不再是 S01)
+    assert "策略1 · 趋势深跌反包" in t and "策略0 · 多专家合议(全A)" in t
+    assert "/static/council.js" in t
+    assert 'id="strat0Body"' in t and 'id="combinedBody"' in t
+
+
+def test_route_strategy0_missing_shows_hint(monkeypatch):
+    """策略0 view 缺失 → 显示「策略0 待运行」,不空页。"""
+    _patch(monkeypatch, {}, get_view=_dispatch(strategy0=None, s01=None))
+    r = client.get("/selection")
+    assert r.status_code == 200
+    assert "策略0 待运行" in r.text and "策略1 待运行" in r.text
+
+
+# ————————————————————————————————————————————————
+# 止盈止损防空 + 名称回退(沿用旧口径,防回归)
+# ————————————————————————————————————————————————
+def _pred_full():
+    return {"现价": 12.34,
+            "持有期建议": {"5日": {"止损位": 11.50, "最大亏损%": 6.8,
+                                  "止盈位": 13.60, "目标盈利%": 10.2, "风险收益比": 1.5}},
+            "情景预测": {"5日": {"上涨概率%": 58.0, "样本数": 120}},
+            "买卖倾向": {"结论": "偏买入", "依据": ["多头"]}}
+
+
+def test_stops_view_guards_missing_and_error():
+    assert da.stops_view({})["止损位"] is None
+    err = da.stops_view({"prediction": {"error": "数据不足", "n": 5}})
+    assert all(v is None for v in err.values())
+    ok = da.stops_view({"prediction": _pred_full()})
+    assert ok["现价"] == 12.34 and ok["止损位"] == 11.50 and ok["上涨概率%"] == 58.0
+
+
+def test_selection_row_carries_stops(monkeypatch):
+    r = _rec("000001", bull=True); r["prediction"] = _pred_full()
+    _patch(monkeypatch, {"000001": r}, pool={"000001"})
+    page = da.selection_page()
+    assert page["rows"][0]["stops"]["止损位"] == 11.50
     resp = client.get("/selection")
-    assert resp.status_code == 200
-    assert "① 自选股" in resp.text and "持续关注" not in resp.text        # 区块①改名
-    # 区块③ Top15 说明:候选池 / 排序 / 用到的策略 / 弃权说明 / 非投资建议
-    assert "候选池" in resp.text and "接近达标票" in resp.text
-    assert "多策略合议" in resp.text
-    assert "技术趋势" in resp.text and "板块轮动" in resp.text
-    assert "自动弃权" in resp.text and "非投资建议" in resp.text
+    assert resp.status_code == 200 and "5日涨概率" in resp.text and "11.5" in resp.text
+
+
+def test_name_fallback_three_levels(monkeypatch):
+    monkeypatch.setattr(da, "_code_name_map", lambda: {"600519": "贵州茅台"})
+    recs = {"000001": {"meta": {"code": "000001", "name": "平安银行"}}}
+    assert da._name(recs, "000001") == "平安银行"
+    assert da._name(recs, "600519") == "贵州茅台"
+    assert da._name(recs, "999999") == "999999"
