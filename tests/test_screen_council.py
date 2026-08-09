@@ -99,8 +99,24 @@ def test_no_future_leak_last_bar_only(monkeypatch):
     assert rec_today["signals"]["trend"]["得分"] == rec_cut["signals"]["trend"]["得分"]
 
 
-def test_offline_universe_codes_from_master(monkeypatch):
-    """离线票池枚举:主档有代码 → 直接用主档代码(升序 + limit)。"""
+def test_offline_universe_codes_from_master(tmp_path, monkeypatch):
+    """离线票池枚举:主档代码升序 + limit(隔离 raw 到空目录,只验主档口径)。"""
+    from tools.config import settings
     monkeypatch.setattr(sc.store, "list_master_codes", lambda: ["000002", "000001", "600519"])
+    monkeypatch.setattr(settings, "DATA_RAW", tmp_path / "noraw")     # 无 raw 分区 → 只剩主档
     assert sc._offline_universe_codes() == ["000001", "000002", "600519"]
     assert sc._offline_universe_codes(limit=2) == ["000001", "000002"]
+
+
+def test_offline_universe_unions_master_and_raw(tmp_path, monkeypatch):
+    """回归:主档非空时也要并 raw 分区(此前 if-not-codes 把全A缩到自选几十只)。"""
+    from tools.pipeline import screen_council as sc
+    from tools.config import settings
+    monkeypatch.setattr(sc.store, "list_master_codes", lambda: ["000001"])   # 主档非空
+    raw = tmp_path / "raw" / "2026-08-08" / "kline"
+    raw.mkdir(parents=True)
+    for c in ("600000", "300001"):
+        (raw / f"{c}.parquet").write_bytes(b"x")
+    monkeypatch.setattr(settings, "DATA_RAW", tmp_path / "raw")
+    codes = set(sc._offline_universe_codes())
+    assert {"000001", "600000", "300001"} <= codes      # 主档 ∪ raw 都在(不再只剩主档)

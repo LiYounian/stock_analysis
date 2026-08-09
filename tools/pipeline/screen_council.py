@@ -40,15 +40,16 @@ def _offline_universe_codes(limit: int | None = None) -> list[str]:
     不触网(--no-fetch 场景用)。主档存在 → 用主档代码;否则扫 data/raw 各日期分区 +
     扁平 kline 目录的 *.parquet 文件名(6 位数字)去重。升序返回;limit 截前 N 只。
     """
+    # 全A票池 = 主档代码 ∪ 所有 raw 日期分区的 kline(总是并集;此前用 if-not-codes
+    # 只在主档为空时才扫 raw → 主档有少量自选票时把全A缩到那几十只,是坑,已改为恒并)。
     codes = set(store.list_master_codes())
-    if not codes:
-        from tools.config import settings
-        raw_root = settings.DATA_RAW
-        if raw_root.exists():
-            for p in raw_root.glob("**/kline/*.parquet"):
-                stem = p.stem
-                if len(stem) == 6 and stem.isdigit():
-                    codes.add(stem)
+    from tools.config import settings
+    raw_root = settings.DATA_RAW
+    if raw_root.exists():
+        for p in raw_root.glob("**/kline/*.parquet"):
+            stem = p.stem
+            if len(stem) == 6 and stem.isdigit():
+                codes.add(stem)
     out = sorted(codes)
     if limit:
         out = out[:limit]
