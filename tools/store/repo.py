@@ -7,7 +7,8 @@
 按日期分区(2026-08 起):每次跑的数据落到 `<日期>/` 子目录,旧数据不被覆盖、
 天然留历史快照(未来回测 BT.2 直接可用)。
   - 写:date 缺省取 `active_date()`(编排开始时 set_active_date 设一次)→ 再缺省今天。
-  - 读:date 缺省 "latest" → 解析该根下最新日期目录。
+  - 读:date 缺省 "latest" → 解析**含该目标数据(kind+code / record / view)的最新日期**,
+    即从最新日期倒序回退到第一个该文件确实存在的日期(某日只抓了部分 kind 时不会误判缺失)。
   - 例外:`llm_cache` 不按日期(内容 hash,跨天复用免重复烧钱)。
 
 物理格式映射(kind → parquet/json):
@@ -94,6 +95,33 @@ def _read_date(root: Path, date: str | None) -> str | None:
     return _latest_date(root)
 
 
+def _date_dirs_desc(root: Path) -> list[str]:
+    """root 下所有日期子目录名,降序(最新在前)。"""
+    if not root.exists():
+        return []
+    return sorted((p.name for p in root.iterdir() if p.is_dir() and _DATE_RE.match(p.name)),
+                  reverse=True)
+
+
+def _resolve_read_date(root: Path, date: str | None, exists_fn) -> str | None:
+    """按 (目标数据存在性) 解析读取日期。
+
+    - 显式具体日期(非 None/"latest"):直接返回,不判断存在性(与原行为一致,
+      存在性交由调用方后续 p.exists() 判定,保留原 FileNotFoundError 路径与报错信息)。
+    - None/"latest":从最新日期倒序回退,返回**第一个 exists_fn(d) 为真**的日期
+      (即"含该目标数据的最新日期");所有日期都无则返回 None(调用方抛 FileNotFoundError)。
+
+    向后兼容:当最新日期就有该数据时,首个命中即最新日期,行为与旧的全局 latest 完全一致。
+    性能:倒序遍历,命中即停,不全扫。
+    """
+    if date and date != "latest":
+        return date
+    for d in _date_dirs_desc(root):
+        if exists_fn(d):
+            return d
+    return None
+
+
 def list_dates(root: str = "analysis") -> list[str]:
     """列出某根(analysis/raw)下所有日期,升序。analysis 侧受 STORE_BACKEND 影响(raw 恒文件)。"""
     if root == "analysis" and _use_db():
@@ -164,9 +192,10 @@ def get_raw(kind: str, code: str, date: str | None = "latest"):
     """读单票某类 raw。parquet→DataFrame,json→dict/list。缺数据抛 FileNotFoundError。"""
     if kind not in _RAW_KINDS:                    # 先校验 kind(未知 kind 抛 ValueError)
         raise ValueError(f"未知 raw kind: {kind!r}(支持 {_RAW_KINDS})")
-    d = None if kind in _FLAT_KINDS else _read_date(_RAW_DIR, date)
+    d = None if kind in _FLAT_KINDS else _resolve_read_date(
+        _RAW_DIR, date, lambda dd: _raw_path(kind, code, dd).exists())
     if kind not in _FLAT_KINDS and d is None:
-        raise FileNotFoundError(f"{code} 无 {kind} 原始数据(无任何日期目录),请先采集")
+        raise FileNotFoundError(f"{code} 无 {kind} 原始数据(任何日期目录均无),请先采集")
     p = _raw_path(kind, code, d)
     if not p.exists():
         raise FileNotFoundError(f"{code} 无 {kind} 原始数据,请先采集: {p}")
@@ -205,8 +234,13 @@ def _write_meta(kind: str, code: str, date: str | None, payload, meta: dict | No
 
 
 def get_raw_meta(kind: str, code: str, date: str | None = "latest") -> dict | None:
-    """读某票某类 raw 的采集元数据;无 sidecar 返回 None(advisory)。"""
-    d = None if kind in _FLAT_KINDS else _read_date(_RAW_DIR, date)
+    """读某票某类 raw 的采集元数据;无 sidecar 返回 None(advisory)。
+
+    "latest" 同 get_raw:回退到含该 (kind, code) meta 的最新日期(与数据同目录、
+    随 put_raw 一起写),使新鲜度判断锚定实际读到的那一日数据。
+    """
+    d = None if kind in _FLAT_KINDS else _resolve_read_date(
+        _RAW_DIR, date, lambda dd: _meta_path(kind, code, dd).exists())
     if kind not in _FLAT_KINDS and d is None:
         return None
     p = _meta_path(kind, code, d)
@@ -337,9 +371,9 @@ def get_record(code: str, date: str | None = "latest") -> dict:
     """读单票中心记录(缺省最新日期)。缺文件抛 FileNotFoundError。"""
     if _use_db():
         return _db().get_record(code, date)
-    d = _read_date(_ANALYSIS_DIR, date)
+    d = _resolve_read_date(_ANALYSIS_DIR, date, lambda dd: _record_path(code, dd).exists())
     if d is None:
-        raise FileNotFoundError(f"{code} 无结构化记录(无任何日期目录),请先 serialize")
+        raise FileNotFoundError(f"{code} 无结构化记录(任何日期目录均无),请先 serialize")
     p = _record_path(code, d)
     if not p.exists():
         raise FileNotFoundError(f"{code} 无结构化记录,请先 serialize: {p}")
@@ -421,9 +455,9 @@ def get_view(name: str, date: str | None = "latest"):
     """读视图对象(如 panel/screen,缺省最新日期)。缺文件抛 FileNotFoundError。"""
     if _use_db():
         return _db().get_view(name, date)
-    d = _read_date(_ANALYSIS_DIR, date)
+    d = _resolve_read_date(_ANALYSIS_DIR, date, lambda dd: _view_path(name, dd).exists())
     if d is None:
-        raise FileNotFoundError(f"无视图 {name}(无任何日期目录),请先生成")
+        raise FileNotFoundError(f"无视图 {name}(任何日期目录均无),请先生成")
     p = _view_path(name, d)
     if not p.exists():
         raise FileNotFoundError(f"无视图 {name},请先生成: {p}")
@@ -451,9 +485,10 @@ def get_code_view(name: str, code: str, date: str | None = "latest") -> dict:
     """读按票视图(缺省最新日期)。缺文件抛 FileNotFoundError。"""
     if _use_db():
         return _db().get_code_view(name, code, date)
-    d = _read_date(_ANALYSIS_DIR, date)
+    d = _resolve_read_date(_ANALYSIS_DIR, date,
+                           lambda dd: _code_view_path(name, code, dd).exists())
     if d is None:
-        raise FileNotFoundError(f"{code} 无 {name} 视图(无任何日期目录)")
+        raise FileNotFoundError(f"{code} 无 {name} 视图(任何日期目录均无)")
     p = _code_view_path(name, code, d)
     if not p.exists():
         raise FileNotFoundError(f"{code} 无 {name} 视图: {p}")
