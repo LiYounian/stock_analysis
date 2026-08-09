@@ -74,6 +74,8 @@ def test_fetch_kline_meta_records_fallback_source(monkeypatch, tmp_path):
 def test_fetch_and_load_roundtrip(monkeypatch, tmp_path):
     """落盘 → 读盘往返一致(经 store);缓存缺失抛错;meta 记命中源。"""
     monkeypatch.setattr(store, "_RAW_DIR", tmp_path)
+    # 隔离滚动主档:load_kline 现在优先读主档,若不隔离会读到真实 data/master/(本地拉取灌过)→ 返回 333 根而非本测的 2 根。
+    monkeypatch.setattr(store, "_MASTER_DIR", tmp_path / "master")
     monkeypatch.setitem(market._FETCHERS, "tencent", lambda *a, **k: _sample_std())
 
     out = market.fetch_kline(["000021"], start="20260101", end="20260105")
