@@ -203,87 +203,141 @@ def screen_page(date: str = "latest") -> dict:
 
 
 def selection_page(date: str = "latest") -> dict:
-    """选股结果页:当日全部记录一张表——是否达标(形态选股)+ 达标理由 + 合议综合方向/分 + 参与专家数。
+    """选股结果页(三区块 + 综合选股):
+        ① 自选股(自选池成员,合议方向/分 + 止盈止损)
+        →【综合选股】(勾选策略 → 各策略入选代码并集,前端实时重算)
+        → 策略0 · 多专家合议(全A,读 view「策略0合议」top)
+        → 策略1 · 趋势深跌反包(读 view「趋势深跌反包」)
 
-    数据源 + 兜底:优先读 store view「形态选股」达标池(标达标/命中形态/正向确认);
-    该视图缺失时**退化为"读当日全部记录、按合议综合分排序展示"**(页面永不空,dev 10 只也立即可见)。
-    默认按合议综合分降序;每行带该票 council 专家信封 + 共享 config,供前端勾选实时重排(复用 council.js)。
+    纯读离线 view + 中心记录;任何 view 缺失全部走兜底(present=False / 空列表),页面永不空、不报错。
+    合议 config(tau/权重/分母模式)供前端勾选实时重合成(复用 council.js councilSynth)。
     """
     recs = _load_all(date)
-    # 达标池(形态选股 view);缺失 → 兜底
-    qualified: dict[str, dict] = {}
-    qualified_items: list[dict] = []          # 保序 + 带板块 hint(供区块②分组)
-    near_items: list[dict] = []               # 接近达标(平盘无达标时区块②降级展示)
-    view_present = False
-    view_meta: dict = {}
-    try:
-        v = store.get_view("形态选股", date=date)
-        view_present = True
-        for item in v.get("达标清单", []):
-            code = item.get("code")
-            reason = {"命中形态": item.get("命中形态"), "正向确认依据": item.get("正向确认依据", [])}
-            qualified[code] = reason
-            # 行业/板块:优先 view 自带(未来 screen_pattern 可能补),否则回退中心记录 meta
-            qualified_items.append({"code": code, **reason,
-                                    "行业hint": item.get("行业") or item.get("板块") or item.get("sector")})
-        # 接近达标:screen_pattern 产出为「{板块: [items]}」字典(每板块top3);拍平成扁平列表供下游用。
-        # 兼容旧/异常形状:dict→拍平 values;list→原样;其它→空。每 item 自带「行业」字段可再分组。
-        _near_raw = v.get("接近达标") or {}
-        if isinstance(_near_raw, dict):
-            near_items = [it for items in _near_raw.values() for it in (items or []) if isinstance(it, dict)]
-        elif isinstance(_near_raw, list):
-            near_items = [it for it in _near_raw if isinstance(it, dict)]
-        else:
-            near_items = []
-        view_meta = {"扫描数": v.get("扫描数"), "有效样本": v.get("有效样本"),
-                     "达标数": v.get("达标数"), "达标占比": v.get("达标占比"),
-                     "纪律": v.get("纪律"), "RS模式": v.get("RS模式")}
-    except FileNotFoundError:
-        view_present = False
 
+    # 区块①「自选股」:只展示当前自选池成员,带合议方向/分 + 专家信封 + 止盈止损(已防空)
     config = None
-    rows = []
-    for code, r in recs.items():
+    pool = _pool_codes()
+    pool_rows = []
+    for code in pool:
+        r = recs.get(code)
+        if not r:
+            continue
         cs = council_summary(r) or {}
         cblk = (r.get("council") or {})
-        experts_env = cblk.get("experts") or []
         if config is None and cblk.get("config"):
             config = cblk["config"]
-        q = qualified.get(code)
-        rows.append({
+        pool_rows.append({
             "code": code, "name": _name(recs, code),
             "sector": (r.get("meta") or {}).get("sector"),
             "industry": (r.get("meta") or {}).get("industry"),
-            "qualified": (code in qualified) if view_present else None,
-            "达标理由": q,                               # {命中形态, 正向确认依据} 或 None
             "council_dir": cs.get("综合方向"),
             "council_score": cs.get("综合分"),
             "council_conflict": cs.get("是否冲突", False),
             "参与专家数": len(cblk.get("default", {}).get("参与专家", []) or []),
-            "experts": experts_env,                      # 供前端勾选重合成
+            "experts": cblk.get("experts") or [],        # 供前端勾选重合成
             "stops": stops_view(r),                      # 5日止盈止损+上涨概率(L1 展示,已防空)
             "anchor": anchor_stops(r),                   # L3 结构位锚定止盈止损(缺则回退 5日ATR,已防空)
         })
-    # 默认按合议综合分降序;无合议分(None)沉底
-    rows.sort(key=lambda x: (x["council_score"] is not None, x["council_score"] or 0), reverse=True)
+    pool_rows.sort(key=lambda x: (x["council_score"] is not None, x["council_score"] or 0), reverse=True)
 
-    total = len(rows)
-    qualified_n = (view_meta.get("达标数") if view_present else None)
-    if qualified_n is None and view_present:
-        qualified_n = sum(1 for x in rows if x["qualified"])
+    # 策略0(全A合议)与策略1(趋势深跌反包):读各自 view,缺失走兜底
+    strategy0 = _strategy0_section(recs, date)
+    strategy1 = _s01_section(recs, date)
+    # config 兜底:自选池无记录时,退用策略0 view 里带的 council config(前端合成口径真源)
+    if not config and strategy0.get("config"):
+        config = strategy0["config"]
 
-    # 区块①「自选股」只展示当前自选池成员(区块②每日筛选/③Top/S01 仍用全A/达标票);
-    # total/qualified 仍为全量扫描口径(描述"本页共分析")。pool 代码当日无记录自然跳过,不报错。
-    pool = _pool_codes()
-    pool_rows = [x for x in rows if x["code"] in pool]
+    # 综合选股:各策略入选代码并集(前端按勾选实时重算;后端给全并集 + 每票命中来源)
+    combined = _combined_section(strategy0, strategy1, recs)
 
-    daily = _daily_sections(qualified_items, near_items, recs, view_present, view_meta, qualified_n)
-    top_picks = _top_picks(qualified_items, near_items, recs)
-    s01 = _s01_section(recs, date)
-    return {"rows": pool_rows, "total": total, "qualified": qualified_n,
-            "view_present": view_present, "view_meta": view_meta,
-            "daily": daily, "top_picks": top_picks, "s01": s01,
+    return {"rows": pool_rows, "total": len(recs),
+            "combined": combined, "strategy0": strategy0, "strategy1": strategy1,
             "config": config or {}, "as_of": as_of(date)}
+
+
+def _strategy0_section(recs: dict, date: str = "latest") -> dict:
+    """策略0「多专家合议(全A)」区块:读 store view「策略0合议」(screen_council 产出)。
+
+    防空(同页其它区块口径):view 缺失 / 非法 → present=False(前端"策略0 待运行")。
+    每行:code / name(走 code_name 回退)/ 行业 / 综合方向 / 综合分 / 冲突 / experts(供前端勾选重排)。
+    名称优先中心记录 meta,回退 code_name.json,再回退 code。
+    """
+    empty = {"present": False, "as_of": as_of(date), "扫描数": None, "有效": None,
+             "top_n": None, "rows": [], "config": None}
+    try:
+        v = store.get_view("策略0合议", date=date)
+    except FileNotFoundError:
+        return empty
+    if not isinstance(v, dict):
+        return empty
+    config = None
+    rows = []
+    for item in v.get("top", []) or []:
+        if not isinstance(item, dict):
+            continue
+        code = item.get("code")
+        cblk = item.get("council") or {}
+        if config is None and cblk.get("config"):
+            config = cblk["config"]
+        d = cblk.get("default") or {}
+        rows.append({
+            "code": code, "name": _name(recs, code),
+            "industry": item.get("行业"),
+            "council_dir": item.get("综合方向") or d.get("综合方向"),
+            "council_score": item.get("综合分", d.get("综合分")),
+            "council_conflict": bool(d.get("是否冲突")),
+            "experts": cblk.get("experts") or [],
+        })
+    return {
+        "present": True,
+        "as_of": v.get("as_of") or as_of(date),
+        "扫描数": v.get("扫描数"),
+        "有效": v.get("有效", v.get("有效样本")),
+        "top_n": v.get("top_n", len(rows)),
+        "rows": rows,
+        "config": config,
+    }
+
+
+def _combined_section(strategy0: dict, strategy1: dict, recs: dict) -> dict:
+    """【综合选股】:各策略入选代码的并集(去重),每票标注命中来源(被哪几个策略选中)。
+
+    后端产出**全并集**(所有可用策略入选代码);前端按勾选的策略实时过滤 + 重算命中来源
+    (一个都没勾 → 前端显示"无")。默认全勾(展示全并集)。策略2 暂无 → available=False、codes 空。
+    name 走 code_name 回退;行业优先中心记录 meta,再回退策略0 view 自带行业。
+    """
+    s0_codes = [r["code"] for r in strategy0.get("rows", []) if r.get("code")]
+    s1_codes = [r["code"] for r in strategy1.get("rows", []) if r.get("code")]
+    # 行业 hint:策略0 view 自带行业(全A票多无中心记录)
+    s0_industry = {r["code"]: r.get("industry") for r in strategy0.get("rows", [])}
+
+    sources: dict[str, list[str]] = {}
+    order: list[str] = []
+    for key, codes in (("策略0", s0_codes), ("策略1", s1_codes)):
+        for c in codes:
+            if c not in sources:
+                sources[c] = []
+                order.append(c)
+            if key not in sources[c]:
+                sources[c].append(key)
+
+    rows = []
+    for code in order:
+        meta = (recs.get(code) or {}).get("meta") or {}
+        rows.append({
+            "code": code, "name": _name(recs, code),
+            "industry": meta.get("industry") or meta.get("sector") or s0_industry.get(code),
+            "sources": sources[code],                    # 前端按勾选过滤 + 拼「策略0+策略1」
+        })
+
+    strategies = [
+        {"key": "策略0", "label": "策略0", "codes": s0_codes,
+         "available": bool(strategy0.get("present"))},
+        {"key": "策略1", "label": "策略1", "codes": s1_codes,
+         "available": bool(strategy1.get("present"))},
+        {"key": "策略2", "label": "策略2(暂无)", "codes": [], "available": False},
+    ]
+    return {"strategies": strategies, "rows": rows}
 
 
 def _s01_section(recs: dict, date: str = "latest") -> dict:
@@ -341,132 +395,6 @@ def _s01_section(recs: dict, date: str = "latest") -> dict:
         "as_of": v.get("as_of") or as_of(date),
         "rows": rows,
     }
-
-
-def _top_picks(qualified_items: list[dict], near_items: list[dict], recs: dict,
-               top_n: int = 15) -> list[dict]:
-    """区块③「今日精选(数据策略综合)」:达标清单 ∪ 接近达标 ∪ 自选池,按合议综合分降序 Top N。
-
-    纯数据策略(技术趋势/超买超卖/拐点/资金流/多因子/板块轮动的合议),未用新闻/大模型。
-    取数来源三并集去重;合议分优先取中心记录 council.default.综合分,无记录(全A接近达标票)取契约「合议分」。
-    每行带 anchor(L3 止盈止损,已防空回退)+ experts(供前端勾选实时重排 Top N)。
-    达标池 view 缺失时 qualified_items/near_items 为空,仍以自选池(recs)兜底出 Top N。
-    """
-    near_score = {it.get("code"): it.get("合议分") for it in (near_items or []) if it.get("code")}
-    qualified_codes = {it.get("code") for it in (qualified_items or []) if it.get("code")}
-    codes: set[str] = set(recs.keys())
-    codes |= qualified_codes
-    codes |= {it.get("code") for it in (near_items or []) if it.get("code")}
-    rows = []
-    for code in codes:
-        r = recs.get(code)
-        cs = council_summary(r) or {}
-        score = cs.get("综合分")
-        if score is None:
-            score = near_score.get(code)
-        meta = (r or {}).get("meta") or {}
-        cblk = (r or {}).get("council") or {}
-        a = anchor_stops(r)
-        rows.append({
-            "code": code, "name": _resolve_name(r, code),
-            "industry": meta.get("industry") or meta.get("sector"),
-            "情景": a["情景"], "止损位": a["止损位"], "止盈位": a["止盈位"],
-            "盈亏比": a["盈亏比"], "突破": a["突破"], "区间位置%": a["区间位置%"],
-            "council_dir": cs.get("综合方向"), "council_score": score,
-            "council_conflict": cs.get("是否冲突", False),
-            "qualified": code in qualified_codes,
-            "experts": cblk.get("experts") or [],
-        })
-    # 合议综合分降序;无合议分(None)沉底
-    rows.sort(key=lambda x: (x["council_score"] is not None, x["council_score"] or 0), reverse=True)
-    return rows[:top_n]
-
-
-def _group_by_board(items: list[dict], recs: dict, row_builder, top_n: int) -> list[dict]:
-    """通用:按板块分组 → 组内按合议分降序取 top_n → 板块按组内最高分降序(并列看 count)。
-
-    row_builder(item, rec) → (板块名, 行字典);行字典须含 council_score(可 None,沉底)。
-    """
-    from collections import defaultdict
-    buckets: dict[str, list] = defaultdict(list)
-    for it in items:
-        board, row = row_builder(it, recs.get(it.get("code")))
-        buckets[board].append(row)
-    groups = []
-    for board, rows in buckets.items():
-        rows.sort(key=lambda x: (x["council_score"] is not None, x["council_score"] or 0), reverse=True)
-        groups.append({"板块": board, "count": len(rows), "rows": rows[:top_n]})
-    groups.sort(key=lambda g: (max((r["council_score"] or -9 for r in g["rows"]), default=-9), g["count"]),
-                reverse=True)
-    return groups
-
-
-def _qual_row(it: dict, rec: dict | None):
-    """达标票行:命中形态 + 正向确认 + 该票 council(复用中心记录)+ 专家信封(供前端重排)。"""
-    code = it["code"]
-    meta = (rec or {}).get("meta") or {}
-    board = it.get("行业hint") or meta.get("industry") or meta.get("sector") or "未分类"
-    cs = council_summary(rec) or {}
-    cblk = (rec or {}).get("council") or {}
-    return board, {
-        "code": code, "name": _resolve_name(rec, code),
-        "industry": meta.get("industry") or meta.get("sector"),
-        "命中形态": it.get("命中形态"), "正向确认依据": it.get("正向确认依据", []),
-        "council_dir": cs.get("综合方向"), "council_score": cs.get("综合分"),
-        "council_conflict": cs.get("是否冲突", False),
-        "experts": cblk.get("experts") or [],
-    }
-
-
-def _near_row(it: dict, rec: dict | None):
-    """接近达标行(仅提示,非达标信号):最接近形态 + 差距说明 + 合议分(优先契约自带,回退中心记录)。
-
-    合议分取 view 契约的「合议分」(全A票可能无中心记录);有记录时补方向。**不带 experts**——
-    静态提示,不参与前端勾选重排(前端只重排 tbody.daily-group,接近达标用 daily-near 类跳过)。
-    """
-    code = it.get("code")
-    meta = (rec or {}).get("meta") or {}
-    board = it.get("行业") or meta.get("industry") or meta.get("sector") or "未分类"
-    cs = council_summary(rec) or {}
-    score = it.get("合议分")
-    if score is None:
-        score = cs.get("综合分")
-    return board, {
-        "code": code, "name": _resolve_name(rec, code),
-        "industry": it.get("行业") or meta.get("industry") or meta.get("sector"),
-        "最接近形态": it.get("最接近形态"), "差距说明": it.get("差距说明"),
-        "council_dir": cs.get("综合方向"), "council_score": score,
-        "council_conflict": cs.get("是否冲突", False),
-    }
-
-
-def _daily_sections(qualified_items: list[dict], near_items: list[dict], recs: dict,
-                    view_present: bool, view_meta: dict, qualified_n,
-                    top_n: int = 5, near_top_n: int = 3) -> dict:
-    """区块②「每日筛选」:全市场按行业/板块分组,永不空页。三态:
-
-    - view 缺失          → present=False(前端"待扫描生成")。
-    - 达标数>0           → mode=qualified,展示达标票(每板块 top_n)。
-    - 达标数==0 有接近达标 → mode=near,展示各板块接近达标 top(前端加"仅提示"标注)。
-    - 达标==0 且无接近达标 → mode=qualified、groups 空(前端"本日无达标且无接近达标")。
-
-    行业来源:view item 自带 → 中心记录 meta.industry/sector → 「未分类」(全A票可能无记录)。
-    """
-    if not view_present:
-        return {"present": False, "mode": None, "total_scanned": None,
-                "qualified_n": None, "near_n": None, "board_count": 0,
-                "top_n": top_n, "groups": []}
-    near_items = near_items or []
-    near_n = len(near_items)
-    if qualified_n and qualified_n > 0:
-        groups, mode, used_top = _group_by_board(qualified_items, recs, _qual_row, top_n), "qualified", top_n
-    elif near_items:
-        groups, mode, used_top = _group_by_board(near_items, recs, _near_row, near_top_n), "near", near_top_n
-    else:
-        groups, mode, used_top = [], "qualified", top_n
-    return {"present": True, "mode": mode, "total_scanned": view_meta.get("扫描数"),
-            "qualified_n": qualified_n, "near_n": near_n, "board_count": len(groups),
-            "top_n": used_top, "groups": groups}
 
 
 def pool_page(date: str = "latest") -> dict:
