@@ -168,3 +168,70 @@ def test_get_raw_missing_raises(store):
 def test_get_view_missing_raises(store):
     with pytest.raises(FileNotFoundError):
         store.get_view("panel")
+
+
+# —— "latest" 按 (kind, code) 存在性回退(本轮修复:某日只抓部分 kind 不再误判缺失)——
+def _mk_kline(store, code, date, closes):
+    pd = pytest.importorskip("pandas")
+    df = pd.DataFrame({"date": [f"{date}"] * len(closes), "close": closes})
+    store.put_raw("kline", code, df, date=date)
+
+
+def test_raw_latest_unchanged_when_newest_has_kind(store):
+    """①最新日就有该 kind+code → 仍读最新(向后兼容,行为不变)。"""
+    _mk_kline(store, "000021", "2026-08-05", [1.0])
+    _mk_kline(store, "000021", "2026-08-08", [2.0])
+    assert list(store.get_raw("kline", "000021")["close"]) == [2.0]
+
+
+def test_raw_latest_falls_back_when_newest_missing_kind(store):
+    """②最新日目录只有别的 kind(如 board_kline)、无 kline,但前一日有 →
+    "latest" 回退到前一日读到 kline(本 bug 的修复点)。"""
+    pd = pytest.importorskip("pandas")
+    # 前一日有 kline
+    _mk_kline(store, "000021", "2026-08-08", [2.0])
+    # 最新日(周日)只抓了 board_kline,没有 kline
+    store.put_raw("board_kline", "BK0001",
+                  pd.DataFrame({"date": ["2026-08-09"], "close": [9.0]}), date="2026-08-09")
+    # latest 目录(2026-08-09)无 kline,应回退到 2026-08-08
+    assert list(store.get_raw("kline", "000021")["close"]) == [2.0]
+    # meta 也应锚定回退后的那一日(有数据)
+    assert store.get_raw_meta("kline", "000021") is not None
+
+
+def test_raw_latest_missing_all_dates_raises(store):
+    """③该 kind+code 在任何日期都无 → FileNotFoundError。"""
+    _mk_kline(store, "000021", "2026-08-08", [2.0])   # 只有 000021 有
+    with pytest.raises(FileNotFoundError):
+        store.get_raw("kline", "999999")
+
+
+def test_view_latest_falls_back(store):
+    """④对 get_view 同样回退:最新日无该视图但前一日有 → 读前一日。"""
+    store.put_view("panel", {"rows": [{"代码": "000021"}]}, date="2026-08-06")
+    # 更新的一天只落了 screen 视图,没有 panel
+    store.put_view("screen", {"candidates": []}, date="2026-08-08")
+    assert store.get_view("panel") == {"rows": [{"代码": "000021"}]}
+
+
+def test_code_view_latest_falls_back(store):
+    """④'(按票视图)同样回退。"""
+    store.put_code_view("chart", "000021", {"close": [1.0]}, date="2026-08-06")
+    store.put_code_view("chart", "600519", {"close": [9.0]}, date="2026-08-08")  # 更新日无 000021
+    assert store.get_code_view("chart", "000021") == {"close": [1.0]}
+
+
+def test_record_latest_falls_back(store):
+    """记录同样按 code 回退:最新日无该票记录但前一日有 → 读前一日。"""
+    store.put_record(_rec("000021"), date="2026-08-06")
+    store.put_record(_rec("600519"), date="2026-08-08")   # 更新日无 000021
+    assert store.get_record("000021")["meta"]["code"] == "000021"
+
+
+def test_explicit_date_not_affected_by_fallback(store):
+    """⑤传具体日期不受回退影响:该日无数据即抛 FileNotFoundError(不回退)。"""
+    _mk_kline(store, "000021", "2026-08-08", [2.0])   # 数据只在 08-08
+    with pytest.raises(FileNotFoundError):
+        store.get_raw("kline", "000021", date="2026-08-09")   # 指定空日 → 不回退,直接报缺
+    # 指定有数据的具体日 → 正常读到
+    assert list(store.get_raw("kline", "000021", date="2026-08-08")["close"]) == [2.0]
