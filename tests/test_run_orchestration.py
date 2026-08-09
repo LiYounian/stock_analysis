@@ -30,6 +30,7 @@ def test_cmd_all_step_order(monkeypatch):
     monkeypatch.setattr(run, "run_council", rec("run_council"))
     monkeypatch.setattr(run, "run_panel", rec("run_panel"))
     monkeypatch.setattr(run, "run_screen", rec("run_screen"))
+    monkeypatch.setattr(run, "run_backtest", rec("run_backtest"))
 
     run.cmd_all([])
 
@@ -40,6 +41,65 @@ def test_cmd_all_step_order(monkeypatch):
     assert calls.index("run_factor") < calls.index("run_council")
     assert calls.index("run_council") < calls.index("run_panel")
     assert calls.index("run_council") < calls.index("run_screen")
+    # 回测是闭环收尾:排在 screen 之后(读已累积的达标池快照)
+    assert calls.index("run_screen") < calls.index("run_backtest")
+    assert calls[-1] == "run_backtest"
+
+
+# ———————————— 回测接进闭环收尾:调用 + 优雅降级 + 幂等 ————————————
+def test_run_backtest_calls_run_and_store_offline(monkeypatch):
+    """run_backtest 只调用 backtest_summary.run_and_store,离线口径 fetch=False。"""
+    from tools.backtest import backtest_summary as bs
+    got = {}
+
+    def fake_run_and_store(*a, **k):
+        got.update(k)
+        return {"达标日数": 0, "样本数": 0, "状态": "待观察"}
+
+    monkeypatch.setattr(bs, "run_and_store", fake_run_and_store)
+    run.run_backtest()
+    assert got.get("fetch") is False            # 收尾步不新增网络依赖
+    assert got.get("generated_at")              # 注入时间戳便于复现
+
+
+def test_backtest_step_degrades_no_crash(monkeypatch):
+    """回测步抛错 → _safe 吞掉,cmd_all 收尾不中止(回测是可选增强)。"""
+    noop = lambda *a, **k: None
+    monkeypatch.setattr(run, "_prep", lambda argv: (["000001"], "2026-08-08"))
+    for name in ("collect_values", "collect_message", "collect_market_context",
+                 "run_sentiment", "run_serialize", "run_events", "run_factor",
+                 "run_council", "run_panel", "run_screen"):
+        monkeypatch.setattr(run, name, noop)
+
+    def boom():
+        raise RuntimeError("回测算不动(缺缓存)")
+
+    monkeypatch.setattr(run, "run_backtest", boom)
+    run.cmd_all([])                              # 回测炸,但闭环不应抛
+
+
+def test_two_stage_runs_backtest_at_tail(monkeypatch):
+    """两阶段流水线收尾也调回测步(在 screen 之后)。"""
+    calls = []
+    monkeypatch.setattr(run.master_sync, "sync_master", lambda c, **k: {"mode": "spot", "ok": 0})
+
+    class _SP:
+        @staticmethod
+        def run_pattern_screen(codes, as_of=None, fetch=False):
+            return {"达标清单": [], "接近达标": {}, "有效样本": 0, "候选数": 0}
+
+    monkeypatch.setitem(__import__("sys").modules, "tools.pipeline.screen_pattern", _SP)
+    monkeypatch.setattr(run.stock_pool, "get_codes", lambda: [])
+    for name in ("collect_values_missing", "collect_message", "collect_market_context",
+                 "run_sentiment", "run_serialize", "run_events", "run_factor",
+                 "run_council", "_enrich_near_miss", "run_panel"):
+        monkeypatch.setattr(run, name, lambda *a, **k: 0)
+    monkeypatch.setattr(run, "run_screen", lambda *a, **k: calls.append("run_screen"))
+    monkeypatch.setattr(run, "run_backtest", lambda: calls.append("run_backtest"))
+
+    run.run_two_stage(["000001"], "2026-08-08", no_llm=True)
+    assert "run_backtest" in calls
+    assert calls.index("run_screen") < calls.index("run_backtest")
 
 
 def test_recent_quarter_ends():
