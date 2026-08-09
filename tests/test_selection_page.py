@@ -459,3 +459,97 @@ def test_selection_empty_day_no_crash(monkeypatch):
                         lambda name, date="latest": (_ for _ in ()).throw(FileNotFoundError()))
     page = da.selection_page()
     assert page["total"] == 0 and page["rows"] == []
+
+
+# ————————————————————————————————————————————————
+# S01「趋势深跌反包」区块(screen_s01 产出 view → selection_page.s01 + 路由渲染)
+# ————————————————————————————————————————————————
+def _s01_view():
+    """一份「趋势深跌反包」view(3 只入选),字段口径同 tools/pipeline/screen_s01 产出。"""
+    return {
+        "as_of": "2026-08-08", "策略": "趋势深跌反包(S01)",
+        "扫描数": 5539, "有效样本": 5124, "跳过数(历史不足)": 415, "入选数": 3,
+        "入选清单": [
+            {"code": "300311", "明细": {
+                "MA": {"5": 6.16, "10": 5.649, "20": 5.414, "30": 5.3593, "60": 5.3325, "200": 5.1149},
+                "close": 6.69, "H52": 7.16, "近强_涨/跌": [9, 1], "当日跌幅": -0.1257, "收阳": True}},
+            {"code": "300951", "明细": {
+                "MA": {"5": 62.704, "10": 58.218, "20": 49.957, "30": 49.222, "60": 46.2617, "200": 38.5521},
+                "close": 68.5, "H52": 70.59, "近强_涨/跌": [8, 2], "当日跌幅": -0.0419, "收阳": True}},
+            {"code": "603221", "明细": {   # close > H52 → 突破前高
+                "MA": {"5": 22.254, "10": 18.191, "20": 14.6835, "30": 13.3203, "60": 12.8087, "200": 12.5568},
+                "close": 24.82, "H52": 24.79, "近强_涨/跌": [1, 0], "当日跌幅": -0.0891, "收阳": True}},
+        ],
+    }
+
+
+def _view_dispatch(s01=None, other=None):
+    """按 view 名分派:S01 名返回 s01(或抛 FNF);其它名返回 other(或抛 FNF)。"""
+    def _fn(name, date="latest"):
+        v = s01 if name == "趋势深跌反包" else other
+        if v is None:
+            raise FileNotFoundError(name)
+        return v
+    return _fn
+
+
+def test_s01_section_parses_view(monkeypatch):
+    """S01 view 存在 → s01 块 present + 规模字段 + 每票扁平化(跌幅%/突破前高/均线多头/收阳)。"""
+    recs = {"300311": _rec("300311", bull=True)}          # 一只有中心记录 → 取到名字
+    _patch_records(monkeypatch, recs)
+    monkeypatch.setattr(da.store, "get_view", _view_dispatch(s01=_s01_view()))
+    s01 = da.selection_page()["s01"]
+    assert s01["present"] is True
+    assert s01["扫描数"] == 5539 and s01["有效"] == 5124 and s01["跳过"] == 415 and s01["入选数"] == 3
+    assert [r["code"] for r in s01["rows"]] == ["300311", "300951", "603221"]
+    byc = {r["code"]: r for r in s01["rows"]}
+    assert byc["300311"]["name"] == "T300311"             # 有记录取 meta 名
+    assert byc["300951"]["name"] == "300951"              # 无记录回退代码
+    assert byc["300311"]["当日跌幅%"] == -12.57            # 小数→百分比
+    assert byc["300311"]["均线多头"] is True and byc["300311"]["收阳"] is True
+    assert byc["300311"]["近强_涨"] == 9 and byc["300311"]["近强_跌"] == 1
+    assert byc["603221"]["突破前高"] is True               # close 24.82 > H52 24.79
+    assert byc["300311"]["突破前高"] is False              # close 6.69 < H52 7.16
+
+
+def test_s01_section_missing_view_fallback(monkeypatch):
+    """S01 view 缺失 → present=False,不空页不抛(其它 view 可正常存在)。"""
+    _patch_records(monkeypatch, {})
+    monkeypatch.setattr(da.store, "get_view", _view_dispatch(s01=None, other=None))
+    s01 = da.selection_page()["s01"]
+    assert s01["present"] is False and s01["rows"] == [] and s01["入选数"] is None
+
+
+def test_s01_section_guards_missing_fields(monkeypatch):
+    """S01 单票明细缺 MA/字段 → 均线多头/收阳/跌幅 置 None,不抛(前端渲染「—」)。"""
+    _patch_records(monkeypatch, {})
+    view = {"扫描数": 10, "入选数": 1, "入选清单": [{"code": "000001", "明细": {"close": 5.0}}]}
+    monkeypatch.setattr(da.store, "get_view", _view_dispatch(s01=view))
+    r = da.selection_page()["s01"]["rows"][0]
+    assert r["均线多头"] is None and r["收阳"] is None
+    assert r["当日跌幅%"] is None and r["H52"] is None and r["突破前高"] is False
+
+
+def test_selection_route_renders_s01(monkeypatch):
+    """路由:S01 view 存在 → 渲染「趋势深跌反包」区块 + 说明 + 入选票代码。"""
+    monkeypatch.setattr(da, "_load_all", lambda date="latest": {})
+    monkeypatch.setattr(da, "as_of", lambda date="latest": "2026-08-08")
+    monkeypatch.setattr(da, "available_dates", lambda: ["2026-08-08"])
+    monkeypatch.setattr(da.store, "get_view", _view_dispatch(s01=_s01_view()))
+    r = client.get("/selection")
+    assert r.status_code == 200
+    assert "趋势深跌反包" in r.text and "当日深跌收阳" in r.text
+    assert "300311" in r.text and "603221" in r.text
+    assert "突破前高" in r.text                                    # 603221 close>H52
+    assert "-12.57%" in r.text                                    # 跌幅百分比
+
+
+def test_selection_route_s01_missing_shows_hint(monkeypatch):
+    """路由:S01 view 缺失 → 显示「S01 待运行」提示,不空页不报错。"""
+    monkeypatch.setattr(da, "_load_all", lambda date="latest": {})
+    monkeypatch.setattr(da, "as_of", lambda date="latest": "2026-08-08")
+    monkeypatch.setattr(da, "available_dates", lambda: ["2026-08-08"])
+    monkeypatch.setattr(da.store, "get_view", _view_dispatch(s01=None, other=None))
+    r = client.get("/selection")
+    assert r.status_code == 200
+    assert "S01 待运行" in r.text and "screen_s01" in r.text
