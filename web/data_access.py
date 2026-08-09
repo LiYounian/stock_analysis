@@ -51,9 +51,49 @@ def get_kline(code: str, date: str = "latest") -> dict:
                 "ma5": [], "ma20": [], "ma60": [], "volume": []}
 
 
+# ————————————————————————————————————————————————
+# 名称回退:自选记录 meta.name → config/code_name.json[code] → code
+# code_name.json 是全A「代码→名称」映射(offline 产出),模块级只加载一次;
+# web 不触网。文件缺失/损坏 → 空 dict,优雅退回「只用中心记录、再退 code」,不报错。
+# ————————————————————————————————————————————————
+_CODE_NAME_CACHE: dict[str, str] | None = None
+
+
+def _code_name_map() -> dict[str, str]:
+    """全A代码→名称映射(config/code_name.json),模块级只加载一次。文件缺失/损坏 → 空 dict。"""
+    global _CODE_NAME_CACHE
+    if _CODE_NAME_CACHE is None:
+        try:
+            import json
+            from tools.config import settings
+            path = settings.PROJECT_ROOT / "config" / "code_name.json"
+            data = json.loads(path.read_text(encoding="utf-8"))
+            _CODE_NAME_CACHE = data if isinstance(data, dict) else {}
+        except (FileNotFoundError, ValueError, OSError):
+            _CODE_NAME_CACHE = {}
+    return _CODE_NAME_CACHE
+
+
+def _resolve_name(rec, code):
+    """单记录版名称回退:rec.meta.name → code_name.json[code] → code。"""
+    nm = ((rec or {}).get("meta") or {}).get("name")
+    if nm:
+        return nm
+    return _code_name_map().get(code) or code
+
+
 def _name(recs, code):
-    r = recs.get(code)
-    return r["meta"]["name"] if r else code
+    """名称回退链(全页统一入口):自选记录 meta.name → code_name.json → code。"""
+    return _resolve_name((recs or {}).get(code), code)
+
+
+def _pool_codes() -> set[str]:
+    """当前自选池代码集合(区块①「自选股」过滤用)。读失败 → 空集合(区块① 空,不炸页)。"""
+    try:
+        from tools.config import stock_pool
+        return set(stock_pool.get_codes())
+    except Exception:
+        return set()
 
 
 def council_summary(rec: dict) -> dict | None:
@@ -232,10 +272,15 @@ def selection_page(date: str = "latest") -> dict:
     if qualified_n is None and view_present:
         qualified_n = sum(1 for x in rows if x["qualified"])
 
+    # 区块①「自选股」只展示当前自选池成员(区块②每日筛选/③Top/S01 仍用全A/达标票);
+    # total/qualified 仍为全量扫描口径(描述"本页共分析")。pool 代码当日无记录自然跳过,不报错。
+    pool = _pool_codes()
+    pool_rows = [x for x in rows if x["code"] in pool]
+
     daily = _daily_sections(qualified_items, near_items, recs, view_present, view_meta, qualified_n)
     top_picks = _top_picks(qualified_items, near_items, recs)
     s01 = _s01_section(recs, date)
-    return {"rows": rows, "total": total, "qualified": qualified_n,
+    return {"rows": pool_rows, "total": total, "qualified": qualified_n,
             "view_present": view_present, "view_meta": view_meta,
             "daily": daily, "top_picks": top_picks, "s01": s01,
             "config": config or {}, "as_of": as_of(date)}
@@ -323,7 +368,7 @@ def _top_picks(qualified_items: list[dict], near_items: list[dict], recs: dict,
         cblk = (r or {}).get("council") or {}
         a = anchor_stops(r)
         rows.append({
-            "code": code, "name": meta.get("name", code),
+            "code": code, "name": _resolve_name(r, code),
             "industry": meta.get("industry") or meta.get("sector"),
             "情景": a["情景"], "止损位": a["止损位"], "止盈位": a["止盈位"],
             "盈亏比": a["盈亏比"], "突破": a["突破"], "区间位置%": a["区间位置%"],
@@ -364,7 +409,7 @@ def _qual_row(it: dict, rec: dict | None):
     cs = council_summary(rec) or {}
     cblk = (rec or {}).get("council") or {}
     return board, {
-        "code": code, "name": meta.get("name", code),
+        "code": code, "name": _resolve_name(rec, code),
         "industry": meta.get("industry") or meta.get("sector"),
         "命中形态": it.get("命中形态"), "正向确认依据": it.get("正向确认依据", []),
         "council_dir": cs.get("综合方向"), "council_score": cs.get("综合分"),
@@ -387,7 +432,7 @@ def _near_row(it: dict, rec: dict | None):
     if score is None:
         score = cs.get("综合分")
     return board, {
-        "code": code, "name": meta.get("name", code),
+        "code": code, "name": _resolve_name(rec, code),
         "industry": it.get("行业") or meta.get("industry") or meta.get("sector"),
         "最接近形态": it.get("最接近形态"), "差距说明": it.get("差距说明"),
         "council_dir": cs.get("综合方向"), "council_score": score,
@@ -496,7 +541,7 @@ def news_flow(date: str = "latest") -> list[dict]:
     for code, r in recs.items():
         meta = r.get("meta") or {}
         for i, item in enumerate(news_list(code, date)):
-            out.append({"code": code, "name": meta.get("name", code),
+            out.append({"code": code, "name": _resolve_name(r, code),
                         "sector": meta.get("sector", ""), "idx": i, **item})
     out.sort(key=lambda x: x.get("time") or "", reverse=True)
     return out
