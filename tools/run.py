@@ -234,6 +234,28 @@ def run_screen(codes: list[str]) -> None:
     logger.info("选股视图 → %s(主线 %s,预设 %d 组)", p, agg.get("hot_theme"), len(presets))
 
 
+def run_backtest() -> None:
+    """闭环收尾:跨多日累积的前瞻回测汇总(**可选增强**,失败绝不中止主闭环)。
+
+    只**调用** tools.backtest.backtest_summary(不改其算法):读已累积的历次
+    data/analysis/<date>/ 达标池,按防未来函数口径算前瞻 5/10/20 日收益 + Alpha +
+    regime 分层胜率;前瞻期未到的窗口优雅标「待观察」,不报错。结果 run_and_store
+    落成 store view(backtest.json + 形态选股回测汇总.json,写到最新达标日目录),
+    随当日 analysis 产物被现有 upload 自动带到远端(为日后「策略体检卡」上页铺路)。
+
+    幂等:run_and_store 用 put_view 覆盖同一天,重跑同一天覆盖当天回测结果、不重复累积。
+    离线安全:fetch=False,只读已缓存 K线/基准(主闭环采集步已把当日数据落地),
+    不给收尾步新增网络依赖;缺基准时 Alpha 优雅留空并带说明。
+    """
+    import datetime as _dt
+
+    from tools.backtest import backtest_summary
+    stamp = _dt.datetime.now().isoformat(timespec="seconds")
+    r = backtest_summary.run_and_store(fetch=False, generated_at=stamp)
+    logger.info("前瞻回测汇总:达标日数=%d 事件数=%d;结论:%s",
+                r.get("达标日数", 0), r.get("样本数", 0), r.get("状态"))
+
+
 # ————————————————————————————————————————————————
 # 合议数据生产者(横截面/事件),必须在 serialize 之后、council 回写之前
 # ————————————————————————————————————————————————
@@ -353,6 +375,7 @@ def cmd_all(argv):
     run_council(codes, as_of)            # 数据就绪后回写 council 块(全专家不再弃权)
     run_panel(codes)
     run_screen(codes)
+    _safe("前瞻回测汇总", run_backtest)   # 收尾可选增强:跨多日累积回测(失败降级,绝不中止闭环)
     logger.info("===== 全链路完成 → data/analysis/%s/(record 含完整 council)=====", as_of)
 
 
@@ -441,6 +464,7 @@ def run_two_stage(codes_all: list[str], as_of: str, no_llm: bool = False) -> dic
     filled = _enrich_near_miss(as_of)     # 回填接近达标合议分 + 按合议分重排 top3
     run_panel(analysis_set)
     run_screen(analysis_set)
+    _safe("前瞻回测汇总", run_backtest)   # 收尾可选增强:跨多日累积回测(失败降级,绝不中止闭环)
     logger.info("===== 全A两阶段流水线完成 → data/analysis/%s/;LLM子集 %d 只含完整合议,"
                 "接近达标合议分回填 %d 只 =====", as_of, len(llm_subset), filled)
     return {"as_of": as_of, "扫描": len(codes_all), "达标": len(qualified),
