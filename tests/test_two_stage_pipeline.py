@@ -14,11 +14,11 @@ from tools.store import repo as store
 
 
 def _breakout_df(last=108.0):
-    base = [100 + (2 if i % 2 else -2) for i in range(20)]
+    base = [100 + (2 if i % 2 else -2) for i in range(30)]   # 箱体.窗口=30 → 30 根箱体 + 1 根突破
     closes = base + [last]
-    vols = [1000.0] * 20 + [2500.0]
+    vols = [1000.0] * 30 + [2500.0]
     return pd.DataFrame({
-        "date": pd.date_range("2024-01-01", periods=21, freq="D"),
+        "date": pd.date_range("2024-01-01", periods=31, freq="D"),
         "open": closes, "high": [c * 1.005 for c in closes],
         "low": [c * 0.995 for c in closes], "close": closes, "volume": vols})
 
