@@ -12,6 +12,7 @@ from tools.strategy.registry import (
     run,
     strategy,
 )
+from tools.strategy import momentum as _momentum  # noqa: F401  导入即注册
 
 __all__ = ["STRATEGY_KINDS", "StrategyMeta", "strategy", "register",
            "get", "list_strategies", "run"]

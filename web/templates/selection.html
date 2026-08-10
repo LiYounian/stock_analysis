@@ -59,13 +59,21 @@
   <h2>综合选股 <small>勾选策略 → 展示所选策略入选股票代码的<b>并集</b>(去重);前端实时重算,不触网</small></h2>
   <div class="council-experts">
     {% for st in s.combined.strategies %}
-    <label class="council-chk">
+    <label class="council-chk" title="{{ st.title }}">
       <input type="checkbox" class="strat-cb" value="{{ st.key }}"
-             {% if st.available %}checked{% else %}disabled{% endif %}> {{ st.label }}
+             {% if st.available %}checked{% else %}disabled{% endif %}>
+      <span class="strat-label">{{ st.label }}</span>
+      <span class="strat-key muted tiny">({{ st.key }})</span>
+      <span class="strat-info" aria-label="{{ st.title }}">ⓘ</span>
     </label>
     {% endfor %}
   </div>
-  <p class="muted tiny">默认全勾(展示全并集)。命中来源标出被哪几个策略选中(如「策略0+策略1」)。一个都没勾 → 显示「无」。纯数据 · 非投资建议。</p>
+  <ul class="strat-desc muted tiny">
+    {% for st in s.combined.strategies %}
+    <li><b>{{ st.label }}</b>({{ st.key }}):{{ st.title }}</li>
+    {% endfor %}
+  </ul>
+  <p class="muted tiny">默认全勾(展示全并集)。命中来源用 key 拼接(如「策略0+策略1」)。一个都没勾 → 显示「无」。纯数据 · 非投资建议。</p>
   <table>
     <thead><tr><th>代码</th><th>名称</th><th>行业</th><th>命中来源</th></tr></thead>
     <tbody id="combinedBody">
