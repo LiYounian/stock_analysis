@@ -34,6 +34,41 @@ def test_annualized_vol():
     assert fac.annualized_vol(df.head(5), win=60) is None            # 样本不足→None
 
 
+# ---------- 股息率 = 每股股利 / 最新收盘 × 100(锁 真0 vs 缺失) ----------
+def test_dividend_yield_positive():
+    df = pd.DataFrame({"close": [9.0, 10.0]})                        # 最新收盘 10
+    assert fac.dividend_yield(0.5, df) == pytest.approx(5.0)         # 0.5/10×100
+
+def test_dividend_yield_zero_is_real_not_missing():
+    df = pd.DataFrame({"close": [10.0]})
+    assert fac.dividend_yield(0.0, df) == 0.0                        # 无分红=真 0,非 None
+    assert fac.dividend_yield(0, df) == 0.0
+
+def test_dividend_yield_missing_dps_is_none():
+    df = pd.DataFrame({"close": [10.0]})
+    assert fac.dividend_yield(None, df) is None                      # 采集缺失→None
+
+def test_dividend_yield_no_price_degrades_none():
+    assert fac.dividend_yield(0.5, None) is None                     # 有分红但无价格分母→缺失
+    assert fac.dividend_yield(0.5, pd.DataFrame({"close": []})) is None
+    # 无分红即便无价也仍是真 0(不需价格)
+    assert fac.dividend_yield(0.0, None) == 0.0
+
+def test_raw_factors_dividend_availability():
+    """含每股股利 + kline → 股息率可得(>0);无分红票 → 0(仍可得,availability 计入)。"""
+    df = pd.DataFrame({"close": [9.0, 10.0]})
+    rec_pay = {"meta": {"code": "P"}, "fundamental": {"每股股利": 0.5}, "valuation": {}}
+    rec_nopay = {"meta": {"code": "N"}, "fundamental": {"每股股利": 0.0}, "valuation": {}}
+    r_pay = fac.raw_factors(rec_pay, df)
+    r_nopay = fac.raw_factors(rec_nopay, df)
+    assert r_pay["股息率"] == pytest.approx(5.0)
+    assert r_nopay["股息率"] == 0.0                                  # 真 0,非 None → availability 命中
+    # availability 用 is not None 判定:有分红与无分红都算"可得"
+    from tools.analysis.factor import score as sc
+    avail = sc._availability({"P": r_pay, "N": r_nopay})
+    assert avail["股息率"] == pytest.approx(1.0)
+
+
 # ---------- score.cross_section:定向 / 合成 / 降级 ----------
 def test_cross_section_orientation_and_direction():
     raw = {

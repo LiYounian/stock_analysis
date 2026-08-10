@@ -83,7 +83,8 @@ def build_record(code: str, as_of: str) -> dict:
             "mktcap_yi": fund.get("总市值"), "报告期": fund.get("报告期"), **sw,
         }
     fundamental_block = {k: fund.get(k) for k in
-                         ("营收", "净利", "营收增速", "净利增速", "ROE", "毛利率", "净利率", "负债率")} if fund else None
+                         ("营收", "净利", "营收增速", "净利增速", "ROE", "毛利率", "净利率", "负债率",
+                          "每股股利")} if fund else None
 
     events = [{"date": a.get("date"), "type": a.get("type"),
                "impact": a.get("impact"), "title": a.get("title")} for a in anns[:20]]

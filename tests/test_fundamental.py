@@ -92,10 +92,68 @@ def test_missing_indicator_none(monkeypatch):
 def test_fetch_and_load_roundtrip(monkeypatch, tmp_path):
     monkeypatch.setattr(store, "_RAW_DIR", tmp_path)
     _install_fake_ak(monkeypatch, _fake_abstract_df())
+    monkeypatch.setattr(fd, "fetch_dividends", lambda codes, as_of=None: {"000021": 0.5})
     out = fd.fetch_fundamental(["000021"])
     assert "000021" in out
     loaded = fd.load_fundamental("000021")
     assert loaded["ROE"] == 8.8
+    assert loaded["每股股利"] == 0.5                    # 分红写入 fundamental 记录
     assert store.get_raw_meta("fundamental", "000021")["source"] == fd._SOURCE
     with pytest.raises(FileNotFoundError):
         fd.load_fundamental("999999")
+
+
+# ---------- baostock 每股现金分红 TTM(mock 会话,锁 真0 vs 缺失 vs 窗口)----------
+class _FakeRS:
+    """模拟 baostock 结果集:error_code / fields / next() / get_row_data()。"""
+    def __init__(self, rows, error_code="0"):
+        self.error_code = error_code
+        self.fields = ["dividOperateDate", "dividCashPsBeforeTax"]
+        self._rows = list(rows)
+        self._i = -1
+
+    def next(self):
+        self._i += 1
+        return self._i < len(self._rows)
+
+    def get_row_data(self):
+        return self._rows[self._i]
+
+
+class _FakeBS:
+    def __init__(self, by_year, error_code="0"):
+        self._by_year = by_year          # {year_str: [[exdate, cash], ...]}
+        self._error_code = error_code
+
+    def query_dividend_data(self, code, year, yearType):
+        return _FakeRS(self._by_year.get(year, []), self._error_code)
+
+
+def test_dividend_ttm_sums_within_365d():
+    bs = _FakeBS({
+        "2026": [["2026-07-16", "0.116823"]],
+        "2025": [["2025-11-28", "0.05"], ["2025-07-23", "0.295"]],   # 07-23 在 365d 窗口外(as_of 2026-08-10)
+    })
+    v = fd._dividend_ttm_ps(bs, "sz.000625", "2026-08-10")
+    assert v == pytest.approx(0.166823)              # 0.116823 + 0.05,不含窗口外 0.295
+
+
+def test_dividend_ttm_no_records_is_real_zero():
+    bs = _FakeBS({})                                  # 无任何分红记录 → 真 0(非缺失)
+    assert fd._dividend_ttm_ps(bs, "sz.002129", "2026-08-10") == 0.0
+
+
+def test_dividend_ttm_api_error_is_missing():
+    bs = _FakeBS({"2026": [["2026-07-16", "0.1"]]}, error_code="10001")  # 接口报错
+    assert fd._dividend_ttm_ps(bs, "sz.000625", "2026-08-10") is None    # → 缺失,不当 0
+
+
+def test_fetch_dividends_session_fail_degrades_empty(monkeypatch):
+    """baostock 会话建不起来 → 空 dict(整体缺失,上层降级),不抛。"""
+    import tools.collectors.baostock_src as bsrc
+
+    def _boom():
+        raise ConnectionError("baostock 登录失败")
+    monkeypatch.setattr(bsrc, "session", _boom)
+    assert fd.fetch_dividends(["000625", "002129"]) == {}
+    assert fd.fetch_dividends([]) == {}               # 空输入→空
