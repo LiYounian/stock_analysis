@@ -157,6 +157,95 @@
   {% endif %}
 </section>
 
+<!-- 策略2:放量后缩量回踩(S02,web 实时算·待验证) -->
+<section class="card wide">
+  <h2>策略2 · 放量后缩量回踩
+    <span style="font-size:12px;padding:1px 8px;border:1px solid #b0883a;color:#b0883a;border-radius:10px;vertical-align:middle;">待验证</span>
+    {% if s.strategy2.present %}
+    <small>自选池实时扫描 · 入选 <b class="pos">{{ s.strategy2.rows|length }}</b> · 数据日期 <b>{{ s.strategy2.as_of }}</b></small>
+    {% endif %}</h2>
+  <p class="muted tiny">周线放量后、当日缩量回踩 10 日线的候选(C1..C5 全满足,单日触发)。
+    <b>待验证</b>:仅做过「信号日收盘机械基线」回测(edge 薄不足定论),买点未定,回测口径非最终买法,仅供观察。
+    web 端在自选池内实时计算,毫秒级,不触网、不预落盘。</p>
+  {% if not s.strategy2.present %}
+  <p class="muted">策略2 待运行(自选池为空)。</p>
+  {% elif not s.strategy2.rows %}
+  <p class="muted">本日策略2 无入选标的。</p>
+  {% else %}
+  <table>
+    <thead><tr><th>代码</th><th>名称</th><th>行业</th></tr></thead>
+    <tbody>
+    {% for x in s.strategy2.rows %}
+      <tr data-code="{{ x.code }}">
+        <td>{{ x.code }}</td>
+        <td><a href="/stock/{{ x.code }}?date={{ s.as_of }}">{{ x.name }}</a></td>
+        <td class="muted">{{ x.industry or '-' }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+</section>
+
+<!-- 策略3:箱体形态(web 实时算·待验证) -->
+<section class="card wide">
+  <h2>策略3 · 箱体形态
+    <span style="font-size:12px;padding:1px 8px;border:1px solid #b0883a;color:#b0883a;border-radius:10px;vertical-align:middle;">待验证</span>
+    {% if s.strategy3.present %}
+    <small>自选池实时扫描 · 入选 <b class="pos">{{ s.strategy3.rows|length }}</b> · 数据日期 <b>{{ s.strategy3.as_of }}</b></small>
+    {% endif %}</h2>
+  <p class="muted tiny">箱体整理突破候选(欧奈尔/墨菲经典形态):末根放量突破窄幅箱体上沿。
+    <b>待验证</b>:形态几何参数刚录入、尚未回测,仅供观察。
+    web 端在自选池内实时计算,毫秒级,不触网、不预落盘。</p>
+  {% if not s.strategy3.present %}
+  <p class="muted">策略3 待运行(自选池为空)。</p>
+  {% elif not s.strategy3.rows %}
+  <p class="muted">本日策略3 无入选标的。</p>
+  {% else %}
+  <table>
+    <thead><tr><th>代码</th><th>名称</th><th>行业</th></tr></thead>
+    <tbody>
+    {% for x in s.strategy3.rows %}
+      <tr data-code="{{ x.code }}">
+        <td>{{ x.code }}</td>
+        <td><a href="/stock/{{ x.code }}?date={{ s.as_of }}">{{ x.name }}</a></td>
+        <td class="muted">{{ x.industry or '-' }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+</section>
+
+<!-- 策略4:动量组合(原策略2 改号·web 实时算) -->
+<section class="card wide">
+  <h2>策略4 · 动量组合
+    {% if s.strategy4.present %}
+    <small>自选池实时扫描 · 入选 <b class="pos">{{ s.strategy4.rows|length }}</b> · 数据日期 <b>{{ s.strategy4.as_of }}</b></small>
+    {% endif %}</h2>
+  <p class="muted tiny">移植自聚宽社区双策略:加权对数动量打分 + 拉普拉斯闸门(动量组合);
+    质地过滤 + BBI 站上 + 24 日动量排序(红利动量组合)。web 端在自选池内实时计算,毫秒级,不触网。</p>
+  {% if not s.strategy4.present %}
+  <p class="muted">策略4 待运行(自选池为空)。</p>
+  {% elif not s.strategy4.rows %}
+  <p class="muted">本日策略4 无入选标的。</p>
+  {% else %}
+  <table>
+    <thead><tr><th>代码</th><th>名称</th><th>行业</th><th>组合</th></tr></thead>
+    <tbody>
+    {% for x in s.strategy4.rows %}
+      <tr data-code="{{ x.code }}">
+        <td>{{ x.code }}</td>
+        <td><a href="/stock/{{ x.code }}?date={{ s.as_of }}">{{ x.name }}</a></td>
+        <td class="muted">{{ x.industry or '-' }}</td>
+        <td class="muted tiny">{{ x.combos|join('+') if x.combos else '-' }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+</section>
+
 <p class="muted tiny">点名称进个股页看完整归因/K线。合议综合分同口径(前端同 councilSynth 公式,勾选专家实时重排)。</p>
 
 <script id="selectionExperts" type="application/json">{{ (s.rows|list)|tojson }}</script>
