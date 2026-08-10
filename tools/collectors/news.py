@@ -1,16 +1,23 @@
 """新闻采集(个股新闻)。
 
-主源:akshare `stock_news_em`(东财,个股维度)。pandas 3.0 默认 pyarrow 字符串
-会触发 akshare 内部正则报错,调用前关掉 `future.infer_string`(实测可绕过)。
-**备源(消单点)**:东财失败/无结果时回落 `stock_info_global_cls`(财联社电报,
-全市场快讯,不同信源)按**股票名过滤**——电报无个股维度,只能名称子串命中,
-召回低、属降级保底,但避免个股新闻全押东财一家。meta.source 记实际命中源。
+**个股维度并集多源**(提升召回,消单点):
+- **主源**:akshare `stock_news_em`(东财,个股维度)。pandas 3.0 默认 pyarrow
+  字符串会触发 akshare 内部正则报错,调用前关掉 `future.infer_string`(实测可绕过)。
+- **新增源(并入,非替换)**:新浪财经个股新闻页 `vCB_AllNewsStock.php`(个股维度、
+  SSR HTML,curl_cffi 伪装 chrome 可直取,与 UGC/资金流同套指纹)。东财对部分票近日
+  条目稀疏(实测有票只返 10 条、最新停在数日前),新浪对同一票能覆盖到当日,二者互补。
+  两源各拉一遍 → 去重合并(url 优先,无 url 则 title+日期)→ 统一时间窗过滤 → 倒序。
+- **备源(降级保底)**:上述两源皆空时回落 `stock_info_global_cls`(财联社电报,
+  全市场快讯)按**股票名过滤**——电报无个股维度,只能名称子串命中,召回低,
+  但避免全空。三者正交,meta.source 记实际贡献源(如 "eastmoney+新浪")。
 落盘:走 store 层(kind="news",json,原始新闻保留供 L1 抽取)。
 契约见 docs/计划/P2C_新闻情绪LLM.md。
 """
 from __future__ import annotations
 
 import logging
+import os
+import re
 import time
 
 import pandas as pd
@@ -21,9 +28,21 @@ from tools.store import repo as store
 logger = logging.getLogger("collectors.news")
 
 _SOURCE = "eastmoney"        # 东财(主源,个股维度)
+_SOURCE_SINA = "新浪"         # 新增源(新浪个股新闻页,个股维度,并入)
 _SOURCE_CLS = "财联社电报"    # 备源(全市场快讯,按名过滤)
 _COL_MAP = {"新闻标题": "title", "新闻内容": "content", "发布时间": "time",
             "文章来源": "source", "新闻链接": "url"}
+
+# 新浪个股新闻页(SSR,gb2312;curl_cffi 伪装 chrome 可直取,与 UGC 同套指纹)
+_SINA_URL = ("https://vip.stock.finance.sina.com.cn/corp/view/"
+             "vCB_AllNewsStock.php?symbol={sym}&Page={page}")
+_SINA_MAX_PAGES = 3          # 每票最多翻几页(7 天窗内一般 1~2 页即够,遇更早页早停)
+_SINA_TIMEOUT = float(os.getenv("FETCH_TIMEOUT", "10"))
+# 页面把条目内联在 <div class="datelist"><ul>...</ul>;每条 "YYYY-MM-DD HH:MM <a href>title</a>"
+_SINA_LIST_RE = re.compile(r'datelist"><ul>(.*?)</ul>', re.S)
+_SINA_ENTRY_RE = re.compile(
+    r"(\d{4}-\d{2}-\d{2})\s+(\d{2}:\d{2})\s*"
+    r"<a[^>]*href=['\"]([^'\"]+)['\"][^>]*>(.*?)</a>", re.S)
 
 
 def _fetch_em(code: str) -> pd.DataFrame:
@@ -48,6 +67,76 @@ def _parse_em(df: pd.DataFrame, cutoff: str) -> list[dict]:
                           "url": str(r.get("url", ""))})
         items.sort(key=lambda x: x["time"], reverse=True)
     return items
+
+
+def _sina_sym(code: str) -> str:
+    """A 股代码 → 新浪 symbol 前缀:6 开头沪市 sh,其余深市 sz。"""
+    return ("sh" if code.startswith("6") else "sz") + code
+
+
+def _fetch_sina_html(sym: str, page: int) -> str:
+    """curl_cffi 伪装 chrome 拉新浪个股新闻页(gb2312 解码)。抽出便于测试 mock。"""
+    from curl_cffi import requests as creq
+
+    r = creq.get(_SINA_URL.format(sym=sym, page=page),
+                 impersonate="chrome", timeout=_SINA_TIMEOUT)
+    r.raise_for_status()
+    return r.content.decode("gb2312", "ignore")
+
+
+def _parse_sina(html: str) -> list[dict]:
+    """新浪个股新闻页 HTML → 归一新闻条目(未过滤时间窗;调用方统一过滤)。
+
+    列表页仅给标题/链接/时间(无正文),content 回落标题保证下游有文本;
+    source 统一记 `_SOURCE_SINA`(逐条出处需进详情页,成本高,不取)。
+    """
+    html = (html or "").replace("&nbsp;", " ")   # 页面用 &nbsp; 分隔日期/时间/锚点
+    m = _SINA_LIST_RE.search(html)
+    block = m.group(1) if m else html
+    items: list[dict] = []
+    for d, hm, url, raw_title in _SINA_ENTRY_RE.findall(block):
+        title = re.sub(r"<.*?>", "", raw_title).strip()
+        if not title:
+            continue
+        items.append({"title": title, "content": title[:2000],
+                      "time": f"{d} {hm}:00", "source": _SOURCE_SINA,
+                      "url": url.strip()})
+    return items
+
+
+def _fetch_sina(code: str, cutoff: str) -> list[dict]:
+    """新浪个股新闻(个股维度,并入源)。翻页直到该页最早条目早于 cutoff 或到页上限。
+
+    单页解析空即停(无更多);已早于窗口的页停翻。返回时间窗内条目(倒序由上层统一排)。
+    """
+    sym = _sina_sym(code)
+    out: list[dict] = []
+    for page in range(1, _SINA_MAX_PAGES + 1):
+        items = _parse_sina(_fetch_sina_html(sym, page))
+        if not items:
+            break
+        out.extend(it for it in items if it["time"][:10] >= cutoff)
+        if min(it["time"][:10] for it in items) < cutoff:  # 本页已跨过窗口下界
+            break
+    return out
+
+
+def _dedup_merge(*sources: list[dict]) -> list[dict]:
+    """并集去重:同 url 视为同一条;无 url 时按 title+日期(time[:10])。先到者留。
+
+    保序按传入顺序(主源在前),同键后到者丢弃。统一倒序由调用方做。
+    """
+    seen: set = set()
+    merged: list[dict] = []
+    for items in sources:
+        for it in items:
+            url = (it.get("url") or "").strip()
+            key = url if url else (it.get("title", ""), str(it.get("time", ""))[:10])
+            if key in seen:
+                continue
+            seen.add(key)
+            merged.append(it)
+    return merged
 
 
 def _fetch_cls(code: str, cutoff: str) -> list[dict]:
@@ -97,14 +186,31 @@ def fetch_news(codes: list[str], days: int | None = None) -> dict[str, list[dict
     n = len(codes)
     for i, code in enumerate(codes, 1):
         logger.info("[%d/%d] 新闻 %s 采集...", i, n, code)
-        src, items, err = _SOURCE, [], None
-        # 主源:东财个股新闻
+        contributors: list[str] = []
+        em_items: list[dict] = []
+        sina_items: list[dict] = []
+        err = None
+        # 个股维度并集:东财 + 新浪各拉一遍,单源失败隔离不影响其余
         try:
-            items = _parse_em(_fetch_em(code), cutoff)
+            em_items = _parse_em(_fetch_em(code), cutoff)
+            if em_items:
+                contributors.append(_SOURCE)
         except Exception as e:
             err = e
-            logger.warning("新闻 %s 东财失败,尝试备源: %s", code, e)
-        # 主源空/挂 → 备源:财联社电报按名过滤(降级保底,消单点)
+            logger.warning("新闻 %s 东财失败: %s", code, e)
+        try:
+            sina_items = _fetch_sina(code, cutoff)
+            if sina_items:
+                contributors.append(_SOURCE_SINA)
+        except Exception as e:
+            err = err or e
+            logger.warning("新闻 %s 新浪失败: %s", code, e)
+        # 去重合并(url 优先,无 url 则 title+日期)→ 统一按 cutoff 过滤 → 倒序
+        items = [it for it in _dedup_merge(em_items, sina_items)
+                 if str(it.get("time", ""))[:10] >= cutoff]
+        items.sort(key=lambda x: x["time"], reverse=True)
+        src = "+".join(contributors) if contributors else _SOURCE
+        # 两并集源皆空 → 备源:财联社电报按名过滤(降级保底,消单点)
         if not items:
             try:
                 fb = _fetch_cls(code, cutoff)
@@ -115,7 +221,7 @@ def fetch_news(codes: list[str], days: int | None = None) -> dict[str, list[dict
                 err = err or e
         store.put_raw("news", code, items, meta={"source": src})
         out[code] = items
-        if err and not items:                    # 两源皆挂且无数据才算失败(不静默)
+        if err and not items:                    # 各源皆挂且无数据才算失败(不静默)
             failed.append(code)
         logger.info("新闻 %s:%d 条(源=%s)", code, len(items), src)
         time.sleep(settings.FETCH_SLEEP_SEC)
