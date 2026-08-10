@@ -62,6 +62,31 @@ def test_substring_fallback(name, expect):
     assert to_sw(name) == expect
 
 
+# ———————————— 自选池自由文本行业名(此前对不齐弃权的实测样本)————————————
+@pytest.mark.parametrize("name,expect", [
+    ("ICT/网络设备(新华三)", "通信"),   # 000938 紫光股份:此前弃权
+    ("PCB/印制电路板", "电子"),          # 300476 胜宏科技:此前弃权
+    ("云计算/算力服务", "计算机"),       # 300209 行云科技
+    ("电子陶瓷/新材料", "电子"),         # 300285 国瓷材料
+    ("光学元件/激光", "电子"),           # 002222 福晶科技
+    ("航运/油运", "交通运输"),           # 601975 招商南油
+    ("AI应用/游戏", "传媒"),             # 300418 昆仑万维
+    ("光伏硅片/半导体材料", "电子"),     # 002129 TCL中环
+])
+def test_stock_pool_freetext_industries_align(name, expect):
+    assert to_sw(name) == expect
+
+
+def test_no_pool_stock_abstains_by_name(monkeypatch):
+    """自选池 11 只行业名全部能对齐到申万一级(RRG 不再因行业名弃权)。"""
+    import json
+    import pathlib
+    cfg = pathlib.Path(__file__).resolve().parents[1] / "config" / "stock_pool.json"
+    pool = json.loads(cfg.read_text(encoding="utf-8"))
+    unmapped = [(s["code"], s["industry"]) for s in pool if to_sw(s.get("industry")) is None]
+    assert unmapped == [], f"仍对不齐申万一级(会弃权): {unmapped}"
+
+
 # ———————————— 无匹配 → None(绝不硬凑) ————————————
 @pytest.mark.parametrize("name", ["某某概念", "ST摘帽", "", "   ", None, 123, "热点题材"])
 def test_unmappable_returns_none(name):
