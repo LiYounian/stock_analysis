@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% block title %}资金流向 · A股策略辅助工具{% endblock %}
+{% block content %}
+<h1>资金流向
+  <small>大盘 5 单实时净流入 + 行业/概念板块榜 · 直连东财 · 30 秒自动刷新 · 非投资建议</small>
+  <span class="ff-refresh"><span class="ff-live" id="ff-live"></span><span id="ff-updated">--:--:--</span></span>
+</h1>
+
+<section class="card wide ff-summary-card">
+  <h2>大盘 5 单净流入(全 A 汇总)</h2>
+  <div class="ff-summary" id="ff-summary">
+    <div class="ff-cell"><div class="ff-label">小单</div><div class="ff-val" data-k="small">--</div></div>
+    <div class="ff-cell"><div class="ff-label">中单</div><div class="ff-val" data-k="mid">--</div></div>
+    <div class="ff-cell"><div class="ff-label">大单</div><div class="ff-val" data-k="big">--</div></div>
+    <div class="ff-cell"><div class="ff-label">超大单</div><div class="ff-val" data-k="huge">--</div></div>
+    <div class="ff-cell"><div class="ff-label">主力</div><div class="ff-val" data-k="main">--</div></div>
+  </div>
+</section>
+
+<section class="card wide">
+  <div class="ff-toolbar">
+    <div class="ff-tabs" id="ff-tabs">
+      <button data-t="all" class="active">全部</button>
+      <button data-t="2">行业板块</button>
+      <button data-t="3">概念板块</button>
+      <button data-t="fav">★ 收藏<span class="ff-fav-count" id="ff-fav-count" style="display:none">0</span></button>
+    </div>
+    <div class="ff-search">
+      <input id="ff-search" type="text" placeholder="搜索板块名(如 半导体 / 银行 / CPO)" autocomplete="off" />
+    </div>
+  </div>
+  <div id="ff-error" class="ff-error" style="display:none"></div>
+  <div class="ff-list" id="ff-list"></div>
+</section>
+
+<p class="muted tiny">数据源:东方财富 push2 接口(前端直连,30 秒轮询)。板块名单来自东财 · 主力净流入 = 大单+超大单 · 单位亿元。</p>
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/fund_flow.js"></script>
+{% endblock %}
