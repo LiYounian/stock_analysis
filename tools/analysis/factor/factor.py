@@ -8,7 +8,8 @@
   价值: PE_TTM / PB               —— record["valuation"]
   低波: 年化波动率                —— kline 日收益 std × sqrt(244)
   成长: 净利增速                  —— record["fundamental"]
-  股息: 股息率                    —— 记录暂无→None(降级缺失,不改采集)
+  股息: 股息率 = 每股股利(TTM现金分红,采集层baostock) / 最新收盘价 × 100
+                                  —— 无分红票每股股利=0 → 股息率0(真 0);每股股利缺失→None(降级)
   资金流: 北向净流入趋势           —— 北向 5–10 日趋势(拿不到→None,I4 降级)
 
 缺任一 → 该子指标 None(score.py 截面时跳过 None,并据齐全度降置信度)。
@@ -51,6 +52,32 @@ def annualized_vol(kline_df, win: int = None) -> float | None:
     return round(math.sqrt(var) * math.sqrt(244) * 100.0, 4)      # 百分数年化波动
 
 
+def _latest_close(kline_df) -> float | None:
+    """K线最新收盘价;无数据 → None。"""
+    if kline_df is None or "close" not in getattr(kline_df, "columns", []):
+        return None
+    closes = kline_df["close"].tolist()
+    if not closes:
+        return None
+    return _num(closes[-1])
+
+
+def dividend_yield(每股股利, kline_df=None) -> float | None:
+    """股息率(%)= 每股股利(TTM现金分红) / 最新收盘价 × 100。
+
+    每股股利 None(采集缺失)/ 无收盘价 → None(缺失);每股股利=0(无分红)→ 0.0(真 0)。
+    """
+    dps = _num(每股股利)
+    if dps is None:
+        return None
+    if dps == 0:
+        return 0.0                                    # 无分红:真 0,非缺失
+    close = _latest_close(kline_df)
+    if not close or close <= 0:
+        return None                                   # 无价格分母 → 无法算,降级缺失
+    return round(dps / close * 100.0, 4)
+
+
 def raw_factors(record: dict, kline_df=None, 北向净流入趋势=None) -> dict:
     """单票各子指标原始值 {子指标: float|None}。缺块降级 None,不抛。"""
     fund = (record or {}).get("fundamental") or {}
@@ -67,8 +94,8 @@ def raw_factors(record: dict, kline_df=None, 北向净流入趋势=None) -> dict
         "年化波动率": annualized_vol(kline_df),
         # 成长
         "净利增速": _num(fund.get("净利增速")),
-        # 股息(记录暂无 → None,降级缺失)
-        "股息率": _num(fund.get("股息率") if isinstance(fund, dict) else None),
+        # 股息:每股股利(TTM现金分红,采集层)/ 最新收盘价 × 100;无分红→0(真 0),缺采集→None
+        "股息率": dividend_yield(fund.get("每股股利") if isinstance(fund, dict) else None, kline_df),
         # 资金流(北向趋势;拿不到 → None,I4 降级)
         "北向净流入趋势": _num(北向净流入趋势),
     }
