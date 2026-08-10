@@ -46,5 +46,23 @@
     "name": "TCL中环",
     "industry": "光伏硅片/半导体材料",
     "sector": "光伏"
+  },
+  {
+    "code": "300209",
+    "name": "行云科技",
+    "industry": "云计算/算力服务",
+    "sector": "AI算力"
+  },
+  {
+    "code": "300285",
+    "name": "国瓷材料",
+    "industry": "电子陶瓷/新材料",
+    "sector": "新材料"
+  },
+  {
+    "code": "300476",
+    "name": "胜宏科技",
+    "industry": "PCB/印制电路板",
+    "sector": "AI算力"
   }
 ]
