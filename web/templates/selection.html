@@ -110,7 +110,7 @@
 
 <!-- 策略1:趋势深跌反包(单日触发·纯数据) -->
 <section class="card wide">
-  <h2>策略1 · 趋势深跌反包
+  <h2>策略1 · 筛选低吸股票
     <span style="font-size:12px;padding:1px 8px;border:1px solid #b0883a;color:#b0883a;border-radius:10px;vertical-align:middle;">待验证</span>
     {% if s.strategy1.present %}
     <small>扫描 <b>{{ s.strategy1.扫描数 if s.strategy1.扫描数 is not none else '—' }}</b> ·
@@ -118,8 +118,9 @@
       入选 <b class="pos">{{ s.strategy1.入选数 if s.strategy1.入选数 is not none else (s.strategy1.rows|length) }}</b> ·
       日期 <b>{{ s.strategy1.as_of }}</b></small>
     {% endif %}</h2>
-  <p class="muted tiny">均线完整多头 + 贴近 52 周高 + 近 10 日偏强 + 当日深跌收阳(≥4%);单日触发,纯数据。
-    <b>待验证</b>:全A历史回测未通过(入场逻辑待重构后复验),当前仅供观察、非选股建议。</p>
+  <p class="muted tiny">识别被资金「暴力洗盘/做低吸」的候选(均线多头 + 贴近52周高 + 近10日偏强 + 当日暴跌收阳);
+    <b>只筛选、不含买入</b>——买点(继续洗盘不破低点→低吸;反包高点→追)为后续主观/实时决策。
+    <b>待验证</b>:此前按「信号日收盘买入」的回测口径与本意不符,正按「午休选股→下午开盘买入」重设计验证。</p>
   {% if not s.strategy1.present %}
   <p class="muted">策略1 待运行(<code>python -m tools.pipeline.screen_s01</code>)。</p>
   {% elif not s.strategy1.rows %}
