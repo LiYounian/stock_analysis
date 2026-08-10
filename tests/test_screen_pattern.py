@@ -14,12 +14,15 @@ from tools.store import repo as store
 
 
 def _breakout_df(last=108.0):
-    """箱体放量突破;末根收盘 last 决定 20 日收益(越高收益越大)。"""
-    base = [100 + (2 if i % 2 else -2) for i in range(20)]
+    """箱体放量突破;末根收盘 last 决定 20 日收益(越高收益越大)。
+
+    箱体.窗口=30 → 需 30 根箱体 + 1 根突破;箱体.突破幅度%=3 → last 需 >箱顶 3%(>~105.6)。
+    """
+    base = [100 + (2 if i % 2 else -2) for i in range(30)]
     closes = base + [last]
-    vols = [1000.0] * 20 + [2500.0]
+    vols = [1000.0] * 30 + [2500.0]
     return pd.DataFrame({
-        "date": pd.date_range("2024-01-01", periods=21, freq="D"),
+        "date": pd.date_range("2024-01-01", periods=31, freq="D"),
         "open": closes, "high": [c * 1.005 for c in closes],
         "low": [c * 0.995 for c in closes], "close": closes, "volume": vols,
     })
@@ -65,7 +68,7 @@ def test_two_layer_uses_board_mean(monkeypatch, tmp_path):
     """双层:同业(3 只达最小样本)等权均值当板块基准;跑输同业均值的票 RS 不达标。"""
     _isolate(monkeypatch, tmp_path)
     # 同一行业 3 只,均为突破形态,20 日收益不同 → 均值≈10.2%
-    klines = {"HI": _breakout_df(112.0), "MID": _breakout_df(108.0), "LO": _breakout_df(104.0)}
+    klines = {"HI": _breakout_df(112.0), "MID": _breakout_df(108.0), "LO": _breakout_df(106.0)}
     monkeypatch.setattr(market, "load_kline", lambda code: klines[code])
     monkeypatch.setattr(board, "load_membership",
                         lambda: {"HI": "计算机", "MID": "计算机", "LO": "计算机"})
@@ -80,7 +83,7 @@ def test_two_layer_uses_board_mean(monkeypatch, tmp_path):
 def test_thin_board_degrades_to_single_layer(monkeypatch, tmp_path):
     """行业成分数 < 板块最小样本(默认 3)→ 该行业逐票降级单层。"""
     _isolate(monkeypatch, tmp_path)
-    klines = {"HI": _breakout_df(112.0), "LO": _breakout_df(104.0)}   # 同行业仅 2 只 < 3
+    klines = {"HI": _breakout_df(112.0), "LO": _breakout_df(106.0)}   # 同行业仅 2 只 < 3
     monkeypatch.setattr(market, "load_kline", lambda code: klines[code])
     monkeypatch.setattr(board, "load_membership", lambda: {"HI": "计算机", "LO": "计算机"})
     view = sp.run_pattern_screen(["HI", "LO"], as_of="2024-06-01", fetch=False)

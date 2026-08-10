@@ -28,9 +28,9 @@ def mk(closes, vols=None):
 
 # ---------- 箱体 / 平台突破 ----------
 def _box_df():
-    base = [100 + (2 if i % 2 else -2) for i in range(20)]   # 20 根窄幅箱体 ~[98,102]
-    closes = base + [108]                                     # 末根突破
-    vols = [1000.0] * 20 + [2500.0]                           # 末根放量
+    base = [100 + (2 if i % 2 else -2) for i in range(30)]   # 30 根窄幅箱体 ~[98,102](箱体.窗口=30)
+    closes = base + [108]                                     # 末根突破(>箱顶 3%)
+    vols = [1000.0] * 30 + [2500.0]                           # 末根放量
     return mk(closes, vols)
 
 
@@ -84,10 +84,10 @@ def test_cup_depth_out_of_range_no_hit():
 
 # ---------- 楔形(收敛)----------
 def _wedge_df():
-    first = [90 + (20 if i % 2 else 0) for i in range(10)]    # 前段大幅 [90,110]
-    second = [99 + (3 if i % 2 else 0) for i in range(10)]    # 后段收窄 [99,102]
+    first = [90 + (20 if i % 2 else 0) for i in range(15)]    # 前段大幅 [90,110]
+    second = [99 + (3 if i % 2 else 0) for i in range(15)]    # 后段收窄 [99,102](楔形.窗口=30)
     closes = first + second + [107]                           # 末根突破
-    vols = [1000.0] * 20 + [2000.0]
+    vols = [1000.0] * 30 + [2000.0]
     return mk(closes, vols)
 
 
@@ -99,8 +99,8 @@ def test_wedge_hit():
 # ---------- 旗形 ----------
 def _flag_df():
     flat = [100, 100, 100]
-    pole = list(np.linspace(100, 122, 10))                    # 旗杆急涨 ~22%
-    flagf = [121, 120, 121, 122, 120, 121, 120, 122, 121, 120, 121, 122]  # 旗面浅横盘
+    pole = list(np.linspace(100, 125, 10))                    # 旗杆急涨 ~25%(≥旗杆最短涨幅 20%)
+    flagf = [124, 123, 124, 123, 124, 123, 124, 123, 124, 123]  # 旗面浅横盘(10 根,回撤<10%)
     return mk(flat + pole + flagf)
 
 
