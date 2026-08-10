@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+from concurrent.futures import ThreadPoolExecutor
 
 from tools.collectors import news as nw
 from tools.collectors import policy as pol
@@ -39,6 +40,28 @@ def _cache_key(s: str) -> str:
     return hashlib.md5(s.encode("utf-8")).hexdigest()
 
 
+def _pmap(fn, items: list, workers: int) -> list:
+    """有界线程池按输入顺序回填结果(index 对齐,防并发乱序)。
+
+    - I/O 型(逐条 LLM 抽取),用线程池即可;workers<=1 或单条时退化为串行。
+    - fn 须自行做失败隔离(内部 try/except 返回 {"error":...}),本函数不吞异常语义,
+      只负责并发调度 + 顺序回填(下游可能按序处理)。
+    - 缓存幂等:并发下多线程首次读同一缺失键最多重复调用一次、写同名文件幂等,可接受
+      (不加锁,避免把并行锁没了)。
+    """
+    n = len(items)
+    if n == 0:
+        return []
+    if workers <= 1 or n == 1:
+        return [fn(i, items[i]) for i in range(n)]
+    results: list = [None] * n
+    with ThreadPoolExecutor(max_workers=min(workers, n)) as pool:
+        futs = {pool.submit(fn, i, it): i for i, it in enumerate(items)}
+        for fut in futs:
+            results[futs[fut]] = fut.result()   # 按 index 回填,保持输入顺序
+    return results
+
+
 def _cached_extract(client, text: str, instruction: str, schema: dict | None = None) -> dict:
     """按 (指令+文本) hash 缓存 LLM 抽取结果。schema 缺省用新闻抽取 schema(向后兼容)。"""
     schema = schema or prompts.NEWS_EXTRACT_SCHEMA
@@ -53,24 +76,30 @@ def _cached_extract(client, text: str, instruction: str, schema: dict | None = N
 
 # ---------- L1 抽取 ----------
 def extract_news_events(code: str, client=None, limit: int | None = None) -> list[dict]:
-    """对单票新闻逐条 LLM 抽取。失败的条目标 error(不中断)。"""
+    """对单票新闻逐条 LLM 抽取(有界线程池并行,I/O 型)。失败的条目标 error(不中断)。
+
+    limit:只截断送 LLM 抽取的条数,取最近 limit 条(load_news 已按 time 倒序);
+    原始新闻的落盘/展示不受此影响(见 news_ai / store)。
+    并发下按输入顺序回填结果(index 对齐),下游可按序处理。
+    """
     s = stock_pool.get(code)
     name = s.name if s else code
     items = nw.load_news(code)
     if limit:
-        items = items[:limit]
+        items = items[:limit]           # 取最近 limit 条(倒序在前)
     client = client or lc.get_client()
     instr = prompts.news_extract_instruction(name, code)
-    events = []
-    for n in items:
+
+    def _one(_i: int, n: dict) -> dict:
         text = f"标题:{n['title']}\n正文:{n['content']}"
         try:
             ev = _cached_extract(client, text, instr)
         except Exception as e:
             ev = {"error": str(e)[:80]}
-        events.append({**ev, "time": n.get("time"), "source": n.get("source"),
-                       "url": n.get("url"), "标题": n.get("title")})
-    return events
+        return {**ev, "time": n.get("time"), "source": n.get("source"),
+                "url": n.get("url"), "标题": n.get("title")}
+
+    return _pmap(_one, items, settings.LLM_EXTRACT_WORKERS)
 
 
 # ---------- 三层归类(代码)----------
@@ -121,15 +150,16 @@ def score_policy(client=None, date: str | None = None) -> list[dict]:
     except FileNotFoundError as e:
         logger.warning("政策缓存缺失,跳过打分(先 collect):%s", e)
         items = []
-    scored: list[dict] = []
-    for it in items:
+    def _one(_i: int, it: dict) -> dict:
         text = f"标题:{it.get('title','')}\n摘要:{it.get('summary','')}"
         instr = prompts.policy_score_instruction(it.get("industries") or None)
         try:
             r = _cached_extract(client, text, instr, prompts.POLICY_SCORE_SCHEMA)
         except Exception as e:
             r = {"error": str(e)[:80]}
-        scored.append({**it, **r, "层": "政策"})
+        return {**it, **r, "层": "政策"}
+
+    scored: list[dict] = _pmap(_one, items, settings.LLM_EXTRACT_WORKERS)
     from tools.store import repo as store
     p = store.put_view("sentiment_policy", scored)     # 按日期视图
     logger.info("政策打分完成:%d 条 → %s", len(scored), p)
@@ -229,7 +259,12 @@ def analyze_stock(code: str, client=None, limit: int | None = None) -> dict:
     只有新闻时退化为纯新闻净情绪,**向后兼容**旧行为。
     顶层 sentiment 仍保留新闻聚合的 利好数/利空数/样本数(旧消费方兼容),
     三层明细见 sentiment["三层"]。
+
+    limit 缺省用 settings.NEWS_EXTRACT_MAX(只截断送 LLM 抽取的最近条数,原文全量保留);
+    显式传参可覆盖。
     """
+    if limit is None:
+        limit = settings.NEWS_EXTRACT_MAX
     news_events = classify_events(extract_news_events(code, client, limit))
     news_agg = aggregate_sentiment(news_events)
 
