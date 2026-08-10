@@ -240,18 +240,20 @@ def selection_page(date: str = "latest") -> dict:
         })
     pool_rows.sort(key=lambda x: (x["council_score"] is not None, x["council_score"] or 0), reverse=True)
 
-    # 策略0(全A合议)与策略1(趋势深跌反包):读各自 view,缺失走兜底
+    # 策略0(全A合议)、策略1(趋势深跌反包)、策略2(动量组合,web 实时算):读 view / 计算
     strategy0 = _strategy0_section(recs, date)
     strategy1 = _s01_section(recs, date)
+    strategy2 = _strategy2_section(recs, date)
     # config 兜底:自选池无记录时,退用策略0 view 里带的 council config(前端合成口径真源)
     if not config and strategy0.get("config"):
         config = strategy0["config"]
 
     # 综合选股:各策略入选代码并集(前端按勾选实时重算;后端给全并集 + 每票命中来源)
-    combined = _combined_section(strategy0, strategy1, recs)
+    combined = _combined_section(strategy0, strategy1, recs, strategy2)
 
     return {"rows": pool_rows, "total": len(recs),
             "combined": combined, "strategy0": strategy0, "strategy1": strategy1,
+            "strategy2": strategy2,
             "config": config or {}, "as_of": as_of(date)}
 
 
@@ -299,21 +301,76 @@ def _strategy0_section(recs: dict, date: str = "latest") -> dict:
     }
 
 
-def _combined_section(strategy0: dict, strategy1: dict, recs: dict) -> dict:
+def _store_closes_loader(code: str):
+    """web 层 momentum closes 加载器:优先主档,回退最新日期分区 raw kline。
+
+    展示层不 import 采集层(collectors);走 store 的 master → raw 回退,守分层。
+    读失败/文件缺 → None(momentum 组合函数会跳过该票,不炸页)。
+    """
+    import numpy as np
+    try:
+        if store.has_master_kline(code):
+            df = store.get_master_kline(code)
+        else:
+            df = store.get_raw("kline", code)          # 回退按日期分区最新
+    except (FileNotFoundError, OSError):
+        return None
+    except Exception:
+        return None
+    if df is None or len(df) == 0 or "close" not in df.columns:
+        return None
+    return df["close"].astype(float).to_numpy()
+
+
+def _strategy2_section(recs: dict, date: str = "latest") -> dict:
+    """策略2「动量组合」区块:两个 momentum 组合选股(A_动量组合 + B_红利动量组合)在**自选池**上跑。
+
+    与策略0/1 不同:策略2 无预落盘 view,web 端每次实时算(仅自选池 32 只,毫秒级)。
+    输出并集(每票标注命中"策略A_动量组合" / "策略B_红利动量组合"),供 combined section 汇总。
+    读 K 线失败 → 该票跳过;两个组合都空 → present=True 但 rows=[]。
+    """
+    from tools.strategy import momentum as mm
+
+    pool = _pool_codes()
+    pool_recs = {c: r for c, r in recs.items() if c in pool}
+    if not pool_recs:
+        return {"present": False, "as_of": as_of(date), "rows": [],
+                "picks_a": [], "picks_b": []}
+
+    try:
+        picks_a = mm.combo_momentum_screen(pool_recs, top_k=10,
+                                           closes_loader=_store_closes_loader)
+        picks_b = mm.combo_dividend_momentum_screen(pool_recs, top_k=10,
+                                                    closes_loader=_store_closes_loader)
+    except Exception:
+        return {"present": False, "as_of": as_of(date), "rows": [],
+                "picks_a": [], "picks_b": []}
+
+    return {"present": True, "as_of": as_of(date),
+            "rows": [], "picks_a": picks_a, "picks_b": picks_b}
+
+
+def _combined_section(strategy0: dict, strategy1: dict, recs: dict,
+                      strategy2: dict | None = None) -> dict:
     """【综合选股】:各策略入选代码的并集(去重),每票标注命中来源(被哪几个策略选中)。
 
     后端产出**全并集**(所有可用策略入选代码);前端按勾选的策略实时过滤 + 重算命中来源
-    (一个都没勾 → 前端显示"无")。默认全勾(展示全并集)。策略2 暂无 → available=False、codes 空。
+    (一个都没勾 → 前端显示"无")。默认全勾(展示全并集)。
     name 走 code_name 回退;行业优先中心记录 meta,再回退策略0 view 自带行业。
+
+    策略2 = 两个动量组合(A_动量组合 + B_红利动量组合)合并作为一个来源标记。
     """
     s0_codes = [r["code"] for r in strategy0.get("rows", []) if r.get("code")]
     s1_codes = [r["code"] for r in strategy1.get("rows", []) if r.get("code")]
+    # 策略2:两个 momentum 组合的并集(不区分 A/B,统一算作"策略2"命中)
+    s2 = strategy2 or {}
+    s2_codes = list(dict.fromkeys((s2.get("picks_a") or []) + (s2.get("picks_b") or [])))
     # 行业 hint:策略0 view 自带行业(全A票多无中心记录)
     s0_industry = {r["code"]: r.get("industry") for r in strategy0.get("rows", [])}
 
     sources: dict[str, list[str]] = {}
     order: list[str] = []
-    for key, codes in (("策略0", s0_codes), ("策略1", s1_codes)):
+    for key, codes in (("策略0", s0_codes), ("策略1", s1_codes), ("策略2", s2_codes)):
         for c in codes:
             if c not in sources:
                 sources[c] = []
@@ -330,12 +387,22 @@ def _combined_section(strategy0: dict, strategy1: dict, recs: dict) -> dict:
             "sources": sources[code],                    # 前端按勾选过滤 + 拼「策略0+策略1」
         })
 
+    # label = 人读名,title = 悬停 tooltip;key 保持"策略X"以兼容 sources 已落库口径
+    s2_available = bool((s2.get("picks_a") or []) or (s2.get("picks_b") or []))
     strategies = [
-        {"key": "策略0", "label": "策略0", "codes": s0_codes,
-         "available": bool(strategy0.get("present"))},
-        {"key": "策略1", "label": "策略1", "codes": s1_codes,
-         "available": bool(strategy1.get("present"))},
-        {"key": "策略2", "label": "策略2(暂无)", "codes": [], "available": False},
+        {"key": "策略0", "label": "多专家合议", "codes": s0_codes,
+         "available": bool(strategy0.get("present")),
+         "title": "全 A 5000+ 只由 6 类数据专家(技术 / 资金 / 情绪 / 事件 / 多因子 …)"
+                  "分头打分,弃权项自动剔除后按综合分排序,取 Top N。"},
+        {"key": "策略1", "label": "筛选低吸股票", "codes": s1_codes,
+         "available": bool(strategy1.get("present")),
+         "title": "识别庄家暴力洗盘后的低吸候选(只筛选、不含买入信号)。"
+                  "买点低吸 / 追为后续主观决策。"},
+        {"key": "策略2", "label": "动量组合", "codes": s2_codes,
+         "available": s2_available,
+         "title": "移植自聚宽社区双策略:加权对数动量打分 + 拉普拉斯闸门(策略A提炼);"
+                  "质地过滤 + BBI 站上 + 24 日动量排序(策略B红利腿提炼)。"
+                  "仅在自选池内实时计算,毫秒级,不触网。"},
     ]
     return {"strategies": strategies, "rows": rows}
 

@@ -10,7 +10,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from jinja2 import Environment, FileSystemLoader, select_autoescape
@@ -52,6 +52,12 @@ def selection(request: Request, date: str = "latest"):
     return templates.TemplateResponse(
         request=request, name="selection.html",
         context={"s": da.selection_page(date), **_nav(date)})
+
+
+@app.get("/fund-flow", response_class=HTMLResponse)
+def fund_flow():
+    """A股资金流向单页(直接调东财 push2 接口,前端 30s 轮询,不走本项目后端)。"""
+    return FileResponse(_HERE / "static" / "fund_flow.html")
 
 
 @app.get("/news", response_class=HTMLResponse)

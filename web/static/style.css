@@ -127,4 +127,14 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 .council-attr { width: 100%; }
 .council-attr td, .council-attr th { padding: 4px 8px; }
 
+/* 综合选股 · 策略名 + 描述气泡 */
+.strat-label { font-weight: 500; }
+.strat-key { margin-left: 2px; }
+.strat-info { display: inline-block; width: 14px; height: 14px; line-height: 14px;
+  border-radius: 50%; background: rgba(255,255,255,.08); color: var(--muted);
+  font-size: 10px; text-align: center; margin-left: 2px; }
+.council-chk:hover .strat-info { background: rgba(255,255,255,.15); color: var(--fg); }
+.strat-desc { list-style: disc; padding-left: 20px; margin: 4px 0 8px; line-height: 1.6; }
+.strat-desc li { margin: 2px 0; }
+
 @media (max-width: 760px) { .grid { grid-template-columns: 1fr; } }
