@@ -289,11 +289,16 @@ def run_events(codes: list[str], as_of: str) -> None:
 
 
 def run_factor(codes: list[str], as_of: str) -> None:
-    """多因子截面打分预算(横截面,需全池已 serialize)→ code_view 'factor',供「多因子」专家。"""
+    """多因子截面打分预算(横截面,需全池已 serialize)→ code_view 'factor',供「多因子」专家。
+
+    北向净流入趋势:best-effort 采集(源自 2024-08 停更 → 多为空 dict,资金流维度降级缺失 I4)。
+    """
     from tools.analysis.factor import score
-    r = score.precompute(as_of=as_of, codes=codes)
-    logger.info("多因子截面预算:打分 %d/%d 只,因子可得性 %s",
-                r.get("打分数"), r.get("扫描数"), r.get("因子可得性"))
+    from tools.collectors import northbound as nb
+    北向 = nb.trend_map(codes, as_of=as_of)             # 停更/被墙→{},precompute 按缺失降级
+    r = score.precompute(as_of=as_of, codes=codes, 北向=北向)
+    logger.info("多因子截面预算:打分 %d/%d 只,北向可得 %d,因子可得性 %s",
+                r.get("打分数"), r.get("扫描数"), len(北向), r.get("因子可得性"))
 
 
 def run_council(codes: list[str], as_of: str) -> None:
