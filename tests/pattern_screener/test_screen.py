@@ -10,11 +10,11 @@ from tools.analysis.pattern_screener import screen as sv
 
 def _breakout_df():
     """箱体放量突破序列(pattern 会判达标 + 量能配合)。"""
-    base = [100 + (2 if i % 2 else -2) for i in range(20)]
+    base = [100 + (2 if i % 2 else -2) for i in range(30)]
     closes = base + [108]
-    vols = [1000.0] * 20 + [2500.0]
+    vols = [1000.0] * 30 + [2500.0]
     return pd.DataFrame({
-        "date": pd.date_range("2024-01-01", periods=21, freq="D"),
+        "date": pd.date_range("2024-01-01", periods=31, freq="D"),
         "open": closes, "high": [c * 1.005 for c in closes],
         "low": [c * 0.995 for c in closes], "close": closes, "volume": vols,
     })
