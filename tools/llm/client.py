@@ -53,9 +53,12 @@ class OpenAICompatClient:
         self.model = model
 
     def chat(self, messages, *, temperature=0.0, max_tokens=2048) -> str:
+        # 关思考模式:实测对当前模型中性(该网关本就不花时间思考),
+        # 为将来换带思考模型自动生效预留;网关接受该参数、不报错。
+        extra = {"extra_body": {"enable_thinking": False}} if settings.LLM_DISABLE_THINKING else {}
         r = self._cli.chat.completions.create(
             model=self.model, messages=messages,
-            temperature=temperature, max_tokens=max_tokens)
+            temperature=temperature, max_tokens=max_tokens, **extra)
         return r.choices[0].message.content or ""
 
     def extract(self, text, schema, *, instruction, temperature=0.0) -> dict:
