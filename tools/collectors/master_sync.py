@@ -69,8 +69,50 @@ def _fetch_timeout() -> float:
     return float(os.getenv("FETCH_TIMEOUT", "10"))
 
 
+def _advance_master_from_raw(fetched: dict) -> int:
+    """回退抓到数据后,把每只票严格晚于主档 last_date 的尾部 bar 增量推进主档。
+
+    根治的 bug:market.fetch_kline 只写 raw 分区、从不推进滚动主档,而分析层
+    load_kline 主档优先 → spot 增量失败走回退时新数据进了 raw 却读不到,全下游用旧数据。
+    这里在回退成功抓数后补上"推进主档"这一步。
+
+    只 append 严格晚于主档 last_date 的行(正常一天就是当日那一根):主档是前复权
+    序列、锚定点可能与逐只源不同,无除权时最新 bar 值一致,只补尾部安全;不整段覆盖历史。
+    主档不存在的票(新股首次等)直接全量 append(append_master_kline 首次即落地)。
+    幂等由 append_master_kline 按 date 去重(新覆盖旧)保证,同日多跑不产生重复行。
+
+    除权场景(前复权锚点漂移导致新旧 bar 拼接失真)不在此路径处理——由
+    "覆盖不足/太旧 → backfill 全量重算"兜底(_MIN_COVERAGE / _MAX_GAP_DAYS),此处不改那套判定。
+    """
+    advanced = 0
+    for code, df in fetched.items():
+        try:
+            if df is None or len(df) == 0 or "date" not in getattr(df, "columns", []):
+                continue
+            tail = df.copy()
+            tail["date"] = pd.to_datetime(tail["date"]).dt.normalize()
+            if store.has_master_kline(code):
+                master = store.get_master_kline(code)
+                last = pd.to_datetime(master["date"]).max().normalize()
+                tail = tail[tail["date"] > last]
+            # 主档不存在:tail 保持全量(首次落地)
+            if len(tail) == 0:
+                continue
+            store.append_master_kline(code, tail, meta={"source": "fallback_advance"})
+            advanced += 1
+        except Exception as e:
+            logger.error("回退推进主档失败 %s: %s(仅跳过该票,不影响其余)", code, e)
+    if advanced:
+        logger.info("回退已推进主档:%d 只(尾部增量 append)", advanced)
+    return advanced
+
+
 def _fallback(codes: list[str], workers: int | None, reason: str) -> dict:
-    """回退逐只 akshare fetch_kline(多源 fallback + 可选并发)。套采集期短超时快速失败。"""
+    """回退逐只 akshare fetch_kline(多源 fallback + 可选并发)。套采集期短超时快速失败。
+
+    成功抓到数据后**推进滚动主档**(见 _advance_master_from_raw):否则新数据只进 raw,
+    load_kline 主档优先会一直返回旧主档,全下游读到过期数据。
+    """
     logger.warning("主档路径失败 → 回退逐只 akshare fetch_kline(%d 只,workers=%s):%s",
                    len(codes), workers, reason)
     _old = socket.getdefaulttimeout()
@@ -79,8 +121,9 @@ def _fallback(codes: list[str], workers: int | None, reason: str) -> dict:
         out = market.fetch_kline(codes, workers=workers)
     finally:
         socket.setdefaulttimeout(_old)
+    advanced = _advance_master_from_raw(out)
     return {"mode": "fallback", "ok": len(out), "failed": len(codes) - len(out),
-            "reason": reason}
+            "advanced": advanced, "reason": reason}
 
 
 def sync_master(codes: list[str], as_of: str | None = None, *,
