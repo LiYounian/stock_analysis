@@ -31,6 +31,12 @@ LLM_API_KEY = os.getenv("LLM_API_KEY") or os.getenv("DEEPSEEK_API_KEY", "")
 LLM_MODEL = os.getenv("LLM_MODEL", "deepseek-v4-pro")   # 可用 LLM_MODEL 覆盖
 LLM_TIMEOUT = 60
 LLM_MAX_RETRY = 3
+# —— LLM 抽取提速(I/O 型,有界并发 + 送 LLM 条数上限)——
+LLM_EXTRACT_WORKERS = int(os.getenv("LLM_EXTRACT_WORKERS", "8"))   # 逐条抽取并发度(ThreadPool)
+NEWS_EXTRACT_MAX = int(os.getenv("NEWS_EXTRACT_MAX", "40"))        # 单票送 LLM 抽取的最近条数上限(原文仍全量落盘)
+# 关思考模式开关:实测对当前 deepseek-v4-pro 中性(网关本就不花时间思考),
+# 为将来换带思考模型自动生效预留;走 extra_body={"enable_thinking": False}。
+LLM_DISABLE_THINKING = os.getenv("LLM_DISABLE_THINKING", "true").lower() in ("1", "true", "yes")
 # 触点 → provider 路由:重批量走 qwen,精确抽取/摘要走用户 API
 LLM_ROUTE = {"extract": "openai_compat", "sentiment": "qwen", "summary": "openai_compat"}
 LLM_CACHE = DATA_RAW / "llm_cache"             # 抽取结果缓存,改下游免重复调用
