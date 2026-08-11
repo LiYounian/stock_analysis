@@ -30,13 +30,12 @@ trap 'rmdir "$LOCK" 2>/dev/null' EXIT
   echo "==================== $(date) pull_refresh $D ===================="
   echo "-- ① pull 全A K线(远端增量) --"
   "$PY" -m tools.sync.pull --kind kline || echo "!! pull 失败(继续用本地已有)"
-  echo "-- ② 策略0 全A合议 --"
-  "$PY" -m tools.pipeline.screen_council --date "$D" --no-fetch || echo "!! 策略0 失败"
-  echo "-- ③ 策略1 全A深跌反包 --"
-  "$PY" -m tools.pipeline.screen_s01 --date "$D" --no-fetch || echo "!! 策略1 失败"
-  echo "-- ④ 自选池全链路(新闻/情绪/合议/策略2-4数据) --"
-  "$PY" -m tools.run all --all || echo "!! 自选池流水线 失败"
-  echo "-- ⑤ 上传远端 --"
-  "$PY" -m tools.sync.upload --date "$D" --force || echo "!! 上传 失败"
+  echo "-- ② 全A多策略选股(策略0/1/2/3/4)+ 对(选出并集∪自选)做新闻/LLM/合议 --"
+  # --no-fetch:pull 已把全A落主档,screenall 不再触发 master_sync 回填/重采
+  "$PY" -m tools.run screenall --no-fetch || echo "!! screenall 失败"
+  echo "-- ③ 上传远端(先不带 --force:只补未确认分片,规避 ingest 429 限速) --"
+  "$PY" -m tools.sync.upload --date "$D" || echo "!! 上传第一轮"
+  sleep 65   # 限速窗口(120/60s);分片>120 时首轮部分 429,等窗口重置补齐
+  "$PY" -m tools.sync.upload --date "$D" || echo "!! 上传补齐"
   echo "==================== done $(date) ===================="
 } >> "$LOG" 2>&1
