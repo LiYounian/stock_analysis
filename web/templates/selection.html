@@ -157,18 +157,21 @@
   {% endif %}
 </section>
 
-<!-- 策略2:放量后缩量回踩(S02,web 实时算·待验证) -->
+<!-- 策略2:放量后缩量回踩(S02,全A view·待验证) -->
 <section class="card wide">
   <h2>策略2 · 放量后缩量回踩
     <span style="font-size:12px;padding:1px 8px;border:1px solid #b0883a;color:#b0883a;border-radius:10px;vertical-align:middle;">待验证</span>
     {% if s.strategy2.present %}
-    <small>自选池实时扫描 · 入选 <b class="pos">{{ s.strategy2.rows|length }}</b> · 数据日期 <b>{{ s.strategy2.as_of }}</b></small>
+    <small>扫描 <b>{{ s.strategy2.扫描数 if s.strategy2.扫描数 is not none else '—' }}</b> ·
+      有效 <b>{{ s.strategy2.有效 if s.strategy2.有效 is not none else '—' }}</b> ·
+      入选 <b class="pos">{{ s.strategy2.入选数 if s.strategy2.入选数 is not none else (s.strategy2.rows|length) }}</b> ·
+      数据日期 <b>{{ s.strategy2.as_of }}</b></small>
     {% endif %}</h2>
   <p class="muted tiny">周线放量后、当日缩量回踩 10 日线的候选(C1..C5 全满足,单日触发)。
     <b>待验证</b>:仅做过「信号日收盘机械基线」回测(edge 薄不足定论),买点未定,回测口径非最终买法,仅供观察。
-    web 端在自选池内实时计算,毫秒级,不触网、不预落盘。</p>
+    全 A 筛选,读预落盘 view;入选多时页面仅展示前若干只。</p>
   {% if not s.strategy2.present %}
-  <p class="muted">策略2 待运行(自选池为空)。</p>
+  <p class="muted">策略2 待运行(<code>python -m tools.pipeline.screen_s02</code>)。</p>
   {% elif not s.strategy2.rows %}
   <p class="muted">本日策略2 无入选标的。</p>
   {% else %}
@@ -187,18 +190,21 @@
   {% endif %}
 </section>
 
-<!-- 策略3:箱体形态(web 实时算·待验证) -->
+<!-- 策略3:箱体形态(全A view·待验证) -->
 <section class="card wide">
   <h2>策略3 · 箱体形态
     <span style="font-size:12px;padding:1px 8px;border:1px solid #b0883a;color:#b0883a;border-radius:10px;vertical-align:middle;">待验证</span>
     {% if s.strategy3.present %}
-    <small>自选池实时扫描 · 入选 <b class="pos">{{ s.strategy3.rows|length }}</b> · 数据日期 <b>{{ s.strategy3.as_of }}</b></small>
+    <small>扫描 <b>{{ s.strategy3.扫描数 if s.strategy3.扫描数 is not none else '—' }}</b> ·
+      有效 <b>{{ s.strategy3.有效 if s.strategy3.有效 is not none else '—' }}</b> ·
+      入选 <b class="pos">{{ s.strategy3.入选数 if s.strategy3.入选数 is not none else (s.strategy3.rows|length) }}</b> ·
+      数据日期 <b>{{ s.strategy3.as_of }}</b></small>
     {% endif %}</h2>
   <p class="muted tiny">箱体整理突破候选(欧奈尔/墨菲经典形态):末根放量突破窄幅箱体上沿。
     <b>待验证</b>:形态几何参数刚录入、尚未回测,仅供观察。
-    web 端在自选池内实时计算,毫秒级,不触网、不预落盘。</p>
+    全 A 筛选,读预落盘 view;入选多时页面仅展示前若干只。</p>
   {% if not s.strategy3.present %}
-  <p class="muted">策略3 待运行(自选池为空)。</p>
+  <p class="muted">策略3 待运行(<code>python -m tools.pipeline.screen_box</code>)。</p>
   {% elif not s.strategy3.rows %}
   <p class="muted">本日策略3 无入选标的。</p>
   {% else %}
@@ -217,16 +223,19 @@
   {% endif %}
 </section>
 
-<!-- 策略4:动量组合(原策略2 改号·web 实时算) -->
+<!-- 策略4:动量组合(原策略2 改号·全A view) -->
 <section class="card wide">
   <h2>策略4 · 动量组合
     {% if s.strategy4.present %}
-    <small>自选池实时扫描 · 入选 <b class="pos">{{ s.strategy4.rows|length }}</b> · 数据日期 <b>{{ s.strategy4.as_of }}</b></small>
+    <small>扫描 <b>{{ s.strategy4.扫描数 if s.strategy4.扫描数 is not none else '—' }}</b> ·
+      有效 <b>{{ s.strategy4.有效 if s.strategy4.有效 is not none else '—' }}</b> ·
+      入选 <b class="pos">{{ s.strategy4.入选数 if s.strategy4.入选数 is not none else (s.strategy4.rows|length) }}</b> ·
+      数据日期 <b>{{ s.strategy4.as_of }}</b></small>
     {% endif %}</h2>
   <p class="muted tiny">移植自聚宽社区双策略:加权对数动量打分 + 拉普拉斯闸门(动量组合);
-    质地过滤 + BBI 站上 + 24 日动量排序(红利动量组合)。web 端在自选池内实时计算,毫秒级,不触网。</p>
+    质地过滤 + BBI 站上 + 24 日动量排序(红利动量组合)。全 A 筛选,读预落盘 view;入选多时页面仅展示前若干只。</p>
   {% if not s.strategy4.present %}
-  <p class="muted">策略4 待运行(自选池为空)。</p>
+  <p class="muted">策略4 待运行(<code>python -m tools.pipeline.screen_momentum</code>)。</p>
   {% elif not s.strategy4.rows %}
   <p class="muted">本日策略4 无入选标的。</p>
   {% else %}

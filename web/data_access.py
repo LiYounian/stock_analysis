@@ -208,13 +208,13 @@ def selection_page(date: str = "latest") -> dict:
         →【综合选股】(勾选策略0/1/2/3/4 → 各策略入选代码并集,前端实时重算)
         → 策略0 · 多专家合议(全A,读 view「策略0合议」top)
         → 策略1 · 趋势深跌反包(读 view「趋势深跌反包」,标「待验证」)
-        → 策略2 · 放量后缩量回踩 S02(web 实时在自选池跑,标「待验证」)
-        → 策略3 · 箱体形态(web 实时在自选池跑箱体识别,标「待验证」)
-        → 策略4 · 动量组合(web 实时在自选池跑 momentum 双组合)
+        → 策略2 · 放量后缩量回踩 S02(读 view「放量后缩量回踩」,标「待验证」)
+        → 策略3 · 箱体形态(读 view「箱体形态」,标「待验证」)
+        → 策略4 · 动量组合(读 view「动量组合」)
 
-    纯读离线 view + 中心记录;策略2/3/4 web 端实时算(仅自选池,毫秒级,不触网,不预落盘)。
-    任何 view 缺失 / pool 空全部走兜底(present=False / 空列表),页面永不空、不报错。
-    合议 config(tau/权重/分母模式)供前端勾选实时重合成(复用 council.js councilSynth)。
+    纯读离线 view + 中心记录:策略0~4 全部读全A screener 预落盘 view(offline run.py 产出),
+    web 不触网、不计算。任何 view 缺失 / pool 空全部走兜底(present=False / 空列表),
+    页面永不空、不报错。合议 config(tau/权重/分母模式)供前端勾选实时重合成(复用 council.js councilSynth)。
     """
     recs = _load_all(date)
 
@@ -244,12 +244,12 @@ def selection_page(date: str = "latest") -> dict:
         })
     pool_rows.sort(key=lambda x: (x["council_score"] is not None, x["council_score"] or 0), reverse=True)
 
-    # 策略0(全A合议)读 view;策略1(趋势深跌反包)读 view;策略2/3/4 web 实时在自选池算
+    # 策略0~4 全部读全A screener 预落盘 view(策略0 top / 其余 入选清单)
     strategy0 = _strategy0_section(recs, date)
     strategy1 = _s01_section(recs, date)
-    strategy2 = _strategy2_section(recs, date)     # 放量后缩量回踩 S02(待验证)
-    strategy3 = _strategy3_section(recs, date)     # 箱体形态(待验证)
-    strategy4 = _strategy4_section(recs, date)     # 动量组合(原策略2 改号 2→4)
+    strategy2 = _strategy2_section(recs, date)     # 放量后缩量回踩 S02(全A view,待验证)
+    strategy3 = _strategy3_section(recs, date)     # 箱体形态(全A view,待验证)
+    strategy4 = _strategy4_section(recs, date)     # 动量组合(全A view,原策略2 改号 2→4)
     # config 兜底:自选池无记录时,退用策略0 view 里带的 council config(前端合成口径真源)
     if not config and strategy0.get("config"):
         config = strategy0["config"]
@@ -307,154 +307,86 @@ def _strategy0_section(recs: dict, date: str = "latest") -> dict:
     }
 
 
-def _store_closes_loader(code: str):
-    """web 层 momentum closes 加载器:优先主档,回退最新日期分区 raw kline。
+def _view_picks_section(view_name: str, recs: dict, date: str = "latest",
+                        cap: int = 30) -> dict:
+    """通用:读全A screener 预落盘 view(策略2/3/4 同构),取 入选清单 → 补名称/行业 → top-N。
 
-    展示层不 import 采集层(collectors);走 store 的 master → raw 回退,守分层。
-    读失败/文件缺 → None(momentum 组合函数会跳过该票,不炸页)。
+    schema(全A screener 统一口径,同 screen_s02/screen_s01):
+      {as_of, 扫描数, 有效样本, 入选数, 入选清单:[{code, 行业?, 组合?, ...}]}。
+    · 名称走 _name 回退(中心记录 meta → code_name.json → code);
+    · 行业优先中心记录 meta,再回退 view item 自带「行业」;
+    · 组合(策略4 用)读 item「组合」/「combos」,可为 str 或 list,缺则空 list;
+    · picks 与展示 rows 对齐(都截到 cap):combined 并集口径 = 页面实际展示的票,不多不少。
+
+    防空(同页其它区块口径):view 缺失 / 非法 → present=False(前端「待运行」),绝不抛。
     """
-    import numpy as np
+    empty = {"present": False, "as_of": as_of(date), "扫描数": None, "有效": None,
+             "入选数": None, "rows": [], "picks": []}
     try:
-        if store.has_master_kline(code):
-            df = store.get_master_kline(code)
-        else:
-            df = store.get_raw("kline", code)          # 回退按日期分区最新
-    except (FileNotFoundError, OSError):
-        return None
-    except Exception:
-        return None
-    if df is None or len(df) == 0 or "close" not in df.columns:
-        return None
-    return df["close"].astype(float).to_numpy()
+        v = store.get_view(view_name, date=date)
+    except FileNotFoundError:
+        return empty
+    if not isinstance(v, dict):
+        return empty
 
-
-def _store_kline_loader(code: str):
-    """web 层完整 K线 DataFrame 加载器(策略2/3 用):优先主档,回退最新日期分区 raw。
-
-    展示层不 import 采集层(collectors);走 store 的 master → raw 回退,守分层。
-    读失败/文件缺/空 → None(策略 section 会跳过该票,不炸页)。
-    """
-    try:
-        if store.has_master_kline(code):
-            df = store.get_master_kline(code)
-        else:
-            df = store.get_raw("kline", code)          # 回退按日期分区最新
-    except (FileNotFoundError, OSError):
-        return None
-    except Exception:
-        return None
-    if df is None or len(df) == 0:
-        return None
-    return df
-
-
-def _pool_pick_rows(recs: dict, codes: list[str]) -> list[dict]:
-    """把入选代码列表补名称/行业为展示行(策略2/3/4 复用)。"""
-    rows = []
-    for code in codes:
+    picks: list[str] = []
+    rows: list[dict] = []
+    for item in v.get("入选清单", []) or []:
+        if not isinstance(item, dict):
+            continue
+        code = item.get("code")
+        if not code or len(rows) >= cap:
+            continue
+        combos = item.get("组合") or item.get("combos") or []
+        if isinstance(combos, str):
+            combos = [combos]
         meta = (recs.get(code) or {}).get("meta") or {}
+        picks.append(code)
         rows.append({"code": code, "name": _name(recs, code),
-                     "industry": meta.get("industry") or meta.get("sector")})
-    return rows
+                     "industry": meta.get("industry") or meta.get("sector") or item.get("行业"),
+                     "combos": list(combos)})
+    return {
+        "present": True,
+        "as_of": v.get("as_of") or as_of(date),
+        "扫描数": v.get("扫描数"),
+        "有效": v.get("有效样本", v.get("有效")),
+        "入选数": v.get("入选数", len(v.get("入选清单", []) or [])),
+        "rows": rows,
+        "picks": picks,
+    }
 
 
 def _strategy2_section(recs: dict, date: str = "latest") -> dict:
-    """策略2「放量后缩量回踩(S02)」区块:web 端实时在**自选池**逐票跑 signal_at 最后一根。
+    """策略2「放量后缩量回踩(S02)」区块:读全A screener view「放量后缩量回踩」(screen_s02 产出)。
 
-    与策略0/1 不同:策略2 无预落盘 view,web 端每次实时算(仅自选池,毫秒级,不触网)。
-    signal_at 返回 SELECT=True 的票入选。读 K线失败/历史不足 → 该票跳过;pool 空 → present=False。
+    schema:{as_of, 扫描数, 有效样本, 跳过数(历史不足), 入选数, 入选清单:[{code, 明细}]}。
+    与策略0/1 一致:全A 预落盘 view;view 缺失 → present=False(前端「策略2 待运行」)。
 
     标「待验证」:S02 仅做过"信号日收盘机械基线"回测(edge 薄不足定论),买点未定,仅供观察。
     """
-    from tools.pipeline import screen_s02 as s02
-
-    pool = _pool_codes()
-    if not pool:
-        return {"present": False, "as_of": as_of(date), "rows": [], "picks": []}
-
-    picks: list[str] = []
-    for code in sorted(pool):
-        kdf = _store_kline_loader(code)
-        if kdf is None or len(kdf) == 0:
-            continue
-        try:
-            r = s02.signal_at(kdf, len(kdf) - 1)
-        except Exception:
-            continue
-        if r.get("SELECT"):
-            picks.append(code)
-    return {"present": True, "as_of": as_of(date),
-            "rows": _pool_pick_rows(recs, picks), "picks": picks}
+    return _view_picks_section("放量后缩量回踩", recs, date)
 
 
 def _strategy3_section(recs: dict, date: str = "latest") -> dict:
-    """策略3「箱体形态」区块:web 端实时在**自选池**逐票跑箱体识别(pattern.detect_box)。
+    """策略3「箱体形态」区块:读全A screener view「箱体形态」(screen_box 产出)。
 
-    只用箱体单形态(不含杯柄/楔形/旗形);末根放量突破窄幅箱体上沿即入选(达标=True)。
-    与策略2 同为 web 实时算,无预落盘 view。读 K线失败 → 该票跳过;pool 空 → present=False。
+    schema:{as_of, 扫描数, 有效样本, 入选数, 入选清单:[{code, ...}]}。
+    与策略0/1 一致:全A 预落盘 view;view 缺失 → present=False(前端「策略3 待运行」)。
 
     标「待验证」:箱体几何参数刚录入、未回测,仅供观察。
     """
-    from tools.analysis.pattern_screener import pattern
-
-    pool = _pool_codes()
-    if not pool:
-        return {"present": False, "as_of": as_of(date), "rows": [], "picks": []}
-
-    picks: list[str] = []
-    for code in sorted(pool):
-        kdf = _store_kline_loader(code)
-        if kdf is None or len(kdf) == 0:
-            continue
-        try:
-            r = pattern.detect_box(kdf)                # cfg 缺省 → THRESHOLDS["形态选股"]["箱体"]
-        except Exception:
-            continue
-        if r.get("达标"):
-            picks.append(code)
-    return {"present": True, "as_of": as_of(date),
-            "rows": _pool_pick_rows(recs, picks), "picks": picks}
+    return _view_picks_section("箱体形态", recs, date)
 
 
 def _strategy4_section(recs: dict, date: str = "latest") -> dict:
-    """策略4「动量组合」区块(原策略2 改号 2→4):两个 momentum 组合(A_动量组合 + B_红利动量组合)
-    在**自选池**上跑。
+    """策略4「动量组合」区块(原策略2 改号 2→4):读全A screener view「动量组合」(screen_momentum 产出)。
 
-    与策略0/1 不同:无预落盘 view,web 端每次实时算(仅自选池,毫秒级)。
-    输出并集(每票标注命中"动量组合"/"红利动量组合"),供 combined section 汇总。
-    读 K 线失败 → 该票跳过;两个组合都空 → present=True 但 rows=[]。
+    schema:{as_of, 扫描数, 有效样本, 入选数, 入选清单:[{code, 组合?, ...}]};
+    「组合」标注该票命中"动量组合"/"红利动量组合"(可为 list 或 str),供展示「组合」列。
+    与策略0/1 一致:全A 预落盘 view;view 缺失 → present=False(前端「策略4 待运行」)。
+    动量入选可能达 top30,展示已截到 cap。
     """
-    from tools.strategy import momentum as mm
-
-    pool = _pool_codes()
-    pool_recs = {c: r for c, r in recs.items() if c in pool}
-    if not pool_recs:
-        return {"present": False, "as_of": as_of(date), "rows": [],
-                "picks_a": [], "picks_b": []}
-
-    try:
-        picks_a = mm.combo_momentum_screen(pool_recs, top_k=10,
-                                           closes_loader=_store_closes_loader)
-        picks_b = mm.combo_dividend_momentum_screen(pool_recs, top_k=10,
-                                                    closes_loader=_store_closes_loader)
-    except Exception:
-        return {"present": False, "as_of": as_of(date), "rows": [],
-                "picks_a": [], "picks_b": []}
-
-    codes = list(dict.fromkeys((picks_a or []) + (picks_b or [])))
-    rows = []
-    for code in codes:
-        meta = (recs.get(code) or {}).get("meta") or {}
-        combos = []
-        if code in (picks_a or []):
-            combos.append("动量组合")
-        if code in (picks_b or []):
-            combos.append("红利动量组合")
-        rows.append({"code": code, "name": _name(recs, code),
-                     "industry": meta.get("industry") or meta.get("sector"),
-                     "combos": combos})
-    return {"present": True, "as_of": as_of(date),
-            "rows": rows, "picks_a": picks_a, "picks_b": picks_b}
+    return _view_picks_section("动量组合", recs, date)
 
 
 def _combined_section(strategy0: dict, strategy1: dict, strategy2: dict,
@@ -465,15 +397,16 @@ def _combined_section(strategy0: dict, strategy1: dict, strategy2: dict,
     (一个都没勾 → 前端显示"无")。默认全勾(展示全并集)。
     name 走 code_name 回退;行业优先中心记录 meta,再回退策略0 view 自带行业。
 
-    策略2 = S02 放量后缩量回踩;策略3 = 箱体形态;策略4 = 两个动量组合合并作一个来源标记。
+    策略0~4 入选代码均来自各自全A screener 预落盘 view(与页面各区块展示口径一致,已截到 cap)。
+    策略2 = S02 放量后缩量回踩;策略3 = 箱体形态;策略4 = 动量组合。
     """
     s0_codes = [r["code"] for r in strategy0.get("rows", []) if r.get("code")]
     s1_codes = [r["code"] for r in strategy1.get("rows", []) if r.get("code")]
     s2_codes = list(strategy2.get("picks") or [])
     s3_codes = list(strategy3.get("picks") or [])
-    # 策略4:两个 momentum 组合的并集(不区分 A/B,统一算作"策略4"命中)
+    # 策略4:动量组合 view 入选(与展示 rows 对齐,已截到 cap)
     s4 = strategy4 or {}
-    s4_codes = list(dict.fromkeys((s4.get("picks_a") or []) + (s4.get("picks_b") or [])))
+    s4_codes = list(s4.get("picks") or [])
     # 行业 hint:策略0 view 自带行业(全A票多无中心记录)
     s0_industry = {r["code"]: r.get("industry") for r in strategy0.get("rows", [])}
 
@@ -498,7 +431,6 @@ def _combined_section(strategy0: dict, strategy1: dict, strategy2: dict,
         })
 
     # label = 人读名,title = 悬停 tooltip;key 保持"策略X"以兼容 sources 已落库口径
-    s4_available = bool((s4.get("picks_a") or []) or (s4.get("picks_b") or []))
     strategies = [
         {"key": "策略0", "label": "多专家合议", "codes": s0_codes,
          "available": bool(strategy0.get("present")),
@@ -512,16 +444,16 @@ def _combined_section(strategy0: dict, strategy1: dict, strategy2: dict,
          "available": bool(strategy2.get("present")),
          "title": "周线放量后当日缩量回踩 10 日线的候选(待验证);"
                   "回测为信号日收盘机械基线、非最终买法,仅供观察。"
-                  "仅在自选池内实时计算,毫秒级,不触网。"},
+                  "全 A 筛选,读预落盘 view。"},
         {"key": "策略3", "label": "箱体形态", "codes": s3_codes,
          "available": bool(strategy3.get("present")),
          "title": "箱体整理突破候选(欧奈尔/墨菲经典形态),参数已录入待回测(待验证)。"
-                  "仅在自选池内实时计算,毫秒级,不触网。"},
+                  "全 A 筛选,读预落盘 view。"},
         {"key": "策略4", "label": "动量组合", "codes": s4_codes,
-         "available": s4_available,
+         "available": bool(strategy4.get("present")),
          "title": "移植自聚宽社区双策略:加权对数动量打分 + 拉普拉斯闸门(策略A提炼);"
                   "质地过滤 + BBI 站上 + 24 日动量排序(策略B红利腿提炼)。"
-                  "仅在自选池内实时计算,毫秒级,不触网。"},
+                  "全 A 筛选,读预落盘 view。"},
     ]
     return {"strategies": strategies, "rows": rows}
 
