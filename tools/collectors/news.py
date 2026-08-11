@@ -205,20 +205,21 @@ def fetch_news(codes: list[str], days: int | None = None) -> dict[str, list[dict
         except Exception as e:
             err = err or e
             logger.warning("新闻 %s 新浪失败: %s", code, e)
-        # 去重合并(url 优先,无 url 则 title+日期)→ 统一按 cutoff 过滤 → 倒序
-        items = [it for it in _dedup_merge(em_items, sina_items)
+        # 财联社电报(全市场快讯按名过滤)——改为**总是查并入**(不再只在个股源空时兜底):
+        # 管制/宏观/突发类快讯常不进东财/新浪个股 feed,财联社快讯能补这类盲区。
+        cls_items: list[dict] = []
+        try:
+            cls_items = _fetch_cls(code, cutoff)
+            if cls_items:
+                contributors.append(_SOURCE_CLS)
+        except Exception as e:
+            logger.warning("新闻 %s 财联社失败: %s", code, e)
+            err = err or e
+        # 三源去重合并(东财→新浪→财联社,先到者留)→ 统一按 cutoff 过滤 → 倒序
+        items = [it for it in _dedup_merge(em_items, sina_items, cls_items)
                  if str(it.get("time", ""))[:10] >= cutoff]
         items.sort(key=lambda x: x["time"], reverse=True)
         src = "+".join(contributors) if contributors else _SOURCE
-        # 两并集源皆空 → 备源:财联社电报按名过滤(降级保底,消单点)
-        if not items:
-            try:
-                fb = _fetch_cls(code, cutoff)
-                if fb:
-                    items, src, err = fb, _SOURCE_CLS, None
-            except Exception as e:
-                logger.warning("新闻 %s 备源(财联社)失败: %s", code, e)
-                err = err or e
         store.put_raw("news", code, items, meta={"source": src})
         out[code] = items
         if err and not items:                    # 各源皆挂且无数据才算失败(不静默)
