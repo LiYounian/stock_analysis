@@ -90,3 +90,51 @@ def test_fetch_and_load_roundtrip(monkeypatch, tmp_path):
 
     with pytest.raises(FileNotFoundError):
         market.load_kline("999999")
+
+
+# ———— 新增:腾讯 fqkline 端点(_fetch_tencent 改版)————
+class _FakeResp:
+    def __init__(self, payload):
+        self._p = payload
+    def raise_for_status(self):
+        return None
+    def json(self):
+        return self._p
+
+
+def _fq_payload(sym, rows):
+    """构造 fqkline 响应:data[sym]['qfqday'] = [[date,open,close,high,low,vol手], ...]。"""
+    return {"data": {sym: {"qfqday": rows}}}
+
+
+def test_fetch_tencent_parses_and_scales_volume(monkeypatch):
+    """fqkline 端点:每行 [date,open,close,high,low,vol手] → 归一列 + volume×100(手→股);
+    成交额/换手率缺 → _normalize 补 NA;含当日最新 bar。"""
+    rows = [
+        ["2026-08-07", "919.87", "919.87", "925.0", "900.0", "500000"],
+        ["2026-08-10", "917.99", "864.58", "919.80", "835.00", "525921"],
+        ["2026-08-11", "880.14", "886.96", "898.48", "850.40", "339737"],
+    ]
+    monkeypatch.setattr("requests.get", lambda *a, **k: _FakeResp(_fq_payload("sz300308", rows)))
+    df = market._fetch_tencent("300308", "20250329", "20260811", "qfq")
+    assert list(df.columns[:5]) == ["date", "open", "close", "high", "low"]
+    # 单位:手→股 ×100
+    last = df.iloc[-1]
+    assert last["date"] == "2026-08-11" and float(last["volume"]) == 339737 * 100
+    # 经 _normalize 后:标准列齐、amount/turnover 为 NA、pct_chg 补算
+    norm = market._normalize(df)
+    assert list(norm.columns) == market._STD_COLS
+    assert pd.isna(norm.iloc[-1]["amount"]) and pd.isna(norm.iloc[-1]["turnover"])
+    assert str(norm.iloc[-1]["date"].date()) == "2026-08-11"   # 含当日最新
+
+
+def test_fetch_tencent_filters_by_start(monkeypatch):
+    """按 start 裁剪:早于 start 的 bar 丢弃(端点固定拉最近 N 根,需裁到请求区间)。"""
+    rows = [
+        ["2025-01-02", "10", "10.5", "10.8", "9.9", "100"],
+        ["2026-08-10", "11", "11.2", "11.5", "10.8", "200"],
+        ["2026-08-11", "11.2", "11.4", "11.6", "11.0", "300"],
+    ]
+    monkeypatch.setattr("requests.get", lambda *a, **k: _FakeResp(_fq_payload("sz300001", rows)))
+    df = market._fetch_tencent("300001", "20260801", "20260811", "qfq")
+    assert list(df["date"]) == ["2026-08-10", "2026-08-11"]   # 2025 那根被裁掉
