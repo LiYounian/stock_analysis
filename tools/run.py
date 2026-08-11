@@ -140,7 +140,9 @@ def collect_message(codes: list[str]) -> None:
     _old = socket.getdefaulttimeout()
     socket.setdefaulttimeout(FETCH_TIMEOUT)
     try:
-        logger.info("新闻:成功 %d", len(_safe("新闻", lambda: news.fetch_news(codes)) or {}))
+        # recall=True:开启行业主题词扩召回 + LLM 宁严相关性初筛(collect_message 只被自选池/
+        # screenall/两阶段的 llm_subset 调用,天然不波及全A;补"挂不到个股的行业/宏观/管制"消息)。
+        logger.info("新闻:成功 %d", len(_safe("新闻", lambda: news.fetch_news(codes, recall=True)) or {}))
         logger.info("舆情(股吧):成功 %d", len(_safe("舆情(股吧)", lambda: ugc.fetch_ugc(codes)) or {}))
         pol = _safe("政策", lambda: policy.fetch_policy())      # 政策按行业关键词(全池共用)
         logger.info("政策:%d 条", len(pol or []))
