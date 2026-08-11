@@ -171,14 +171,23 @@ def _fetch_cls(code: str, cutoff: str) -> list[dict]:
     return items
 
 
-def fetch_news(codes: list[str], days: int | None = None) -> dict[str, list[dict]]:
+def fetch_news(codes: list[str], days: int | None = None,
+               recall: bool | None = None) -> dict[str, list[dict]]:
     """拉取每票近 days 天新闻并落盘。
 
     输出:{code: [{title, content, time, source, url}, ...]}(按时间倒序)。
     单票失败记 logger 跳过,不中断整批。
+
+    recall:是否开启**新闻扩召回 + LLM 相关性初筛**(见 collectors.news_recall)。
+      None → 取 settings.NEWS_RECALL_ENABLED(默认 False);True/False 显式覆盖。
+      为 True 时,每票在东财/新浪/财联社三源并集之外,再按**行业主题词**扩召回未挂到个股
+      的行业/宏观/管制类消息 → LLM 宁严初筛只留直接相关 → 并入(_dedup_merge 去重)一起落盘。
+      **只在调用方显式开启时生效**——范围天然限于调用方传入的这批票(如 screenall/pool 的
+      llm_subset≈选出并集∪自选),不波及全A。扩召回失败/空则降级(仅原三源,不崩)。
     """
     settings.ensure_dirs()
     days = days or settings.NEWS_LOOKBACK_DAYS
+    recall = settings.NEWS_RECALL_ENABLED if recall is None else recall
     cutoff = (pd.Timestamp.today() - pd.Timedelta(days=days)).strftime("%Y-%m-%d")
 
     out: dict[str, list[dict]] = {}
@@ -215,8 +224,18 @@ def fetch_news(codes: list[str], days: int | None = None) -> dict[str, list[dict
         except Exception as e:
             logger.warning("新闻 %s 财联社失败: %s", code, e)
             err = err or e
-        # 三源去重合并(东财→新浪→财联社,先到者留)→ 统一按 cutoff 过滤 → 倒序
-        items = [it for it in _dedup_merge(em_items, sina_items, cls_items)
+        # 扩召回(可选,仅 recall=True):按行业主题词补召回 + LLM 宁严初筛,并入三源之后
+        # (三源为主,先到者留 → 扩召回只补三源未覆盖的行业/宏观消息)。降级不崩,失败返 []。
+        recall_items: list[dict] = []
+        if recall:
+            from tools.collectors import news_recall     # 延迟导入:避免与 news_recall 的模块级循环依赖
+            from tools.config import stock_pool
+            s = stock_pool.get(code)
+            recall_items = news_recall.recall_related(code, s.name if s else "", cutoff)
+            if recall_items:
+                contributors.append("扩召回")
+        # 多源去重合并(东财→新浪→财联社→扩召回,先到者留)→ 统一按 cutoff 过滤 → 倒序
+        items = [it for it in _dedup_merge(em_items, sina_items, cls_items, recall_items)
                  if str(it.get("time", ""))[:10] >= cutoff]
         items.sort(key=lambda x: x["time"], reverse=True)
         src = "+".join(contributors) if contributors else _SOURCE
