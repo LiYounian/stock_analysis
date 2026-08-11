@@ -14,9 +14,11 @@
     python -m tools.run pattern      # 形态选股(模块二)扫描:RS+硬规则AND+达标占比
     python -m tools.run all          # 全链路(采集→情绪→组装→事件→多因子→合议回写→视图),一个日期
     python -m tools.run pipeline     # 全A 两阶段流水线:全A便宜筛得达标池,再只对(达标∪自选)做新闻/LLM/合议
+    python -m tools.run screenall    # 全A 多策略选股(策略0/1/2/3/4)→ 只对(各策略选出并集∪自选)做新闻/LLM/合议
     # 追加 --all 用全池 32 只;默认开发子集 10 只(config/dev_sample.json)
     # pattern 额外支持 --universe [N]:从全 A 票池取前 N 只(默认 50)扫描
     # pipeline 额外支持 --universe [N]:阶段①只扫全A前 N 只(默认全量);贵活只对候选(达标∪自选)
+    # screenall 额外支持 --universe [N]:全A前 N 只做筛选(默认全量);--no-llm 纯数据快跑(跳过新闻+LLM)
 
 按日期:编排开始 store.set_active_date(今天),本次所有产出落 data/<日期>/。
 """
@@ -496,10 +498,119 @@ def cmd_pipeline(argv):
     run_two_stage(codes_all, as_of, no_llm=no_llm)
 
 
+# ————————————————————————————————————————————————
+# 全A 多策略选股 + 只对选出票做新闻/LLM(screenall)
+# ————————————————————————————————————————————————
+def _picks_from_view(view: dict | None) -> list[str]:
+    """从单个 screener view 抽出选出票 code。
+
+    兼容两种落法:规则型 screener 落 `入选清单`([{code,...}]),打分型(策略0)落 `top`。
+    view 为 None(screener 被 _safe 隔离失败)/字段缺失 → 返回空(不中止汇总)。
+    """
+    if not isinstance(view, dict):
+        return []
+    items = view.get("入选清单") or view.get("top") or []
+    return [x["code"] for x in items
+            if isinstance(x, dict) and x.get("code")]
+
+
+def run_screen_all(codes_all: list[str], as_of: str, no_llm: bool = False) -> dict:
+    """全A 多策略选股 → 只对(各策略选出并集 ∪ 自选)做新闻/LLM/合议。
+
+    与 run_two_stage(单形态达标池)的区别:达标池 = 策略0/1/2/3/4 **五个全A screener 选出票的并集**,
+    把新闻/LLM 覆盖面扩到所有策略选出的票,而非仅形态。省 token 命门同 two_stage:
+    最贵的新闻/LLM 只对 llm_subset(选出并集 ∪ 自选),不对全A codes_all。
+
+    no_llm=True(数据-only 快跑):跳过新闻采集 + LLM 情绪,情绪三层专家因无数据自然弃权。
+
+    流程:
+      ①  set_active_date + K线主档同步(主档缺失/太旧→baostock 全量;否则 spot 增量;失败回退逐只)。
+      ②  跑 5 个全A screener(council/s01/s02/box/momentum,均 fetch=False 读步骤①主档,不重采);
+          各 _safe 隔离——单个 screener 失败降级跳过,不中止其余。
+      ③  union_picks = 各 screener picks 并集(去重保序)。
+      ④  llm_subset = union_picks ∪ 自选池(去重)——新闻/LLM 只对这批。
+      ⑤  补缺数值面(skip-if-cached)→ 新闻(no_llm 跳过)→ 板块指数 → LLM 情绪(no_llm 跳过)→
+          组装/事件/多因子/合议 → 横表/选股视图,全对 llm_subset。
+    """
+    from tools.pipeline import (screen_box, screen_council, screen_momentum,
+                                 screen_s01, screen_s02)
+    store.set_active_date(as_of)
+    logger.info("===== 全A多策略选股开始(日期 %s,全A %d 只)%s=====",
+                as_of, len(codes_all), "(数据-only)" if no_llm else "")
+    # —— 步骤①:K线主档同步(同 run_two_stage 开头)——各 screener 随后 fetch=False 读主档,不重采 ——
+    ms = _safe("K线主档同步", lambda: master_sync.sync_master(codes_all, as_of=as_of)) or {}
+    logger.info("K线主档同步:模式=%s 成功 %d", ms.get("mode"), ms.get("ok", 0))
+
+    # —— 步骤②:跑 5 个全A screener(fetch=False 只读主档);_safe 逐个隔离,单个失败不中止其余 ——
+    screeners = [
+        ("策略0·多专家合议", lambda: screen_council.run_council_screen(codes_all, as_of=as_of, fetch=False)),
+        ("策略1·趋势深跌反包", lambda: screen_s01.run_s01_screen(codes_all, as_of=as_of, fetch=False)),
+        ("策略2·放量后缩量回踩", lambda: screen_s02.run_s02_screen(codes_all, as_of=as_of, fetch=False)),
+        ("策略3·箱体形态", lambda: screen_box.run_box_screen(codes_all, as_of=as_of, fetch=False)),
+        ("策略4·动量组合", lambda: screen_momentum.run_momentum_screen(codes_all, as_of=as_of, fetch=False)),
+    ]
+    union: list[str] = []
+    per_strategy: dict[str, int] = {}
+    for label, fn in screeners:
+        view = _safe(f"{label} 全A筛选", fn)
+        picks = _picks_from_view(view)
+        per_strategy[label] = len(picks)
+        union.extend(picks)
+        logger.info("  %s 入选 %d", label, len(picks))
+
+    union_picks = _dedup(union)                     # 各策略选出票并集(去重保序)
+    watch = stock_pool.get_codes()
+    llm_subset = _dedup(union_picks + watch)         # 选出并集 ∪ 自选 —— 新闻/LLM 只对这批(省 token)
+    logger.info("各策略入选:%s;union=%d,llm_subset(union∪自选)=%d",
+                per_strategy, len(union_picks), len(llm_subset))
+
+    # —— 阶段②:新闻/LLM 只对 llm_subset ——
+    collect_values_missing(llm_subset)               # 补 K线/基本面/公告/资金流(无 LLM,skip-if-cached)
+    if not no_llm:
+        collect_message(llm_subset)                  # 新闻/舆情 只对 llm_subset ← 关键省 token
+    collect_market_context()                         # 全市场指数(每轮一次、非逐票)→ RRG 专家
+    if no_llm:
+        logger.info("数据-only 模式:跳过新闻采集 + LLM 情绪(情绪三层专家将弃权)")
+    else:
+        run_sentiment(llm_subset)                    # LLM 情绪 只对 llm_subset ← 关键省 token
+    run_serialize(llm_subset, as_of)
+    run_events(llm_subset, as_of)
+    run_factor(llm_subset, as_of)
+    run_council(llm_subset, as_of)
+    run_panel(llm_subset)
+    run_screen(llm_subset)
+    _safe("前瞻回测汇总", run_backtest)              # 收尾可选增强(失败降级,不中止闭环)
+    logger.info("===== 全A多策略选股完成 → data/analysis/%s/;union=%d,llm_subset=%d 只含完整合议 =====",
+                as_of, len(union_picks), len(llm_subset))
+    return {"as_of": as_of, "扫描": len(codes_all), "各策略入选": per_strategy,
+            "union": len(union_picks), "llm_subset": len(llm_subset),
+            "union_picks": union_picks, "llm_subset_codes": llm_subset}
+
+
+def cmd_screenall(argv):
+    """全A 多策略选股入口:python -m tools.run screenall [--universe N] [--no-llm]。
+
+    默认全A(不传 --universe);--universe N 取全A前 N 只做筛选(小规模验证/试跑)。
+    --no-llm:纯数据模式,跳过新闻采集 + LLM 情绪(不烧 token 的快跑)。
+    """
+    as_of = _as_of()
+    store.set_active_date(as_of)
+    from tools.collectors import universe
+    n = None
+    if argv and "--universe" in argv:
+        i = argv.index("--universe")
+        n = int(argv[i + 1]) if i + 1 < len(argv) and argv[i + 1].isdigit() else None
+    no_llm = bool(argv and "--no-llm" in argv)
+    codes_all = universe.universe_codes(limit=n)
+    logger.info("全A多策略选股票池:全A%s共 %d 只%s",
+                f"前{n}只" if n else "全量", len(codes_all), "(数据-only)" if no_llm else "")
+    run_screen_all(codes_all, as_of, no_llm=no_llm)
+
+
 _CMDS = {"collect": cmd_collect, "message": cmd_message, "sentiment": cmd_sentiment,
          "serialize": cmd_serialize, "panel": cmd_panel, "screen": cmd_screen,
          "events": cmd_events, "factor": cmd_factor, "council": cmd_council,
-         "context": cmd_context, "pipeline": cmd_pipeline,
+         "context": cmd_context, "pipeline": cmd_pipeline, "screenall": cmd_screenall,
          "pattern": cmd_pattern, "analyze": cmd_analyze, "all": cmd_all}
 
 
