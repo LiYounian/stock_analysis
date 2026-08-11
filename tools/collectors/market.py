@@ -1,7 +1,8 @@
 """行情采集:日 K线、量价。
 
 多源 fallback:腾讯 → 新浪 → 东财。
-  - 主源腾讯 `stock_zh_a_hist_tx`:本机实测可用,返回 OHLCV+成交额+换手率。
+  - 主源腾讯 fqkline 端点(web.ifzq.gtimg.cn):当日盘后即含当天 bar(比 akshare stock_zh_a_hist_tx 新鲜~1交易日);
+    volume 单位手→×100 股;该端点不给成交额/换手率(缺列由 _normalize 补 NA)。
   - 东财 `stock_zh_a_hist`:本机被其 TLS 指纹反爬(python-requests 被 RST),留作其他环境备选。
     详见 docs/问题/问题台账.md R4。
 落盘:走 store 层(kind="kline",parquet),旁记 meta.source=实际命中源。
@@ -60,10 +61,38 @@ def _normalize(df: pd.DataFrame) -> pd.DataFrame:
     return df[_STD_COLS]
 
 
+# 腾讯 fqkline 端点(比 akshare stock_zh_a_hist_tx 新鲜约 1 个交易日:当日盘后即含当天 bar)
+_TX_URL = "https://web.ifzq.gtimg.cn/appstock/app/fqkline/get"
+_TX_COUNT = 640   # 取最近 N 根(~2.5 年,覆盖 KLINE_DAYS 且含当天最新 bar)
+
+
 def _fetch_tencent(code, start, end, adjust) -> pd.DataFrame:
-    import akshare as ak
-    return ak.stock_zh_a_hist_tx(symbol=market_prefix(code),
-                                 start_date=start, end_date=end, adjust=adjust)
+    """腾讯 fqkline 端点:**当日盘后即含当天 bar**(akshare stock_zh_a_hist_tx 会滞后约 1 个交易日,
+    午休/收盘同日选股拿不到当天,故改直连此端点)。
+
+    用"取最近 N 根"形式(空区间);实测**区间参数形式反而滞后一天**,固定拉最近 _TX_COUNT 根再按 start 裁剪。
+    volume 端点单位为"手",×100 归一到"股"(与原 akshare-tx 口径一致,防主档拼接处成交量单位跳变)。
+    该端点不给 成交额/换手率 → 缺列,由 _normalize 补 NA(screener 用 volume/OHLC,不受影响)。
+    每行:[date, open, close, high, low, volume(手)]。
+    """
+    import os
+    import requests
+    sym = market_prefix(code)
+    fq = "qfq" if adjust == "qfq" else ("hfq" if adjust == "hfq" else "")
+    key = f"{fq}day" if fq else "day"
+    param = f"{sym},day,,,{_TX_COUNT},{fq}"
+    r = requests.get(_TX_URL, params={"param": param},
+                     timeout=float(os.getenv("FETCH_TIMEOUT", "15")))
+    r.raise_for_status()
+    node = r.json().get("data", {}).get(sym) or {}
+    rows = node.get(key) or node.get("day") or []
+    recs = [{"date": x[0], "open": x[1], "close": x[2], "high": x[3],
+             "low": x[4], "volume": float(x[5]) * 100} for x in rows if len(x) >= 6]
+    df = pd.DataFrame(recs)
+    if len(df) and start:
+        s = f"{start[:4]}-{start[4:6]}-{start[6:8]}" if (len(start) == 8 and start.isdigit()) else start
+        df = df[df["date"] >= s].reset_index(drop=True)
+    return df
 
 
 def _fetch_sina(code, start, end, adjust) -> pd.DataFrame:
