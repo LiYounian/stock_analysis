@@ -20,6 +20,13 @@ KLINE_DAYS = 250            # 默认拉取天数(约一年交易日)
 NEWS_LOOKBACK_DAYS = 7      # 新闻/公告回看窗口
 UGC_LIMIT = 50             # 每票 UGC 抓取条数上限
 
+# —— 新闻扩召回 + LLM 相关性初筛(collectors.news_recall；仅调用方 fetch_news(recall=True) 时生效)——
+# 默认关:只在 screenall/pool 的 collect_message 那批(选出并集∪自选，~125 只)由调用方开，
+# 补「不挂到个股、但对该股重要的行业/宏观/管制类」消息，再用 LLM 关思考做宁严相关性初筛。
+NEWS_RECALL_ENABLED = os.getenv("NEWS_RECALL_ENABLED", "false").lower() in ("1", "true", "yes")
+NEWS_RECALL_KEYWORD_CAP = int(os.getenv("NEWS_RECALL_KEYWORD_CAP", "6"))       # 每票扩召回主题关键词上限(每词一次网络请求)
+NEWS_RECALL_CANDIDATE_CAP = int(os.getenv("NEWS_RECALL_CANDIDATE_CAP", "30"))  # 每票扩召回候选条数上限(控 LLM 初筛量)
+
 # —— 情感打分(qwen 外包)——
 USE_QWEN_SENTIMENT = True   # 情感打分是否走 qwen 外包
 QWEN_BATCH_SIZE = 20        # 每批送 qwen 的文本条数
