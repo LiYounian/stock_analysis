@@ -514,7 +514,8 @@ def _picks_from_view(view: dict | None) -> list[str]:
             if isinstance(x, dict) and x.get("code")]
 
 
-def run_screen_all(codes_all: list[str], as_of: str, no_llm: bool = False) -> dict:
+def run_screen_all(codes_all: list[str], as_of: str, no_llm: bool = False,
+                   no_fetch: bool = False) -> dict:
     """全A 多策略选股 → 只对(各策略选出并集 ∪ 自选)做新闻/LLM/合议。
 
     与 run_two_stage(单形态达标池)的区别:达标池 = 策略0/1/2/3/4 **五个全A screener 选出票的并集**,
@@ -538,8 +539,13 @@ def run_screen_all(codes_all: list[str], as_of: str, no_llm: bool = False) -> di
     logger.info("===== 全A多策略选股开始(日期 %s,全A %d 只)%s=====",
                 as_of, len(codes_all), "(数据-only)" if no_llm else "")
     # —— 步骤①:K线主档同步(同 run_two_stage 开头)——各 screener 随后 fetch=False 读主档,不重采 ——
-    ms = _safe("K线主档同步", lambda: master_sync.sync_master(codes_all, as_of=as_of)) or {}
-    logger.info("K线主档同步:模式=%s 成功 %d", ms.get("mode"), ms.get("ok", 0))
+    # no_fetch=True:调用方已备好数据(本地已有全A raw/主档,或已 pull),跳过同步,避免主档覆盖低时
+    # 误触发 baostock 全量回填(全A 数据常在 raw 分区,load_kline 主档缺失会回退 raw)。
+    if no_fetch:
+        logger.info("K线主档同步:跳过(no_fetch,直接用现有 raw/主档)")
+    else:
+        ms = _safe("K线主档同步", lambda: master_sync.sync_master(codes_all, as_of=as_of)) or {}
+        logger.info("K线主档同步:模式=%s 成功 %d", ms.get("mode"), ms.get("ok", 0))
 
     # —— 步骤②:跑 5 个全A screener(fetch=False 只读主档);_safe 逐个隔离,单个失败不中止其余 ——
     screeners = [
@@ -601,10 +607,12 @@ def cmd_screenall(argv):
         i = argv.index("--universe")
         n = int(argv[i + 1]) if i + 1 < len(argv) and argv[i + 1].isdigit() else None
     no_llm = bool(argv and "--no-llm" in argv)
+    no_fetch = bool(argv and "--no-fetch" in argv)
     codes_all = universe.universe_codes(limit=n)
-    logger.info("全A多策略选股票池:全A%s共 %d 只%s",
-                f"前{n}只" if n else "全量", len(codes_all), "(数据-only)" if no_llm else "")
-    run_screen_all(codes_all, as_of, no_llm=no_llm)
+    logger.info("全A多策略选股票池:全A%s共 %d 只%s%s",
+                f"前{n}只" if n else "全量", len(codes_all),
+                "(数据-only)" if no_llm else "", "(no-fetch)" if no_fetch else "")
+    run_screen_all(codes_all, as_of, no_llm=no_llm, no_fetch=no_fetch)
 
 
 _CMDS = {"collect": cmd_collect, "message": cmd_message, "sentiment": cmd_sentiment,
