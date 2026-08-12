@@ -31,11 +31,11 @@ NEWS_RECALL_CANDIDATE_CAP = int(os.getenv("NEWS_RECALL_CANDIDATE_CAP", "30"))  #
 USE_QWEN_SENTIMENT = True   # 情感打分是否走 qwen 外包
 QWEN_BATCH_SIZE = 20        # 每批送 qwen 的文本条数
 
-# —— LLM API(全部走环境变量,禁止硬编 url/key,禁止入库)——
-# 只认通用 LLM_* 变量;实际 url/key 值只在本机 shell 环境里(~/.zshrc),代码只引用变量名。
+# —— LLM API(url/key 走环境变量,禁止硬编 url/key,禁止入库;model 写死)——
+# 只认 LLM_BASE_URL + LLM_API_KEY 两个变量;实际值只在本机 shell 环境(~/.zshrc),代码只引用变量名。
 LLM_BASE_URL = os.getenv("LLM_BASE_URL", "")
-LLM_API_KEY = os.getenv("LLM_API_KEY") or os.getenv("DEEPSEEK_API_KEY", "")
-LLM_MODEL = os.getenv("LLM_MODEL", "deepseek-v4-pro")   # 可用 LLM_MODEL 覆盖
+LLM_API_KEY = os.getenv("LLM_API_KEY", "")
+LLM_MODEL = "deepseek-v4-pro"   # 写死(env 不再设 LLM_MODEL;要换模型改这里)
 LLM_TIMEOUT = 60
 LLM_MAX_RETRY = 3
 # —— LLM 抽取提速(I/O 型,有界并发 + 送 LLM 条数上限)——
