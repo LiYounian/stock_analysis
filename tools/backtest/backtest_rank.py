@@ -41,6 +41,25 @@ def _score_momentum(kdf_slice: pd.DataFrame, code: str) -> float | None:
         return None
 
 
+def _rev_k(k: int):
+    """构造"过去 k 日反转"打分:−(close[t]/close[t-k]−1)。买近期跌得多的(反转假设)。"""
+    def _s(kdf_slice: pd.DataFrame, code: str) -> float | None:
+        c = kdf_slice["close"].to_numpy(float)
+        if len(c) < k + 1 or c[-(k + 1)] <= 0:
+            return None
+        return -float(c[-1] / c[-(k + 1)] - 1.0)
+    return _s
+
+
+def _score_rev_mom(kdf_slice: pd.DataFrame, code: str) -> float | None:
+    """反做加权对数动量:−weighted_log_momentum.score(测"反转=动量镜像"是否成立)。"""
+    from tools.strategy.momentum import weighted_log_momentum
+    try:
+        return -float(weighted_log_momentum(kdf_slice).get("score", 0.0))
+    except Exception:
+        return None
+
+
 def _score_council(kdf_slice: pd.DataFrame, code: str) -> float | None:
     from tools.analysis import council
     from tools.pipeline.screen_council import build_min_record
@@ -56,7 +75,9 @@ def _score_council(kdf_slice: pd.DataFrame, code: str) -> float | None:
         return None
 
 
-_SCORERS = {"momentum": _score_momentum, "council": _score_council}
+_SCORERS = {"momentum": _score_momentum, "council": _score_council,
+            "rev5": _rev_k(5), "rev10": _rev_k(10), "rev20": _rev_k(20),
+            "rev_mom": _score_rev_mom}
 
 
 # ————————————————————————— 建横截面 panel —————————————————————————
@@ -74,6 +95,8 @@ def build_rank_panel(codes, scorer, horizons=(5, 10, 20), step=1, warmup=_WARMUP
             continue
         df = df.reset_index(drop=True)
         close = df["close"].to_numpy(float)
+        vol = df["volume"].to_numpy(float) if "volume" in df.columns else np.zeros(len(df))
+        amt = close * vol                                    # 成交额代理(流动性)
         dates = [str(x)[:10] for x in df["date"].tolist()]
         n = len(df)
         used += 1
@@ -81,7 +104,8 @@ def build_rank_panel(codes, scorer, horizons=(5, 10, 20), step=1, warmup=_WARMUP
             s = scorer(df.iloc[: t + 1], code)
             if s is None or not np.isfinite(s):
                 continue
-            row = {"date": dates[t], "code": code, "score": s}
+            liq = float(np.mean(amt[max(0, t - 19): t + 1]))  # 近20日均成交额
+            row = {"date": dates[t], "code": code, "score": s, "liq": liq}
             for N in horizons:
                 row[f"r_{N}"] = float(close[t + N] / close[t] - 1.0) * 100.0
             rows.append(row)
@@ -136,8 +160,12 @@ def decile_metrics(panel: pd.DataFrame, N: int, min_cross=10) -> list:
             for i, v in buckets.items()]
 
 
-def topk_metrics(panel: pd.DataFrame, N: int, k=20, min_cross=10) -> dict:
-    """每日取 score Top K 等权前瞻收益,对比全样本均值(≈基准)的超额;并给 Top−Bottom。"""
+def topk_metrics(panel: pd.DataFrame, N: int, k=20, min_cross=10, cost_bps=5.0) -> dict:
+    """每日取 score Top K 等权前瞻收益 vs 全样本均值超额 + Top−Bottom 多空 + **净成本年化**。
+
+    净成本:多空组合每 N 日换一次,进出各扣一次、多空两腿 → 4×cost_bps 每轮。
+    年化按非重叠持有 250/N 轮。反转类换手高,净成本这关最能证伪"看着能赚"。
+    """
     col = f"r_{N}"
     top, allm, bot = [], [], []
     for _, g in panel.groupby("date"):
@@ -151,19 +179,36 @@ def topk_metrics(panel: pd.DataFrame, N: int, k=20, min_cross=10) -> dict:
     if not top:
         return {"n日": 0}
     t, a, b = np.mean(top), np.mean(allm), np.mean(bot)
+    ls_gross = t - b
+    cost_round = 4 * cost_bps / 100.0                        # % per N日轮
+    ls_net = ls_gross - cost_round
+    ann_net = ls_net * (250.0 / N)
     return {"交易日": len(top), f"Top{k}均收益%": round(t, 2), "全样本均值%": round(a, 2),
-            "Top超额%": round(t - a, 2), "TopminusBottom%": round(t - b, 2)}
+            "Top超额%": round(t - a, 2), "多空Top-Bottom毛%": round(ls_gross, 2),
+            "多空净%(每N日)": round(ls_net, 2), "多空年化净%": round(ann_net, 1)}
 
 
-def run(score="momentum", codes=None, horizons=(5, 10, 20), step=1, json_path=None, topk=20):
+def _liq_filter(panel: pd.DataFrame, min_liq_pct: float) -> pd.DataFrame:
+    """每个交易日剔除成交额分位 < min_liq_pct 的票(测反转 edge 在可交易票里还在不在)。"""
+    if not min_liq_pct or "liq" not in panel.columns:
+        return panel
+    keep = panel.groupby("date")["liq"].transform(lambda s: s.rank(pct=True)) >= min_liq_pct
+    return panel[keep]
+
+
+def run(score="momentum", codes=None, horizons=(5, 10, 20), step=1, json_path=None,
+        topk=20, min_liq_pct=0.0):
     scorer = _SCORERS[score]
     panel = build_rank_panel(codes, scorer, horizons, step=step)
     if panel.empty:
         print("!! panel 为空"); return
-    res = {"打分": score, "样本股数": int(panel.attrs.get("used", 0)),
+    used_stocks = int(panel.attrs.get("used", 0))
+    if min_liq_pct:
+        panel = _liq_filter(panel, min_liq_pct)
+    res = {"打分": score, "流动性过滤分位": min_liq_pct, "样本股数": used_stocks,
            "总观测": int(len(panel)), "交易日数": int(panel["date"].nunique()), "免责": _DISCLAIMER}
-    print(f"\n===== 排序型回测 · 打分={score} · 样本 {res['样本股数']} 只 · 观测 {res['总观测']} · "
-          f"{res['交易日数']} 个交易日 =====\n(非投资建议;横截面·无未来函数)\n")
+    print(f"\n===== 排序型回测 · 打分={score} · 流动性过滤≥{min_liq_pct} · 样本 {used_stocks} 只 · "
+          f"观测 {len(panel)} · {res['交易日数']} 个交易日 =====\n(非投资建议;横截面·无未来函数)\n")
     for N in horizons:
         ic = ic_metrics(panel, N)
         dec = decile_metrics(panel, N)
@@ -193,6 +238,7 @@ if __name__ == "__main__":
     ap.add_argument("--step", type=int, default=1)
     ap.add_argument("--horizon", default="5,10,20")
     ap.add_argument("--topk", type=int, default=20)
+    ap.add_argument("--min-liq-pct", type=float, default=0.0, help="每日剔除成交额分位<此值的票(0~1)")
     ap.add_argument("--json", default="")
     a = ap.parse_args()
     codes = [c for c in a.codes.split(",") if c] or None
@@ -201,4 +247,4 @@ if __name__ == "__main__":
         import random
         codes = random.Random(a.seed).sample(allc, min(a.sample, len(allc)))
     run(score=a.score, codes=codes, horizons=tuple(int(x) for x in a.horizon.split(",")),
-        step=a.step, json_path=a.json or None, topk=a.topk)
+        step=a.step, json_path=a.json or None, topk=a.topk, min_liq_pct=a.min_liq_pct)
