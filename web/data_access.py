@@ -75,9 +75,13 @@ def _code_name_map() -> dict[str, str]:
 
 
 def _resolve_name(rec, code):
-    """单记录版名称回退:rec.meta.name → code_name.json[code] → code。"""
+    """单记录版名称回退:rec.meta.name → code_name.json[code] → code。
+
+    注:全A 选出票的旧口径 record 里 meta.name 被填成代码本身(serialize 无池名时 name=code),
+    故 meta.name 等于 code 时视为"无有效名"、继续走 code_name.json,避免名称列显示成数字。
+    """
     nm = ((rec or {}).get("meta") or {}).get("name")
-    if nm:
+    if nm and nm != code:
         return nm
     return _code_name_map().get(code) or code
 

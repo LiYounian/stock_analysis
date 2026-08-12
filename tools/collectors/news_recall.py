@@ -198,7 +198,7 @@ def llm_relevance_filter(candidates: list[dict], name: str,
 def recall_related(code: str, name: str, cutoff: str, client=None) -> list[dict]:
     """扩召回 + 初筛全流程:行业 → 关键词 → 召回候选 → LLM 相关性初筛 → 打 source 标。
 
-    命中条目 source 记 `扩召回:<命中关键词或行业>`,清掉内部 `_recall_kw`,返回相关条目。
+    **保留条目原始 source**(东财文章来源),只清内部 `_recall_kw`;"扩召回"来路由 fetch_news 在 meta.source contributors 体现。返回相关条目。
     任一环节空/异常 → 返回 [](降级不崩,不污染既有三源并集)。
     """
     try:
@@ -211,10 +211,8 @@ def recall_related(code: str, name: str, cutoff: str, client=None) -> list[dict]
         if not cands:
             return []
         related = llm_relevance_filter(cands, name or code, industry, client=client)
-        for it in related:
-            kw = it.pop("_recall_kw", None)
-            it["source"] = f"扩召回:{kw or industry or ''}"
-        # 丢弃条目里残留的内部键也清掉(防泄漏进落盘)
+        # 只清内部键,**保留条目原始 source**(东财 文章来源,如 证券时报网/央广);
+        # "扩召回"这个来路由 fetch_news 在 meta.source 的 contributors 里体现,不覆盖单条 source。
         for it in cands:
             it.pop("_recall_kw", None)
         logger.info("扩召回 %s:候选 %d → 相关 %d(行业=%s)",
