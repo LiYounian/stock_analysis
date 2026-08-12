@@ -68,8 +68,11 @@ def _bracket_outcome(high, low, close_end, entry, sl, tp, loss_pct, gain_pct):
 
 
 # ————————————————————————— 逐票逐日建 panel —————————————————————————
-def build_panel(codes, horizons=(1, 5, 10), warmup=_WARMUP) -> pd.DataFrame:
-    """逐票逐日无未来函数跑 predict,落长表。每行 = 一个 (code,t,N) 观测。"""
+def build_panel(codes, horizons=(1, 5, 10), warmup=_WARMUP, step=1) -> pd.DataFrame:
+    """逐票逐日无未来函数跑 predict,落长表。每行 = 一个 (code,t,N) 观测。
+
+    step>1:每隔 step 个交易日取一个 t 点(抽稀,大样本提速,不影响分布口径)。
+    """
     ql, qm, qh = _P["情景分位"]
     rows = []
     maxN = max(horizons)
@@ -87,7 +90,7 @@ def build_panel(codes, horizons=(1, 5, 10), warmup=_WARMUP) -> pd.DataFrame:
         close = df["close"].to_numpy(float)
         n = len(df)
         used += 1
-        for t in range(warmup, n - maxN):
+        for t in range(warmup, n - maxN, step):
             sl_ = df.iloc[: t + 1]
             try:
                 tech = technical.compute(sl_)
@@ -216,9 +219,79 @@ def _fmt(d: dict, keys) -> str:
                      for k in keys if k in d)
 
 
-def run(horizons=(1, 5, 10), codes=None, json_path=None):
+# ————————————————————————— 调参 sweep(OFAT)—————————————————————————
+# 待扫参数网格(逐参数单调,holding others at default)。情景分位为 list,特判。
+_SWEEP_GRID = {
+    "止损_ATR倍数": [0.6, 0.8, 1.0, 1.2, 1.5],
+    "止盈_ATR倍数": [1.2, 1.6, 2.0, 2.5, 3.0],
+    "情景分位": [[10, 50, 90], [5, 50, 95], [2.5, 50, 97.5], [1, 50, 99]],
+    "突破容差%": [0.5, 0.75, 1.0, 1.5],
+    "swing窗口": [3, 5, 8, 10],
+    "止损缓冲ATR倍数": [0.25, 0.5, 1.0],
+}
+
+
+def _summ(panel: pd.DataFrame, N: int) -> dict:
+    """抽 focus_N 的一行紧凑指标(供 sweep 对比)。"""
+    sub = panel[panel["N"] == N]
+    br, anc = _touch_stats(sub, "br"), _touch_stats(sub, "anc")
+    cov, cal = _coverage(sub), _calibration(sub)
+    return {
+        "括号实测%": round(br.get("实测均值%", float("nan")), 2),
+        "括号止损触发%": round(br.get("止损触发率%", float("nan")), 1),
+        "括号TP先%": round(br.get("TP先%", float("nan")), 1),
+        "L3实测%": round(anc.get("实测均值%", float("nan")), 2),
+        "L3止损触发%": round(anc.get("止损触发率%", float("nan")), 1),
+        "覆盖率%": round(cov.get("覆盖率%", float("nan")), 1),
+        "Brier": round(cal.get("Brier", float("nan")), 3),
+    }
+
+
+def sweep_params(codes, focus_N=5, step=1, grid=None) -> dict:
+    """OFAT 调参:逐参数单调,每个取值重建 panel、抽 focus_N 指标。会临时改 THRESHOLDS 再还原。"""
+    grid = grid or _SWEEP_GRID
+    base_default = {k: _P[k] for k in grid}
+    baseline = _summ(build_panel(codes, (focus_N,), step=step), focus_N)
+    out = {"focus_N": focus_N, "baseline(现值)": {"值": base_default, **baseline}, "扫描": {}}
+    for param, values in grid.items():
+        orig = _P[param]
+        rows = []
+        for v in values:
+            _P[param] = v
+            try:
+                rows.append({"值": v, **_summ(build_panel(codes, (focus_N,), step=step), focus_N)})
+            finally:
+                _P[param] = orig
+        out["扫描"][param] = rows
+    return out
+
+
+def _print_sweep(res: dict):
+    N = res["focus_N"]
+    cols = ["括号实测%", "括号止损触发%", "括号TP先%", "L3实测%", "L3止损触发%", "覆盖率%", "Brier"]
+    print(f"\n===== 调参 sweep(OFAT)· focus N={N}日 · 自选池 =====\n(非投资建议;每格=改该参数重建 panel)\n")
+    b = res["baseline(现值)"]
+    print("现值基线:", "  ".join(f"{c}={b[c]}" for c in cols), "\n")
+    for param, rows in res["扫描"].items():
+        print(f"—— {param} ——")
+        for r in rows:
+            mark = " ←现值" if r["值"] == b["值"].get(param) else ""
+            print(f"  {str(r['值']):<16} " + "  ".join(f"{c}={r[c]}" for c in cols) + mark)
+        print()
+
+
+def _sample_universe(n: int, seed: int) -> list[str]:
+    """从本地主档随机抽 n 只(播种可复现)。随机全A 天然以传统/非科技股为主,破自选池'偏成长'偏差。"""
+    import random
+    from tools.store import repo as store
+    allc = sorted(store.list_master_codes())
+    rng = random.Random(seed)
+    return rng.sample(allc, min(n, len(allc)))
+
+
+def run(horizons=(1, 5, 10), codes=None, json_path=None, step=1):
     codes = codes or stock_pool.get_codes()
-    panel = build_panel(codes, horizons)
+    panel = build_panel(codes, horizons, step=step)
     if panel.empty:
         print("!! panel 为空(无足够历史)");
         return
@@ -253,8 +326,23 @@ if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--horizon", default="1,5,10")
     ap.add_argument("--codes", default="")
+    ap.add_argument("--sample", type=int, default=0, help="从主档随机抽 N 只(破自选池偏差)")
+    ap.add_argument("--seed", type=int, default=42)
+    ap.add_argument("--step", type=int, default=1, help="每隔 step 个交易日取一个 t 点(抽稀提速)")
     ap.add_argument("--json", default="")
+    ap.add_argument("--sweep", action="store_true", help="OFAT 调参扫描(替代常规回测)")
+    ap.add_argument("--focus-n", type=int, default=5, help="sweep 聚焦的持有期")
     a = ap.parse_args()
-    run(tuple(int(x) for x in a.horizon.split(",")),
-        codes=[c for c in a.codes.split(",") if c] or None,
-        json_path=a.json or None)
+    codes = [c for c in a.codes.split(",") if c] or None
+    if a.sample:
+        codes = _sample_universe(a.sample, a.seed)
+    if a.sweep:
+        res = sweep_params(codes or stock_pool.get_codes(), focus_N=a.focus_n, step=a.step)
+        _print_sweep(res)
+        if a.json:
+            from pathlib import Path
+            Path(a.json).write_text(json.dumps(res, ensure_ascii=False, indent=2), encoding="utf-8")
+            print(f"结果已落盘:{a.json}")
+    else:
+        run(tuple(int(x) for x in a.horizon.split(",")),
+            codes=codes, json_path=a.json or None, step=a.step)
