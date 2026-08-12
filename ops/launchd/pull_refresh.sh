@@ -1,6 +1,8 @@
 #!/bin/bash
-# 本地盘后闭环(供 launchd 调用):从远端 pull 全A K线 → 全A策略0/1扫描 + 自选池流水线 → 签名上传。
-# 依赖远端 stock-fetch 已在盘后把全A采到当天(见 ops/systemd/stock-fetch.*)。
+# 本地盘后闭环(供 launchd 调用):本地自采全A K线 → 全A多策略选股(screenall)→ 签名上传。
+# 改为**本地自采**(ops.remote_fetch,fqkline ~5min)而非 pull 远端:远端 tencent 限速~2h、
+# 且 pull 会抢在远端采集完成前 → 拿到旧/半截数据。本地 fqkline 当日盘后即含收盘价,快且稳。
+# 远端只负责展示(web 读上传的产物)。
 # 密钥只放本机受限文件、不进 git:默认从 $HOME/.config/stock/sync.env 读(chmod 600)。
 # 仓库路径由脚本自身位置推出(ops/launchd/ 上两级),无需硬编用户名/绝对路径。
 set -uo pipefail
@@ -28,8 +30,10 @@ trap 'rmdir "$LOCK" 2>/dev/null' EXIT
 
 {
   echo "==================== $(date) pull_refresh $D ===================="
-  echo "-- ① pull 全A K线(远端增量) --"
-  "$PY" -m tools.sync.pull --kind kline || echo "!! pull 失败(继续用本地已有)"
+  echo "-- ① 本地自采全A K线(fqkline,~5min;不依赖慢远端 pull,规避时序竞争) --"
+  # ops.remote_fetch = 全A主档同步(spot增量→失败回退 fqkline 逐只 + >= 推进主档;含交易日守卫)。
+  # 本地跑=本地全A自采:fqkline 当日盘后即含收盘价,比"pull 远端(远端 tencent 限速~2h)"快且稳。
+  FETCH_WORKERS="${FETCH_WORKERS:-10}" "$PY" -m ops.remote_fetch || echo "!! 本地全A采集失败(继续用本地已有)"
   echo "-- ② 全A多策略选股(策略0/1/2/3/4)+ 对(选出并集∪自选)做新闻/LLM/合议 --"
   # --no-fetch:pull 已把全A落主档,screenall 不再触发 master_sync 回填/重采
   "$PY" -m tools.run screenall --no-fetch || echo "!! screenall 失败"
