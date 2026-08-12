@@ -20,6 +20,23 @@ from tools.config import settings, stock_pool
 logger = logging.getLogger("analysis.serialize")
 
 _OUT_DIR = settings.PROJECT_ROOT / "data" / "analysis"
+
+_CODE_NAME: dict | None = None
+
+
+def _code_name(code: str) -> str | None:
+    """全A 代码→名称(config/code_name.json,模块级只加载一次)。缺失/损坏 → None。
+    自选池外的票(screenall 选出票)没有 stock_pool 名,靠这里补名,避免 meta.name 落成代码。"""
+    global _CODE_NAME
+    if _CODE_NAME is None:
+        try:
+            _CODE_NAME = json.loads(
+                (settings.PROJECT_ROOT / "config" / "code_name.json").read_text("utf-8"))
+            if not isinstance(_CODE_NAME, dict):
+                _CODE_NAME = {}
+        except Exception:
+            _CODE_NAME = {}
+    return _CODE_NAME.get(code)
 SCHEMA_VERSION = "1.0"
 
 
@@ -91,7 +108,7 @@ def build_record(code: str, as_of: str) -> dict:
 
     rec = {
         "schema_version": SCHEMA_VERSION,
-        "meta": {"code": code, "name": s.name if s else code,
+        "meta": {"code": code, "name": s.name if s else (_code_name(code) or code),
                  "sector": s.sector if s else None, "industry": s.industry if s else None,
                  "as_of": as_of},
         "snapshot": snapshot,
