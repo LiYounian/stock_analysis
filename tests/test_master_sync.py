@@ -169,22 +169,26 @@ def test_fallback_advances_master_last_date(monkeypatch, tmp_path):
     assert pd.to_datetime(m["date"]).max().normalize() == pd.Timestamp("2026-08-07")
 
 
-def test_fallback_only_appends_tail_not_overwrite_history(monkeypatch, tmp_path):
-    """只补尾部:主档已有的历史 bar 不被 raw(值不同)覆盖改写。"""
+def test_fallback_overwrites_last_day_but_not_earlier_history(monkeypatch, tmp_path):
+    """覆盖口径(>= last):**最新日**可被 raw 覆盖(盘中→收盘更新),但**更早历史日**不动。"""
     _real_store_to_tmp(monkeypatch, tmp_path)
     code = "000001"
     _seed_master(code, [_bar("2026-08-05", 10.0), _bar("2026-08-06", 10.5)])
     monkeypatch.setattr(store, "get_master_kline_meta",
                         lambda c: {"last_date": "2026-08-06"} if c == code else None)
     _spot_fails(monkeypatch)
-    raw = pd.DataFrame([_bar("2026-08-06", 99.9), _bar("2026-08-07", 11.0)])
+    # raw 同时给:更早历史 08-05(异值 88.8)、最新日 08-06(收盘价 99.9)、新日 08-07
+    raw = pd.DataFrame([_bar("2026-08-05", 88.8), _bar("2026-08-06", 99.9), _bar("2026-08-07", 11.0)])
     monkeypatch.setattr(market, "fetch_kline", lambda codes, **k: {code: raw})
 
     master_sync.sync_master([code], as_of=_TODAY)
     m = market.load_kline(code).set_index(pd.to_datetime(market.load_kline(code)["date"]))
-    # 历史日 2026-08-06 的 close 仍是主档原值 10.5,不被 raw 的 99.9 覆盖
-    hist = m.loc[m.index == pd.Timestamp("2026-08-06")]
-    assert float(hist["close"].iloc[0]) == 10.5
+    # 更早历史 08-05 不被覆盖(< last,受保护)
+    assert float(m.loc[m.index == pd.Timestamp("2026-08-05")]["close"].iloc[0]) == 10.0
+    # 最新日 08-06 被 raw 覆盖成 99.9(== last,放行同日更新)
+    assert float(m.loc[m.index == pd.Timestamp("2026-08-06")]["close"].iloc[0]) == 99.9
+    # 新日 08-07 追加
+    assert float(m.loc[m.index == pd.Timestamp("2026-08-07")]["close"].iloc[0]) == 11.0
 
 
 def test_fallback_advance_idempotent(monkeypatch, tmp_path):
@@ -244,3 +248,27 @@ def test_fallback_first_landing_when_no_master(monkeypatch, tmp_path):
     assert r["mode"] == "fallback" and r["advanced"] == 1
     m = market.load_kline(code)
     assert len(m) == 3 and pd.to_datetime(m["date"]).max() == pd.Timestamp("2026-08-07")
+
+
+def test_advance_master_intraday_to_close_overwrite(monkeypatch, tmp_path):
+    """同日盘中→收盘覆盖:主档已有当天 bar(盘中价),回退再采到同日收盘价时,
+    _advance_master_from_raw 必须放行同日 bar(>= last)→ append 按 date 覆盖成收盘价。
+    (此前 > last 会把同日收盘价挡掉,主档停在午休价——本测试锁死修复。)"""
+    import pandas as pd
+    from tools.collectors import master_sync as ms
+    monkeypatch.setattr(store, "_MASTER_DIR", tmp_path / "master")
+    code = "300209"
+    # 主档已有 08-11 + 08-12(盘中 35.6)
+    mid = pd.DataFrame({"date": pd.to_datetime(["2026-08-11", "2026-08-12"]),
+                        "open": [34.0, 35.0], "high": [35.0, 36.0], "low": [33.0, 34.0],
+                        "close": [34.92, 35.6], "volume": [1e6, 1e6],
+                        "amount": [1e7, 1e7], "turnover": [0.01, 0.01], "pct_chg": [0.0, 2.0]})
+    store.append_master_kline(code, mid)
+    assert float(store.get_master_kline(code)["close"].iloc[-1]) == 35.6
+    # 收盘再采:同日 08-12 收盘价 36.5
+    close = mid.copy(); close.loc[close["date"] == "2026-08-12", "close"] = 36.5
+    ms._advance_master_from_raw({code: close})
+    # 断言:同日 bar 被覆盖成收盘价,且不重复行
+    m = store.get_master_kline(code)
+    assert float(m[m["date"] == "2026-08-12"]["close"].iloc[0]) == 36.5, "同日收盘价未覆盖午休价"
+    assert len(m[m["date"] == "2026-08-12"]) == 1, "同日出现重复行"
