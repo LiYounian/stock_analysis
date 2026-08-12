@@ -94,7 +94,10 @@ def _advance_master_from_raw(fetched: dict) -> int:
             if store.has_master_kline(code):
                 master = store.get_master_kline(code)
                 last = pd.to_datetime(master["date"]).max().normalize()
-                tail = tail[tail["date"] > last]
+                # >= last(非 > last):含"最新日"本身,让**同一交易日的盘中→收盘更新覆盖**
+                # (盘中先采一次落 midday bar,收盘再采时同日 bar 需覆盖成收盘价;append_master
+                # 按 date 去重、新数据覆盖,故这里必须放行同日 bar,否则收盘价被挡、停在午休价)。
+                tail = tail[tail["date"] >= last]
             # 主档不存在:tail 保持全量(首次落地)
             if len(tail) == 0:
                 continue
