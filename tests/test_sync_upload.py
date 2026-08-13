@@ -165,6 +165,31 @@ def test_partial_resend_via_receipt(tmp_path):
     assert r2["summary"]["failed"] == 0
 
 
+def test_changed_content_resends_despite_receipt(tmp_path):
+    """内容变了的分片即使回执标已成功也重发(根治'同日重传不覆盖');未变的仍跳过。"""
+    analysis = tmp_path / "analysis"
+    _seed_analysis(analysis, "2026-08-07")
+    rp = tmp_path / "receipt.json"
+    calls = []
+
+    def post(url, token, env):
+        code = next(iter(env["records"]), None) or f"__view__:{next(iter(env['views']))}"
+        calls.append(code)
+        return (200, {"ok": True})
+
+    kw = dict(url="http://x", token="t", source="s", key_id="k1", key="K",
+              analysis_dir=analysis, receipt_path=rp, post_fn=post, retries=1,
+              base_delay=0, sleep_fn=lambda s: None)
+    upload.upload_date("2026-08-07", **kw)               # 首轮:全部发出并记内容 hash
+    assert "__view__:panel" in calls
+
+    calls.clear()
+    (analysis / "2026-08-07" / "panel.json").write_text(  # 只改 panel 视图内容
+        json.dumps({"rows": [1, 2, 3]}), encoding="utf-8")
+    upload.upload_date("2026-08-07", **kw)               # 次轮:仅内容变了的 panel 重发
+    assert calls == ["__view__:panel"]                   # 变更分片重发,其余按 hash 跳过
+
+
 def _seed_multi_views(root, date):
     """播种:1 票 + 3 个池级视图(含一个"大"视图),验证按视图独立分片/续传。"""
     d = root / date
