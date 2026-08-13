@@ -37,6 +37,9 @@ trap 'rmdir "$LOCK" 2>/dev/null' EXIT
   echo "-- ② 全A多策略选股(策略0/1/2/3/4)+ 对(选出并集∪自选)做新闻/LLM/合议 --"
   # --no-fetch:pull 已把全A落主档,screenall 不再触发 master_sync 回填/重采
   "$PY" -m tools.run screenall --no-fetch || echo "!! screenall 失败"
+  echo "-- ②.5 前瞻记分卡(picks+预测+情绪 配到期实际收益,幂等滚存;消息面回测长期样本源) --"
+  # 持久 --out:每天重跑把"新到期"的前瞻收益补进,累积几周后供 backtest_sentiment / PEAD 复验
+  "$PY" -m tools.backtest.forward_scorecard --out "$REPO/data/analysis/backtest/forward_scorecard.csv" || echo "!! 记分卡(不阻断)"
   echo "-- ③ 上传远端(先不带 --force:只补未确认分片,规避 ingest 429 限速) --"
   "$PY" -m tools.sync.upload --date "$D" || echo "!! 上传第一轮"
   sleep 65   # 限速窗口(120/60s);分片>120 时首轮部分 429,等窗口重置补齐
