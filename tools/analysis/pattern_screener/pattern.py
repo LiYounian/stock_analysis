@@ -153,6 +153,143 @@ def detect_flag(df: pd.DataFrame, cfg: dict = None) -> dict:
                                  "旗杆": pole_ok, "旗面": flag_ok}}
 
 
+# ————————————————————————————————————————————————
+# 箱体 v2(按策略提供者规格重构;v1 detect_box 保留供 A/B 对比)
+# 均衡口径:振幅带 + 站稳突破 + 放量 = 硬门;触碰/缩量/横盘 = 软信号 → 结构评分 ≥ 下限才达标。
+# 趋势门(MA200+短均线多头)在 screen_box 层叠加(需更长历史)。只用 K线,防未来函数由调用方按 t 截取保证。
+# ————————————————————————————————————————————————
+def _count_touches(highs, lows, rail: float, tol: float, rebound: float, upper: bool) -> int:
+    """带容差触轨 + 回落/反弹确认的有效触碰次数。
+
+    upper=True:high 进入上轨容差带([箱顶×(1-tol), ∞))算触上轨,其后需回落 ≥rebound 才算一次有效触碰;
+    upper=False:low 进入下轨容差带算触下轨,其后需反弹 ≥rebound。tol/rebound 为小数(如 0.01)。
+    相邻同一波只计一次(找到确认后从确认点继续)。
+    """
+    n = len(highs)
+    cnt = 0
+    i = 0
+    while i < n:
+        touch = (highs[i] >= rail * (1 - tol)) if upper else (lows[i] <= rail * (1 + tol))
+        if not touch:
+            i += 1
+            continue
+        peak = highs[i] if upper else lows[i]
+        j = i + 1
+        confirmed = False
+        while j < n:
+            if upper and lows[j] <= peak * (1 - rebound):        # 触上轨后回落≥rebound
+                confirmed = True
+                break
+            if (not upper) and highs[j] >= peak * (1 + rebound):  # 触下轨后反弹≥rebound
+                confirmed = True
+                break
+            j += 1
+        if confirmed:
+            cnt += 1
+            i = j                                                 # 从回落/反弹处继续找下一次
+        else:
+            i += 1
+    return cnt
+
+
+def _shrinking_volume(vols, back_frac: float, ratio: float) -> tuple[bool, float]:
+    """后段(末 back_frac 窗)均量 ≤ 前段均量 ×ratio 视作"后期缩量"。返回 (是否缩量, 量比)。"""
+    n = len(vols)
+    k = max(1, int(round(n * back_frac)))
+    if n - k < 1:
+        return False, float("nan")
+    front = vols[: n - k]
+    back = vols[n - k:]
+    fmean = sum(front) / len(front)
+    bmean = sum(back) / len(back)
+    q = bmean / fmean if fmean > 0 else float("nan")
+    return (bool(fmean > 0 and bmean <= fmean * ratio), round(q, 3) if q == q else q)
+
+
+def _sideways(closes, slope_cap: float) -> tuple[bool, float]:
+    """箱体内收盘对时间的归一化净漂移 |k×N/mean| ≤ slope_cap 视作横盘不单边。返回 (是否横盘, 归一斜率)。"""
+    n = len(closes)
+    if n < 3:
+        return False, float("nan")
+    xs = list(range(n))
+    mx = sum(xs) / n
+    my = sum(closes) / n
+    denom = sum((x - mx) ** 2 for x in xs)
+    if denom <= 0 or my <= 0:
+        return False, float("nan")
+    slope = sum((xs[i] - mx) * (closes[i] - my) for i in range(n)) / denom
+    drift = slope * (n - 1) / my                       # 窗口内净漂移(占均价比例)
+    return (abs(drift) <= slope_cap, round(drift, 4))
+
+
+def _pick_box_window(df: pd.DataFrame, c: dict):
+    """在窗口区间内选箱体窗(不含末根):振幅落 [下界,上界] 的窗中,取结构评分最高者。
+
+    返回 (win, 箱顶, 箱底, 振幅%, 结构评分, 软信号明细) 或 None(无合规窗)。
+    """
+    n = len(df)
+    lo_w, hi_w = int(c["窗口区间"][0]), int(c["窗口区间"][1])
+    tol = c["触碰容差%"] / 100.0
+    reb = c["回落反弹%"] / 100.0
+    high, low, vol, close = (df["high"].to_numpy(float), df["low"].to_numpy(float),
+                             df["volume"].to_numpy(float), df["close"].to_numpy(float))
+    best = None
+    for win in range(lo_w, hi_w + 1, 5):               # 步长5控性能(回测逐根扫)
+        if n < win + 1:
+            continue
+        s, e = n - win - 1, n - 1                       # 不含末根的箱体段 [s, e)
+        seg_hi, seg_lo = high[s:e], low[s:e]
+        seg_vol, seg_close = vol[s:e], close[s:e]
+        top, bot = float(seg_hi.max()), float(seg_lo.min())
+        if bot <= 0:
+            continue
+        amp = (top - bot) / bot * 100.0
+        if not (c["振幅下界%"] <= amp <= c["振幅上界%"]):
+            continue
+        up_t = _count_touches(seg_hi, seg_lo, top, tol, reb, upper=True)
+        dn_t = _count_touches(seg_hi, seg_lo, bot, tol, reb, upper=False)
+        touch_ok = up_t >= c["触碰次数"] and dn_t >= c["触碰次数"]
+        shrink_ok, qratio = _shrinking_volume(seg_vol, c["缩量后段占比"], c["缩量比"])
+        flat_ok, drift = _sideways(seg_close, c["横盘斜率上限"])
+        score = round((int(touch_ok) + int(shrink_ok) + int(flat_ok)) / 3.0, 3)
+        cand = (win, round(top, 3), round(bot, 3), round(amp, 2), score,
+                {"触上次数": up_t, "触下次数": dn_t, "触碰达标": touch_ok,
+                 "缩量": shrink_ok, "量比": qratio, "横盘": flat_ok, "净漂移": drift})
+        if best is None or cand[4] > best[4]:
+            best = cand
+    return best
+
+
+def detect_box_v2(df: pd.DataFrame, cfg: dict = None) -> dict:
+    """箱体 v2 几何判定(均衡口径)。硬门:振幅带 + 站稳突破 + 放量;软门:结构评分 ≥ 下限。
+
+    结构评分 = 触碰达标/缩量/横盘 三软信号等权(0~1)。达标 = 突破 AND 放量 AND 结构评分≥下限
+    (振幅带在选窗时已保证)。趋势门不在此(在 screen_box,需 MA200)。
+    输出 特征 含 箱顶/箱底(供结构化输出与止损)、各软信号、结构评分。
+    """
+    c = (cfg or _CFG).get("箱体v2", _CFG.get("箱体v2", {}))
+    n = len(df)
+    need = int(c["窗口区间"][0]) + 1
+    if n < need:
+        return {"达标": False, "命中": "箱体v2", "特征": {"原因": f"样本不足(<{need})"}}
+    picked = _pick_box_window(df, c)
+    if picked is None:
+        return {"达标": False, "命中": "箱体v2", "特征": {"原因": "无合规箱体窗(振幅不在带内)"}}
+    win, top, bot, amp, score, soft = picked
+    last_c = float(df["close"].iloc[-1])
+    last_v = float(df["volume"].iloc[-1])
+    seg_vol = df["volume"].to_numpy(float)[n - win - 1:n - 1]
+    seg_vmean = float(seg_vol.mean()) if len(seg_vol) else 0.0
+    站稳 = last_c > top * (1 + c["站稳容差%"] / 100.0)
+    放量 = bool(seg_vmean > 0 and last_v > seg_vmean * c["突破放量倍数"])
+    结构达标 = score >= c["结构分下限"]
+    ok = bool(站稳 and 放量 and 结构达标)
+    return {"达标": ok, "命中": "箱体v2",
+            "特征": {"窗口": win, "箱顶": top, "箱底": bot, "振幅%": amp,
+                     "站稳": 站稳, "放量": 放量, "量比突破": round(last_v / seg_vmean, 2) if seg_vmean else None,
+                     "结构评分": score, "结构达标": 结构达标, **soft}}
+
+
 PATTERNS = {"箱体": detect_box, "杯柄": detect_cup_handle,
             "楔形": detect_wedge, "旗形": detect_flag}
 
