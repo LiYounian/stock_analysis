@@ -227,6 +227,143 @@ def test_weekly_volumes_short_history_few_weeks():
     assert len(s02.weekly_volumes(df, len(df) - 1)) == 3
 
 
+# ════════════════════════════════════════════════════════════════════
+# Minervini 趋势模板过滤器(_trend_template)+ signal_at(trend_filter=)
+# 锁死红线:8 条全过才 PASS;各条命中/不命中;RS 百分位门;无未来函数;
+#          S02 原路径零回归(trend_filter=False 逐字节等价旧版)。
+# ════════════════════════════════════════════════════════════════════
+def _uptrend_df(n=300, base=10.0, slope=0.1, start="2023-01-02"):
+    """稳健线性上升趋势(≥252 根):close>MA50>MA150>MA200、MA200 上升、贴近 52 周高、远离 52 周低。"""
+    closes = [round(base + slope * i, 4) for i in range(n)]
+    opens = [round(c - 0.02, 4) for c in closes]
+    highs = [round(c + 0.05, 4) for c in closes]
+    lows = [round(c - 0.05, 4) for c in closes]
+    dates = pd.bdate_range(start, periods=n)
+    vols = [1000.0] * n
+    return pd.DataFrame({"date": dates, "open": opens, "high": highs,
+                         "low": lows, "close": closes, "volume": vols})
+
+
+def test_trend_all_conditions_pass():
+    df = _uptrend_df()
+    t = len(df) - 1
+    g = s02._trend_template(df, t, rs_rank=85.0)
+    assert g["C1_价上150_200"] and g["C2_150上200"] and g["C3_200上升"]
+    assert g["C4_50上150_200"] and g["C5_价上50"]
+    assert g["C6_距52低≥30%"] and g["C7_距52高≤25%"] and g["C8_RS达标"]
+    assert g["PASS"] is True
+
+
+def test_trend_rs_below_threshold_blocks():
+    """RS 百分位 < 门槛(70)→ C8 假 → 趋势门不过(其余 7 条仍真)。"""
+    df = _uptrend_df()
+    t = len(df) - 1
+    g = s02._trend_template(df, t, rs_rank=60.0)
+    assert g["C8_RS达标"] is False and g["PASS"] is False
+    assert g["C1_价上150_200"] and g["C7_距52高≤25%"]        # 其余仍真 → 只 C8 卡
+
+
+def test_trend_rs_none_blocks():
+    """RS 未提供(横截面缺喂)→ C8 无法判 → 不通过(诚实不放行)。"""
+    g = s02._trend_template(_uptrend_df(), len(_uptrend_df()) - 1, rs_rank=None)
+    assert g["C8_RS达标"] is False and g["PASS"] is False
+
+
+def test_trend_rs_boundary_at_threshold():
+    """RS 恰等于门槛 70 → 达标(含等号 ≥)。"""
+    df = _uptrend_df()
+    t = len(df) - 1
+    assert s02._trend_template(df, t, rs_rank=70.0)["C8_RS达标"] is True
+    assert s02._trend_template(df, t, rs_rank=69.99)["C8_RS达标"] is False
+
+
+def test_trend_downtrend_fails_ma_conditions():
+    """下降趋势:价在均线下、短均线在长均线下、MA200 不升 → 多条假 → 不过。"""
+    df = _uptrend_df(slope=-0.05, base=100.0)                # 下行
+    t = len(df) - 1
+    g = s02._trend_template(df, t, rs_rank=95.0)
+    assert g["C1_价上150_200"] is False
+    assert g["C2_150上200"] is False and g["C4_50上150_200"] is False
+    assert g["C3_200上升"] is False
+    assert g["PASS"] is False
+
+
+def test_trend_near_52w_low_ratio_fails_c6():
+    """涨幅太小(现价 < 52周最低×1.30)→ C6 假(即便仍是上升趋势、RS 达标)。"""
+    df = _uptrend_df(base=100.0, slope=0.02)                 # 温和上行:252 窗内涨幅 <30%
+    t = len(df) - 1
+    g = s02._trend_template(df, t, rs_rank=90.0)
+    assert g["C6_距52低≥30%"] is False and g["PASS"] is False
+
+
+def test_trend_far_below_52w_high_fails_c7():
+    """窗内某历史高点被顶高(现价 < 52周最高×0.75)→ C7 假,隔离验证(只动 high 列)。"""
+    df = _uptrend_df()
+    t = len(df) - 1
+    df.loc[t - 10, "high"] = df.loc[t, "close"] * 2.0        # 制造远高于现价的 52 周高
+    g = s02._trend_template(df, t, rs_rank=90.0)
+    assert g["C7_距52高≤25%"] is False and g["PASS"] is False
+    assert g["C1_价上150_200"] and g["C6_距52低≥30%"]        # 其余不受影响
+
+
+def test_trend_flat_series_c3_not_rising():
+    """完全走平:MA200[t]==MA200[t−21] → C3(strict >)假;MA 相等 → C2/C4 亦假。"""
+    df = _uptrend_df(slope=0.0, base=50.0)
+    t = len(df) - 1
+    g = s02._trend_template(df, t, rs_rank=90.0)
+    assert g["C3_200上升"] is False
+    assert g["PASS"] is False
+
+
+def test_trend_insufficient_history_skips():
+    """历史 < 252(次新)→ 趋势门不通过 + 标 跳过(记为 not passed)。"""
+    df = _uptrend_df(n=200)
+    g = s02._trend_template(df, len(df) - 1, rs_rank=90.0)
+    assert g["PASS"] is False and g.get("跳过") is True
+
+
+def test_trend_no_lookahead_invariance():
+    """趋势门在 t 处的判定 = 截断 t 之后再判(只用 ≤ t 数据)。"""
+    df = _uptrend_df()
+    t = 270
+    full = s02._trend_template(df, t, rs_rank=88.0)
+    trunc = s02._trend_template(df.iloc[: t + 1].reset_index(drop=True), t, rs_rank=88.0)
+    assert full == trunc
+
+
+# ———————————————————— signal_at(trend_filter=) 向后兼容 + 叠加 ————————————————————
+def test_signal_at_trend_filter_off_is_byte_equal_legacy():
+    """trend_filter=False(默认)必须与旧版逐字节等价:不加任何键、SELECT 不变。"""
+    df = _base_df()
+    t = len(df) - 1
+    legacy = s02.signal_at(df, t)
+    off = s02.signal_at(df, t, trend_filter=False)
+    assert off == legacy
+    assert "趋势门" not in off
+
+
+def test_signal_at_trend_filter_on_can_block_select():
+    """开趋势门:base 命中的 S02 信号,若趋势门不过(短历史无法判)→ SELECT 翻 False + 带趋势门键。"""
+    df = _base_df()                                          # 仅 45 根 → 趋势门历史不足
+    t = len(df) - 1
+    base = s02.signal_at(df, t)
+    assert base["SELECT"] is True                            # base S02 命中
+    on = s02.signal_at(df, t, trend_filter=True, rs_rank=90.0)
+    assert "趋势门" in on
+    assert on["趋势门"]["PASS"] is False                      # 历史不足 → 不过
+    assert on["SELECT"] is False                             # 趋势门否决
+
+
+def test_signal_at_trend_filter_passthrough_when_base_false():
+    """base 未命中时,开不开趋势门 SELECT 都是 False(不误放行)。"""
+    closes = [100.0] * 44 + [99.8]                           # C2 假 → base False
+    df = _df(_vols(), closes)
+    t = len(df) - 1
+    assert s02.signal_at(df, t)["SELECT"] is False
+    on = s02.signal_at(df, t, trend_filter=True, rs_rank=99.0)
+    assert on["SELECT"] is False
+
+
 # ———————————————————— pipeline 落 view ————————————————————
 def test_run_s02_screen_writes_view(monkeypatch, tmp_path):
     monkeypatch.setattr(store, "_ANALYSIS_DIR", tmp_path / "analysis")
