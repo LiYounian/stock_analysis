@@ -679,29 +679,50 @@ def _report_date(stem: str) -> str:
     return f"{d[:4]}-{d[4:6]}-{d[6:8]}"
 
 
+_REPORT_VIEW = "选股分析报告"    # store 容器视图(远端 DB 后端经此展示,见 tools/sync/publish_report.py)
+
+
+def _store_reports() -> dict[str, dict]:
+    """store 容器视图里的报告 {name: {name,title,date,md}}(远端/已上传);无则空。"""
+    try:
+        return (store.get_view(_REPORT_VIEW) or {}).get("reports", {})
+    except FileNotFoundError:
+        return {}
+
+
+def _fs_report_text(name: str) -> str | None:
+    """本地文件系统报告原文(名经白名单,防路径穿越);无则 None。"""
+    p = _REPORT_DIR / f"{name}.md"
+    if _REPORT_DIR.is_dir() and p.is_file() and p.parent == _REPORT_DIR:
+        return p.read_text(encoding="utf-8")
+    return None
+
+
 def list_analysis_reports() -> list[dict]:
-    """列出 data/reports/选股分析/ 下所有 .md 报告,按日期/修改时间倒序(新在前)。"""
-    if not _REPORT_DIR.is_dir():
-        return []
-    out = []
-    for p in _REPORT_DIR.glob("*.md"):
-        try:
-            text = p.read_text(encoding="utf-8")
-        except Exception:
-            continue
-        out.append({"name": p.stem, "title": _report_title(text, p.stem),
-                    "date": _report_date(p.stem), "mtime": p.stat().st_mtime})
-    out.sort(key=lambda r: (r["date"], r["mtime"]), reverse=True)
+    """列出报告:本地 data/reports/选股分析/*.md ∪ store 容器视图(远端),按日期倒序。"""
+    merged: dict[str, dict] = {}
+    for name, r in _store_reports().items():         # 远端/已上传(DB 后端只有这个)
+        merged[name] = {"name": name, "title": r.get("title") or name, "date": r.get("date") or ""}
+    if _REPORT_DIR.is_dir():                          # 本地文件优先(覆盖标题/日期)
+        for p in _REPORT_DIR.glob("*.md"):
+            try:
+                text = p.read_text(encoding="utf-8")
+            except Exception:
+                continue
+            merged[p.stem] = {"name": p.stem, "title": _report_title(text, p.stem),
+                              "date": _report_date(p.stem)}
+    out = list(merged.values())
+    out.sort(key=lambda r: (r["date"], r["name"]), reverse=True)
     return out
 
 
 def get_analysis_report(name: str) -> dict | None:
-    """按报告名(文件 stem)读取并渲染为 HTML。name 经白名单校验防路径穿越。"""
-    valid = {r["name"] for r in list_analysis_reports()}
-    if name not in valid:
+    """按报告名读取并渲染为 HTML。本地文件优先,否则读 store 容器视图(远端)。"""
+    text = _fs_report_text(name)
+    if text is None:
+        text = (_store_reports().get(name) or {}).get("md")
+    if not text:
         return None
-    p = _REPORT_DIR / f"{name}.md"
-    text = p.read_text(encoding="utf-8")
     import markdown as _md
     html = _md.markdown(text, extensions=["tables", "fenced_code", "toc", "sane_lists"])
     return {"name": name, "title": _report_title(text, name),
