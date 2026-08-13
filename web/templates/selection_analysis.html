@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+{% block title %}选股分析 · A股策略辅助工具{% endblock %}
+{% block content %}
+<h1>选股分析 <small>定向分析报告(策略提供者指定的股票 → 分析产出 → 此页查看)</small></h1>
+
+{% if not reports %}
+<section class="card wide">
+  <p>暂无分析报告。报告文件放在 <code>data/reports/选股分析/*.md</code>,离线分析产出后即在此列出。</p>
+</section>
+{% else %}
+<div class="sa-layout">
+  <aside class="sa-list">
+    <h3>报告列表</h3>
+    {% for r in reports %}
+    <a class="sa-item {{ 'active' if selected and selected.name == r.name else '' }}"
+       href="/selection-analysis?report={{ r.name }}">
+      <span class="sa-item-title">{{ r.title }}</span>
+      <span class="sa-item-date">{{ r.date or r.name }}</span>
+    </a>
+    {% endfor %}
+  </aside>
+
+  <section class="sa-content card wide">
+    {% if selected %}
+    <div class="md-report">{{ selected.html | safe }}</div>
+    {% else %}
+    <p>请从左侧选择一份报告查看。</p>
+    {% endif %}
+  </section>
+</div>
+{% endif %}
+
+<style>
+.sa-layout { display: flex; gap: 18px; align-items: flex-start; }
+.sa-list { flex: 0 0 240px; display: flex; flex-direction: column; gap: 8px; }
+.sa-list h3 { margin: 4px 0 8px; }
+.sa-item { display: flex; flex-direction: column; padding: 10px 12px; border-radius: 8px;
+  background: rgba(127,127,127,.08); text-decoration: none; border: 1px solid transparent; }
+.sa-item:hover { background: rgba(127,127,127,.16); }
+.sa-item.active { border-color: #d33; background: rgba(221,51,51,.12); }
+.sa-item-title { font-weight: 600; font-size: .92em; }
+.sa-item-date { font-size: .8em; opacity: .7; margin-top: 2px; }
+.sa-content { flex: 1 1 auto; min-width: 0; }
+.md-report { line-height: 1.6; overflow-x: auto; }
+.md-report h1 { font-size: 1.5em; margin-top: 0; }
+.md-report h2 { font-size: 1.2em; margin-top: 1.2em; border-bottom: 1px solid rgba(127,127,127,.2); padding-bottom: 4px; }
+.md-report h3 { font-size: 1.05em; margin-top: 1em; }
+.md-report table { border-collapse: collapse; margin: 10px 0; font-size: .9em; }
+.md-report th, .md-report td { border: 1px solid rgba(127,127,127,.3); padding: 5px 9px; text-align: left; }
+.md-report th { background: rgba(127,127,127,.12); }
+.md-report code { background: rgba(127,127,127,.15); padding: 1px 5px; border-radius: 4px; }
+.md-report blockquote { border-left: 3px solid rgba(221,51,51,.5); margin: 8px 0; padding: 2px 12px; opacity: .85; }
+@media (max-width: 760px) { .sa-layout { flex-direction: column; } .sa-list { flex-basis: auto; width: 100%; } }
+</style>
+{% endblock %}

@@ -651,3 +651,58 @@ def dashboard(date: str = "latest") -> dict:
             "reversal": rev, "flow": flow[:10], "flow_out": flow[-5:][::-1],
             "tendency": tend, "announcements": anns[:25], "as_of": as_of(date),
             "total": len(recs)}
+
+
+# ———— 选股分析报告(data/reports/选股分析/*.md,供 /selection-analysis 页展示)————
+import re as _re
+from pathlib import Path as _Path
+
+from tools.config import settings as _settings
+
+_REPORT_DIR = _settings.PROJECT_ROOT / "data" / "reports" / "选股分析"
+
+
+def _report_title(text: str, fallback: str) -> str:
+    """取 markdown 第一行 # 一级标题作标题;无则用文件名。"""
+    for line in text.splitlines():
+        if line.startswith("# "):
+            return line[2:].strip().lstrip("⚠️ ").strip()
+    return fallback
+
+
+def _report_date(stem: str) -> str:
+    """从文件名里的 8 位日期 YYYYMMDD 解析成 YYYY-MM-DD;无则空。"""
+    m = _re.search(r"(20\d{6})", stem)
+    if not m:
+        return ""
+    d = m.group(1)
+    return f"{d[:4]}-{d[4:6]}-{d[6:8]}"
+
+
+def list_analysis_reports() -> list[dict]:
+    """列出 data/reports/选股分析/ 下所有 .md 报告,按日期/修改时间倒序(新在前)。"""
+    if not _REPORT_DIR.is_dir():
+        return []
+    out = []
+    for p in _REPORT_DIR.glob("*.md"):
+        try:
+            text = p.read_text(encoding="utf-8")
+        except Exception:
+            continue
+        out.append({"name": p.stem, "title": _report_title(text, p.stem),
+                    "date": _report_date(p.stem), "mtime": p.stat().st_mtime})
+    out.sort(key=lambda r: (r["date"], r["mtime"]), reverse=True)
+    return out
+
+
+def get_analysis_report(name: str) -> dict | None:
+    """按报告名(文件 stem)读取并渲染为 HTML。name 经白名单校验防路径穿越。"""
+    valid = {r["name"] for r in list_analysis_reports()}
+    if name not in valid:
+        return None
+    p = _REPORT_DIR / f"{name}.md"
+    text = p.read_text(encoding="utf-8")
+    import markdown as _md
+    html = _md.markdown(text, extensions=["tables", "fenced_code", "toc", "sane_lists"])
+    return {"name": name, "title": _report_title(text, name),
+            "date": _report_date(name), "html": html}
