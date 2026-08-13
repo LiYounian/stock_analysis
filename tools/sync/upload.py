@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import logging
 import math
@@ -166,6 +167,12 @@ def _summary(receipt: dict) -> dict:
 # ————————————————————————————————————————————————
 # 主流程
 # ————————————————————————————————————————————————
+def _shard_hash(sp: dict) -> str:
+    """分片内容指纹(清 NaN/Inf 后按 key 排序序列化 → sha256 前16位)。内容变即变,供回执判"要不要重发"。"""
+    body = json.dumps(_json_safe(sp), sort_keys=True, ensure_ascii=False)
+    return hashlib.sha256(body.encode("utf-8")).hexdigest()[:16]
+
+
 def upload_date(date: str, *, url: str, token: str, source: str, key_id: str, key: str,
                 analysis_dir: Path | None = None, receipt_path: Path | None = None,
                 post_fn=None, retries: int = 5, base_delay: float = 1.0,
@@ -180,12 +187,13 @@ def upload_date(date: str, *, url: str, token: str, source: str, key_id: str, ke
                  "generated_at": _now_iso(), "sig_alg": sign.SIG_ALG}
 
     for skey, sp in shards.items():
+        h = _shard_hash(sp)                           # 内容指纹:内容变了即使已传也重发(根治"同日重传不覆盖")
         prev = receipt["shards"].get(skey)
-        if prev and prev.get("ok") and not force:
-            continue                                  # 断点续传:已成功不重发
+        if prev and prev.get("ok") and prev.get("hash") == h and not force:
+            continue                                  # 断点续传:已成功**且内容未变**才跳过
         ok, status, msg = sign_and_post(sp, dict(meta_base), key, url, token,
                                         post_fn, retries, base_delay, sleep_fn)
-        receipt["shards"][skey] = {"ok": ok, "status": status, "at": _now_iso(), "msg": msg}
+        receipt["shards"][skey] = {"ok": ok, "status": status, "at": _now_iso(), "msg": msg, "hash": h}
         logger.info("分片 %s → %s (status=%s)", skey, "OK" if ok else "FAIL", status)
 
     receipt["summary"] = _summary(receipt)
