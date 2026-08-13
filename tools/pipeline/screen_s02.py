@@ -35,6 +35,7 @@ from tools.store import repo as store
 logger = logging.getLogger("pipeline.screen_s02")
 
 _CFG = THRESHOLDS["放量后缩量回踩"]
+_TREND_CFG = THRESHOLDS["S02趋势过滤"]
 
 
 def _ma(arr, t: int, period: int) -> float:
@@ -72,11 +73,105 @@ def min_history() -> int:
     return int(_CFG["最少历史根数"])
 
 
-def signal_at(kdf: pd.DataFrame, t: int, cfg: dict | None = None) -> dict:
+def trend_min_history(cfg: dict | None = None) -> int:
+    """趋势模板判定所需最少日线根数(52 周高低点窗为最紧约束)。不足→不通过趋势门。"""
+    tc = cfg or _TREND_CFG
+    return int(tc["最少历史根数"])
+
+
+def _trend_template(kdf: pd.DataFrame, t: int, rs_rank: float | None,
+                    rs_up: bool | None = None, cfg: dict | None = None) -> dict:
+    """Minervini 8 条趋势模板门:在第 t 根判该票是否处于强势上升趋势(全过=PASS)。
+
+    只用 ≤ t 的数据(防未来函数)。`rs_rank` 为**当日全A 横截面**的 RS 百分位(0–100),
+    须由调用方预计算后喂入(单票函数不做横截面);为 None → 条件 8 无法判 → PASS=False。
+    `rs_up` 可选:RS 曲线是否向上(RS[t]>RS[t−RS曲线回看]);仅当配置「启用RS曲线向上」为真时参与。
+    历史不足(< 最少历史根数)→ PASS=False + 原因(次新股不通过)。
+    """
+    tc = cfg or _TREND_CFG
+    n = len(kdf)
+    if t < 0 or t >= n:
+        return {"PASS": False, "原因": "索引越界"}
+    need = int(tc["最少历史根数"])
+    if t + 1 < need:
+        return {"PASS": False, "原因": f"历史不足({t + 1}<{need})", "跳过": True}
+
+    close = kdf["close"].to_numpy(dtype=float)
+    high = kdf["high"].to_numpy(dtype=float)
+    low = kdf["low"].to_numpy(dtype=float)
+
+    p50, p150, p200 = int(tc["MA50"]), int(tc["MA150"]), int(tc["MA200"])
+    ma50 = _ma(close, t, p50)
+    ma150 = _ma(close, t, p150)
+    ma200 = _ma(close, t, p200)
+    up_look = int(tc["MA200上升回看"])
+    strong_look = int(tc["MA200强上升回看"])
+    ma200_prev = _ma(close, t - up_look, p200) if t - up_look >= 0 else float("nan")
+    ma200_strong_prev = _ma(close, t - strong_look, p200) if t - strong_look >= 0 else float("nan")
+
+    win = int(tc["周窗口"])
+    seg_lo = low[t - win + 1: t + 1]
+    seg_hi = high[t - win + 1: t + 1]
+    low52 = float(seg_lo.min()) if len(seg_lo) else float("nan")
+    high52 = float(seg_hi.max()) if len(seg_hi) else float("nan")
+
+    c = float(close[t])
+    lo_mult = float(tc["低点距离倍数"])
+    hi_mult = float(tc["高点距离倍数"])
+    rs_thr = float(tc["RS排名门槛"])
+
+    def ok(x) -> bool:
+        return x == x  # 非 NaN
+
+    cond1 = ok(ma150) and ok(ma200) and c > ma150 and c > ma200
+    cond2 = ok(ma150) and ok(ma200) and ma150 > ma200
+    cond3 = ok(ma200) and ok(ma200_prev) and ma200 > ma200_prev
+    cond3_strong = ok(ma200) and ok(ma200_strong_prev) and ma200 > ma200_strong_prev
+    cond4 = ok(ma50) and ok(ma150) and ok(ma200) and ma50 > ma150 and ma50 > ma200
+    cond5 = ok(ma50) and c > ma50
+    cond6 = ok(low52) and c >= low52 * lo_mult
+    cond7 = ok(high52) and c >= high52 * hi_mult
+    cond8_rank = (rs_rank is not None) and (float(rs_rank) >= rs_thr)
+    if bool(tc.get("启用RS曲线向上", False)):
+        cond8 = cond8_rank and bool(rs_up)
+    else:
+        cond8 = cond8_rank
+
+    passed = bool(cond1 and cond2 and cond3 and cond4 and cond5
+                  and cond6 and cond7 and cond8)
+    return {
+        "PASS": passed,
+        "C1_价上150_200": bool(cond1), "C2_150上200": bool(cond2),
+        "C3_200上升": bool(cond3), "C3_200强上升": bool(cond3_strong),
+        "C4_50上150_200": bool(cond4), "C5_价上50": bool(cond5),
+        "C6_距52低≥30%": bool(cond6), "C7_距52高≤25%": bool(cond7),
+        "C8_RS达标": bool(cond8),
+        "明细": {
+            "close": round(c, 4),
+            f"MA{p50}": (round(ma50, 4) if ok(ma50) else None),
+            f"MA{p150}": (round(ma150, 4) if ok(ma150) else None),
+            f"MA{p200}": (round(ma200, 4) if ok(ma200) else None),
+            f"MA200[t-{up_look}]": (round(ma200_prev, 4) if ok(ma200_prev) else None),
+            "低52": (round(low52, 4) if ok(low52) else None),
+            "高52": (round(high52, 4) if ok(high52) else None),
+            "RS百分位": (round(float(rs_rank), 2) if rs_rank is not None else None),
+            "RS曲线向上": (bool(rs_up) if rs_up is not None else None),
+        },
+    }
+
+
+def signal_at(kdf: pd.DataFrame, t: int, cfg: dict | None = None,
+              trend_filter: bool = False, rs_rank: float | None = None,
+              rs_up: bool | None = None, trend_cfg: dict | None = None) -> dict:
     """判 kdf 第 t 根是否入选,返回逐条布尔明细 + SELECT。
 
     历史不足(完整周 < 周量均窗 或 日线 < 最少历史根数 或 t<1)→ SELECT=False + 原因。
     只用 t 及之前的数据(防未来函数);当周整周剔除。
+
+    可选 `trend_filter=True`(默认关,**向后兼容**:关时结果逐字节等价旧版,不加任何键):
+      在 base SELECT 之上叠加 Minervini 趋势门(见 `_trend_template`),base 通过且趋势门
+      PASS 才 SELECT=True,并在返回加 `趋势门` 明细键。`rs_rank` 为当日全A 横截面 RS 百分位,
+      须由调用方喂入;为 None → 趋势门条件 8 不通过 → SELECT=False(诚实标注)。
     """
     c = cfg or _CFG
     n = len(kdf)
@@ -119,9 +214,9 @@ def signal_at(kdf: pd.DataFrame, t: int, cfg: dict | None = None) -> dict:
     c5 = (ma_line == ma_line) and (ma_line > 0) and \
         (abs(close[t] - ma_line) / ma_line <= float(c["贴线容差"]))
 
-    select = bool(c1 and c2 and c3 and c4 and c5)
-    return {
-        "SELECT": select,
+    base_select = bool(c1 and c2 and c3 and c4 and c5)
+    result = {
+        "SELECT": base_select,
         "C1_周线放量": bool(c1), "C2_短均多头": bool(c2), "C3_缩量回踩": bool(c3),
         "C4_接近地量": bool(c4), "C5_贴10日线": bool(c5),
         "明细": {
@@ -137,6 +232,13 @@ def signal_at(kdf: pd.DataFrame, t: int, cfg: dict | None = None) -> dict:
                         if (ma_line == ma_line and ma_line > 0) else None),
         },
     }
+    if not trend_filter:
+        return result                                       # 向后兼容:关时逐字节等价旧版
+    # —— 叠加趋势门(只在 base 通过时才有意义;base 未过则趋势门无关,SELECT 已为 False)——
+    gate = _trend_template(kdf, t, rs_rank, rs_up=rs_up, cfg=trend_cfg)
+    result["趋势门"] = gate
+    result["SELECT"] = bool(base_select and gate.get("PASS"))
+    return result
 
 
 def screen_latest(kdf: pd.DataFrame, cfg: dict | None = None) -> dict:
