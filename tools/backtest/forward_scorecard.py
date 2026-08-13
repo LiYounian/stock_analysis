@@ -14,9 +14,16 @@
 仅作结果标签。命中 = sign(前瞻收益) 与预测方向一致。
 
 字段:date, code, name, trend(趋势评级), senti(净情绪分), pred_dir(合成预测方向 +1/-1/0),
+      persist(持续性:结构性持续/短暂事件/中性,读该 record 的根源 events→分类器,LLM不可用则空),
+      persist_dir(持续性方向), persist_strength(印证强度), persist_basis(依据),
       r_1/r_5/r_10(到期实际%,未到期=空), hit_1/hit_5/hit_10(方向命中 1/0,未到期=空)。
 
-用法:python -m tools.backtest.forward_scorecard [--out path.csv] [--horizon 1,5,10]
+持续性接入(治本主线 §2 之 live 腿):读该 record 的**根源 events**(层∈{政策,公司行为},非舆情),
+拼成一条根源消息 → 调 news_persistence 分类器打「持续性」标签,随记分卡滚存,攒
+**持续性×前瞻收益**样本。LLM 未配置/降级 → persist 留空(不崩,约法第5条);结果按文本 hash 缓存,
+每日重跑幂等且不重复烧钱。无未来函数:events 是信号日 t 及之前落的,分类只用其文本。
+
+用法:python -m tools.backtest.forward_scorecard [--out path.csv] [--horizon 1,5,10] [--no-persistence]
       缺省 --out 落 scratch;部署到每日闭环时由上层传持久路径(如 data/analysis/backtest/)。
 非投资建议。
 """
@@ -33,6 +40,8 @@ from tools.collectors import market
 from tools.store import repo as store
 
 logger = logging.getLogger("backtest.scorecard")
+
+_ROOT_LAYERS = ("政策", "公司行为")   # 根源层(公告/政策),非舆情
 
 _DEFAULT_OUT = os.path.join(
     "/private/tmp/claude-501/-Users-yqg-Documents-projects-stock-analysis/"
@@ -53,10 +62,67 @@ def _pred_dir(trend: str | None, senti: float | None) -> int:
     return 0
 
 
-def build_scorecard(dates=None, horizons=(1, 5, 10)) -> pd.DataFrame:
-    """重读全部历史 record → 逐 (date, code) 一行,回填已到期前瞻收益 + 方向命中。"""
+def _root_message(rec: dict) -> str | None:
+    """把 record 里的**根源 events**(层∈{政策,公司行为},非舆情、非 error)拼成一条根源消息文本。
+
+    无根源 events → None(该行持续性留空,降级)。只取披露/公告类,防舆情噪声污染持续性判定。
+    """
+    events = (rec.get("sentiment") or {}).get("events") or rec.get("events") or []
+    parts = []
+    for e in events:
+        if e.get("层") in _ROOT_LAYERS and "error" not in e:
+            title = str(e.get("标题") or "").strip()
+            summary = str(e.get("摘要") or "").strip()
+            seg = title if title else summary
+            if summary and summary != title:
+                seg = f"{seg}。{summary}" if seg else summary
+            if seg:
+                parts.append(seg)
+    if not parts:
+        return None
+    return "公司公告/政策(根源消息):\n" + "\n".join(f"- {p}" for p in parts[:8])
+
+
+def _persist_labeler(enabled: bool):
+    """返回 record→持续性标签 dict 的函数。LLM 未配置/关闭 → 恒返回空标签(降级)。
+
+    结果按根源消息文本 hash 缓存(news_persistence.classify 内),每日重跑幂等、不重复烧钱。
+    """
+    empty = {"持续性": None, "方向": None, "印证强度": None, "依据": None}
+    if not enabled:
+        return lambda rec: dict(empty)
+    try:
+        from tools.llm import client as lc
+        if not lc.is_configured():
+            logger.info("LLM 未配置,持续性标签降级为空")
+            return lambda rec: dict(empty)
+        from tools.analysis import news_persistence as npst
+        client = lc.get_client()
+    except Exception as e:  # noqa: BLE001
+        logger.warning("持续性分类器不可用,降级为空: %s", str(e)[:80])
+        return lambda rec: dict(empty)
+
+    def _label(rec: dict) -> dict:
+        msg = _root_message(rec)
+        if not msg:
+            return dict(empty)
+        r = npst.classify(msg, client=client)
+        if r.get("error"):
+            return dict(empty)      # 配额/网络降级 → 留空,不写脏值
+        return {"持续性": r.get("持续性"), "方向": r.get("方向"),
+                "印证强度": r.get("印证强度"), "依据": r.get("依据")}
+
+    return _label
+
+
+def build_scorecard(dates=None, horizons=(1, 5, 10), classify_persist=True) -> pd.DataFrame:
+    """重读全部历史 record → 逐 (date, code) 一行,回填已到期前瞻收益 + 方向命中 + 持续性标签。
+
+    classify_persist:是否给每行打持续性标签(读根源 events→分类器)。LLM 不可用则自动降级留空。
+    """
     if dates is None:
         dates = store.list_dates()
+    label_persist = _persist_labeler(classify_persist)
     kline_cache: dict[str, pd.DataFrame | None] = {}
 
     def _kline(code):
@@ -81,8 +147,11 @@ def build_scorecard(dates=None, horizons=(1, 5, 10)) -> pd.DataFrame:
             except (TypeError, ValueError):
                 senti = None
             pdir = _pred_dir(trend, senti)
+            plab = label_persist(rec)
             row = {"date": d, "code": str(code), "name": meta.get("name"),
-                   "trend": trend, "senti": senti, "pred_dir": pdir}
+                   "trend": trend, "senti": senti, "pred_dir": pdir,
+                   "persist": plab.get("持续性"), "persist_dir": plab.get("方向"),
+                   "persist_strength": plab.get("印证强度"), "persist_basis": plab.get("依据")}
 
             df = _kline(str(code))
             kdates = [str(x)[:10] for x in df["date"].tolist()] if df is not None and "date" in df.columns else []
@@ -112,11 +181,15 @@ def summarize(sc: pd.DataFrame, horizons=(1, 5, 10)) -> dict:
         out[f"{N}日"] = {"已到期且有方向": int(n),
                         "方向命中率%": round(float(matured[hcol].mean()) * 100, 1) if n else None,
                         "待到期(pending)": int(sc[f"r_{N}"].isna().sum())}
+    if "persist" in sc.columns:
+        labeled = sc["persist"].notna()
+        out["持续性"] = {"已打标行": int(labeled.sum()),
+                        "分布": sc.loc[labeled, "persist"].value_counts().to_dict()}
     return out
 
 
-def run(out=_DEFAULT_OUT, horizons=(1, 5, 10)):
-    sc = build_scorecard(horizons=horizons)
+def run(out=_DEFAULT_OUT, horizons=(1, 5, 10), classify_persist=True):
+    sc = build_scorecard(horizons=horizons, classify_persist=classify_persist)
     print("\n===== 前向累积记分卡(治本·滚存)=====")
     print("(无未来函数;历史回测≠未来保证,非投资建议)\n")
     if sc.empty:
@@ -132,7 +205,11 @@ def run(out=_DEFAULT_OUT, horizons=(1, 5, 10)):
         s = summ[f"{N}日"]
         print(f"  {N}日: 已到期且有方向={s['已到期且有方向']}  方向命中率={s['方向命中率%']}%  "
               f"待到期={s['待到期(pending)']}")
-    print("\n(样本仍薄;每日重跑此脚本即自动把新到期的前瞻收益补进记分卡。)")
+    if "持续性" in summ:
+        p = summ["持续性"]
+        print(f"  持续性: 已打标行={p['已打标行']}  分布={p['分布']}"
+              + ("(LLM未配置/无根源消息→留空降级)" if p["已打标行"] == 0 else ""))
+    print("\n(样本仍薄;每日重跑此脚本即自动把新到期的前瞻收益补进记分卡,并滚存持续性×前瞻收益。)")
     return sc
 
 
@@ -141,5 +218,8 @@ if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", default=_DEFAULT_OUT)
     ap.add_argument("--horizon", default="1,5,10")
+    ap.add_argument("--no-persistence", action="store_true",
+                    help="不打持续性标签(跳过 LLM 分类,只出方向命中记分卡)")
     a = ap.parse_args()
-    run(out=a.out, horizons=tuple(int(x) for x in a.horizon.split(",")))
+    run(out=a.out, horizons=tuple(int(x) for x in a.horizon.split(",")),
+        classify_persist=not a.no_persistence)
