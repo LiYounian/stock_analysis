@@ -106,14 +106,15 @@ def signal_at(kdf: pd.DataFrame, t: int, cfg: dict | None = None,
         r = detect_box(sub, cfg)
         return {"SELECT": bool(r.get("达标")), "特征": r.get("特征", {})}
     c2 = (cfg or _CFG_FS).get("箱体v2", _CFG2)
+    # 趋势门(便宜:几根均线比较)先判、短路——绝大多数根非上升趋势,免去昂贵的多窗箱体识别。
+    # 语义不变(趋势门与几何皆硬门,缺一不可),仅换判定顺序提速(回测逐根扫的性能命门)。
+    tg_ok, tg = _trend_gate(kdf, t, c2)
+    if not tg_ok:
+        return {"SELECT": False, "特征": {"趋势门": tg, "趋势门未过": True}}
     r = detect_box_v2(sub, cfg)
     feat = dict(r.get("特征", {}))
-    if not r.get("达标"):
-        return {"SELECT": False, "特征": feat}
-    tg_ok, tg = _trend_gate(kdf, t, c2)
     feat["趋势门"] = tg
-    if not tg_ok:
-        feat["趋势门未过"] = True
+    if not r.get("达标"):
         return {"SELECT": False, "特征": feat}
     price = float(sub["close"].iloc[-1])
     feat["止损"] = _box_stop(feat["箱底"], price, sub)
