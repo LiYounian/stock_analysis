@@ -54,6 +54,20 @@ def selection(request: Request, date: str = "latest"):
         context={"s": da.selection_page(date), **_nav(date)})
 
 
+@app.get("/selection-analysis", response_class=HTMLResponse)
+def selection_analysis(request: Request, report: str = "", date: str = "latest"):
+    """选股分析报告页:列出定向分析报告(data/reports/选股分析/*.md),可选一份查看(markdown 渲染)。
+
+    用途:策略提供者给定要定向分析的股票 → 离线分析产出报告落该目录 → 此页选看。
+    """
+    reports = da.list_analysis_reports()
+    pick = report or (reports[0]["name"] if reports else "")
+    selected = da.get_analysis_report(pick) if pick else None
+    return templates.TemplateResponse(
+        request=request, name="selection_analysis.html",
+        context={"reports": reports, "selected": selected, **_nav(date)})
+
+
 @app.get("/fund-flow", response_class=HTMLResponse)
 def fund_flow(request: Request, date: str = "latest"):
     """A股资金流向页:大盘 5 单 + 行业/概念板块榜。前端直连东财 push2 30s 轮询,不走后端。"""

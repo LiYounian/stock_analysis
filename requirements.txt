@@ -36,3 +36,4 @@ pytest>=8.0
 # scikit-learn / scipy  # P3-E ML 预测阶段再装
 
 # 精确版本见 requirements-lock.txt(conda 环境 stock_analysis 冻结)
+markdown
