@@ -64,5 +64,17 @@
     "name": "胜宏科技",
     "industry": "PCB/印制电路板",
     "sector": "AI算力"
+  },
+  {
+    "code": "601838",
+    "name": "成都银行",
+    "industry": "城商行/银行",
+    "sector": "银行"
+  },
+  {
+    "code": "002142",
+    "name": "宁波银行",
+    "industry": "城商行/银行",
+    "sector": "银行"
   }
 ]
