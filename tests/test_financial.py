@@ -1,0 +1,282 @@
+"""财报 P0 数值层单测(不触网,mock akshare / 合成 raw)。
+
+锁语义(约法6):
+  - 采集:三表对齐合并 + 单表失败降级不崩 + 全表失败跳过 + 落盘往返。
+  - 衍生:累计同比增速 / 单季拆分 / 关键比率算对。
+  - 红旗:各阈值**边界**命中/不命中语义(防未来重写误删规则)。
+  - 评分:评级映射 + 高危红旗封顶。
+  - 无未来函数:analyze/query 只见 disclosure_date <= as_of 的报告期。
+  - 契约:financial 块合法/非法评级校验。
+"""
+import types
+
+import pandas as pd
+import pytest
+
+from tools.collectors import financial as fin
+from tools.financial_report import analyzer, flags, metrics, scoring
+from tools.store import repo as store
+
+
+# ————————————————————— 采集:符号映射 / 合并 / 降级 —————————————————————
+def test_em_symbol_prefix():
+    assert fin._em_symbol("600519") == "SH600519"
+    assert fin._em_symbol("000001") == "SZ000001"
+    assert fin._em_symbol("300760") == "SZ300760"
+    assert fin._em_symbol("830799") == "BJ830799"
+    assert fin._em_symbol("1") == "SZ000001"          # 补零
+
+
+def _fake_table(fn_key, periods):
+    """构造一张 by_report 表 DataFrame。periods: [(report_date, notice_date, {en:val})]。"""
+    rows = []
+    for rd, nd, vals in periods:
+        base = {"SECURITY_NAME_ABBR": "测试股", "REPORT_DATE": rd + " 00:00:00",
+                "NOTICE_DATE": nd + " 00:00:00", "REPORT_TYPE": "年报",
+                "OPINION_TYPE": "标准无保留意见"}
+        base.update(vals)
+        rows.append(base)
+    return pd.DataFrame(rows)
+
+
+def _install_fake_ak(monkeypatch, profit=None, balance=None, cashflow=None):
+    def mk(df):
+        return (lambda symbol: df)
+    fake = types.SimpleNamespace(
+        stock_profit_sheet_by_report_em=mk(profit),
+        stock_balance_sheet_by_report_em=mk(balance),
+        stock_cash_flow_sheet_by_report_em=mk(cashflow),
+    )
+    monkeypatch.setitem(__import__("sys").modules, "akshare", fake)
+
+
+def test_merge_three_tables(monkeypatch, tmp_path):
+    monkeypatch.setattr(store, "_RAW_DIR", tmp_path)
+    monkeypatch.setattr(fin.settings, "FETCH_SLEEP_SEC", 0)
+    prof = _fake_table("p", [("2025-12-31", "2026-04-01", {"TOTAL_OPERATE_INCOME": 100.0,
+                              "PARENT_NETPROFIT": 10.0, "DEDUCT_PARENT_NETPROFIT": 9.0,
+                              "OPERATE_COST": 60.0})])
+    bal = _fake_table("b", [("2025-12-31", "2026-04-01", {"TOTAL_ASSETS": 500.0,
+                             "TOTAL_LIABILITIES": 200.0, "TOTAL_PARENT_EQUITY": 300.0,
+                             "GOODWILL": 30.0})])
+    cf = _fake_table("c", [("2025-12-31", "2026-04-01", {"NETCASH_OPERATE": 8.0})])
+    _install_fake_ak(monkeypatch, prof, bal, cf)
+    out = fin.fetch_financial(["000001"])
+    assert "000001" in out
+    rec = out["000001"]["periods"]["2025-12-31"]
+    assert rec["disclosure_date"] == "2026-04-01"
+    assert rec["report_type"] == "年报"
+    assert rec["audit_opinion"] == "标准无保留意见"
+    assert rec["利润表"]["营业总收入"] == 100.0
+    assert rec["资产负债表"]["商誉"] == 30.0
+    assert rec["现金流量表"]["经营活动现金流量净额"] == 8.0
+    # 落盘往返
+    loaded = fin.load_financial("000001")
+    assert loaded["periods"]["2025-12-31"]["利润表"]["归母净利润"] == 10.0
+
+
+def test_one_table_fail_degrades(monkeypatch, tmp_path):
+    """现金流量表接口抛错 → 该表留空,其余表照常产出,不崩。"""
+    monkeypatch.setattr(store, "_RAW_DIR", tmp_path)
+    monkeypatch.setattr(fin.settings, "FETCH_SLEEP_SEC", 0)
+    prof = _fake_table("p", [("2025-12-31", "2026-04-01", {"TOTAL_OPERATE_INCOME": 100.0})])
+    bal = _fake_table("b", [("2025-12-31", "2026-04-01", {"TOTAL_ASSETS": 500.0})])
+
+    def boom(symbol):
+        raise ConnectionError("现金流表被限流")
+    fake = types.SimpleNamespace(
+        stock_profit_sheet_by_report_em=lambda symbol: prof,
+        stock_balance_sheet_by_report_em=lambda symbol: bal,
+        stock_cash_flow_sheet_by_report_em=boom,
+    )
+    monkeypatch.setitem(__import__("sys").modules, "akshare", fake)
+    out = fin.fetch_financial(["000001"])
+    rec = out["000001"]["periods"]["2025-12-31"]
+    assert rec["利润表"]["营业总收入"] == 100.0
+    assert rec["现金流量表"] == {}                     # 该表降级为空
+
+
+def test_all_tables_fail_skips_stock(monkeypatch, tmp_path):
+    monkeypatch.setattr(store, "_RAW_DIR", tmp_path)
+    monkeypatch.setattr(fin.settings, "FETCH_SLEEP_SEC", 0)
+
+    def boom(symbol):
+        raise ConnectionError("全挂")
+    fake = types.SimpleNamespace(
+        stock_profit_sheet_by_report_em=boom,
+        stock_balance_sheet_by_report_em=boom,
+        stock_cash_flow_sheet_by_report_em=boom,
+    )
+    monkeypatch.setitem(__import__("sys").modules, "akshare", fake)
+    out = fin.fetch_financial(["000001"])
+    assert out == {}                                    # 整票跳过,不抛
+
+
+# ————————————————————— 衍生指标 —————————————————————
+def _synthetic_periods():
+    """两年年报:营收 100→120(+20%),归母 10→8(-20%,增收不增利),CFO 各期。"""
+    return {
+        "2025-12-31": {
+            "report_date": "2025-12-31", "disclosure_date": "2026-04-01", "report_type": "年报",
+            "利润表": {"营业总收入": 120.0, "营业成本": 90.0, "归母净利润": 8.0,
+                     "扣非归母净利润": 4.0, "净利润": 8.0},
+            "资产负债表": {"资产总计": 500.0, "负债合计": 380.0, "股东权益合计": 120.0,
+                       "归母股东权益": 120.0, "商誉": 50.0, "应收账款": 60.0, "存货": 40.0,
+                       "货币资金": 10.0, "短期借款": 30.0, "一年内到期非流动负债": 5.0},
+            "现金流量表": {"经营活动现金流量净额": 4.0, "购建固定资产无形资产等支付现金": 2.0},
+        },
+        "2024-12-31": {
+            "report_date": "2024-12-31", "disclosure_date": "2025-04-01", "report_type": "年报",
+            "利润表": {"营业总收入": 100.0, "营业成本": 60.0, "归母净利润": 10.0,
+                     "扣非归母净利润": 9.0, "净利润": 10.0},
+            "资产负债表": {"资产总计": 450.0, "负债合计": 200.0, "股东权益合计": 250.0,
+                       "归母股东权益": 250.0, "商誉": 50.0, "应收账款": 30.0, "存货": 20.0,
+                       "货币资金": 100.0, "短期借款": 10.0},
+            "现金流量表": {"经营活动现金流量净额": 12.0, "购建固定资产无形资产等支付现金": 2.0},
+        },
+    }
+
+
+def test_derived_yoy_and_ratios():
+    d = metrics.compute_derived(_synthetic_periods())["2025-12-31"]
+    assert d["营收增速"] == pytest.approx(20.0)         # (120-100)/100
+    assert d["归母净利增速"] == pytest.approx(-20.0)     # (8-10)/10
+    assert d["毛利率"] == pytest.approx(25.0)           # (120-90)/120*100
+    assert d["扣非占归母"] == pytest.approx(0.5)         # 4/8
+    assert d["现金含量_CFO比净利"] == pytest.approx(0.5)  # 4/8
+    assert d["资产负债率"] == pytest.approx(76.0)        # 380/500*100
+    assert d["自由现金流"] == pytest.approx(2.0)         # 4-2
+    # 短债覆盖 = 货币资金 / (短期借款+一年内到期) = 10/35
+    assert d["短债覆盖"] == pytest.approx(10.0 / 35.0)
+
+
+def test_single_quarter_split():
+    """Q3=前三季累计−H1 单季拆分。"""
+    periods = {
+        "2025-06-30": {"利润表": {"营业总收入": 50.0}},
+        "2025-09-30": {"利润表": {"营业总收入": 80.0}},
+    }
+    assert metrics._single_quarter(periods, "2025-09-30", "利润表", "营业总收入") == 30.0
+    assert metrics._single_quarter(periods, "2025-03-31", "利润表", "营业总收入") is None  # 缺Q1记录
+
+
+def test_yoy_negative_prev_direction():
+    """去年为负、今年改善 → 增速为正(亏损收窄=正增长)。"""
+    assert metrics._yoy_pct(-5.0, -10.0) == pytest.approx(50.0)   # (-5-(-10))/10
+    assert metrics._yoy_pct(10.0, 0.0) is None                    # 分母0→None
+
+
+# ————————————————————— 红旗阈值边界 —————————————————————
+def test_flag_cash_content_boundary():
+    """CFO/净利 边界:阈值 0.8;0.79 命中,0.80 不命中。"""
+    assert any(f["code"] == "现金含量不足" for f in flags.evaluate_flags({"现金含量_CFO比净利": 0.79}))
+    assert not any(f["code"] == "现金含量不足" for f in flags.evaluate_flags({"现金含量_CFO比净利": 0.80}))
+
+
+def test_flag_debt_ratio_boundary():
+    assert any(f["code"] == "高负债" for f in flags.evaluate_flags({"资产负债率": 70.1}))
+    assert not any(f["code"] == "高负债" for f in flags.evaluate_flags({"资产负债率": 70.0}))
+
+
+def test_flag_grow_rev_not_profit():
+    fs = flags.evaluate_flags({"营收增速": 20.0, "归母净利增速": -20.0})
+    assert any(f["code"] == "增收不增利" for f in fs)
+
+
+def test_flag_recv_inv_surge():
+    """应收增速 − 营收增速 > 20pct → 应收存货激增。"""
+    fs = flags.evaluate_flags({"营收增速": 10.0, "应收增速": 35.0, "存货增速": 12.0})
+    assert any(f["code"] == "应收存货激增" for f in fs)
+    fs2 = flags.evaluate_flags({"营收增速": 10.0, "应收增速": 25.0, "存货增速": 12.0})
+    assert not any(f["code"] == "应收存货激增" for f in fs2)   # 差 15 < 20,不命中
+
+
+def test_flag_kf_negative_high_severity():
+    fs = flags.evaluate_flags({}, {"利润表": {"扣非归母净利润": -3.0}})
+    hit = [f for f in fs if f["code"] == "扣非为负"]
+    assert hit and hit[0]["严重度"] == "高"
+    assert flags.has_high_severity(fs)
+
+
+def test_flags_missing_data_no_hit():
+    """全 None 输入 → 无红旗(不误杀,不抛)。"""
+    assert flags.evaluate_flags({}) == []
+
+
+# ————————————————————— 评分 —————————————————————
+def test_rating_mapping():
+    cfg = {"评级映射": {"优": 80, "良": 65, "中": 50, "差": 35}}
+    assert scoring._rating(85, cfg) == "优"
+    assert scoring._rating(65, cfg) == "良"
+    assert scoring._rating(34, cfg) == "风险"
+    assert scoring._rating(None, cfg) is None
+
+
+def test_high_severity_caps_score():
+    """含高危红旗 → 评分封顶到高危封顶分(评级≤差)。"""
+    derived = {"营收增速": 40, "扣非净利增速": 40, "现金含量_CFO比净利": 1.2,
+               "扣非占归母": 1.0, "毛利率": 60, "资产负债率": 30, "短债覆盖": 2,
+               "商誉占净资产": 0, "应收周转天数": 30, "存货周转天数": 60, "ROE": 20}
+    high_flag = [{"code": "扣非为负", "命中": True, "严重度": "高", "值": {}}]
+    sc = scoring.quality_score(derived, high_flag)
+    assert sc["高危封顶"] is True
+    assert sc["quality_score"] <= scoring._cfg().get("高危封顶分", 35)
+    assert sc["评级"] in ("差", "风险")
+
+
+# ————————————————————— 无未来函数 —————————————————————
+def _install_synthetic_raw(monkeypatch):
+    payload = {"code": "000001", "name": "测试股", "periods": _synthetic_periods()}
+    monkeypatch.setattr(store, "get_raw",
+                        lambda kind, code, date="latest": payload if kind == "financial_report"
+                        else (_ for _ in ()).throw(FileNotFoundError(kind)))
+
+
+def test_no_future_function_analyze(monkeypatch):
+    """as_of 在 2025 年报披露日(2026-04-01)之前 → 只见 2024 年报。"""
+    _install_synthetic_raw(monkeypatch)
+    res = analyzer.analyze("000001", as_of="2025-06-30", persist=False)
+    assert set(res["periods"]) == {"2024-12-31"}         # 2025 年报未披露,不可见
+    assert res["latest_period"] == "2024-12-31"
+
+    res2 = analyzer.analyze("000001", as_of="2026-05-01", persist=False)
+    assert "2025-12-31" in res2["periods"]               # 已披露 → 可见
+
+
+def test_no_future_function_query(monkeypatch):
+    _install_synthetic_raw(monkeypatch)
+    # 2024 年报归母增速 None(无 2023 期),as_of 卡在 2025 前只看 2024 → 条件取不到,不命中
+    hit_early = analyzer.query(["000001"], as_of="2025-06-30",
+                               where={"资产负债率": ("<", 50)})   # 2024 负债率 200/450≈44%
+    assert "000001" in hit_early
+    hit_late = analyzer.query(["000001"], as_of="2026-05-01",
+                              where={"资产负债率": ("<", 50)})     # 2025 负债率 76% → 不命中
+    assert hit_late == {}
+
+
+def test_query_requires_as_of(monkeypatch):
+    _install_synthetic_raw(monkeypatch)
+    with pytest.raises(ValueError):
+        analyzer.query(["000001"], as_of="")
+
+
+def test_build_financial_block(monkeypatch):
+    _install_synthetic_raw(monkeypatch)
+    blk = analyzer.build_financial_block("000001", as_of="2026-05-01")
+    assert blk["报告期"] == "2025-12-31"
+    assert blk["评级"] in ("优", "良", "中", "差", "风险")
+    assert "利润表摘要" in blk and blk["利润表摘要"]["营业总收入"] == 120.0
+    assert isinstance(blk["flags"], list)
+
+
+# ————————————————————— 契约 financial 块 —————————————————————
+def test_contract_financial_block_enum():
+    from tools.contracts import record as rc
+    base = {"schema_version": "1.0", "meta": {"code": "000001", "name": "x"},
+            "events": [], "timeseries_refs": {}, "provenance": {}}
+    ok = dict(base, financial={"评级": "良", "quality_score": 70})
+    assert rc.validate_record(ok) == []
+    bad = dict(base, financial={"评级": "极好"})
+    assert any("financial.评级" in e for e in rc.validate_record(bad))
+    # null 宽容
+    assert rc.validate_record(dict(base, financial=None)) == []
