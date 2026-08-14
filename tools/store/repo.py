@@ -40,7 +40,7 @@ _ANALYSIS_DIR = settings.PROJECT_ROOT / "data" / "analysis"   # data/analysis
 _PARQUET_KINDS = ("kline", "fundflow", "index_kline", "board_kline",
                   "event_yjyg", "event_yjkb", "event_ggcg")   # 事件驱动采集缓存(业绩预告/快报/增减持)
 _JSON_KINDS = ("fundamental", "announcement", "news", "ugc", "policy", "llm_cache",
-               "board_membership")
+               "board_membership", "financial_report")   # financial_report:按报告期的三大表(内层 period 字典)
 _RAW_KINDS = _PARQUET_KINDS + _JSON_KINDS
 _FLAT_KINDS = ("llm_cache",)   # 不按日期分区的 raw kind
 
