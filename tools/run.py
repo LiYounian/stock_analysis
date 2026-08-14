@@ -557,30 +557,34 @@ def run_screen_all(codes_all: list[str], as_of: str, no_llm: bool = False,
         ("策略3·箱体形态", lambda: screen_box.run_box_screen(codes_all, as_of=as_of, fetch=False)),
         ("策略4·动量组合", lambda: screen_momentum.run_momentum_screen(codes_all, as_of=as_of, fetch=False)),
     ]
+    news_topk = int(os.getenv("SCREENALL_NEWS_TOPK", "5"))  # 新闻/情绪 LLM 每策略只取前 N(省 token、去边缘票噪声)
     union: list[str] = []
+    news_union: list[str] = []
     per_strategy: dict[str, int] = {}
     for label, fn in screeners:
         view = _safe(f"{label} 全A筛选", fn)
         picks = _picks_from_view(view)
         per_strategy[label] = len(picks)
         union.extend(picks)
-        logger.info("  %s 入选 %d", label, len(picks))
+        news_union.extend(picks[:news_topk])        # 新闻/LLM 情绪 只取每策略前 N(排序型=前N强/规则型=前N只)
+        logger.info("  %s 入选 %d(新闻取前%d)", label, len(picks), min(len(picks), news_topk))
 
     union_picks = _dedup(union)                     # 各策略选出票并集(去重保序)
     watch = stock_pool.get_codes()
-    llm_subset = _dedup(union_picks + watch)         # 选出并集 ∪ 自选 —— 新闻/LLM 只对这批(省 token)
-    logger.info("各策略入选:%s;union=%d,llm_subset(union∪自选)=%d",
-                per_strategy, len(union_picks), len(llm_subset))
+    llm_subset = _dedup(union_picks + watch)         # 数值/serialize/因子/合议/横表 对这批(无 LLM,覆盖全并集,记录/网页不缩)
+    news_subset = _dedup(news_union + watch)         # ⭐ 新闻采集 + LLM 情绪 只对 自选∪每策略前N —— 省 token 命门
+    logger.info("各策略入选:%s;union=%d,分析集(∪自选)=%d,LLM新闻子集(自选∪每策略前%d)=%d",
+                per_strategy, len(union_picks), len(llm_subset), news_topk, len(news_subset))
 
     # —— 阶段②:新闻/LLM 只对 llm_subset ——
     collect_values_missing(llm_subset)               # 补 K线/基本面/公告/资金流(无 LLM,skip-if-cached)
     if not no_llm:
-        collect_message(llm_subset)                  # 新闻/舆情 只对 llm_subset ← 关键省 token
+        collect_message(news_subset)                 # ⭐ 新闻/舆情 只对 自选∪每策略前N ← 关键省 token
     collect_market_context()                         # 全市场指数(每轮一次、非逐票)→ RRG 专家
     if no_llm:
         logger.info("数据-only 模式:跳过新闻采集 + LLM 情绪(情绪三层专家将弃权)")
     else:
-        run_sentiment(llm_subset)                    # LLM 情绪 只对 llm_subset ← 关键省 token
+        run_sentiment(news_subset)                   # ⭐ LLM 情绪 只对 自选∪每策略前N ← 关键省 token
     run_serialize(llm_subset, as_of)
     run_events(llm_subset, as_of)
     run_factor(llm_subset, as_of)
