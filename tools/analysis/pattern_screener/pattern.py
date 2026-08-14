@@ -290,6 +290,86 @@ def detect_box_v2(df: pd.DataFrame, cfg: dict = None) -> dict:
                      "结构评分": score, "结构达标": 结构达标, **soft}}
 
 
+def _pick_box_window_strict(df: pd.DataFrame, c: dict):
+    """严格横盘箱体选窗(不含末根):振幅落**窄带** [下界,上界] 且 触碰/缩量/横盘三软信号
+    **全部为硬门**(不再结构分放行)的窗中,取振幅最窄者(最贴近严格横盘矩形)。
+
+    与 v2 `_pick_box_window` 的差异:三软信号由「加权评分」升格为「全True 才收」(由软改硬),
+    带宽由 v2 的宽带收紧到策略给的窄带。返回 (win, 箱顶, 箱底, 振幅%, 触碰合计, 软信号明细) 或 None。
+    """
+    n = len(df)
+    lo_w, hi_w = int(c["窗口区间"][0]), int(c["窗口区间"][1])
+    tol = c["触碰容差%"] / 100.0
+    reb = c["回落反弹%"] / 100.0
+    high, low, vol, close = (df["high"].to_numpy(float), df["low"].to_numpy(float),
+                             df["volume"].to_numpy(float), df["close"].to_numpy(float))
+    best = None
+    for win in range(lo_w, hi_w + 1, 5):
+        if n < win + 1:
+            continue
+        s, e = n - win - 1, n - 1                       # 不含末根的箱体段 [s, e)
+        seg_hi, seg_lo = high[s:e], low[s:e]
+        seg_vol, seg_close = vol[s:e], close[s:e]
+        top, bot = float(seg_hi.max()), float(seg_lo.min())
+        if bot <= 0:
+            continue
+        amp = (top - bot) / bot * 100.0
+        if not (c["振幅下界%"] <= amp <= c["振幅上界%"]):   # 窄带(硬门)
+            continue
+        up_t = _count_touches(seg_hi, seg_lo, top, tol, reb, upper=True)
+        dn_t = _count_touches(seg_hi, seg_lo, bot, tol, reb, upper=False)
+        touch_ok = up_t >= c["触碰次数"] and dn_t >= c["触碰次数"]
+        shrink_ok, qratio = _shrinking_volume(seg_vol, c["缩量后段占比"], c["缩量比"])
+        flat_ok, drift = _sideways(seg_close, c["横盘斜率上限"])
+        if not (touch_ok and shrink_ok and flat_ok):    # 三软信号全部硬门(由软改硬)
+            continue
+        cand = (win, round(top, 3), round(bot, 3), round(amp, 2), up_t + dn_t,
+                {"触上次数": up_t, "触下次数": dn_t, "缩量": shrink_ok, "量比": qratio,
+                 "横盘": flat_ok, "净漂移": drift})
+        # 严格口径:取振幅最窄者(最像横盘矩形);同振幅取触碰更多者
+        if best is None or (cand[3], -cand[4]) < (best[3], -best[4]):
+            best = cand
+    return best
+
+
+def detect_box_strict(df: pd.DataFrame, cfg: dict = None) -> dict:
+    """严格横盘箱体放量突破(Stage1 观察池触发源)。
+
+    收紧 v2:振幅窄带 [8,20] + 触碰≥2/横盘/缩量**三软改硬** + 站稳突破 + 放量,全部硬门。
+    cfg = THRESHOLDS["回踩低吸"]["严格箱体"] 结构(缺省从此读)。
+    输出 特征.箱顶 = 突破位/后续支撑参考(供 Stage2 回踩判定与止损)。
+    """
+    c = cfg if cfg is not None else THRESHOLDS["回踩低吸"]["严格箱体"]
+    n = len(df)
+    lo_w = int(c["窗口区间"][0])
+    if n < lo_w + 1:
+        return {"达标": False, "命中": "严格箱体", "特征": {"原因": f"样本不足(<{lo_w + 1})"}}
+    close = df["close"].to_numpy(float)
+    vol = df["volume"].to_numpy(float)
+    # 便宜快筛(回测逐根扫的性能命门):突破日须为上涨且放量,否则免去多窗扫描。
+    if close[-1] <= close[-2]:
+        return {"达标": False, "命中": "严格箱体", "特征": {"原因": "末根非上涨,非突破日"}}
+    back = vol[max(0, n - 21):n - 1]
+    if len(back) == 0 or vol[-1] <= (back.mean() * c["突破放量倍数"]) * 0.5:
+        return {"达标": False, "命中": "严格箱体", "特征": {"原因": "末根量不足,非放量突破"}}
+    picked = _pick_box_window_strict(df, c)
+    if picked is None:
+        return {"达标": False, "命中": "严格箱体", "特征": {"原因": "无合规严格箱体窗"}}
+    win, top, bot, amp, touch_sum, soft = picked
+    last_c = float(close[-1])
+    last_v = float(vol[-1])
+    seg_vol = vol[n - win - 1:n - 1]
+    seg_vmean = float(seg_vol.mean()) if len(seg_vol) else 0.0
+    站稳 = last_c > top * (1 + c["站稳容差%"] / 100.0)
+    放量 = bool(seg_vmean > 0 and last_v > seg_vmean * c["突破放量倍数"])
+    ok = bool(站稳 and 放量)
+    return {"达标": ok, "命中": "严格箱体",
+            "特征": {"窗口": win, "箱顶": top, "箱底": bot, "振幅%": amp,
+                     "站稳": 站稳, "放量": 放量,
+                     "量比突破": round(last_v / seg_vmean, 2) if seg_vmean else None,
+                     **soft}}
+
+
 PATTERNS = {"箱体": detect_box, "杯柄": detect_cup_handle,
             "楔形": detect_wedge, "旗形": detect_flag}
 
