@@ -50,7 +50,7 @@ def _safe(fn, default=None):
 def build_record(code: str, as_of: str) -> dict:
     """组装单票结构化记录。缺失的数据块降级为 None / 空,不抛错。"""
     s = stock_pool.get(code)
-    kdf = _safe(lambda: market.load_kline(code))          # 加载一次,tech/predict 复用
+    kdf = _safe(lambda: market.load_kline_recent(code))          # 加载一次,tech/predict 复用
     tech = _safe(lambda: ta.compute(kdf), {}) if kdf is not None else {}
     fund = _safe(lambda: fd.load_fundamental(code), {}) or {}
     anns = _safe(lambda: an.load_announcements(code), []) or []
@@ -185,7 +185,7 @@ def reattach_council(codes: list[str], as_of: str) -> int:
             rec = store.get_record(code, date=as_of)
         except FileNotFoundError:
             continue
-        kdf = _safe(lambda: market.load_kline(code))
+        kdf = _safe(lambda: market.load_kline_recent(code))
         rec["council"] = _safe(lambda: council.build_council_block(rec, kdf))
         store.put_record(rec, date=as_of)
         n += 1

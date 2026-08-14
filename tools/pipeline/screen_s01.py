@@ -132,7 +132,7 @@ def confirm_entry(kdf: pd.DataFrame, t: int, mode: str | None = None) -> int | N
 
 def _load_or_fetch_kline(code: str, fetch: bool):
     try:
-        return market.load_kline(code)
+        return market.load_kline_recent(code)
     except FileNotFoundError:
         if not fetch:
             return None

@@ -355,7 +355,7 @@ def cmd_analyze(argv):
     ranked = []
     for code in codes:
         try:
-            r = ta.compute(market.load_kline(code))
+            r = ta.compute(market.load_kline_recent(code))
             if "signal" in r:
                 ranked.append((code, r["signal"]))
         except FileNotFoundError:

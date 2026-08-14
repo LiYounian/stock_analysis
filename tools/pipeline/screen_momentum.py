@@ -50,7 +50,7 @@ def min_history() -> int:
 def _store_closes_loader(code: str) -> np.ndarray | None:
     """code → 收盘序列(np.ndarray)|None。只读 market.load_kline,不采集、不触网。"""
     try:
-        kdf = market.load_kline(code)
+        kdf = market.load_kline_recent(code)
     except FileNotFoundError:
         return None
     except Exception:                                  # noqa: BLE001

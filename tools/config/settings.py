@@ -15,6 +15,9 @@ REPORT_DIR = PROJECT_ROOT / "data" / "reports"        # 报告/产物产出目�
 KLINE_PERIOD = "daily"      # daily / weekly
 KLINE_ADJUST = "qfq"        # 前复权
 KLINE_DAYS = 250            # 默认拉取天数(约一年交易日)
+# 日筛/分析只加载近史尾部(省内存):主档现含多年(为回测),但日筛最长回看仅 ~251 根
+# (MA200+52周高)。取 500(约2年)= 冗余 ~2x,不降级任何日筛信号。回测仍走 load_kline 全历史。
+DAILY_KLINE_ROWS = 500
 
 # —— 舆情/新闻采集参数 ——
 NEWS_LOOKBACK_DAYS = 7      # 新闻/公告回看窗口

@@ -50,7 +50,7 @@ def _leader_pcts(fetch: bool) -> list | None:
     pcts = []
     for code in pool:
         try:
-            kdf = market.load_kline(code)
+            kdf = market.load_kline_recent(code)
         except FileNotFoundError:
             kdf = market.fetch_kline([code]).get(code) if fetch else None
         if kdf is not None and len(kdf) and "pct_chg" in kdf.columns:
