@@ -1,6 +1,9 @@
 """策略 3「箱体形态」全A screener 单测(hermetic,不触网)。
 
-锁死红线:
+⚠️ 本文件锁 **v1(detect_box)** 路径(重构后默认改 v2,v1 仍保留供 A/B,显式 use_v2=False 触达)。
+   v2(提供者规格:振幅带/触碰/缩量/横盘/趋势门/结构化输出)覆盖见 tests/test_box_rewrite.py。
+
+锁死红线(v1):
   · 复用 detect_box(不重写几何):命中票进入选清单、不达标不入选;
   · view schema 完整(as_of/策略/扫描数/有效样本/跳过数/入选数/入选清单);
   · 空池 / 历史不足不崩;
@@ -35,7 +38,7 @@ def _box_df(win: int = 30, breakout: bool = True):
 
 # ———————————————————— 复用 detect_box:命中/不命中 ————————————————————
 def test_real_detect_box_hit():
-    r = box.screen_latest(_box_df(breakout=True))
+    r = box.screen_latest(_box_df(breakout=True), use_v2=False)
     assert r["SELECT"] is True
     assert r["特征"]["突破"] is True and r["特征"]["放量"] is True and r["特征"]["窄幅"] is True
 
@@ -59,7 +62,7 @@ def test_run_box_screen_with_mocked_detect(monkeypatch, tmp_path):
         return {"达标": last > 104.0, "特征": {"箱高%": 1.0, "收盘": last}}
 
     monkeypatch.setattr(box, "detect_box", dispatch)
-    v = box.run_box_screen(["HIT", "MISS"], as_of="2024-06-01", fetch=False)
+    v = box.run_box_screen(["HIT", "MISS"], as_of="2024-06-01", fetch=False, use_v2=False)
     assert v["入选数"] == 1
     assert [x["code"] for x in v["入选清单"]] == ["HIT"]
     assert v["有效样本"] == 2 and v["跳过数(历史不足)"] == 0
@@ -72,7 +75,7 @@ def test_run_box_screen_writes_view(monkeypatch, tmp_path):
     short = _box_df(win=10)                       # 11 根 < 窗口+1=31 → 历史不足跳过
     kl = {"GOOD": good, "SHORT": short}
     monkeypatch.setattr(box.market, "load_kline", lambda c: kl[c])
-    v = box.run_box_screen(["GOOD", "SHORT"], as_of="2024-06-01", fetch=False)
+    v = box.run_box_screen(["GOOD", "SHORT"], as_of="2024-06-01", fetch=False, use_v2=False)
     for key in ("as_of", "策略", "扫描数", "有效样本", "跳过数(历史不足)",
                 "入选数", "入选清单", "规则", "防未来函数"):
         assert key in v

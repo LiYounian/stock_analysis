@@ -113,11 +113,13 @@ def _exit_signal(arrays: dict, j: int, entry_idx: int, p0: float,
 
 
 def simulate_position(kdf, entry_idx: int, cfg: dict | None = None,
-                      code: str | None = None) -> dict:
+                      code: str | None = None, entry_price: float | None = None) -> dict:
     """从 entry_idx(信号日)建仓,逐日跑离场状态机,返回一笔交易 dict。
 
     Returns dict 含:进场日/进场价P0/离场日/离场价/离场规则/离场规则号/持有天数/收益/
                     状态/一字板顺延/顺延天数。未离场(数据不足或一字板未解)→ 收益 None。
+    entry_price:进场价 P0 覆盖(缺省=entry_idx 收盘)。用于"T+1 开盘进场"等口径
+    (调用方传 open[t+1] 并把 entry_idx 设为 t+1);不传则维持"信号日收盘"旧口径,现有调用零变化。
     """
     cfg = cfg or _ALL
     n = len(kdf)
@@ -129,7 +131,7 @@ def simulate_position(kdf, entry_idx: int, cfg: dict | None = None,
         "low": kdf["low"].to_numpy(dtype=float),
         "vol": kdf["volume"].to_numpy(dtype=float),
     }
-    p0 = float(arrays["close"][entry_idx])
+    p0 = float(entry_price) if entry_price is not None else float(arrays["close"][entry_idx])
     trade = {
         "进场日": dates[entry_idx], "进场价P0": round(p0, 4),
         "离场日": None, "离场价": None, "离场规则": None, "离场规则号": None,
