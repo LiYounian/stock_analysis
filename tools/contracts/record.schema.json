@@ -39,6 +39,13 @@
       "直接",
       "间接",
       "无关"
+    ],
+    "财报评级": [
+      "优",
+      "良",
+      "中",
+      "差",
+      "风险"
     ]
   },
   "hold_periods": [
@@ -64,6 +71,7 @@
     "prediction",
     "sentiment",
     "fundflow",
+    "financial",
     "events",
     "timeseries_refs",
     "provenance"
@@ -80,8 +88,9 @@
     "snapshot": "null | {close, pct_chg, ma{ma5,ma10,ma20,ma60,排列}, macd{dif,dea,macd,状态}, kdj{k,d,j,状态}, rsi{rsi6,rsi12,rsi24}, bias20, vol_ratio, vol_state}",
     "valuation": "null | {pe_ttm, pb, mktcap_yi(亿), 报告期, pe_valid:bool, ...}",
     "fundamental": "null | {营收, 净利, 营收增速, 净利增速, ROE, 毛利率, 净利率, 负债率}",
+    "financial": "null | {报告期, 报告类型, 披露日, is_forecast, quality_score:0~100, 评级∈财报评级, five_dims{成长,质量,健康,运营,回报}, 利润表摘要{营业总收入,归母净利润,扣非归母净利润,营收增速,...}, flags[信号名], derived{增速/质量/健康/运营/回报衍生}, verdict:null(LLM层留口)}(财报 P0 数值层最新已披露期摘要;多期明细见 code_view financial_report;披露日锚定无未来函数)",
     "signals": "null | {trend{评级∈趋势评级,得分,依据[]}, reversal{拐点标签∈拐点标签,拐点评分,...}, ob_os{verdict∈超买超卖,resonance,per_indicator}}",
-    "prediction": "null | {现价, atr, atr_pct, 近三次放量[], 支撑位[], 压力位[], 持有期建议{1日/5日/10日:{止损位,最大亏损%,止盈位,目标盈利%,风险收益比}}, 情景预测{1日/5日/10日:{上涨概率%,...}}, 买卖倾向{结论∈买卖倾向,得分,依据[]}, 免责}",
+    "prediction": "null | {现价, atr, atr_pct, 近三次放量[], 支撑位[], 压力位[], 持有期建议{1日/5日/10日:{止损位,最大亏损%,止盈位,目标盈利%,风险收益比}}, 结构位{支撑[],压力[],距支撑%,距压力%,区间位置%,当日量比,放量,突破,趋势,bias20,锚定{情景,止损位,止盈位,盈亏比,依据[]}}, 情景预测{1日/5日/10日:{上涨概率%,...}}, 买卖倾向{结论∈买卖倾向,得分,依据[]}, 免责}",
     "sentiment": "null | {净情绪分:-1~1, 利好数, 利空数, 样本数, events[]{影响方向∈影响方向,影响强度:1~5,与本股关系∈与本股关系,层∈情绪三层,标题,time}}",
     "fundflow": "null | {今日主力净流入(元), 今日主力净占比, 近5日主力合计(元), 主力连续净流入天数}",
     "events": "list[{date, type, impact∈公告方向, title}](公告)",

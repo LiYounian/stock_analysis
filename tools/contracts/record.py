@@ -25,6 +25,7 @@ ENUMS = {
     "买卖倾向": ("偏买入", "偏卖出", "观望"),      # prediction.买卖倾向.结论
     "情绪三层": ("政策", "公司行为", "舆情"),      # sentiment.events[].层
     "与本股关系": ("直接", "间接", "无关"),        # sentiment.events[].与本股关系
+    "财报评级": ("优", "良", "中", "差", "风险"),   # financial.评级(质地评分映射)
 }
 HOLD_PERIODS = ("1日", "5日", "10日")
 
@@ -44,7 +45,7 @@ CONVENTIONS = {
 # 记录顶层块(12);核心必需 + 可空块
 REQUIRED_TOP = ("schema_version", "meta", "events", "timeseries_refs", "provenance")
 OPTIONAL_TOP = ("snapshot", "valuation", "fundamental", "signals",
-                "prediction", "sentiment", "fundflow")
+                "prediction", "sentiment", "fundflow", "financial")
 TOP_LEVEL_KEYS = REQUIRED_TOP[:2] + OPTIONAL_TOP + REQUIRED_TOP[2:]
 
 # 人读 + 机读 schema(字段 → 说明)。详尽结构见各生产者;此处固化契约要点。
@@ -57,6 +58,11 @@ RECORD_SCHEMA = {
                 "bias20, vol_ratio, vol_state}",
     "valuation": "null | {pe_ttm, pb, mktcap_yi(亿), 报告期, pe_valid:bool, ...}",
     "fundamental": "null | {营收, 净利, 营收增速, 净利增速, ROE, 毛利率, 净利率, 负债率}",
+    "financial": "null | {报告期, 报告类型, 披露日, is_forecast, quality_score:0~100, "
+                 "评级∈财报评级, five_dims{成长,质量,健康,运营,回报}, "
+                 "利润表摘要{营业总收入,归母净利润,扣非归母净利润,营收增速,...}, "
+                 "flags[信号名], derived{增速/质量/健康/运营/回报衍生}, verdict:null(LLM层留口)}"
+                 "(财报 P0 数值层最新已披露期摘要;多期明细见 code_view financial_report;披露日锚定无未来函数)",
     "signals": "null | {trend{评级∈趋势评级,得分,依据[]}, "
                "reversal{拐点标签∈拐点标签,拐点评分,...}, ob_os{verdict∈超买超卖,resonance,per_indicator}}",
     "prediction": "null | {现价, atr, atr_pct, 近三次放量[], 支撑位[], 压力位[], "
@@ -130,6 +136,10 @@ def validate_record(rec: dict) -> list[str]:
     for i, e in enumerate(rec.get("events") or []):
         if e.get("impact") is not None and e.get("impact") not in ENUMS["公告方向"]:
             errs.append(f"events[{i}].impact 非法: {e.get('impact')!r}")
+
+    fin = rec.get("financial")
+    if isinstance(fin, dict) and not _enum_ok(fin.get("评级"), "财报评级"):
+        errs.append(f"financial.评级 非法: {fin.get('评级')!r}")
 
     return errs
 
