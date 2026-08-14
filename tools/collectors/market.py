@@ -315,3 +315,18 @@ def load_kline(code: str) -> pd.DataFrame:
     if store.has_master_kline(code):
         return store.get_master_kline(code)
     return store.get_raw("kline", code)
+
+
+def load_kline_recent(code: str, rows: int | None = None) -> pd.DataFrame:
+    """日筛/分析用:只取近史尾部 rows 根(默认 settings.DAILY_KLINE_ROWS)。
+
+    为什么:主档回补到多年后(供回测),日筛每票读全历史 → 全A内存爆。日筛最长回看
+    仅 ~251 根(MA200+52周高),取近 500 根既不降级信号、又把内存/IO 降到 ~1/4。
+    **回测需全历史 → 仍用 load_kline，勿改。** 保留原索引不 reset(行为对齐 load_kline)。
+    """
+    from tools.config import settings
+    n = settings.DAILY_KLINE_ROWS if rows is None else rows
+    df = load_kline(code)
+    if n and len(df) > n:
+        return df.tail(n)
+    return df

@@ -27,7 +27,7 @@ def build_chart(code: str, limit: int = 120) -> dict:
     含 OHLC(open/high/low/close)以支持蜡烛图;折线图取 close。向后兼容旧折线视图。
     """
     try:
-        df = market.load_kline(code).copy()
+        df = market.load_kline_recent(code).copy()
     except FileNotFoundError:
         return dict(_EMPTY)
     for w in (5, 20, 60):

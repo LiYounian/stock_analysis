@@ -208,7 +208,7 @@ def n_day_momentum(kline_df, n: int = 30) -> dict:
 def _load_closes_from_record(code: str) -> np.ndarray | None:
     try:
         from tools.collectors import market
-        kdf = market.load_kline(code)
+        kdf = market.load_kline_recent(code)
     except (FileNotFoundError, ImportError):
         return None
     except Exception:

@@ -173,7 +173,7 @@ def precompute(as_of: str | None = None, codes: list[str] | None = None,
             continue
         kdf = None
         try:
-            kdf = market.load_kline(c)
+            kdf = market.load_kline_recent(c)
         except FileNotFoundError:
             pass
         raw_by_code[c] = fac.raw_factors(rec, kdf, 北向.get(c))

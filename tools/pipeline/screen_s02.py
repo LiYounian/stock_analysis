@@ -149,7 +149,7 @@ def screen_latest(kdf: pd.DataFrame, cfg: dict | None = None) -> dict:
 
 def _load_or_fetch_kline(code: str, fetch: bool):
     try:
-        return market.load_kline(code)
+        return market.load_kline_recent(code)
     except FileNotFoundError:
         if not fetch:
             return None

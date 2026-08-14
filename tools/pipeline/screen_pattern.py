@@ -52,7 +52,7 @@ _BENCH = "000300"        # 沪深300
 def _load_or_fetch_kline(code: str, fetch: bool):
     """读本地 K线;缺失且 fetch=True 时采集。返回 df 或 None。"""
     try:
-        return market.load_kline(code)
+        return market.load_kline_recent(code)
     except FileNotFoundError:
         if not fetch:
             return None
