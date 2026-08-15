@@ -233,3 +233,8 @@ button:disabled { opacity: .5; cursor: not-allowed; }
   .ff-summary { grid-template-columns: repeat(3, 1fr); }
   .ff-summary .ff-cell:nth-child(4), .ff-summary .ff-cell:nth-child(5) { grid-column: span 1; }
 }
+
+/* 财报质地 · AI 综合归纳/定性块 */
+.ai-note { margin: 8px 0; padding: 8px 12px; background: #21262e; border-left: 3px solid #3a4250; border-radius: 4px; }
+.ai-note p { margin: 4px 0; line-height: 1.5; }
+.ai-note .pos, .ai-note .neg { font-size: 13px; }

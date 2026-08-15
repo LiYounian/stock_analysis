@@ -2,7 +2,7 @@
 {% block title %}{{ r.meta.name }}({{ r.meta.code }}){% endblock %}
 {% block content %}
 {% set snap = r.snapshot %}{% set sig = r.signals %}{% set p = r.prediction %}
-{% set val = r.valuation %}{% set fund = r.fundamental %}{% set flow = r.fundflow %}
+{% set val = r.valuation %}{% set fund = r.fundamental %}{% set flow = r.fundflow %}{% set finr = r.financial %}
 
 <div class="stock-head">
   <h1>{{ r.meta.name }} <span class="code">{{ r.meta.code }}</span>
@@ -143,6 +143,45 @@
       {% if val %}<tr><td>PE(TTM)</td><td>{{ val.pe_ttm }}</td><td>PB</td><td>{{ val.pb }}</td></tr>
       <tr><td>总市值(亿)</td><td>{{ val.mktcap_yi }}</td><td>PE有效</td><td>{{ val.pe_valid }}</td></tr>{% endif %}
     </table>
+  </section>
+  {% endif %}
+
+  {% if finr %}
+  {% set dims = finr.five_dims or {} %}{% set prof = finr.利润表摘要 or {} %}
+  <section class="card wide">
+    <h2>财报质地
+      <small>
+        <b class="{{ 'pos' if finr.评级 in ['优','良'] else ('neg' if finr.评级 in ['差','风险'] else '') }}">{{ finr.评级 or '-' }}</b>
+        {% if finr.quality_score is not none %} · 质地分 {{ finr.quality_score }}{% endif %}
+        {% if finr.报告期 %} · {{ finr.报告期 }}{{ '(预告)' if finr.is_forecast else '' }}{% endif %}
+        {% if finr.金融业口径 %} · 金融业口径{% endif %}
+      </small>
+    </h2>
+    <p>
+      审计意见闸门:<b class="{{ 'neg' if finr.审计意见闸门=='不通过' else ('pos' if finr.审计意见闸门=='通过' else 'muted') }}">{{ finr.审计意见闸门 or '未知' }}</b>{% if finr.审计意见 %}({{ finr.审计意见 }}){% endif %}
+      &nbsp;·&nbsp; 审计机构闸门:<b class="{{ 'neg' if finr.审计机构闸门=='不通过' else ('pos' if finr.审计机构闸门=='通过' else 'muted') }}">{{ finr.审计机构闸门 or '未知' }}</b>{% if finr.审计机构 %}({{ finr.审计机构 }}{% if finr.审计机构档位 %}·档{{ finr.审计机构档位 }}{% endif %}){% endif %}
+    </p>
+    {% if finr.flags %}<p>红旗:{% for f in finr.flags %}<span class="badge neg">{{ f }}</span> {% endfor %}</p>{% endif %}
+    <table>
+      <tr><td>营收增速%</td><td>{{ prof.营收增速 }}</td><td>扣非增速%</td><td>{{ prof.扣非增速 }}</td></tr>
+      <tr><td>毛利率%</td><td>{{ prof.毛利率 }}</td><td>净利率%</td><td>{{ prof.净利率 }}</td></tr>
+      {% if dims %}<tr><td>五维</td><td colspan="3" class="muted">成长 {{ dims.成长 }} / 质量 {{ dims.质量 }} / 健康 {{ dims.健康 }} / 运营 {{ dims.运营 }} / 回报 {{ dims.回报 }}</td></tr>{% endif %}
+    </table>
+    {% if finr.verdict %}{% set v = finr.verdict %}
+    <div class="ai-note">
+      <b>AI 综合归纳</b> <small>{{ v.综合评级 or '' }}{% if v.置信度 %} · 置信{{ v.置信度 }}{% endif %}{% if v.盈利质量判断 %} · 盈利质量{{ v.盈利质量判断 }}{% endif %}</small>
+      {% if v.一句话结论 %}<p>{{ v.一句话结论 }}</p>{% endif %}
+      {% if v.多头理由 %}<p class="pos">看好:{{ v.多头理由|join('；') }}</p>{% endif %}
+      {% if v.空头理由 %}<p class="neg">警惕:{{ v.空头理由|join('；') }}</p>{% endif %}
+    </div>
+    {% endif %}
+    {% if finr.qualitative %}{% set q = finr.qualitative %}
+    <div class="ai-note muted">
+      {% if q.增长来源 %}<p>增长来源:{{ q.增长来源 }}</p>{% endif %}
+      {% if q.风险提示 %}<p>风险提示:{{ q.风险提示|join('、') }}</p>{% endif %}
+      {% if q.管理层语气 %}<p>管理层语气:{{ q.管理层语气 }}{% if q.文本红旗 %} · 文本红旗:{{ q.文本红旗|join('、') }}{% endif %}</p>{% endif %}
+    </div>
+    {% endif %}
   </section>
   {% endif %}
 
