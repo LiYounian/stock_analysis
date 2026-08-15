@@ -53,5 +53,25 @@ PDF 下载 + LLM 是本轮最重的两处:**只 ~30 只、只最新年报、内�
 - LLM 文本层能对有年报的票产出非空 `qualitative/verdict`;无年报/解析失败 → 保持 null(与 M1 一致降级)。
 - 全程不破坏 M1(数值层/闸门2/财报专家)已过的 29 例测试。
 
-## 5. 结果(实现后回填)
-_(待回填。)_
+## 5. 结果(2026-08-15 回填)· M2 完成
+
+分步实现 + 测试,`tests/test_financial.py` 20→37、新增 `tests/test_annual_report.py` 4 例,全过。
+
+| 子步 | 交付 | commit |
+|---|---|---|
+| 前置 | 装 pymupdf(D1)+ Claude subagent 抓备案名录 105 家(D3) | — |
+| P2.0/P2.1 | 采集层 `collectors/annual_report.py`(cninfo→PDF url→pymupdf→切审计/MD&A/风险段);名录 `config/audit_firms.json`(105家三档) | `3cb4a3a` |
+| P2.2 闸门1 | `analysis/financial/audit_gate.py`(抽事务所名+正则→比对名录);不在录→高危红旗降"风险";财报专家审计双闸门否决 | `e0f73f0` |
+| P2.3+P2.4 | `llm_text.py`(MD&A/风险→LLM schema_A定性+schema_B归纳,缓存)+ 接进 screenall 三步(三大表/年报/文本)只对 news_subset | `3c422ff` |
+| 修复 | 金融业结构兜底(无营业成本+无存货→银行),修非池银行 board_of=None 时高负债误报 | `96d1315` |
+
+**端到端实测**(茅台+成都银行):茅台→天健档1通过/评级良/LLM归纳"良·增收不增利";成都银行→毕马威通过/结构兜底识别为金融业/高负债不再误报/LLM归纳"风险·依赖利息净收入"。
+
+**分层达成**:采集(`collectors/annual_report`)→ 分析(`audit_gate`/`llm_text`)→ 决策(财报专家/panel)单向;LLM 只碰文本、数值全走代码;`build_financial_block` 只读预算不触发 LLM(控 token);全程只对 news_subset(资源纪律)。
+
+**已知限制/遗留**:
+- 风险段切分对个别公司偏弱(如茅台风险段落到关联交易段)→ LLM 优雅降级为 [];可后续优化章节切分。
+- 名录以 2025-12-16 版 105 家入库(证监会最新 2026-05-29 页 WebFetch 被 302 拦截);家数动态,建议定期比对更新。
+- 频繁更换审计机构/换向尾部的红旗需多年年报,本轮只做单年在录判定。
+- **web 详情页定性/verdict 渲染未做**(避开并发的 web 修复任务;数据已随 record 进 /api/stock)。
+- 评分权重标定(M3)仍等提供者(方案 Q3)。
