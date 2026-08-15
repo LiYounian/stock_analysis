@@ -66,6 +66,18 @@ def _is_financial(code: str, industry: str | None = None) -> bool:
     return sw in fin_set
 
 
+def _is_financial_structural(periods_raw: dict) -> bool:
+    """结构兜底(行业名解析不到时):有资产负债表数据、但**无'营业成本'且无'存货'** → 银行/保险/证券。
+    银行等金融业利润表无营业成本行、资产负债表无存货,是稳定可判信号(不依赖会员/行业数据加载)。"""
+    if not periods_raw:
+        return False
+    latest = periods_raw.get(max(periods_raw)) or {}
+    lp = latest.get("利润表") or {}
+    bs = latest.get("资产负债表") or {}
+    return bool(bs.get("资产总计") is not None
+                and lp.get("营业成本") is None and bs.get("存货") is None)
+
+
 def _cfg() -> dict:
     from tools.config import strategy
     return strategy.THRESHOLDS.get("财报", {})
@@ -117,8 +129,9 @@ def analyze(code: str, as_of: str | None = None, persist: bool = True,
     """
     code = str(code).zfill(6)
     raw = store.get_raw("financial_report", code)          # 缺失 → FileNotFoundError
-    is_fin = _is_financial(code, industry)
     periods_raw = raw.get("periods", {})
+    # 金融业判定:行业名(池/board)优先,结构信号(无营业成本+无存货)兜底,任一命中即金融业
+    is_fin = _is_financial(code, industry) or _is_financial_structural(periods_raw)
     derived_all = metrics_mod.compute_derived(periods_raw)
 
     # 注入「毛利率同比升」(供毛利率异常跳升红旗)
@@ -217,6 +230,33 @@ def build_financial_block(code: str, as_of: str | None = None,
     else:
         block["审计意见"] = None
         block["审计意见闸门"] = None
+
+    # 闸门1(M2):审计机构备案核查——读采集层落的年报文本(披露日 <= as_of 才可见,无未来函数)。
+    # 抽到名且不在录 → 高危红旗"审计机构未备案" + 降"风险";名录未知/抽不到名 → 不判(不误杀)。
+    try:
+        ar_raw = store.get_raw("annual_report_text", code)
+    except FileNotFoundError:
+        ar_raw = None
+    if ar_raw and (as_of is None or (ar_raw.get("disclosure_date") or "") <= as_of):
+        from tools.analysis.financial import audit_gate as ag_mod
+        g = ag_mod.audit_gate((ar_raw.get("段落") or {}).get("审计报告"))
+        block["审计机构"] = g.get("审计机构")
+        block["审计机构闸门"] = g.get("闸门1")
+        block["审计机构档位"] = g.get("档位")
+        if g.get("闸门1") == "不通过":
+            if "审计机构未备案" not in block["flags"]:
+                block["flags"].append("审计机构未备案")
+            block["评级"] = "风险"
+
+    # LLM 文本层(M2):只读 llm_text.run_financial_text 预算的 code_view,**不触发 LLM**
+    # (避免对每票 serialize 都烧 token)。未预算 → qualitative/verdict 保持 null。
+    block.setdefault("qualitative", None)
+    try:
+        ft = store.get_code_view("financial_text", code)
+        block["qualitative"] = ft.get("qualitative")
+        block["verdict"] = ft.get("verdict")
+    except FileNotFoundError:
+        pass
     return block
 
 

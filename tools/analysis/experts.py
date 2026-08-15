@@ -249,7 +249,8 @@ def expert_财报(record: dict, kline=None) -> ExpertVerdict:
     if not fin:
         return _missing("财报", 能力类型="评级", 原因="无财报块(未采财报或未接入)")
     评级 = fin.get("评级")
-    gate = fin.get("审计意见闸门")
+    op_gate = fin.get("审计意见闸门")          # 闸门2:审计意见(非标)
+    firm_gate = fin.get("审计机构闸门")        # 闸门1:审计机构备案(不在录)
     dir_map = {"优": "看多", "良": "看多", "中": "中性", "差": "看空", "风险": "看空"}
     str_map = {"优": 0.9, "良": 0.5, "中": 0.0, "差": -0.5, "风险": -0.9}
     方向 = dir_map.get(评级, "中性")
@@ -260,16 +261,17 @@ def expert_财报(record: dict, kline=None) -> ExpertVerdict:
     flags = fin.get("flags") or []
     if flags:
         依据.append("红旗:" + "/".join(flags[:4]))
-    if gate == "不通过":                       # 审计意见闸门:非标 → 一票否决看空
+    if op_gate == "不通过" or firm_gate == "不通过":   # 审计双闸门:任一不过 → 一票否决看空
         方向, 强度 = "看空", -1.0
-        依据.append("审计意见闸门不通过(非标)")
+        依据.append("审计闸门不通过(" + "/".join(
+            g for g, v in [("非标意见", op_gate), ("机构未备案", firm_gate)] if v == "不通过") + ")")
     conf = 0.6 + (0.0 if fin.get("is_forecast") else 0.2)   # 正式财报比预告置信高
     充分 = "部分降级" if fin.get("is_forecast") else "充分"
     return ExpertVerdict(专家="财报", 能力类型="评级", 方向=方向, 强度=强度,
                          置信度=_clamp(conf, 0.0, 1.0), 默认权重=_w("财报"),
                          依据=依据 or ["财报块无评级"], 数据充分度=充分,
                          原始={"评级": 评级, "quality_score": fin.get("quality_score"),
-                               "审计意见闸门": gate, "flags": flags,
+                               "审计意见闸门": op_gate, "审计机构闸门": firm_gate, "flags": flags,
                                "金融业口径": fin.get("金融业口径")})
 
 

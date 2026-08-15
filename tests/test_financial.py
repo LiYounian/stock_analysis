@@ -380,3 +380,114 @@ def test_expert_caibao_registered_and_in_default_group():
     from tools.config.strategy import THRESHOLDS
     assert "财报" in experts.BUILTIN
     assert "财报" in THRESHOLDS["合议"]["默认专家组"]
+
+
+# ———————————— P2.2:闸门1 审计机构备案核查(M2)————————————
+def test_audit_gate_extract_and_check():
+    """抽事务所名 + 名录核查:在录/不在录/无名/别名。"""
+    from tools.analysis.financial import audit_gate as ag
+    on = ag.audit_gate("审计报告 天健会计师事务所（特殊普通合伙）接受委托审计…审计意见 标准无保留意见")
+    assert on["闸门1"] == "通过" and on["在录"] is True and on["档位"] == 1
+    off = ag.audit_gate("审计报告 张三会计师事务所（特殊普通合伙）审计…")
+    assert off["闸门1"] == "不通过" and off["在录"] is False
+    assert ag.audit_gate("本段无事务所")["闸门1"] == "未知"       # 抽不到名→不判
+    assert ag.check_auditor("普华永道中天会计师事务所")["在录"] is True   # 四大在录
+
+
+def test_audit_firm_gate_downgrades_block(monkeypatch):
+    """build_financial_block 集成闸门1:年报审计机构不在录 → 评级降'风险'+补红旗+闸门=不通过。"""
+    periods = _synthetic_periods()
+    fin_payload = {"code": "000001", "name": "测试股", "periods": periods}
+    ar_payload = {"code": "000001", "disclosure_date": "2026-04-01",
+                  "段落": {"审计报告": "审计报告 野鸡会计师事务所（特殊普通合伙）审计…审计意见 标准无保留意见"}}
+
+    def fake_get_raw(kind, code, date="latest"):
+        if kind == "financial_report":
+            return fin_payload
+        if kind == "annual_report_text":
+            return ar_payload
+        raise FileNotFoundError(kind)
+    monkeypatch.setattr(store, "get_raw", fake_get_raw)
+    blk = analyzer.build_financial_block("000001", as_of="2026-05-01")
+    assert blk["审计机构闸门"] == "不通过"
+    assert blk["评级"] == "风险"
+    assert "审计机构未备案" in blk["flags"]
+
+
+def test_audit_firm_gate_pass_in_registry(monkeypatch):
+    """审计机构在录 → 闸门1=通过,不强降评级。"""
+    fin_payload = {"code": "000001", "name": "测试股", "periods": _synthetic_periods()}
+    ar_payload = {"code": "000001", "disclosure_date": "2026-04-01",
+                  "段落": {"审计报告": "审计报告 天健会计师事务所（特殊普通合伙）审计…"}}
+    monkeypatch.setattr(store, "get_raw",
+                        lambda kind, code, date="latest": fin_payload if kind == "financial_report"
+                        else (ar_payload if kind == "annual_report_text"
+                              else (_ for _ in ()).throw(FileNotFoundError(kind))))
+    blk = analyzer.build_financial_block("000001", as_of="2026-05-01")
+    assert blk["审计机构闸门"] == "通过"
+    assert "审计机构未备案" not in blk["flags"]
+
+
+def test_expert_caibao_firm_gate_veto():
+    """财报专家:审计机构闸门不通过 → 一票否决看空(即便评级良)。"""
+    from tools.analysis import experts
+    v = experts.expert_财报({"meta": {"code": "1"},
+                           "financial": {"评级": "良", "审计意见闸门": "通过",
+                                         "审计机构闸门": "不通过", "is_forecast": False}}).to_dict()
+    assert v["方向"] == "看空" and v["强度"] == -1.0
+
+
+# ———————————— P2.3:LLM 文本层(M2)————————————
+def test_llm_text_degrades_when_not_configured(monkeypatch):
+    """LLM 未配置 → 文本层返回 {qualitative:None, verdict:None}(不阻断)。"""
+    from tools.analysis.financial import llm_text
+    from tools.llm import client as lc
+    monkeypatch.setattr(lc, "is_configured", lambda: False)
+    res = llm_text.analyze_text("600519", "贵州茅台", {"MD&A": "一些正文", "风险": "一些风险"})
+    assert res == {"qualitative": None, "verdict": None}
+
+
+def test_llm_text_no_sections_returns_null(monkeypatch):
+    """有 LLM 但无 MD&A/风险文本 → qualitative/verdict 均 None。"""
+    from tools.analysis.financial import llm_text
+    from tools.llm import client as lc
+    monkeypatch.setattr(lc, "is_configured", lambda: True)
+    res = llm_text.analyze_text("x", "测试", {"MD&A": None, "风险": None})
+    assert res == {"qualitative": None, "verdict": None}
+
+
+def test_block_merges_financial_text_view(monkeypatch):
+    """build_financial_block 读预算的 financial_text code_view → 合入 qualitative/verdict(不触发 LLM)。"""
+    fin_payload = {"code": "000001", "name": "测试股", "periods": _synthetic_periods()}
+    ft_view = {"qualitative": {"增长来源": "产品放量"}, "verdict": {"综合评级": "良"}}
+
+    def fake_get_raw(kind, code, date="latest"):
+        if kind == "financial_report":
+            return fin_payload
+        raise FileNotFoundError(kind)
+    monkeypatch.setattr(store, "get_raw", fake_get_raw)
+    monkeypatch.setattr(store, "get_code_view",
+                        lambda name, code, date="latest": ft_view if name == "financial_text"
+                        else (_ for _ in ()).throw(FileNotFoundError(name)))
+    blk = analyzer.build_financial_block("000001", as_of="2026-05-01")
+    assert blk["qualitative"] == {"增长来源": "产品放量"}
+    assert blk["verdict"] == {"综合评级": "良"}
+
+
+def test_financial_structural_fallback_detects_bank(monkeypatch):
+    """行业名解析不到时,结构信号(无营业成本+无存货)兜底识别银行 → 跳过高负债误杀。"""
+    bank_periods = {"2025-12-31": {"report_date": "2025-12-31", "disclosure_date": "2026-04-01",
+                    "report_type": "年报",
+                    "利润表": {"营业总收入": None, "营业成本": None, "归母净利润": 100.0, "扣非归母净利润": 100.0},
+                    "资产负债表": {"资产总计": 10000.0, "负债合计": 9200.0, "股东权益合计": 800.0,
+                                "归母股东权益": 800.0, "存货": None},
+                    "现金流量表": {}}}
+    payload = {"code": "601838", "name": "某银行", "periods": bank_periods}
+    monkeypatch.setattr(store, "get_raw",
+                        lambda kind, code, date="latest": payload if kind == "financial_report"
+                        else (_ for _ in ()).throw(FileNotFoundError(kind)))
+    monkeypatch.setattr(store, "get_code_view",
+                        lambda *a, **k: (_ for _ in ()).throw(FileNotFoundError("x")))
+    blk = analyzer.build_financial_block("601838", as_of="2026-05-01")  # 不传 industry
+    assert blk["金融业口径"] is True          # 结构兜底认出银行
+    assert "高负债" not in blk["flags"]       # 高负债被金融业特判跳过
