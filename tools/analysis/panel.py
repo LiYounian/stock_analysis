@@ -28,6 +28,7 @@ def _row(rec: dict) -> dict:
     sig = rec.get("signals") or {}
     val = rec.get("valuation") or {}
     fund = rec.get("fundamental") or {}
+    fin = rec.get("financial") or {}
     flow = rec.get("fundflow") or {}
     pred = rec.get("prediction") or {}
     bias_tend = pred.get("买卖倾向") or {}
@@ -60,6 +61,9 @@ def _row(rec: dict) -> dict:
         # 基本面
         "营收增速": fund.get("营收增速"), "净利增速": fund.get("净利增速"),
         "ROE": fund.get("ROE"), "毛利率": fund.get("毛利率"), "负债率": fund.get("负债率"),
+        # 财报质地(P1:analysis.financial 产出的 financial 块)
+        "财报评级": fin.get("评级"), "财报红旗": "/".join(fin.get("flags") or []) or None,
+        "审计闸门": fin.get("审计意见闸门"),
         # 资金流
         "主力净流入亿": _yi(flow.get("今日主力净流入")), "主力净占比%": flow.get("今日主力净占比"),
         "近5日主力亿": _yi(flow.get("近5日主力合计")), "连续净流入天": flow.get("主力连续净流入天数"),

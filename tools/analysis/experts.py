@@ -238,6 +238,41 @@ def expert_板块轮动(record: dict, kline=None) -> ExpertVerdict:
                                "RS_Ratio": row["RS_Ratio"], "RS_Momentum": row["RS_Momentum"]})
 
 
+def expert_财报(record: dict, kline=None) -> ExpertVerdict:
+    """财报质地专家:读 record['financial'] 块(analysis.financial.build_financial_block 产出)→ 信封。
+
+    方向 = 财报评级(优/良→看多、中→中性、差/风险→看空);**审计意见闸门不通过 → 强制看空(一票否决)**。
+    强度 = 评级映射[-1,1];置信度 = 数据完整度(有块基础,正式财报比预告高)。缺 financial 块 → 弃权。
+    数值全由分析层算(analysis.financial),本专家只读块、不算数、不触网(低耦合)。
+    """
+    fin = (record or {}).get("financial")
+    if not fin:
+        return _missing("财报", 能力类型="评级", 原因="无财报块(未采财报或未接入)")
+    评级 = fin.get("评级")
+    gate = fin.get("审计意见闸门")
+    dir_map = {"优": "看多", "良": "看多", "中": "中性", "差": "看空", "风险": "看空"}
+    str_map = {"优": 0.9, "良": 0.5, "中": 0.0, "差": -0.5, "风险": -0.9}
+    方向 = dir_map.get(评级, "中性")
+    强度 = _clamp(str_map.get(评级, 0.0))
+    依据 = []
+    if 评级:
+        依据.append(f"财报评级={评级}(quality={fin.get('quality_score')})")
+    flags = fin.get("flags") or []
+    if flags:
+        依据.append("红旗:" + "/".join(flags[:4]))
+    if gate == "不通过":                       # 审计意见闸门:非标 → 一票否决看空
+        方向, 强度 = "看空", -1.0
+        依据.append("审计意见闸门不通过(非标)")
+    conf = 0.6 + (0.0 if fin.get("is_forecast") else 0.2)   # 正式财报比预告置信高
+    充分 = "部分降级" if fin.get("is_forecast") else "充分"
+    return ExpertVerdict(专家="财报", 能力类型="评级", 方向=方向, 强度=强度,
+                         置信度=_clamp(conf, 0.0, 1.0), 默认权重=_w("财报"),
+                         依据=依据 or ["财报块无评级"], 数据充分度=充分,
+                         原始={"评级": 评级, "quality_score": fin.get("quality_score"),
+                               "审计意见闸门": gate, "flags": flags,
+                               "金融业口径": fin.get("金融业口径")})
+
+
 # 内置专家名 → 适配器(record-shaped)
 BUILTIN = {
     "技术趋势": expert_技术趋势,
@@ -248,6 +283,7 @@ BUILTIN = {
     "多因子": expert_多因子,
     "事件驱动": expert_事件驱动,
     "板块轮动": expert_板块轮动,      # F8 RRG 板块轮动专家
+    "财报": expert_财报,              # P1 财报质地专家(读 financial 块 + 审计闸门否决)
 }
 
 

@@ -103,6 +103,12 @@ def build_record(code: str, as_of: str) -> dict:
                          ("营收", "净利", "营收增速", "净利增速", "ROE", "毛利率", "净利率", "负债率",
                           "每股股利")} if fund else None
 
+    # 财报质地块(P1):披露日锚定的最新已披露报告期轻量摘要(analysis.financial)。
+    # 缺财报采集 → None(优雅降级,不阻断);行业传入供金融业红旗特判。
+    from tools.analysis.financial import analyzer as fr_analyzer
+    financial_block = _safe(lambda: fr_analyzer.build_financial_block(
+        code, as_of=as_of, industry=(s.industry if s else None)))
+
     events = [{"date": a.get("date"), "type": a.get("type"),
                "impact": a.get("impact"), "title": a.get("title")} for a in anns[:20]]
 
@@ -114,6 +120,7 @@ def build_record(code: str, as_of: str) -> dict:
         "snapshot": snapshot,
         "valuation": valuation_block,
         "fundamental": fundamental_block,
+        "financial": financial_block,
         "signals": signals,
         "prediction": prediction,
         "sentiment": sentiment,

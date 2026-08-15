@@ -352,3 +352,31 @@ def test_audit_gate_pass_marks_through(monkeypatch):
                         else (_ for _ in ()).throw(FileNotFoundError(kind)))
     blk = analyzer.build_financial_block("000001", as_of="2026-05-01")
     assert blk["审计意见闸门"] == "通过"
+
+
+# ———————————— 步骤4:财报专家(接入合议决策层,P1)————————————
+def test_expert_caibao_direction_and_veto():
+    """财报专家:评级→方向/强度;审计闸门不通过→一票否决看空;无块→弃权。"""
+    from tools.analysis import experts
+    good = experts.expert_财报({"meta": {"code": "1"},
+                               "financial": {"评级": "良", "quality_score": 70,
+                                             "flags": [], "审计意见闸门": "通过", "is_forecast": False}}).to_dict()
+    assert good["方向"] == "看多" and good["强度"] > 0
+    risk = experts.expert_财报({"meta": {"code": "1"},
+                               "financial": {"评级": "风险", "审计意见闸门": "通过", "is_forecast": False}}).to_dict()
+    assert risk["方向"] == "看空" and risk["强度"] < 0
+    # 审计闸门否决:即便评级"良",非标 → 强制看空
+    veto = experts.expert_财报({"meta": {"code": "1"},
+                               "financial": {"评级": "良", "审计意见闸门": "不通过", "is_forecast": False}}).to_dict()
+    assert veto["方向"] == "看空" and veto["强度"] == -1.0
+    # 无块 → 弃权(中性 + 数据充分度缺失)
+    ab = experts.expert_财报({"meta": {"code": "1"}}).to_dict()
+    assert ab["方向"] == "中性" and ab["数据充分度"] == "缺失"
+
+
+def test_expert_caibao_registered_and_in_default_group():
+    """财报专家已注册进 BUILTIN 且在合议默认专家组(真正被决策层用上)。"""
+    from tools.analysis import experts
+    from tools.config.strategy import THRESHOLDS
+    assert "财报" in experts.BUILTIN
+    assert "财报" in THRESHOLDS["合议"]["默认专家组"]
