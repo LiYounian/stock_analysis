@@ -14,7 +14,7 @@ import pandas as pd
 import pytest
 
 from tools.collectors import financial as fin
-from tools.financial_report import analyzer, flags, metrics, scoring
+from tools.analysis.financial import analyzer, flags, metrics, scoring
 from tools.store import repo as store
 
 

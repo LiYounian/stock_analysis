@@ -25,12 +25,12 @@ from __future__ import annotations
 
 import logging
 
-from tools.financial_report import flags as flags_mod
-from tools.financial_report import metrics as metrics_mod
-from tools.financial_report import scoring as scoring_mod
+from tools.analysis.financial import flags as flags_mod
+from tools.analysis.financial import metrics as metrics_mod
+from tools.analysis.financial import scoring as scoring_mod
 from tools.store import repo as store
 
-logger = logging.getLogger("financial_report.analyzer")
+logger = logging.getLogger("analysis.financial.analyzer")
 
 # 浅度输出 & structured 摘要选取的关键科目(方案 §2.2 structured 块)
 _STRUCT_PROFIT = ("营业总收入", "营业成本", "营业利润", "利润总额",
