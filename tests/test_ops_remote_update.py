@@ -224,3 +224,24 @@ def test_http_health_fails_after_exhausting_retries(monkeypatch):
     ok = http_health(Service("stock-web", 8801), retries=3, delay=1.0, sleep_fn=sleeps.append)
     assert ok is False
     assert len(sleeps) == 3                     # 3 次重试间隔后才放弃
+
+
+def test_run_update_ff_fail_resets_hard(repo):
+    """ff-only 合并失败(远端分叉)→ reset --hard origin/main,仍完成更新。
+
+    锁住 2026-08-15 事故的修复:ff 失败若不兜底,merge 不生效 → after==before → 误判
+    'nochange' → 永远卡旧代码(概览页 500)。改为 ff 失败即硬对齐 origin。
+    """
+    class FailFF(FakeRunner):
+        def __call__(self, cmd):
+            if "merge" in cmd and "--ff-only" in cmd:
+                self.calls.append(cmd)
+                return 1, "fatal: Not possible to fast-forward, aborting."
+            return super().__call__(cmd)
+
+    runner = FailFF(revs=["BEFORE", "AFTER"])   # before=BEFORE;reset 后 after=AFTER → changed
+    res = run_update(RemoteConfig(repo_dir=str(repo)), runner=runner,
+                     health_check=lambda svc: True, env=GOOD_ENV)
+    assert res.ok and res.changed
+    assert runner.ran("git", "reset", "--hard", "origin/main")   # ff 失败 → 硬对齐
+    assert runner.ran("systemctl", "restart", "stock-web")        # 完成更新,不卡 nochange
