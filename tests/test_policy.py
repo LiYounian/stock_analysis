@@ -41,14 +41,20 @@ def _cctv_df(rows):
     return pd.DataFrame(rows, columns=["date", "title", "content"])
 
 
+# 落在窗口内的近期时间戳:用相对日期(昨天),避免硬编码日期随 today 推移滑出 days 窗口
+# 导致窗口/去重/命中过滤用例误报(cutoff = today - days,写死日期迟早 < cutoff 被丢)。
+def _recent_ts(hour=9):
+    return (pd.Timestamp.today() - pd.Timedelta(days=1)).strftime(f"%Y-%m-%d {hour:02d}:00:00")
+
+
 def _domestic_row(kw="半导体 补贴"):
     return [kw, "国家出台半导体产业补贴新政", "发改委发布集成电路专项补贴政策",
-            "2026-08-06 09:00:00", "证券时报", "http://x/1"]
+            _recent_ts(9), "证券时报", "http://x/1"]
 
 
 def _foreign_row(kw="出口管制"):
     return [kw, "美国收紧对华芯片出口管制", "美国商务部BIS更新半导体出口管制清单",
-            "2026-08-06 10:00:00", "财联社", "http://x/2"]
+            _recent_ts(10), "财联社", "http://x/2"]
 
 
 def _old_row(kw="芯片"):
@@ -58,7 +64,7 @@ def _old_row(kw="芯片"):
 
 def _nohit_row(kw="政策"):
     return [kw, "耶路撒冷地位争议", "与票池行业无关的国际政治新闻",
-            "2026-08-06 11:00:00", "某报", "http://x/3"]
+            _recent_ts(11), "某报", "http://x/3"]
 
 
 def _today_str():
