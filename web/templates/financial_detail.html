@@ -3,6 +3,7 @@
 {% block content %}
 {% set fin = d.fin %}{% set std = d.standards %}{% set an = d.annual %}
 {% set dims = fin.five_dims or {} %}{% set dv = fin.derived or {} %}{% set prof = fin.利润表摘要 or {} %}
+{% macro yi(v) %}{% if v is not none %}{{ '%.2f'|format(v/1e8) }}亿{% else %}-{% endif %}{% endmacro %}
 
 <div class="stock-head">
   <h1>{{ d.name }} <span class="code">{{ d.code }}</span>
@@ -39,7 +40,7 @@
 </section>
 
 <section class="card wide">
-  <h2>① 五维质地评分 <small>来源:三大表(akshare 东财)代码算衍生指标,按标准化区间映射 0~100 · 非 LLM</small></h2>
+  <h2>② 五维质地评分 <small>来源:三大表(akshare 东财)代码算衍生指标,按标准化区间映射 0~100 · 非 LLM</small></h2>
   <table>
     <tr><th>维度</th><th>得分</th><th>子指标(当期值 → 标准化区间 0分端→100分端)</th></tr>
     {% for dim, subs in std.五维区间.items() %}
@@ -56,7 +57,7 @@
 </section>
 
 <section class="card wide">
-  <h2>① 数值红旗与证据 <small>来源:三大表衍生;每条附命中值 vs 阈值</small></h2>
+  <h2>③ 数值红旗与证据 <small>来源:三大表衍生;每条附命中值 vs 阈值</small></h2>
   {% if fin.flags_detail %}
   <table>
     <tr><th>红旗</th><th>严重度</th><th>命中证据(值 vs 阈值)</th></tr>
@@ -75,9 +76,41 @@
   </table>
 </section>
 
+<section class="card wide">
+  <h2>④ 资金来源与资产负债 <small>来源:三大表(现金流量表 + 资产负债表)· 判"钱从哪来、家底与欠债"</small></h2>
+  {% if d.现金流 %}{% set c = d.现金流 %}
+  <h3 class="sub">资金来源 · 现金流三段 → 造血模式</h3>
+  <p>造血模式:<b class="{{ 'pos' if c.造血模式 and '经营造血' in c.造血模式 else ('neg' if c.造血模式 and ('输血' in c.造血模式 or '变卖' in c.造血模式 or '不足' in c.造血模式) else '') }}">{{ c.造血模式 or '数据不足' }}</b></p>
+  <table>
+    <tr><td>经营活动现金流 CFO</td><td class="{{ 'pos' if c.CFO is not none and c.CFO>0 else 'neg' }}">{{ yi(c.CFO) }}</td>
+        <td class="muted tiny">主业造血:为正=经营能产生现金</td></tr>
+    <tr><td>投资活动现金流 CFI</td><td>{{ yi(c.CFI) }}</td>
+        <td class="muted tiny">为负=扩张/买资产;为正=变卖资产</td></tr>
+    <tr><td>筹资活动现金流 CFF</td><td>{{ yi(c.CFF) }}</td>
+        <td class="muted tiny">为正=净融资(借钱/增发);为负=还债/分红</td></tr>
+    <tr><td>自由现金流(CFO−资本开支)</td><td class="{{ 'pos' if c.自由现金流 is not none and c.自由现金流>0 else 'neg' }}">{{ yi(c.自由现金流) }}</td>
+        <td class="muted tiny">为正=经营现金能覆盖资本开支(真金白银)</td></tr>
+  </table>
+  {% endif %}
+  {% if d.资产负债 %}{% set b = d.资产负债 %}
+  <h3 class="sub">资产负债关键科目</h3>
+  <table>
+    <tr><td>货币资金</td><td>{{ yi(b.货币资金) }}</td><td>有息负债</td><td>{{ yi(b.有息负债) }}</td></tr>
+    <tr><td>应收账款</td><td>{{ yi(b.应收账款) }}</td><td>存货</td><td>{{ yi(b.存货) }}</td></tr>
+    <tr><td>商誉</td><td>{{ yi(b.商誉) }}</td><td>合同负债(订单先行)</td><td>{{ yi(b.合同负债) }}</td></tr>
+    <tr><td>资产总计</td><td>{{ yi(b.资产总计) }}</td><td>负债合计</td><td>{{ yi(b.负债合计) }}</td></tr>
+    <tr><td>归母净资产</td><td>{{ yi(b.归母净资产) }}</td>
+        <td>货币资金 vs 有息负债</td>
+        <td class="{{ 'neg' if b.货币资金 is not none and b.有息负债 and b.货币资金 < b.有息负债 else 'pos' }}">
+          {% if b.货币资金 is not none and b.有息负债 %}{{ '覆盖不足(流动性风险/大存大贷线索)' if b.货币资金 < b.有息负债 else '货币资金可覆盖' }}{% else %}-{% endif %}</td></tr>
+  </table>
+  {% endif %}
+  {% if not d.现金流 and not d.资产负债 %}<p class="muted">无三大表数据。</p>{% endif %}
+</section>
+
 {% if fin.qualitative %}{% set q = fin.qualitative %}
 <section class="card wide">
-  <h2>① 文本定性与来源 <small>来源:年报「管理层讨论与分析 / 风险」段(cninfo PDF)→ LLM 只抄原文抽取、不算数值</small></h2>
+  <h2>⑤ 文本定性与来源 <small>来源:年报「管理层讨论与分析 / 风险」段(cninfo PDF)→ LLM 只抄原文抽取、不算数值</small></h2>
   <table>
     {% if q.增长来源 %}<tr><td>增长来源</td><td>{{ q.增长来源 }}</td></tr>{% endif %}
     {% if q.量价拆分 %}<tr><td>量价拆分</td><td>{{ q.量价拆分 }}</td></tr>{% endif %}
@@ -101,7 +134,7 @@
 <!-- ═══════════ ② AI 讲解与审计标准 ═══════════ -->
 {% if fin.verdict %}{% set v = fin.verdict %}
 <section class="card wide">
-  <h2>② AI 综合归纳(讲解) <small>投资侧"合理怀疑即避",非审计定罪 · LLM 综合数值+文本给出</small></h2>
+  <h2>⑥ AI 综合归纳(讲解) <small>投资侧"合理怀疑即避",非审计定罪 · LLM 综合数值+文本给出</small></h2>
   <div class="ai-note">
     <b>AI 评级:{{ v.综合评级 or '-' }}</b>
     {% if v.置信度 %} · 置信 {{ v.置信度 }}{% endif %}{% if v.盈利质量判断 %} · 盈利质量 {{ v.盈利质量判断 }}{% endif %}
@@ -114,7 +147,7 @@
 {% endif %}
 
 <section class="card wide">
-  <h2>② 审计标准(我是怎么审的) <small>透明留痕:所有判据可核,阈值为占位待策略提供者标定</small></h2>
+  <h2>⑦ 审计标准(我是怎么审的) <small>透明留痕:所有判据可核,阈值为占位待策略提供者标定</small></h2>
 
   <h3 class="sub">A. 双前置闸门(命中即弃,最便宜)</h3>
   <ul>
