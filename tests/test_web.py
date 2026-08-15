@@ -75,6 +75,49 @@ def test_api_stock_json():
     assert "record" in body and "kline" in body
 
 
+def test_json_safe_sanitizes_nonfinite():
+    """json_safe 递归把 NaN/Inf/-Inf → None,其余原样(锁死 JSON 净化语义)。"""
+    src = {"a": float("nan"), "b": [1.0, float("inf"), {"c": float("-inf")}], "d": 3, "e": "x"}
+    assert da.json_safe(src) == {"a": None, "b": [1.0, None, {"c": None}], "d": 3, "e": "x"}
+
+
+def test_api_stock_json_survives_nan(monkeypatch):
+    """回归:pandas 落盘的 NaN(如 kline.volume)不得让 /api/stock 500。
+
+    离线管线 json.dumps(allow_nan) 会把 NaN 写进 data/analysis,读回后严格 JSON 编码器
+    会抛 ValueError→500。锁死:接口在返回边界净化 NaN→null,恒 200。
+    """
+    monkeypatch.setattr(da, "get_record", lambda code, date="latest": {"meta": {"code": code}})
+    monkeypatch.setattr(da, "get_kline",
+                        lambda code, date="latest": {"volume": [1.0, float("nan"), float("inf")]})
+    r = client.get("/api/stock/999999")
+    assert r.status_code == 200
+    assert r.json()["kline"]["volume"] == [1.0, None, None]
+
+
+def _rec(code, sector, 得分, 拐点评分):
+    return {"meta": {"code": code, "name": "n", "sector": sector},
+            "signals": {"trend": {"得分": 得分}, "ob_os": {"结论": None},
+                        "reversal": {"拐点标签": "底背离", "拐点评分": 拐点评分}}}
+
+
+def test_dashboard_and_list_records_survive_null_scores(monkeypatch):
+    """回归:得分/拐点评分 显式为 null(样本不足/未算)时,首页聚合与列表排序不得 TypeError。
+
+    .get(key, default) 只在键缺失时兜底,值为 None 时仍返回 None,混进 sort key →
+    '>' not supported between NoneType and int/float。_num 排序前折成可比数值锁死。
+    需 ≥2 条(含 null 与数值混排)才会触发比较,单条 sort 不比较测不出。
+    """
+    two = {"000001": _rec("000001", "半导体", None, None),
+           "000002": _rec("000002", "半导体", 5.0, 3.0)}
+    monkeypatch.setattr(da, "_load_all", lambda date="latest": two)
+    d = da.dashboard("latest")                 # 修复前:sum([None,5.0]) / rev.sort 抛异常
+    assert d["total"] == 2
+    assert d["reversal"][0]["评分"] == 3.0     # 数值在前,null 折 0 沉底
+    recs = da.list_records("latest")           # 修复前:sort key 混 None 抛 '>' TypeError
+    assert [r["meta"]["code"] for r in recs] == ["000002", "000001"]  # 得分 5.0 在前,null(-999)沉底
+
+
 # —— 历史/日期(点2)——
 @skip_no_data
 def test_available_dates_and_date_param():

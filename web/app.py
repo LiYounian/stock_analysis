@@ -128,7 +128,8 @@ def api_stock(code: str, date: str = "latest"):
     rec = da.get_record(code, date)
     if rec is None:
         return JSONResponse({"error": "not found"}, status_code=404)
-    return {"record": rec, "kline": da.get_kline(code, date)}
+    # pandas 算出的 NaN/Inf(kline.volume、资金流等)落盘后会让严格 JSON 编码器 500,统一净化为 null
+    return da.json_safe({"record": rec, "kline": da.get_kline(code, date)})
 
 
 # ———— 票池管理:页面 + 增删 API(写操作委托编排层 pool_service)————
