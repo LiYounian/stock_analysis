@@ -3,7 +3,7 @@
 一轮 run_update:
   ① 环境检查+自愈:仓库/venv/必需 env(STORE_BACKEND=db、密钥变量名)/DB 目录/端口配置;
      能补的补(建 DB 目录),补不了的(缺 venv、缺密钥 env)清晰报错退出。
-  ② 更新:git fetch + ff-only 合并最新;有变更才 pip 装依赖。
+  ② 更新:git fetch → ff-only 合并;ff 失败(远端分叉/本地改动)→ reset --hard origin(展示端跟随远端,不留本地改动);有变更才 pip 装依赖。
   ③ 重启+验证:重启 web(8801)+ingest(8802);任一重启后健康检查不过 → 回滚到更新前 commit
      (需要则重装依赖)、重启、返回告警。
 幂等、可重复跑;远端专有值(路径/分支/端口/密钥变量)走 RemoteConfig 参数或 env,不硬编。
@@ -155,7 +155,13 @@ def run_update(cfg: RemoteConfig, *, runner, health_check, env: dict | None = No
     # ② 更新:码仓没变 → 直接返回,不重启(定时轮询只在有变更时动手)
     before = _rev(cfg, runner)
     runner(["git", "-C", cfg.repo_dir, "fetch", "origin"])
-    runner(["git", "-C", cfg.repo_dir, "merge", "--ff-only", f"origin/{cfg.branch}"])
+    # 优先 ff-only(干净跟随);ff 失败(远端分叉 / 本地有改动)→ 展示端本就该跟随 origin,
+    # 硬对齐 reset --hard(不留本地改动)。否则 merge 不生效 → after==before → 误判"nochange"
+    # → 永远卡旧代码(实测事故:2026-08-15 远端因此卡在旧代码,概览页 500)。
+    rc, _ = runner(["git", "-C", cfg.repo_dir, "merge", "--ff-only", f"origin/{cfg.branch}"])
+    if rc != 0:
+        logger.warning("ff-only 合并失败(远端分叉/本地改动),reset --hard 到 origin/%s", cfg.branch)
+        runner(["git", "-C", cfg.repo_dir, "reset", "--hard", f"origin/{cfg.branch}"])
     after = _rev(cfg, runner)
     changed = before != after
     if not changed:
