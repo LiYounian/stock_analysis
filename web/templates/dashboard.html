@@ -84,8 +84,8 @@
       <td><a href="/stock/{{ r.meta.code }}">{{ r.meta.name }}</a></td>
       <td>{{ r.meta.code }}</td><td>{{ r.meta.sector }}</td>
       <td>{{ r.snapshot.close if r.snapshot else '-' }}</td>
-      <td class="{{ 'pos' if r.snapshot and r.snapshot.pct_chg>0 else 'neg' }}">
-        {{ r.snapshot.pct_chg if r.snapshot else '-' }}</td>
+      <td class="{{ 'pos' if r.snapshot and r.snapshot.pct_chg is not none and r.snapshot.pct_chg>0 else 'neg' }}">
+        {{ r.snapshot.pct_chg if (r.snapshot and r.snapshot.pct_chg is not none) else '-' }}</td>
       <td>{{ sig.trend.评级 if sig else '-' }}</td>
       <td>{{ sig.ob_os.结论 if sig else '-' }}</td>
       <td>{{ sig.reversal.拐点标签 if sig else '-' }}</td>

@@ -118,6 +118,21 @@ def test_dashboard_and_list_records_survive_null_scores(monkeypatch):
     assert [r["meta"]["code"] for r in recs] == ["000002", "000001"]  # 得分 5.0 在前,null(-999)沉底
 
 
+@skip_no_data
+def test_dashboard_survives_null_pct_chg(monkeypatch):
+    """回归:全池速览行渲染 pct_chg 时,snapshot 存在但 pct_chg=None 不得 500。
+
+    真实数据里个别票 snapshot.pct_chg 为 None(停牌/次新/快照缺列),dashboard.html
+    的涨跌色判断只挡了 snapshot 存在、没挡 pct_chg 为 None → `None > 0` 抛
+    '>' not supported between NoneType and int,整页 500。锁死:模板先判 is not none。
+    """
+    real = da.list_records()
+    crafted = {"meta": {"code": "999999", "name": "n", "sector": "x"},
+               "snapshot": {"close": 1.0, "pct_chg": None}}
+    monkeypatch.setattr(da, "list_records", lambda date="latest": real + [crafted])
+    assert client.get("/").status_code == 200
+
+
 # —— 历史/日期(点2)——
 @skip_no_data
 def test_available_dates_and_date_param():
