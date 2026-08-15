@@ -1,8 +1,10 @@
 #!/bin/bash
-# 本地盘后闭环(供 launchd 调用):本地自采全A K线 → 全A多策略选股(screenall)→ 签名上传。
-# 改为**本地自采**(ops.remote_fetch,fqkline ~5min)而非 pull 远端:远端 tencent 限速~2h、
-# 且 pull 会抢在远端采集完成前 → 拿到旧/半截数据。本地 fqkline 当日盘后即含收盘价,快且稳。
-# 远端只负责展示(web 读上传的产物)。
+# 本地盘后闭环(供 launchd 调用):[①全A自采K线·默认关] → 全A多策略选股(screenall --no-fetch,
+#   含 M2 财报) → 前瞻记分卡 → 签名上传。远端只负责展示(web 读上传的产物)。
+# **默认口径(PULL_FETCH!=1):跳过①自采**——ops.remote_fetch 的东财 mini_racer 在内存吃紧时原生崩溃、
+#   会拖垮整条闭环;日筛用近史护栏(load_kline_recent 500根)、财报/展示不依赖当日新K线,故默认用现有主档。
+#   需刷新全A K线时设 PULL_FETCH=1(内存充裕或 mini_racer 修复后);那时 ops.remote_fetch 走 spot增量→
+#   回退 fqkline 逐只推进主档(当日盘后即含收盘价)。
 # 密钥只放本机受限文件、不进 git:默认从 $HOME/.config/stock/sync.env 读(chmod 600)。
 # 仓库路径由脚本自身位置推出(ops/launchd/ 上两级),无需硬编用户名/绝对路径。
 set -uo pipefail
@@ -30,12 +32,18 @@ trap 'rmdir "$LOCK" 2>/dev/null' EXIT
 
 {
   echo "==================== $(date) pull_refresh $D ===================="
-  echo "-- ① 本地自采全A K线(fqkline,~5min;不依赖慢远端 pull,规避时序竞争) --"
-  # ops.remote_fetch = 全A主档同步(spot增量→失败回退 fqkline 逐只 + >= 推进主档;含交易日守卫)。
-  # 本地跑=本地全A自采:fqkline 当日盘后即含收盘价,比"pull 远端(远端 tencent 限速~2h)"快且稳。
-  FETCH_WORKERS="${FETCH_WORKERS:-10}" "$PY" -m ops.remote_fetch || echo "!! 本地全A采集失败(继续用本地已有)"
-  echo "-- ② 全A多策略选股(策略0/1/2/3/4)+ 对(选出并集∪自选)做新闻/LLM/合议 --"
-  # --no-fetch:pull 已把全A落主档,screenall 不再触发 master_sync 回填/重采
+  # ① 本地自采全A K线:**默认跳过**(PULL_FETCH!=1)。原因:ops.remote_fetch 走东财 JS 解密
+  #    (mini_racer)在内存吃紧时会**原生崩溃**(Trace/BPT trap)拖垮整条闭环;且财报/展示不依赖
+  #    当日新 K 线,日筛用近史护栏(load_kline_recent 500根)即可。需刷新全A K线时(内存充裕/
+  #    mini_racer 修复后)设 PULL_FETCH=1。ops.remote_fetch = spot增量→回退 fqkline 逐只推进主档。
+  if [ "${PULL_FETCH:-0}" = "1" ]; then
+    echo "-- ① 本地自采全A K线(PULL_FETCH=1,fqkline ~5min) --"
+    FETCH_WORKERS="${FETCH_WORKERS:-10}" "$PY" -m ops.remote_fetch || echo "!! 本地全A采集失败(继续用本地已有)"
+  else
+    echo "-- ① 跳过全A自采(默认;PULL_FETCH=1 可开启)——用现有主档,规避 mini_racer 崩溃 --"
+  fi
+  echo "-- ② 全A多策略选股(策略0/1/2/3/4)+ 对(选出并集∪自选)做新闻/LLM/合议 + M2财报(数值+审计双闸门+LLM文本,仅news_subset) --"
+  # --no-fetch:不触发 master_sync 回填/重采,直接用现有主档(近史护栏);财报三步在 run_screen_all 内对 news_subset 自然跑
   "$PY" -m tools.run screenall --no-fetch || echo "!! screenall 失败"
   echo "-- ②.5 前瞻记分卡(picks+预测+情绪 配到期实际收益,幂等滚存;消息面回测长期样本源) --"
   # 持久 --out:每天重跑把"新到期"的前瞻收益补进,累积几周后供 backtest_sentiment / PEAD 复验
