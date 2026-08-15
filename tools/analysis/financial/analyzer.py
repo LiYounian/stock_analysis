@@ -186,7 +186,7 @@ def build_financial_block(code: str, as_of: str | None = None,
     latest = res.get("latest")
     if not latest:
         return None
-    return {
+    block = {
         "报告期": latest["report_date"],
         "报告类型": latest.get("report_type"),
         "披露日": latest.get("disclosure_date"),
@@ -200,6 +200,24 @@ def build_financial_block(code: str, as_of: str | None = None,
         "derived": latest.get("derived"),
         "verdict": None,   # LLM 层留口
     }
+    # 审计意见闸门(闸门2)传导:取最新已披露"年报"的审计意见,即使 latest 是季报也生效。
+    # 非标 → 记录级降"风险" + 补红旗(非标年报期间公司整体不可信,不待下一份干净年报不翻身)。
+    annual = [p for p in res.get("periods", {}).values() if p.get("audit_opinion")]
+    if annual:
+        newest = max(annual, key=lambda x: x.get("disclosure_date") or "")
+        op = newest.get("audit_opinion")
+        pass_ops = set(_cfg().get("审计意见_通过", ["标准无保留意见", "无保留意见"]))
+        gate_pass = op in pass_ops
+        block["审计意见"] = op
+        block["审计意见闸门"] = "通过" if gate_pass else "不通过"
+        if not gate_pass:
+            if "非标审计意见" not in block["flags"]:
+                block["flags"].append("非标审计意见")
+            block["评级"] = "风险"
+    else:
+        block["审计意见"] = None
+        block["审计意见闸门"] = None
+    return block
 
 
 # —— 声明式查询接口(方案 §2.3a):按披露日锚定、条件筛票 / 字段取值 ——

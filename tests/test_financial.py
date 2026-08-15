@@ -315,3 +315,40 @@ def test_financial_industry_keeps_applicable_flags():
     st = {"利润表": {"扣非归母净利润": -5.0}}
     names = [f["code"] for f in flags.evaluate_flags(derived, st, is_financial=True)]
     assert "扣非为负" in names
+
+
+# ———————————— 步骤3:审计意见闸门(闸门2,P1)————————————
+def test_flag_nonstandard_audit_opinion():
+    """非标审计意见 → 高危红旗'非标审计意见';标准无保留/空(季报)不判。"""
+    bad = flags.evaluate_flags({}, {"audit_opinion": "保留意见"})
+    assert any(f["code"] == "非标审计意见" and f["严重度"] == "高" for f in bad)
+    assert not any(f["code"] == "非标审计意见"
+                   for f in flags.evaluate_flags({}, {"audit_opinion": "标准无保留意见"}))
+    assert not any(f["code"] == "非标审计意见"
+                   for f in flags.evaluate_flags({}, {"audit_opinion": None}))  # 季报无意见
+
+
+def test_audit_gate_downgrades_block(monkeypatch):
+    """最新年报非标意见 → build_financial_block 传导:评级降'风险' + 闸门=不通过 + 补红旗。"""
+    periods = _synthetic_periods()
+    periods["2025-12-31"]["audit_opinion"] = "无法表示意见"     # 年报非标
+    payload = {"code": "000001", "name": "测试股", "periods": periods}
+    monkeypatch.setattr(store, "get_raw",
+                        lambda kind, code, date="latest": payload if kind == "financial_report"
+                        else (_ for _ in ()).throw(FileNotFoundError(kind)))
+    blk = analyzer.build_financial_block("000001", as_of="2026-05-01")
+    assert blk["审计意见闸门"] == "不通过"
+    assert blk["评级"] == "风险"
+    assert "非标审计意见" in blk["flags"]
+
+
+def test_audit_gate_pass_marks_through(monkeypatch):
+    """标准无保留 → 闸门=通过,不强降评级。"""
+    periods = _synthetic_periods()
+    periods["2025-12-31"]["audit_opinion"] = "标准无保留意见"
+    payload = {"code": "000001", "name": "测试股", "periods": periods}
+    monkeypatch.setattr(store, "get_raw",
+                        lambda kind, code, date="latest": payload if kind == "financial_report"
+                        else (_ for _ in ()).throw(FileNotFoundError(kind)))
+    blk = analyzer.build_financial_block("000001", as_of="2026-05-01")
+    assert blk["审计意见闸门"] == "通过"

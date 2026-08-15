@@ -122,6 +122,12 @@ def evaluate_flags(derived: dict, structured: dict | None = None,
         if isinstance(kf, (int, float)) and kf < 0:
             hit("扣非为负", {"扣非归母净利润": kf})
 
+    # 非标审计意见(闸门2):年报审计意见非"标准无保留" → 高危红旗(封顶降"风险")。仅年报有意见,季报为空不判。
+    op = (structured or {}).get("audit_opinion")
+    pass_ops = set(_cfg().get("审计意见_通过", ["标准无保留意见", "无保留意见"]))
+    if op and op not in pass_ops:
+        hit("非标审计意见", {"审计意见": op})
+
     # 毛利率异常跳升:同比绝对百分点跳升 > 阈值(需上一期毛利率,由 analyzer 注入 derived['毛利率同比升'])
     jump = derived.get("毛利率同比升")
     jump_thr = thr.get("毛利率跳升_pct")
