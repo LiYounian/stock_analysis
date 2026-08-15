@@ -54,6 +54,14 @@ def selection(request: Request, date: str = "latest"):
         context={"s": da.selection_page(date), **_nav(date)})
 
 
+@app.get("/financial", response_class=HTMLResponse)
+def financial(request: Request, date: str = "latest"):
+    """财报分析页:带财报块的票的质地评级/审计双闸门/关键红旗/LLM综合归纳一览,可点进个股详情。"""
+    return templates.TemplateResponse(
+        request=request, name="financial.html",
+        context={"f": da.financial_page(date), **_nav(date)})
+
+
 @app.get("/selection-analysis", response_class=HTMLResponse)
 def selection_analysis(request: Request, report: str = "", date: str = "latest"):
     """选股分析报告页:列出定向分析报告(data/reports/选股分析/*.md),可选一份查看(markdown 渲染)。

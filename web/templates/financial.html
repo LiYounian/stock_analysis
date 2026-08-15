@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+{% block title %}财报分析 · A股策略辅助工具{% endblock %}
+{% block content %}
+<h1>财报分析 <small>数值质地 + 审计双闸门 + LLM 综合归纳;仅已采财报的票(自选∪每策略前5);⚠️ 非投资建议</small></h1>
+
+<section class="card wide">
+  <h2>财报质地榜 <small>{{ f.count }} 只 · 按评级排序(风险/差在前,便于排雷);点代码进个股详情看完整财报卡片</small></h2>
+  {% if f.rows %}
+  <table>
+    <tr>
+      <th>代码</th><th>名称</th><th>行业</th><th>评级</th><th>质地分</th>
+      <th>审计意见闸门</th><th>审计机构闸门</th><th>关键红旗</th><th>AI 综合归纳</th>
+    </tr>
+    {% for x in f.rows %}
+    <tr>
+      <td><a href="/stock/{{ x.code }}?date={{ _d }}">{{ x.code }}</a></td>
+      <td><a href="/stock/{{ x.code }}?date={{ _d }}">{{ x.name }}</a></td>
+      <td class="muted">{{ x.industry }}</td>
+      <td><b class="{{ 'pos' if x.评级 in ['优','良'] else ('neg' if x.评级 in ['差','风险'] else '') }}">{{ x.评级 or '-' }}</b>{% if x.金融业口径 %} <span class="tiny muted">金融</span>{% endif %}</td>
+      <td>{{ x.质地分 if x.质地分 is not none else '-' }}</td>
+      <td><span class="{{ 'neg' if x.审计意见闸门=='不通过' else ('pos' if x.审计意见闸门=='通过' else 'muted') }}">{{ x.审计意见闸门 or '未知' }}</span></td>
+      <td><span class="{{ 'neg' if x.审计机构闸门=='不通过' else ('pos' if x.审计机构闸门=='通过' else 'muted') }}">{{ x.审计机构闸门 or '未知' }}</span>{% if x.审计机构 %} <span class="tiny muted">{{ x.审计机构 }}</span>{% endif %}</td>
+      <td>{% for fl in x.flags[:3] %}<span class="badge neg">{{ fl }}</span> {% endfor %}{% if x.flags|length > 3 %}<span class="tiny muted">+{{ x.flags|length - 3 }}</span>{% endif %}</td>
+      <td class="muted">{% if x.LLM评级 %}<b>[{{ x.LLM评级 }}]</b> {% endif %}{{ x.一句话 or '' }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% else %}
+  <p class="muted">当日暂无财报数据(需每日闭环带 M2 跑一轮铺开;或该日期未采财报)。</p>
+  {% endif %}
+</section>
+{% endblock %}
