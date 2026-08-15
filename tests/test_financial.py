@@ -280,3 +280,38 @@ def test_contract_financial_block_enum():
     assert any("financial.评级" in e for e in rc.validate_record(bad))
     # null 宽容
     assert rc.validate_record(dict(base, financial=None)) == []
+
+
+# ———————————— 步骤2:低基数护栏 + 金融业特判(P1)————————————
+def test_low_base_guard_suppresses_small_receivables():
+    """低基数护栏:应收增速高但应收占营收极小(如茅台)→ 不判'应收存货激增'(修小基数误杀)。"""
+    derived = {"营收增速": 6.0, "应收增速": 80.0, "存货增速": None}
+    # 应收/营收 = 10/1000 = 1% < 5% 阈值 → 护栏抑制
+    st = {"利润表": {"营业总收入": 1000.0}, "资产负债表": {"应收账款": 10.0}}
+    names = [f["code"] for f in flags.evaluate_flags(derived, st)]
+    assert "应收存货激增" not in names
+
+
+def test_low_base_guard_allows_material_receivables():
+    """基数充分(应收占营收 20% ≥ 5%)+ 增速超阈 → 正常触发'应收存货激增'。"""
+    derived = {"营收增速": 6.0, "应收增速": 80.0, "存货增速": None}
+    st = {"利润表": {"营业总收入": 1000.0}, "资产负债表": {"应收账款": 200.0}}
+    names = [f["code"] for f in flags.evaluate_flags(derived, st)]
+    assert "应收存货激增" in names
+
+
+def test_financial_industry_skips_inapplicable_flags():
+    """金融业特判:银行高负债/短债覆盖等对金融业不适用 → is_financial=True 时跳过;非金融照常判。"""
+    derived = {"资产负债率": 91.0, "短债覆盖": 0.2, "现金含量_CFO比净利": 0.1}
+    fin_names = [f["code"] for f in flags.evaluate_flags(derived, None, is_financial=True)]
+    assert "高负债" not in fin_names and "短债覆盖不足" not in fin_names and "现金含量不足" not in fin_names
+    non_fin = [f["code"] for f in flags.evaluate_flags(derived, None, is_financial=False)]
+    assert "高负债" in non_fin
+
+
+def test_financial_industry_keeps_applicable_flags():
+    """金融业特判只跳'不适用'红旗;扣非为负等普适红旗对金融业仍要判。"""
+    derived = {}
+    st = {"利润表": {"扣非归母净利润": -5.0}}
+    names = [f["code"] for f in flags.evaluate_flags(derived, st, is_financial=True)]
+    assert "扣非为负" in names

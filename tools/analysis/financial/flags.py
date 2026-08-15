@@ -26,19 +26,35 @@ def _sev(name: str) -> str:
     return _cfg().get("严重度", {}).get(name, "中")
 
 
-def evaluate_flags(derived: dict, structured: dict | None = None) -> list[dict]:
+def _num(rec: dict | None, *path: str):
+    """安全取嵌套数值科目:_num(rec, '资产负债表', '存货');任一层缺/非数 → None。"""
+    cur = rec
+    for k in path:
+        if not isinstance(cur, dict):
+            return None
+        cur = cur.get(k)
+    return cur if isinstance(cur, (int, float)) else None
+
+
+def evaluate_flags(derived: dict, structured: dict | None = None,
+                   is_financial: bool = False) -> list[dict]:
     """对单期衍生指标算红旗清单。
 
     Args:
         derived: metrics.compute_derived 的单期结果。
-        structured: 单期三大表记录(取扣非绝对值等原始科目;可 None)。
+        structured: 单期三大表记录(取扣非绝对值 / 应收存货基数等原始科目;可 None)。
+        is_financial: 该票是否金融业(银行/非银)。True 时跳过对金融业不适用的红旗
+                      (高负债/现金含量/短债覆盖/应收存货激增),避免系统性误杀。
     Returns:
         list[flag];仅返回**命中**的红旗(未命中不列)。
     """
     thr = _thr()
     flags: list[dict] = []
+    skip = set(_cfg().get("金融业跳过红旗", [])) if is_financial else set()
 
     def hit(name: str, val: dict):
+        if name in skip:                     # 金融业特判:该红旗对金融业不适用,不判
+            return
         flags.append({"code": name, "命中": True, "严重度": _sev(name), "值": val})
 
     营收增速 = derived.get("营收增速")
@@ -53,14 +69,28 @@ def evaluate_flags(derived: dict, structured: dict | None = None) -> list[dict]:
     if cfo_ratio is not None and lo is not None and cfo_ratio < lo:
         hit("现金含量不足", {"现金含量_CFO比净利": round(cfo_ratio, 4), "下限": lo})
 
-    # 应收/存货激增:任一增速 − 营收增速 > 阈值
+    # 应收/存货激增:任一增速 − 营收增速 > 阈值,且该项绝对基数占营收 ≥ 下限(低基数护栏)
     gap = thr.get("应收存货增速超营收_pct")
+    min_base = thr.get("应收存货最小基数占营收")   # 占营收比;None/0 = 不启用护栏
     if gap is not None and 营收增速 is not None:
+        营收_abs = _num(structured, "利润表", "营业总收入")
+        base_of = {
+            "应收增速": (_num(structured, "资产负债表", "应收账款")
+                       or _num(structured, "资产负债表", "应收票据及应收账款")),
+            "存货增速": _num(structured, "资产负债表", "存货"),
+        }
         for k in ("应收增速", "存货增速"):
             g = derived.get(k)
-            if g is not None and (g - 营收增速) > gap:
-                hit("应收存货激增", {k: g, "营收增速": 营收增速, "差值pct": round(g - 营收增速, 4)})
-                break
+            if g is None or (g - 营收增速) <= gap:
+                continue
+            base = base_of.get(k)
+            # 低基数护栏:基数/营收 < 下限 → 小基数噪声(如茅台极小应收),不判
+            if min_base and 营收_abs and base is not None and (base / 营收_abs) < min_base:
+                continue
+            ratio = round(base / 营收_abs, 4) if (base is not None and 营收_abs) else None
+            hit("应收存货激增", {k: g, "营收增速": 营收增速,
+                             "差值pct": round(g - 营收增速, 4), "基数占营收": ratio})
+            break
 
     # 商誉高企:商誉/净资产 > 上限
     gw = derived.get("商誉占净资产")
