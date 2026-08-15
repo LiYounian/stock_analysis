@@ -6,7 +6,26 @@ Web 不做计算、不触网,只读离线 run.py 产出的数据。store 按日�
 """
 from __future__ import annotations
 
+import math
+
 from tools.store import repo as store
+
+
+def json_safe(obj):
+    """把结构里的非法 JSON 浮点(NaN/Inf/-Inf)递归替换为 None。
+
+    离线管线用 json.dumps(allow_nan=True) 落盘,pandas 算出的 NaN(如 kline.volume、
+    资金流字段)会以字面量 `NaN` 存进 data/analysis,Python json.loads 能读回 float('nan'),
+    但 FastAPI/严格 JSON 编码器会抛 ValueError(Out of range float values)导致接口 500。
+    在返回 JSON 的边界统一净化,前端 NaN→null→渲染「—」,不炸接口。
+    """
+    if isinstance(obj, float):
+        return None if (math.isnan(obj) or math.isinf(obj)) else obj
+    if isinstance(obj, dict):
+        return {k: json_safe(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [json_safe(v) for v in obj]
+    return obj
 
 
 def available_dates() -> list[str]:

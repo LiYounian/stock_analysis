@@ -75,6 +75,26 @@ def test_api_stock_json():
     assert "record" in body and "kline" in body
 
 
+def test_json_safe_sanitizes_nonfinite():
+    """json_safe 递归把 NaN/Inf/-Inf → None,其余原样(锁死 JSON 净化语义)。"""
+    src = {"a": float("nan"), "b": [1.0, float("inf"), {"c": float("-inf")}], "d": 3, "e": "x"}
+    assert da.json_safe(src) == {"a": None, "b": [1.0, None, {"c": None}], "d": 3, "e": "x"}
+
+
+def test_api_stock_json_survives_nan(monkeypatch):
+    """回归:pandas 落盘的 NaN(如 kline.volume)不得让 /api/stock 500。
+
+    离线管线 json.dumps(allow_nan) 会把 NaN 写进 data/analysis,读回后严格 JSON 编码器
+    会抛 ValueError→500。锁死:接口在返回边界净化 NaN→null,恒 200。
+    """
+    monkeypatch.setattr(da, "get_record", lambda code, date="latest": {"meta": {"code": code}})
+    monkeypatch.setattr(da, "get_kline",
+                        lambda code, date="latest": {"volume": [1.0, float("nan"), float("inf")]})
+    r = client.get("/api/stock/999999")
+    assert r.status_code == 200
+    assert r.json()["kline"]["volume"] == [1.0, None, None]
+
+
 # —— 历史/日期(点2)——
 @skip_no_data
 def test_available_dates_and_date_param():
