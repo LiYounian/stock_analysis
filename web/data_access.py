@@ -28,6 +28,20 @@ def json_safe(obj):
     return obj
 
 
+def _num(v, default: float = 0.0) -> float:
+    """排序键净化:None / 非数 / NaN / Inf → default。
+
+    得分/评分等字段在数据里可能显式为 null(样本不足/未算),.get(key, default) 只在键
+    *缺失* 时兜底,键存在但值为 None 时仍返回 None,混进 sort key 会抛
+    '>' not supported between NoneType and int/float。排序前统一折成可比数值。
+    """
+    if isinstance(v, bool):
+        return default
+    if isinstance(v, (int, float)) and not (isinstance(v, float) and (math.isnan(v) or math.isinf(v))):
+        return v
+    return default
+
+
 def available_dates() -> list[str]:
     """所有可选分析日期,倒序(最新在前),供页面日期下拉。"""
     return list(reversed(store.list_dates("analysis")))
@@ -49,7 +63,7 @@ def _load_all(date: str = "latest") -> dict[str, dict]:
 def list_records(date: str = "latest") -> list[dict]:
     """全池记录,按趋势得分降序。"""
     recs = list(_load_all(date).values())
-    recs.sort(key=lambda r: ((r.get("signals") or {}).get("trend") or {}).get("得分", -999),
+    recs.sort(key=lambda r: _num(((r.get("signals") or {}).get("trend") or {}).get("得分"), -999),
               reverse=True)
     return recs
 
@@ -623,7 +637,7 @@ def dashboard(date: str = "latest") -> dict:
     # 板块强弱(趋势得分均值)
     sec: dict[str, list] = {}
     for r in recs:
-        sec.setdefault(r["meta"]["sector"], []).append(r["signals"]["trend"]["得分"])
+        sec.setdefault(r["meta"]["sector"], []).append(_num(r["signals"]["trend"].get("得分")))
     sectors = sorted(({"板块": s, "均分": round(sum(v) / len(v), 1), "只数": len(v)}
                       for s, v in sec.items()), key=lambda x: x["均分"], reverse=True)
 
@@ -639,7 +653,7 @@ def dashboard(date: str = "latest") -> dict:
 
     # 拐点榜
     rev = [{**_meta(r), "标签": r["signals"]["reversal"].get("拐点标签"),
-            "评分": r["signals"]["reversal"].get("拐点评分", 0)}
+            "评分": _num(r["signals"]["reversal"].get("拐点评分"), 0)}
            for r in recs if r["signals"]["reversal"].get("拐点标签", "无") != "无"]
     rev.sort(key=lambda x: x["评分"], reverse=True)
 
