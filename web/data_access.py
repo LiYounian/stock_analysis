@@ -94,6 +94,56 @@ def financial_page(date: str = "latest") -> dict:
     return {"rows": rows, "count": len(rows), "date": date}
 
 
+def financial_detail(code: str, date: str = "latest") -> dict | None:
+    """单只票的**详细**财报分析页数据:分析+证据(带来源)+ AI 讲解 + 审计标准。
+
+    组装:record.financial 块(评级/五维/红旗明细/审计双闸门/LLM verdict+qualitative)
+    + config 审计标准(红旗阈值/五维标准化区间/评级映射/审计意见通过口径/名录家数)
+    + 年报原文段落(MD&A/风险,LLM 定性的来源证据)。展示层只读、不算。
+    """
+    rec = get_record(code, date)
+    if not rec or not rec.get("financial"):
+        return None
+    from tools.config import strategy
+    from tools.analysis.financial import scoring
+    cfg = strategy.THRESHOLDS.get("财报", {})
+    # 年报原文来源(证据):MD&A/风险 段截断预览 + PDF 链接
+    annual = None
+    try:
+        ar = store.get_raw("annual_report_text", str(code).zfill(6))
+        secs = ar.get("段落") or {}
+        annual = {"年度": ar.get("年度"), "披露日": ar.get("disclosure_date"),
+                  "pdf_url": ar.get("pdf_url"),
+                  "MD&A": (secs.get("MD&A") or "")[:1500] or None,
+                  "风险": (secs.get("风险") or "")[:900] or None,
+                  "审计报告": (secs.get("审计报告") or "")[:1200] or None}
+    except FileNotFoundError:
+        pass
+    # 审计名录家数/更新日期(闸门1 标准来源)
+    firms_meta = {}
+    try:
+        import json as _json
+        from pathlib import Path as _Path
+        p = _Path(__file__).resolve().parent.parent / "tools" / "config" / "audit_firms.json"
+        d = _json.loads(p.read_text(encoding="utf-8"))
+        firms_meta = {"覆盖家数": d.get("覆盖家数"), "更新日期": d.get("更新日期"), "口径说明": d.get("口径说明")}
+    except Exception:                                       # noqa: BLE001
+        pass
+    return {
+        "code": str(code).zfill(6), "name": rec["meta"].get("name"),
+        "industry": rec["meta"].get("industry"), "sector": rec["meta"].get("sector"),
+        "fin": rec["financial"],
+        "annual": annual,
+        "standards": {
+            "红旗阈值": cfg.get("红旗", {}), "严重度": cfg.get("严重度", {}),
+            "审计意见_通过": cfg.get("审计意见_通过", []),
+            "金融业跳过红旗": cfg.get("金融业跳过红旗", []),
+            "评分": cfg.get("评分", {}), "五维区间": scoring.dimension_specs(),
+            "名录": firms_meta,
+        },
+    }
+
+
 def get_record(code: str, date: str = "latest") -> dict | None:
     try:
         return store.get_record(code, date=date)

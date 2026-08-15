@@ -209,6 +209,7 @@ def build_financial_block(code: str, as_of: str | None = None,
         "five_dims": latest.get("five_dims"),
         "利润表摘要": latest.get("利润表摘要"),
         "flags": [f["code"] for f in latest.get("flags", [])],   # 轻量:只列命中信号名
+        "flags_detail": latest.get("flags", []),                  # 完整红旗:{code,命中,严重度,值}(详情页证据)
         "金融业口径": latest.get("金融业口径", False),
         "derived": latest.get("derived"),
         "verdict": None,   # LLM 层留口

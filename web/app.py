@@ -62,6 +62,17 @@ def financial(request: Request, date: str = "latest"):
         context={"f": da.financial_page(date), **_nav(date)})
 
 
+@app.get("/financial/{code}", response_class=HTMLResponse)
+def financial_detail(request: Request, code: str, date: str = "latest"):
+    """单只票的详细财报页:财报分析+证据(带来源)+ AI 综合归纳 + 审计标准。"""
+    d = da.financial_detail(code, date)
+    if d is None:
+        return HTMLResponse(f"<p>{code} 无财报数据(该票未采财报,或该日期无记录)。"
+                            f"<a href='/financial?date={date}'>返回财报榜</a></p>", status_code=404)
+    return templates.TemplateResponse(
+        request=request, name="financial_detail.html", context={"d": d, **_nav(date)})
+
+
 @app.get("/selection-analysis", response_class=HTMLResponse)
 def selection_analysis(request: Request, report: str = "", date: str = "latest"):
     """选股分析报告页:列出定向分析报告(data/reports/选股分析/*.md),可选一份查看(markdown 渲染)。
