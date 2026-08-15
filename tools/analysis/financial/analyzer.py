@@ -66,6 +66,18 @@ def _is_financial(code: str, industry: str | None = None) -> bool:
     return sw in fin_set
 
 
+def _is_financial_structural(periods_raw: dict) -> bool:
+    """结构兜底(行业名解析不到时):有资产负债表数据、但**无'营业成本'且无'存货'** → 银行/保险/证券。
+    银行等金融业利润表无营业成本行、资产负债表无存货,是稳定可判信号(不依赖会员/行业数据加载)。"""
+    if not periods_raw:
+        return False
+    latest = periods_raw.get(max(periods_raw)) or {}
+    lp = latest.get("利润表") or {}
+    bs = latest.get("资产负债表") or {}
+    return bool(bs.get("资产总计") is not None
+                and lp.get("营业成本") is None and bs.get("存货") is None)
+
+
 def _cfg() -> dict:
     from tools.config import strategy
     return strategy.THRESHOLDS.get("财报", {})
@@ -117,8 +129,9 @@ def analyze(code: str, as_of: str | None = None, persist: bool = True,
     """
     code = str(code).zfill(6)
     raw = store.get_raw("financial_report", code)          # 缺失 → FileNotFoundError
-    is_fin = _is_financial(code, industry)
     periods_raw = raw.get("periods", {})
+    # 金融业判定:行业名(池/board)优先,结构信号(无营业成本+无存货)兜底,任一命中即金融业
+    is_fin = _is_financial(code, industry) or _is_financial_structural(periods_raw)
     derived_all = metrics_mod.compute_derived(periods_raw)
 
     # 注入「毛利率同比升」(供毛利率异常跳升红旗)

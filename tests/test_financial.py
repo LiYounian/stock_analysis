@@ -472,3 +472,22 @@ def test_block_merges_financial_text_view(monkeypatch):
     blk = analyzer.build_financial_block("000001", as_of="2026-05-01")
     assert blk["qualitative"] == {"增长来源": "产品放量"}
     assert blk["verdict"] == {"综合评级": "良"}
+
+
+def test_financial_structural_fallback_detects_bank(monkeypatch):
+    """行业名解析不到时,结构信号(无营业成本+无存货)兜底识别银行 → 跳过高负债误杀。"""
+    bank_periods = {"2025-12-31": {"report_date": "2025-12-31", "disclosure_date": "2026-04-01",
+                    "report_type": "年报",
+                    "利润表": {"营业总收入": None, "营业成本": None, "归母净利润": 100.0, "扣非归母净利润": 100.0},
+                    "资产负债表": {"资产总计": 10000.0, "负债合计": 9200.0, "股东权益合计": 800.0,
+                                "归母股东权益": 800.0, "存货": None},
+                    "现金流量表": {}}}
+    payload = {"code": "601838", "name": "某银行", "periods": bank_periods}
+    monkeypatch.setattr(store, "get_raw",
+                        lambda kind, code, date="latest": payload if kind == "financial_report"
+                        else (_ for _ in ()).throw(FileNotFoundError(kind)))
+    monkeypatch.setattr(store, "get_code_view",
+                        lambda *a, **k: (_ for _ in ()).throw(FileNotFoundError("x")))
+    blk = analyzer.build_financial_block("601838", as_of="2026-05-01")  # 不传 industry
+    assert blk["金融业口径"] is True          # 结构兜底认出银行
+    assert "高负债" not in blk["flags"]       # 高负债被金融业特判跳过
