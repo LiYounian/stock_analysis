@@ -217,6 +217,23 @@ def build_financial_block(code: str, as_of: str | None = None,
     else:
         block["审计意见"] = None
         block["审计意见闸门"] = None
+
+    # 闸门1(M2):审计机构备案核查——读采集层落的年报文本(披露日 <= as_of 才可见,无未来函数)。
+    # 抽到名且不在录 → 高危红旗"审计机构未备案" + 降"风险";名录未知/抽不到名 → 不判(不误杀)。
+    try:
+        ar_raw = store.get_raw("annual_report_text", code)
+    except FileNotFoundError:
+        ar_raw = None
+    if ar_raw and (as_of is None or (ar_raw.get("disclosure_date") or "") <= as_of):
+        from tools.analysis.financial import audit_gate as ag_mod
+        g = ag_mod.audit_gate((ar_raw.get("段落") or {}).get("审计报告"))
+        block["审计机构"] = g.get("审计机构")
+        block["审计机构闸门"] = g.get("闸门1")
+        block["审计机构档位"] = g.get("档位")
+        if g.get("闸门1") == "不通过":
+            if "审计机构未备案" not in block["flags"]:
+                block["flags"].append("审计机构未备案")
+            block["评级"] = "风险"
     return block
 
 

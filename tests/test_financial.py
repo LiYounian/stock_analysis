@@ -380,3 +380,58 @@ def test_expert_caibao_registered_and_in_default_group():
     from tools.config.strategy import THRESHOLDS
     assert "财报" in experts.BUILTIN
     assert "财报" in THRESHOLDS["合议"]["默认专家组"]
+
+
+# ———————————— P2.2:闸门1 审计机构备案核查(M2)————————————
+def test_audit_gate_extract_and_check():
+    """抽事务所名 + 名录核查:在录/不在录/无名/别名。"""
+    from tools.analysis.financial import audit_gate as ag
+    on = ag.audit_gate("审计报告 天健会计师事务所（特殊普通合伙）接受委托审计…审计意见 标准无保留意见")
+    assert on["闸门1"] == "通过" and on["在录"] is True and on["档位"] == 1
+    off = ag.audit_gate("审计报告 张三会计师事务所（特殊普通合伙）审计…")
+    assert off["闸门1"] == "不通过" and off["在录"] is False
+    assert ag.audit_gate("本段无事务所")["闸门1"] == "未知"       # 抽不到名→不判
+    assert ag.check_auditor("普华永道中天会计师事务所")["在录"] is True   # 四大在录
+
+
+def test_audit_firm_gate_downgrades_block(monkeypatch):
+    """build_financial_block 集成闸门1:年报审计机构不在录 → 评级降'风险'+补红旗+闸门=不通过。"""
+    periods = _synthetic_periods()
+    fin_payload = {"code": "000001", "name": "测试股", "periods": periods}
+    ar_payload = {"code": "000001", "disclosure_date": "2026-04-01",
+                  "段落": {"审计报告": "审计报告 野鸡会计师事务所（特殊普通合伙）审计…审计意见 标准无保留意见"}}
+
+    def fake_get_raw(kind, code, date="latest"):
+        if kind == "financial_report":
+            return fin_payload
+        if kind == "annual_report_text":
+            return ar_payload
+        raise FileNotFoundError(kind)
+    monkeypatch.setattr(store, "get_raw", fake_get_raw)
+    blk = analyzer.build_financial_block("000001", as_of="2026-05-01")
+    assert blk["审计机构闸门"] == "不通过"
+    assert blk["评级"] == "风险"
+    assert "审计机构未备案" in blk["flags"]
+
+
+def test_audit_firm_gate_pass_in_registry(monkeypatch):
+    """审计机构在录 → 闸门1=通过,不强降评级。"""
+    fin_payload = {"code": "000001", "name": "测试股", "periods": _synthetic_periods()}
+    ar_payload = {"code": "000001", "disclosure_date": "2026-04-01",
+                  "段落": {"审计报告": "审计报告 天健会计师事务所（特殊普通合伙）审计…"}}
+    monkeypatch.setattr(store, "get_raw",
+                        lambda kind, code, date="latest": fin_payload if kind == "financial_report"
+                        else (ar_payload if kind == "annual_report_text"
+                              else (_ for _ in ()).throw(FileNotFoundError(kind))))
+    blk = analyzer.build_financial_block("000001", as_of="2026-05-01")
+    assert blk["审计机构闸门"] == "通过"
+    assert "审计机构未备案" not in blk["flags"]
+
+
+def test_expert_caibao_firm_gate_veto():
+    """财报专家:审计机构闸门不通过 → 一票否决看空(即便评级良)。"""
+    from tools.analysis import experts
+    v = experts.expert_财报({"meta": {"code": "1"},
+                           "financial": {"评级": "良", "审计意见闸门": "通过",
+                                         "审计机构闸门": "不通过", "is_forecast": False}}).to_dict()
+    assert v["方向"] == "看空" and v["强度"] == -1.0
