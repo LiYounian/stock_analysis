@@ -13,8 +13,8 @@
     </tr>
     {% for x in f.rows %}
     <tr>
-      <td><a href="/stock/{{ x.code }}?date={{ _d }}">{{ x.code }}</a></td>
-      <td><a href="/stock/{{ x.code }}?date={{ _d }}">{{ x.name }}</a></td>
+      <td><a href="/financial/{{ x.code }}?date={{ _d }}">{{ x.code }}</a></td>
+      <td><a href="/financial/{{ x.code }}?date={{ _d }}">{{ x.name }}</a></td>
       <td class="muted">{{ x.industry }}</td>
       <td><b class="{{ 'pos' if x.评级 in ['优','良'] else ('neg' if x.评级 in ['差','风险'] else '') }}">{{ x.评级 or '-' }}</b>{% if x.金融业口径 %} <span class="tiny muted">金融</span>{% endif %}</td>
       <td>{{ x.质地分 if x.质地分 is not none else '-' }}</td>

@@ -1,0 +1,149 @@
+{% extends "base.html" %}
+{% block title %}{{ d.name }} 财报详析 · A股策略辅助工具{% endblock %}
+{% block content %}
+{% set fin = d.fin %}{% set std = d.standards %}{% set an = d.annual %}
+{% set dims = fin.five_dims or {} %}{% set dv = fin.derived or {} %}{% set prof = fin.利润表摘要 or {} %}
+
+<div class="stock-head">
+  <h1>{{ d.name }} <span class="code">{{ d.code }}</span>
+    <small>{{ d.sector }}{% if d.industry %} · {{ d.industry }}{% endif %} · 财报详细分析 · ⚠️ 非投资建议</small></h1>
+  <div class="badges">
+    <span class="badge big {{ 'buy' if fin.评级 in ['优','良'] else ('sell' if fin.评级 in ['差','风险'] else 'wait') }}">财报评级 {{ fin.评级 or '-' }}</span>
+    {% if fin.quality_score is not none %}<span class="badge">质地分 {{ fin.quality_score }}</span>{% endif %}
+    {% if fin.报告期 %}<span class="badge">{{ fin.报告期 }}{{ '(预告)' if fin.is_forecast else '' }}</span>{% endif %}
+    {% if fin.金融业口径 %}<span class="badge">金融业口径</span>{% endif %}
+    <a class="badge news-entry" href="/stock/{{ d.code }}?date={{ _d }}">← 个股详情</a>
+    <a class="badge news-entry" href="/financial?date={{ _d }}">← 财报榜</a>
+  </div>
+</div>
+
+<div class="grid">
+
+<!-- ═══════════ ① 财报分析与证据 ═══════════ -->
+<section class="card wide">
+  <h2>① 审计双闸门 <small>来源:年报「审计报告」段(巨潮 cninfo PDF){% if an and an.披露日 %} · {{ an.年度 }}年报 · 披露 {{ an.披露日 }}{% endif %}</small></h2>
+  <table>
+    <tr>
+      <td>闸门2 · 审计意见</td>
+      <td><b class="{{ 'neg' if fin.审计意见闸门=='不通过' else ('pos' if fin.审计意见闸门=='通过' else 'muted') }}">{{ fin.审计意见闸门 or '未知' }}</b>
+          {% if fin.审计意见 %}（{{ fin.审计意见 }}）{% endif %}</td>
+      <td class="muted tiny">标准:仅「{{ std.审计意见_通过|join('/') }}」通过;其余(保留/否定/无法表示/带强调事项)→ 判财报有问题、降"风险"</td>
+    </tr>
+    <tr>
+      <td>闸门1 · 审计机构</td>
+      <td><b class="{{ 'neg' if fin.审计机构闸门=='不通过' else ('pos' if fin.审计机构闸门=='通过' else 'muted') }}">{{ fin.审计机构闸门 or '未知' }}</b>
+          {% if fin.审计机构 %}（{{ fin.审计机构 }}{% if fin.审计机构档位 %}·第{{ fin.审计机构档位 }}档{% endif %}）{% endif %}</td>
+      <td class="muted tiny">标准:从年报审计报告抽事务所名 → 比对证监会「证券服务业务备案名录」{% if std.名录.覆盖家数 %}({{ std.名录.覆盖家数 }}家,{{ std.名录.更新日期 }}){% endif %};不在录=判不可信</td>
+    </tr>
+  </table>
+</section>
+
+<section class="card wide">
+  <h2>① 五维质地评分 <small>来源:三大表(akshare 东财)代码算衍生指标,按标准化区间映射 0~100 · 非 LLM</small></h2>
+  <table>
+    <tr><th>维度</th><th>得分</th><th>子指标(当期值 → 标准化区间 0分端→100分端)</th></tr>
+    {% for dim, subs in std.五维区间.items() %}
+    <tr>
+      <td><b>{{ dim }}</b></td>
+      <td><b class="{{ 'pos' if (dims[dim] or 0) >= 65 else ('neg' if (dims[dim] or 0) < 40 else '') }}">{{ dims[dim] if dims[dim] is not none else '-' }}</b></td>
+      <td class="muted tiny">
+        {% for name, key, lo, hi in subs %}{{ name }}:<b>{{ dv[key]|round(2) if dv[key] is not none else '缺' }}</b> <span class="muted">[{{ lo }}→{{ hi }}]</span>{% if not loop.last %} · {% endif %}{% endfor %}
+      </td>
+    </tr>
+    {% endfor %}
+  </table>
+  <p class="muted tiny">综合 = 五维加权均值 − 红旗扣分,触发高危红旗封顶降"风险"(权重/区间/阈值口径见 §② 审计标准,占位待策略提供者标定)。</p>
+</section>
+
+<section class="card wide">
+  <h2>① 数值红旗与证据 <small>来源:三大表衍生;每条附命中值 vs 阈值</small></h2>
+  {% if fin.flags_detail %}
+  <table>
+    <tr><th>红旗</th><th>严重度</th><th>命中证据(值 vs 阈值)</th></tr>
+    {% for f in fin.flags_detail %}
+    <tr>
+      <td><span class="badge neg">{{ f.code }}</span></td>
+      <td class="{{ 'neg' if f.严重度=='高' else '' }}">{{ f.严重度 }}{% if f.严重度=='高' %} · 一票封顶降"风险"{% endif %}</td>
+      <td class="muted tiny">{% for k, v in (f.值 or {}).items() %}{{ k }}={{ v }}{% if not loop.last %} · {% endif %}{% endfor %}</td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% else %}<p class="muted">当期无数值红旗命中。</p>{% endif %}
+  <table style="margin-top:8px">
+    <tr><td>利润表摘要</td>
+        <td class="muted tiny">营收增速 {{ prof.营收增速 }}% · 扣非增速 {{ prof.扣非增速 }}% · 毛利率 {{ prof.毛利率 }}% · 净利率 {{ prof.净利率 }}%（来源:利润表)</td></tr>
+  </table>
+</section>
+
+{% if fin.qualitative %}{% set q = fin.qualitative %}
+<section class="card wide">
+  <h2>① 文本定性与来源 <small>来源:年报「管理层讨论与分析 / 风险」段(cninfo PDF)→ LLM 只抄原文抽取、不算数值</small></h2>
+  <table>
+    {% if q.增长来源 %}<tr><td>增长来源</td><td>{{ q.增长来源 }}</td></tr>{% endif %}
+    {% if q.量价拆分 %}<tr><td>量价拆分</td><td>{{ q.量价拆分 }}</td></tr>{% endif %}
+    {% if q.在手订单 %}<tr><td>在手订单</td><td>{{ q.在手订单 }}</td></tr>{% endif %}
+    {% if q.产能与募投 %}<tr><td>产能与募投</td><td>{{ q.产能与募投 }}</td></tr>{% endif %}
+    {% if q.经营指引 %}<tr><td>经营指引</td><td>{{ q.经营指引 }}</td></tr>{% endif %}
+    {% if q.风险提示 %}<tr><td>风险提示</td><td>{{ q.风险提示|join('；') }}</td></tr>{% endif %}
+    {% if q.一次性事项 %}<tr><td>一次性事项</td><td>{{ q.一次性事项|join('；') }}</td></tr>{% endif %}
+    {% if q.管理层语气 %}<tr><td>管理层语气</td><td>{{ q.管理层语气 }}</td></tr>{% endif %}
+    {% if q.文本红旗 %}<tr><td>文本红旗</td><td class="neg">{{ q.文本红旗|join('；') }}</td></tr>{% endif %}
+  </table>
+  {% if an and (an['MD&A'] or an.风险) %}
+  <details><summary class="muted tiny">展开年报原文片段(证据来源 · {{ an.年度 }}年报{% if an.pdf_url %} · <a href="{{ an.pdf_url }}" target="_blank">原文PDF</a>{% endif %})</summary>
+    {% if an['MD&A'] %}<div class="ai-note muted"><b>管理层讨论与分析(节选)</b><p style="white-space:pre-wrap">{{ an['MD&A'] }}……</p></div>{% endif %}
+    {% if an.风险 %}<div class="ai-note muted"><b>风险(节选)</b><p style="white-space:pre-wrap">{{ an.风险 }}……</p></div>{% endif %}
+  </details>
+  {% endif %}
+</section>
+{% endif %}
+
+<!-- ═══════════ ② AI 讲解与审计标准 ═══════════ -->
+{% if fin.verdict %}{% set v = fin.verdict %}
+<section class="card wide">
+  <h2>② AI 综合归纳(讲解) <small>投资侧"合理怀疑即避",非审计定罪 · LLM 综合数值+文本给出</small></h2>
+  <div class="ai-note">
+    <b>AI 评级:{{ v.综合评级 or '-' }}</b>
+    {% if v.置信度 %} · 置信 {{ v.置信度 }}{% endif %}{% if v.盈利质量判断 %} · 盈利质量 {{ v.盈利质量判断 }}{% endif %}
+    {% if v.一句话结论 %}<p>{{ v.一句话结论 }}</p>{% endif %}
+    {% if v.多头理由 %}<p class="pos"><b>看好:</b></p><ul>{% for r in v.多头理由 %}<li class="pos">{{ r }}</li>{% endfor %}</ul>{% endif %}
+    {% if v.空头理由 %}<p class="neg"><b>警惕:</b></p><ul>{% for r in v.空头理由 %}<li class="neg">{{ r }}</li>{% endfor %}</ul>{% endif %}
+  </div>
+  <p class="muted tiny">说明:数值评级(§①)= 代码按占位阈值算,可能偏严;AI 综合归纳融合了数值+年报文本,给出更贴近实质的定性(如数值"差"但基本面实为"中")。</p>
+</section>
+{% endif %}
+
+<section class="card wide">
+  <h2>② 审计标准(我是怎么审的) <small>透明留痕:所有判据可核,阈值为占位待策略提供者标定</small></h2>
+
+  <h3 class="sub">A. 双前置闸门(命中即弃,最便宜)</h3>
+  <ul>
+    <li><b>闸门1 审计机构备案核查</b>:从年报审计报告抽会计师事务所名 → 归一 → 比对证监会「从事证券服务业务备案名录」{% if std.名录.覆盖家数 %}(<b>{{ std.名录.覆盖家数 }}家</b>,更新 {{ std.名录.更新日期 }}){% endif %}。<b>不在录 = 判财报不可信、降"风险"</b>;抽不到名/名录未知 = 不判(不误杀)。{% if std.名录.口径说明 %}<span class="muted tiny">{{ std.名录.口径说明 }}</span>{% endif %}</li>
+    <li><b>闸门2 审计意见</b>:仅「{{ std.审计意见_通过|join('/') }}」通过;保留/否定/无法表示/带强调事项等 → 连专业初审都没过 → 高危红旗降"风险"。</li>
+  </ul>
+
+  <h3 class="sub">B. 数值红旗阈值(占位)</h3>
+  <table>
+    <tr><th>红旗</th><th>阈值</th></tr>
+    {% for k, val in std.红旗阈值.items() %}<tr><td>{{ k }}</td><td>{{ val }}</td></tr>{% endfor %}
+  </table>
+  <p class="muted tiny">高危(一票封顶降"风险"):{% for name, sev in std.严重度.items() if sev == '高' %}{{ name }}{% if not loop.last %}、{% endif %}{% endfor %}。
+     金融业(银行/非银)豁免:{{ std.金融业跳过红旗|join('、') }}(对金融业不适用)。</p>
+
+  <h3 class="sub">C. 五维标准化区间 + 评分口径</h3>
+  <table>
+    <tr><th>维度</th><th>子指标:0分端 → 100分端</th></tr>
+    {% for dim, subs in std.五维区间.items() %}<tr><td>{{ dim }}</td>
+      <td class="muted tiny">{% for name, key, lo, hi in subs %}{{ name }} [{{ lo }}→{{ hi }}]{% if not loop.last %} · {% endif %}{% endfor %}</td></tr>{% endfor %}
+  </table>
+  <p class="muted tiny">
+    五维权重:{% for k, w in (std.评分.五维权重 or {}).items() %}{{ k }}={{ w }} {% endfor %}(等权占位)·
+    红旗扣分:高{{ std.评分.红旗扣分.高 }}/中{{ std.评分.红旗扣分.中 }}/低{{ std.评分.红旗扣分.低 }} ·
+    高危封顶 {{ std.评分.高危封顶分 }} ·
+    评级映射:{% for k, cut in (std.评分.评级映射 or {}).items() %}{{ k }}≥{{ cut }} {% endfor %}
+  </p>
+  <p class="muted tiny">⚠️ 权重/阈值/区间均为工程占位,待策略提供者标定(见 docs/计划/财报评级标定_待提供者清单_M3)。数值不让 LLM 碰(三大表全走代码);LLM 只做年报文本定性 + 综合归纳。</p>
+</section>
+
+</div>
+{% endblock %}
