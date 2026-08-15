@@ -9,7 +9,7 @@
   <h2>组合概览</h2>
   <p>主线板块:<b>{{ agg.hot_theme }}</b> ·
      市场宽度:偏多 {{ agg.breadth.偏多 }} / 中性 {{ agg.breadth.中性 }} / 偏空 {{ agg.breadth.偏空 }} ·
-     情绪温度(公告利好-利空):<b class="{{ 'pos' if agg.sentiment_temp>0 else 'neg' }}">{{ agg.sentiment_temp }}</b></p>
+     情绪温度(公告利好-利空):<b class="{{ 'pos' if agg.sentiment_temp is not none and agg.sentiment_temp>0 else 'neg' }}">{{ agg.sentiment_temp if agg.sentiment_temp is not none else '-' }}</b></p>
 </section>
 {% endif %}
 
