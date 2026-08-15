@@ -83,6 +83,24 @@ def _cfg() -> dict:
     return strategy.THRESHOLDS.get("财报", {})
 
 
+def _funding_mode(cfo, cfi, cff) -> str | None:
+    """现金流三段 → 造血模式(方案 §2.3b:靠经营/靠融资/靠变卖)。"""
+    if cfo is None:
+        return None
+    if cfo > 0:
+        s = "经营造血(CFO为正)"
+        if isinstance(cfi, (int, float)) and cfi < 0:
+            s += " · 投资扩张"
+        if isinstance(cff, (int, float)):
+            s += " · 净融资" if cff > 0 else " · 净还债/分红"
+        return s
+    if isinstance(cff, (int, float)) and cff > 0:
+        return "靠融资输血(CFO≤0,筹资净流入)"
+    if isinstance(cfi, (int, float)) and cfi > 0:
+        return "靠变卖资产(CFO≤0,投资净流入)"
+    return "造血不足(CFO≤0)"
+
+
 def _prev_year_period(period: str) -> str:
     return f"{int(period[:4]) - 1}{period[4:]}"
 
@@ -258,6 +276,37 @@ def build_financial_block(code: str, as_of: str | None = None,
         block["verdict"] = ft.get("verdict")
     except FileNotFoundError:
         pass
+
+    # 资金来源(现金流三段→造血模式)+ 资产负债关键科目:从最新可见期 raw 取,写进 block
+    # (随记录同步远端;详细页不依赖 raw——upload 只同步 records/views,不含 data/raw)。
+    lp = res.get("latest_period")
+    try:
+        rp = ((store.get_raw("financial_report", code).get("periods")) or {}).get(lp, {})
+    except FileNotFoundError:
+        rp = {}
+    cf = rp.get("现金流量表") or {}
+    bs = rp.get("资产负债表") or {}
+    if cf or bs:
+        cfo, cfi, cff = (cf.get("经营活动现金流量净额"), cf.get("投资活动现金流量净额"),
+                         cf.get("筹资活动现金流量净额"))
+        block["现金流"] = {"CFO": cfo, "CFI": cfi, "CFF": cff,
+                         "自由现金流": (latest.get("derived") or {}).get("自由现金流"),
+                         "造血模式": _funding_mode(cfo, cfi, cff)}
+        _yx = [bs.get(k) for k in ("短期借款", "一年内到期非流动负债", "长期借款", "应付债券")]
+        block["资产负债"] = {
+            "货币资金": bs.get("货币资金"),
+            "应收账款": bs.get("应收账款") or bs.get("应收票据及应收账款"),
+            "存货": bs.get("存货"), "商誉": bs.get("商誉"), "合同负债": bs.get("合同负债"),
+            "有息负债": sum(v for v in _yx if isinstance(v, (int, float))) or None,
+            "资产总计": bs.get("资产总计"), "负债合计": bs.get("负债合计"),
+            "归母净资产": bs.get("归母股东权益") or bs.get("股东权益合计")}
+    # 年报节选(证据原文,截断;随 block 同步远端)。仅在年报披露日可见时带。
+    if ar_raw and (as_of is None or (ar_raw.get("disclosure_date") or "") <= as_of):
+        _secs = ar_raw.get("段落") or {}
+        block["年报节选"] = {"年度": ar_raw.get("年度"), "披露日": ar_raw.get("disclosure_date"),
+                          "pdf_url": ar_raw.get("pdf_url"),
+                          "MD&A": (_secs.get("MD&A") or "")[:800] or None,
+                          "风险": (_secs.get("风险") or "")[:600] or None}
     return block
 
 

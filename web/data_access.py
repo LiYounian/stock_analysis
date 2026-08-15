@@ -107,18 +107,11 @@ def financial_detail(code: str, date: str = "latest") -> dict | None:
     from tools.config import strategy
     from tools.analysis.financial import scoring
     cfg = strategy.THRESHOLDS.get("财报", {})
-    # 年报原文来源(证据):MD&A/风险 段截断预览 + PDF 链接
-    annual = None
-    try:
-        ar = store.get_raw("annual_report_text", str(code).zfill(6))
-        secs = ar.get("段落") or {}
-        annual = {"年度": ar.get("年度"), "披露日": ar.get("disclosure_date"),
-                  "pdf_url": ar.get("pdf_url"),
-                  "MD&A": (secs.get("MD&A") or "")[:1500] or None,
-                  "风险": (secs.get("风险") or "")[:900] or None,
-                  "审计报告": (secs.get("审计报告") or "")[:1200] or None}
-    except FileNotFoundError:
-        pass
+    fin = rec["financial"]
+    # 资金/负债/年报节选:M2 起写进 financial 块(随记录同步远端;upload 不含 data/raw,故不再读 raw)
+    cash = fin.get("现金流")
+    balance = fin.get("资产负债")
+    annual = fin.get("年报节选")
     # 审计名录家数/更新日期(闸门1 标准来源)
     firms_meta = {}
     try:
@@ -133,6 +126,7 @@ def financial_detail(code: str, date: str = "latest") -> dict | None:
         "code": str(code).zfill(6), "name": rec["meta"].get("name"),
         "industry": rec["meta"].get("industry"), "sector": rec["meta"].get("sector"),
         "fin": rec["financial"],
+        "现金流": cash, "资产负债": balance,
         "annual": annual,
         "standards": {
             "红旗阈值": cfg.get("红旗", {}), "严重度": cfg.get("严重度", {}),
