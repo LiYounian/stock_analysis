@@ -14,7 +14,7 @@ import pandas as pd
 import pytest
 
 from tools.collectors import financial as fin
-from tools.financial_report import analyzer, flags, metrics, scoring
+from tools.analysis.financial import analyzer, flags, metrics, scoring
 from tools.store import repo as store
 
 
@@ -280,3 +280,103 @@ def test_contract_financial_block_enum():
     assert any("financial.评级" in e for e in rc.validate_record(bad))
     # null 宽容
     assert rc.validate_record(dict(base, financial=None)) == []
+
+
+# ———————————— 步骤2:低基数护栏 + 金融业特判(P1)————————————
+def test_low_base_guard_suppresses_small_receivables():
+    """低基数护栏:应收增速高但应收占营收极小(如茅台)→ 不判'应收存货激增'(修小基数误杀)。"""
+    derived = {"营收增速": 6.0, "应收增速": 80.0, "存货增速": None}
+    # 应收/营收 = 10/1000 = 1% < 5% 阈值 → 护栏抑制
+    st = {"利润表": {"营业总收入": 1000.0}, "资产负债表": {"应收账款": 10.0}}
+    names = [f["code"] for f in flags.evaluate_flags(derived, st)]
+    assert "应收存货激增" not in names
+
+
+def test_low_base_guard_allows_material_receivables():
+    """基数充分(应收占营收 20% ≥ 5%)+ 增速超阈 → 正常触发'应收存货激增'。"""
+    derived = {"营收增速": 6.0, "应收增速": 80.0, "存货增速": None}
+    st = {"利润表": {"营业总收入": 1000.0}, "资产负债表": {"应收账款": 200.0}}
+    names = [f["code"] for f in flags.evaluate_flags(derived, st)]
+    assert "应收存货激增" in names
+
+
+def test_financial_industry_skips_inapplicable_flags():
+    """金融业特判:银行高负债/短债覆盖等对金融业不适用 → is_financial=True 时跳过;非金融照常判。"""
+    derived = {"资产负债率": 91.0, "短债覆盖": 0.2, "现金含量_CFO比净利": 0.1}
+    fin_names = [f["code"] for f in flags.evaluate_flags(derived, None, is_financial=True)]
+    assert "高负债" not in fin_names and "短债覆盖不足" not in fin_names and "现金含量不足" not in fin_names
+    non_fin = [f["code"] for f in flags.evaluate_flags(derived, None, is_financial=False)]
+    assert "高负债" in non_fin
+
+
+def test_financial_industry_keeps_applicable_flags():
+    """金融业特判只跳'不适用'红旗;扣非为负等普适红旗对金融业仍要判。"""
+    derived = {}
+    st = {"利润表": {"扣非归母净利润": -5.0}}
+    names = [f["code"] for f in flags.evaluate_flags(derived, st, is_financial=True)]
+    assert "扣非为负" in names
+
+
+# ———————————— 步骤3:审计意见闸门(闸门2,P1)————————————
+def test_flag_nonstandard_audit_opinion():
+    """非标审计意见 → 高危红旗'非标审计意见';标准无保留/空(季报)不判。"""
+    bad = flags.evaluate_flags({}, {"audit_opinion": "保留意见"})
+    assert any(f["code"] == "非标审计意见" and f["严重度"] == "高" for f in bad)
+    assert not any(f["code"] == "非标审计意见"
+                   for f in flags.evaluate_flags({}, {"audit_opinion": "标准无保留意见"}))
+    assert not any(f["code"] == "非标审计意见"
+                   for f in flags.evaluate_flags({}, {"audit_opinion": None}))  # 季报无意见
+
+
+def test_audit_gate_downgrades_block(monkeypatch):
+    """最新年报非标意见 → build_financial_block 传导:评级降'风险' + 闸门=不通过 + 补红旗。"""
+    periods = _synthetic_periods()
+    periods["2025-12-31"]["audit_opinion"] = "无法表示意见"     # 年报非标
+    payload = {"code": "000001", "name": "测试股", "periods": periods}
+    monkeypatch.setattr(store, "get_raw",
+                        lambda kind, code, date="latest": payload if kind == "financial_report"
+                        else (_ for _ in ()).throw(FileNotFoundError(kind)))
+    blk = analyzer.build_financial_block("000001", as_of="2026-05-01")
+    assert blk["审计意见闸门"] == "不通过"
+    assert blk["评级"] == "风险"
+    assert "非标审计意见" in blk["flags"]
+
+
+def test_audit_gate_pass_marks_through(monkeypatch):
+    """标准无保留 → 闸门=通过,不强降评级。"""
+    periods = _synthetic_periods()
+    periods["2025-12-31"]["audit_opinion"] = "标准无保留意见"
+    payload = {"code": "000001", "name": "测试股", "periods": periods}
+    monkeypatch.setattr(store, "get_raw",
+                        lambda kind, code, date="latest": payload if kind == "financial_report"
+                        else (_ for _ in ()).throw(FileNotFoundError(kind)))
+    blk = analyzer.build_financial_block("000001", as_of="2026-05-01")
+    assert blk["审计意见闸门"] == "通过"
+
+
+# ———————————— 步骤4:财报专家(接入合议决策层,P1)————————————
+def test_expert_caibao_direction_and_veto():
+    """财报专家:评级→方向/强度;审计闸门不通过→一票否决看空;无块→弃权。"""
+    from tools.analysis import experts
+    good = experts.expert_财报({"meta": {"code": "1"},
+                               "financial": {"评级": "良", "quality_score": 70,
+                                             "flags": [], "审计意见闸门": "通过", "is_forecast": False}}).to_dict()
+    assert good["方向"] == "看多" and good["强度"] > 0
+    risk = experts.expert_财报({"meta": {"code": "1"},
+                               "financial": {"评级": "风险", "审计意见闸门": "通过", "is_forecast": False}}).to_dict()
+    assert risk["方向"] == "看空" and risk["强度"] < 0
+    # 审计闸门否决:即便评级"良",非标 → 强制看空
+    veto = experts.expert_财报({"meta": {"code": "1"},
+                               "financial": {"评级": "良", "审计意见闸门": "不通过", "is_forecast": False}}).to_dict()
+    assert veto["方向"] == "看空" and veto["强度"] == -1.0
+    # 无块 → 弃权(中性 + 数据充分度缺失)
+    ab = experts.expert_财报({"meta": {"code": "1"}}).to_dict()
+    assert ab["方向"] == "中性" and ab["数据充分度"] == "缺失"
+
+
+def test_expert_caibao_registered_and_in_default_group():
+    """财报专家已注册进 BUILTIN 且在合议默认专家组(真正被决策层用上)。"""
+    from tools.analysis import experts
+    from tools.config.strategy import THRESHOLDS
+    assert "财报" in experts.BUILTIN
+    assert "财报" in THRESHOLDS["合议"]["默认专家组"]

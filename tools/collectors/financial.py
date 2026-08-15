@@ -12,7 +12,7 @@
 三张表按报告期对齐合并;单张表缺失 → 该表科目留空,其余表照常产出。
 
 落盘:`store.put_raw("financial_report", code, payload)`,payload 内层按 period 索引
-(一个 code 一份多报告期字典)。衍生/红旗/评分在 financial_report.analyzer 消费,不在此算。
+(一个 code 一份多报告期字典)。衍生/红旗/评分在 analysis.financial.analyzer 消费,不在此算。
 
 ⚠️ 非投资建议。审计闸门 / LLM 文本定性 / 三大表深度勾稽本轮不实现(见 analyzer TODO)。
 """

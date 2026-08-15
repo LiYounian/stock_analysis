@@ -25,12 +25,12 @@ from __future__ import annotations
 
 import logging
 
-from tools.financial_report import flags as flags_mod
-from tools.financial_report import metrics as metrics_mod
-from tools.financial_report import scoring as scoring_mod
+from tools.analysis.financial import flags as flags_mod
+from tools.analysis.financial import metrics as metrics_mod
+from tools.analysis.financial import scoring as scoring_mod
 from tools.store import repo as store
 
-logger = logging.getLogger("financial_report.analyzer")
+logger = logging.getLogger("analysis.financial.analyzer")
 
 # 浅度输出 & structured 摘要选取的关键科目(方案 §2.2 structured 块)
 _STRUCT_PROFIT = ("营业总收入", "营业成本", "营业利润", "利润总额",
@@ -45,6 +45,30 @@ def need_llm_fields() -> list[str]:
     """计划用 LLM 从财报原文抽取的字段(schema_A,本轮未采集正文源,置 null)。"""
     return ["增长来源", "量价拆分", "在手订单", "产能与募投", "经营指引",
             "风险提示", "一次性事项", "管理层语气", "文本红旗"]
+
+
+def _is_financial(code: str, industry: str | None = None) -> bool:
+    """该票是否金融业(银行/非银)——用于红旗金融业特判。
+
+    行业口径:优先用传入的 industry(如 record.meta.industry),否则回退 board.board_of(code)
+    (证监会门类),统一经 industry_map 对齐到申万一级,命中 THRESHOLDS['财报']['金融业申万'] 即金融业。
+    任何一步失败 → False(不特判,退回通用红旗;宁可不特判也不误伤非金融)。
+    """
+    from tools.analysis import industry_map
+    fin_set = set(_cfg().get("金融业申万", ["银行", "非银金融"]))
+    sw = industry_map.to_sw(industry) if industry else None
+    if sw is None:
+        try:
+            from tools.collectors import board
+            sw = industry_map.to_sw(board.board_of(code) or "")
+        except Exception:                                   # noqa: BLE001
+            sw = None
+    return sw in fin_set
+
+
+def _cfg() -> dict:
+    from tools.config import strategy
+    return strategy.THRESHOLDS.get("财报", {})
 
 
 def _prev_year_period(period: str) -> str:
@@ -78,19 +102,22 @@ def _profit_digest(rec: dict, derived: dict) -> dict:
     }
 
 
-def analyze(code: str, as_of: str | None = None, persist: bool = True) -> dict:
+def analyze(code: str, as_of: str | None = None, persist: bool = True,
+            industry: str | None = None) -> dict:
     """对单票做财报数值分析,产出按报告期的财报视图。
 
     Args:
         code: 6 位代码。
         as_of: 可见性锚(仅纳入 disclosure_date <= as_of 的报告期,防未来函数)。None=全部可见。
         persist: True 则把视图写 code_view("financial_report", code)。
+        industry: 可选行业名(如 record.meta.industry);用于金融业红旗特判,缺省回退 board.board_of。
     Returns:
         {code, name, as_of, periods:{period: 单期分析}, latest: 最新可见期摘要, provenance}。
     缺 raw 抛 FileNotFoundError(与 store 缺失约定一致)。
     """
     code = str(code).zfill(6)
     raw = store.get_raw("financial_report", code)          # 缺失 → FileNotFoundError
+    is_fin = _is_financial(code, industry)
     periods_raw = raw.get("periods", {})
     derived_all = metrics_mod.compute_derived(periods_raw)
 
@@ -108,7 +135,7 @@ def analyze(code: str, as_of: str | None = None, persist: bool = True) -> dict:
             continue                                        # 未来函数红线:未披露不可见
         derived = derived_all.get(p, {})
         struct = _struct_summary(rec)
-        flags = flags_mod.evaluate_flags(derived, rec)
+        flags = flags_mod.evaluate_flags(derived, rec, is_financial=is_fin)
         score = scoring_mod.quality_score(derived, flags)
         out_periods[p] = {
             "report_date": rec.get("report_date", p),
@@ -116,6 +143,7 @@ def analyze(code: str, as_of: str | None = None, persist: bool = True) -> dict:
             "report_type": rec.get("report_type"),
             "is_forecast": rec.get("is_forecast", False),
             "audit_opinion": rec.get("audit_opinion"),     # 采集期落的审计意见(闸门本轮不判)
+            "金融业口径": is_fin,                            # True=已按金融业跳过不适用红旗(高负债等)
             "structured": struct,
             "derived": {k: v for k, v in derived.items() if k != "毛利率同比升"},
             "flags": flags,
@@ -144,20 +172,21 @@ def analyze(code: str, as_of: str | None = None, persist: bool = True) -> dict:
     return result
 
 
-def build_financial_block(code: str, as_of: str | None = None) -> dict | None:
+def build_financial_block(code: str, as_of: str | None = None,
+                          industry: str | None = None) -> dict | None:
     """构建中心记录顶层 `financial` 轻量块(仅最新已披露报告期摘要)。
 
     供 panel/screen/web/Agent 直接消费(不塞多期大数组;多期在 code_view)。
-    无可见报告期 → None。
+    industry:可选行业名(record.meta.industry),用于金融业红旗特判。无可见报告期 → None。
     """
     try:
-        res = analyze(code, as_of=as_of, persist=False)
+        res = analyze(code, as_of=as_of, persist=False, industry=industry)
     except FileNotFoundError:
         return None
     latest = res.get("latest")
     if not latest:
         return None
-    return {
+    block = {
         "报告期": latest["report_date"],
         "报告类型": latest.get("report_type"),
         "披露日": latest.get("disclosure_date"),
@@ -167,9 +196,28 @@ def build_financial_block(code: str, as_of: str | None = None) -> dict | None:
         "five_dims": latest.get("five_dims"),
         "利润表摘要": latest.get("利润表摘要"),
         "flags": [f["code"] for f in latest.get("flags", [])],   # 轻量:只列命中信号名
+        "金融业口径": latest.get("金融业口径", False),
         "derived": latest.get("derived"),
         "verdict": None,   # LLM 层留口
     }
+    # 审计意见闸门(闸门2)传导:取最新已披露"年报"的审计意见,即使 latest 是季报也生效。
+    # 非标 → 记录级降"风险" + 补红旗(非标年报期间公司整体不可信,不待下一份干净年报不翻身)。
+    annual = [p for p in res.get("periods", {}).values() if p.get("audit_opinion")]
+    if annual:
+        newest = max(annual, key=lambda x: x.get("disclosure_date") or "")
+        op = newest.get("audit_opinion")
+        pass_ops = set(_cfg().get("审计意见_通过", ["标准无保留意见", "无保留意见"]))
+        gate_pass = op in pass_ops
+        block["审计意见"] = op
+        block["审计意见闸门"] = "通过" if gate_pass else "不通过"
+        if not gate_pass:
+            if "非标审计意见" not in block["flags"]:
+                block["flags"].append("非标审计意见")
+            block["评级"] = "风险"
+    else:
+        block["审计意见"] = None
+        block["审计意见闸门"] = None
+    return block
 
 
 # —— 声明式查询接口(方案 §2.3a):按披露日锚定、条件筛票 / 字段取值 ——
