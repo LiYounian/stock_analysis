@@ -234,6 +234,16 @@ def build_financial_block(code: str, as_of: str | None = None,
             if "审计机构未备案" not in block["flags"]:
                 block["flags"].append("审计机构未备案")
             block["评级"] = "风险"
+
+    # LLM 文本层(M2):只读 llm_text.run_financial_text 预算的 code_view,**不触发 LLM**
+    # (避免对每票 serialize 都烧 token)。未预算 → qualitative/verdict 保持 null。
+    block.setdefault("qualitative", None)
+    try:
+        ft = store.get_code_view("financial_text", code)
+        block["qualitative"] = ft.get("qualitative")
+        block["verdict"] = ft.get("verdict")
+    except FileNotFoundError:
+        pass
     return block
 
 
