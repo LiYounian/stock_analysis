@@ -37,3 +37,4 @@ pytest>=8.0
 
 # 精确版本见 requirements-lock.txt(conda 环境 stock_analysis 冻结)
 markdown
+pymupdf>=1.24  # 财报 M2:年报 PDF 文本抽取(仅闭环采集端需要,展示端可选)

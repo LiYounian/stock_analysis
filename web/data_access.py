@@ -68,6 +68,32 @@ def list_records(date: str = "latest") -> list[dict]:
     return recs
 
 
+def financial_page(date: str = "latest") -> dict:
+    """财报分析页:所有带财报块的记录 → 评级/审计双闸门/红旗/LLM归纳摘要。
+
+    排序:按评级(风险/差在前,便于排雷),同级按质地分升序。只列有财报数据的票
+    (闭环里仅 news_subset=自选∪每策略前5 采财报,故通常几十只)。展示层只读、不算。
+    """
+    order = {"风险": 0, "差": 1, "中": 2, "良": 3, "优": 4}
+    rows = []
+    for r in _load_all(date).values():
+        fin = r.get("financial")
+        if not fin:
+            continue
+        v = fin.get("verdict") or {}
+        rows.append({
+            "code": r["meta"]["code"], "name": r["meta"].get("name"),
+            "industry": r["meta"].get("industry"),
+            "评级": fin.get("评级"), "质地分": fin.get("quality_score"),
+            "报告期": fin.get("报告期"), "金融业口径": fin.get("金融业口径"),
+            "审计意见闸门": fin.get("审计意见闸门"), "审计机构闸门": fin.get("审计机构闸门"),
+            "审计机构": fin.get("审计机构"), "flags": fin.get("flags") or [],
+            "LLM评级": v.get("综合评级"), "一句话": v.get("一句话结论"),
+        })
+    rows.sort(key=lambda x: (order.get(x["评级"], 9), _num(x["质地分"], 999)))
+    return {"rows": rows, "count": len(rows), "date": date}
+
+
 def get_record(code: str, date: str = "latest") -> dict | None:
     try:
         return store.get_record(code, date=date)
