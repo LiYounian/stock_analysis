@@ -12,11 +12,13 @@
     python -m tools.run panel        # 横向总表视图
     python -m tools.run screen       # 组合聚合 + 预设选股视图
     python -m tools.run pattern      # 形态选股(模块二)扫描:RS+硬规则AND+达标占比
+    python -m tools.run sepa         # SEPA+VCP 监控(午间/收盘):均线入池 + 波段收缩两表
     python -m tools.run all          # 全链路(采集→情绪→组装→事件→多因子→合议回写→视图),一个日期
     python -m tools.run pipeline     # 全A 两阶段流水线:全A便宜筛得达标池,再只对(达标∪自选)做新闻/LLM/合议
     python -m tools.run screenall    # 全A 多策略选股(策略0/1/2/3/4)→ 只对(各策略选出并集∪自选)做新闻/LLM/合议
     # 追加 --all 用全池 32 只;默认开发子集 10 只(config/dev_sample.json)
     # pattern 额外支持 --universe [N]:从全 A 票池取前 N 只(默认 50)扫描
+    # sepa 额外支持 --universe [N] --session 午间|收盘 --no-fetch:SEPA+VCP 监控扫描
     # pipeline 额外支持 --universe [N]:阶段①只扫全A前 N 只(默认全量);贵活只对候选(达标∪自选)
     # screenall 额外支持 --universe [N]:全A前 N 只做筛选(默认全量);--no-llm 纯数据快跑(跳过新闻+LLM)
 
@@ -373,6 +375,16 @@ def cmd_pattern(argv):
     screen_pattern.run_pattern_screen(codes, as_of)
 
 
+def cmd_sepa(argv):
+    """SEPA+VCP 监控。默认会先 spot 增量当日 bar 再扫描;--no-fetch 只读本地主档。
+
+    --universe N 截前 N 只;--session 午间|收盘。
+    """
+    from tools.pipeline import screen_sepa_vcp as sepa
+    rest = argv[2:] if argv else []
+    sepa._main(rest)
+
+
 def cmd_analyze(argv):
     """读缓存算技术指标,打印评级排行(不落盘)。"""
     codes, _ = _prep(argv)
@@ -655,7 +667,7 @@ _CMDS = {"collect": cmd_collect, "message": cmd_message, "sentiment": cmd_sentim
          "serialize": cmd_serialize, "panel": cmd_panel, "screen": cmd_screen,
          "events": cmd_events, "factor": cmd_factor, "council": cmd_council,
          "context": cmd_context, "pipeline": cmd_pipeline, "screenall": cmd_screenall,
-         "pattern": cmd_pattern, "analyze": cmd_analyze, "all": cmd_all}
+         "pattern": cmd_pattern, "sepa": cmd_sepa, "analyze": cmd_analyze, "all": cmd_all}
 
 
 def main(argv: list[str]) -> int:

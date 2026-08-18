@@ -1,0 +1,12 @@
+# 工作日 15:35 收盘 SEPA+VCP 扫描
+# 安装:拷到 /etc/systemd/system/ → systemctl daemon-reload → systemctl enable --now stock-sepa-close.timer
+[Unit]
+Description=Run SEPA+VCP monitor after close
+
+[Timer]
+OnCalendar=Mon..Fri 15:35
+Persistent=true
+Unit=stock-sepa.service
+
+[Install]
+WantedBy=timers.target

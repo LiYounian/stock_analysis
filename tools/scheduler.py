@@ -53,6 +53,17 @@ def _run_backfill() -> None:
         logger.exception("[T5] 兜底补数失败(已捕获)")
 
 
+def _run_sepa(session: str = "收盘") -> None:
+    """SEPA+VCP 监控:午间/收盘各一趟。独立于全链路,不绑 LLM。异常只记日志。"""
+    from tools.pipeline import screen_sepa_vcp as sepa
+    try:
+        logger.info("[SEPA] %s 开始", session)
+        sepa._main(["--session", session])
+        logger.info("[SEPA] %s 完成", session)
+    except Exception:
+        logger.exception("[SEPA] %s 失败(已捕获)", session)
+
+
 # 任务表:id → (回调, 间隔配置项名)。加新层(T2/T3/T4)在此登记即可。
 _JOBS = [
     ("full", _run_full, "SCHED_FULL_INTERVAL_MIN"),
@@ -77,6 +88,18 @@ def build_scheduler(scheduler=None):
                               misfire_grace_time=grace, coalesce=True, max_instances=1,
                               replace_existing=True)
             logger.info("注册任务 %s:每 %d 分钟", job_id, minutes)
+    if getattr(settings, "SCHED_SEPA_ENABLED", False):
+        from apscheduler.triggers.cron import CronTrigger
+        for job_id, session, hour, minute in (
+            ("sepa_noon", "午间", 11, 35),
+            ("sepa_close", "收盘", 15, 35),
+        ):
+            scheduler.add_job(
+                _run_sepa, CronTrigger(day_of_week="mon-fri", hour=hour, minute=minute),
+                id=job_id, kwargs={"session": session},
+                misfire_grace_time=grace, coalesce=True, max_instances=1,
+                replace_existing=True)
+            logger.info("注册任务 %s:工作日 %02d:%02d session=%s", job_id, hour, minute, session)
     return scheduler
 
 

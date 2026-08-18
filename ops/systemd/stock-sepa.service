@@ -1,0 +1,18 @@
+# 本地 SEPA+VCP 监控(oneshot)。由 stock-sepa-noon.timer / stock-sepa-close.timer 触发。
+# 脚本按当前钟点自动选 session:13 点前=午间,否则=收盘。
+# 安装:把路径/用户换成自己的,拷到 /etc/systemd/system/
+[Unit]
+Description=Stock Analysis SEPA+VCP monitor (noon or close)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=deploy
+WorkingDirectory=/srv/stock_analysis
+EnvironmentFile=-/etc/stock-analysis/sync.env
+Environment=STOCK_PYTHON=/srv/stock_analysis/.venv/bin/python
+ExecStart=/bin/bash /srv/stock_analysis/ops/launchd/sepa_monitor.sh
+
+[Install]
+WantedBy=multi-user.target

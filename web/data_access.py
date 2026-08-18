@@ -948,3 +948,55 @@ def get_analysis_report(name: str) -> dict | None:
     html = _md.markdown(text, extensions=["tables", "fenced_code", "toc", "sane_lists"])
     return {"name": name, "title": _report_title(text, name),
             "date": _report_date(name), "html": html}
+
+
+def sepa_page(date: str = "latest") -> dict:
+    """SEPA+VCP 监控页:只读合格池/观察池/雷达 view。缺视图 → 空表不崩。"""
+    def _v(name):
+        try:
+            return store.get_view(name, date=date)
+        except FileNotFoundError:
+            return {}
+    pool = _v("SEPA合格池")
+    watch = _v("SEPA观察池")
+    radar = _v("SEPA雷达")
+    return {
+        "as_of": pool.get("as_of") or as_of(date),
+        "session": pool.get("session") or watch.get("session") or "",
+        "合格": pool.get("rows") or [],
+        "观察": watch.get("rows") or [],
+        "雷达": radar.get("文本") or watch.get("雷达") or "",
+        "合格数": pool.get("合格数") or len(pool.get("rows") or []),
+        "观察数": watch.get("观察数") or len(watch.get("rows") or []),
+        "规则": pool.get("规则") or "",
+    }
+
+
+def sepa_detail(code: str, date: str = "latest") -> dict | None:
+    """单票收缩结构参考图 + 观察池行(若有)。无图则 None。"""
+    try:
+        chart = store.get_code_view("sepa_vcp_chart", code, date=date)
+    except FileNotFoundError:
+        return None
+    row = None
+    try:
+        watch = store.get_view("SEPA观察池", date=date)
+        for r in watch.get("rows") or []:
+            if r.get("code") == code:
+                row = r
+                break
+    except FileNotFoundError:
+        pass
+    if row is None:
+        try:
+            pool = store.get_view("SEPA合格池", date=date)
+            for r in pool.get("rows") or []:
+                if r.get("code") == code:
+                    row = r
+                    break
+        except FileNotFoundError:
+            pass
+    name = (row or {}).get("name") or _code_name_map().get(code) or code
+    return {"code": code, "name": name, "row": row or {}, "chart": chart,
+            "as_of": as_of(date)}
+
