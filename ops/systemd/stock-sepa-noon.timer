@@ -1,0 +1,12 @@
+# 工作日 11:35 午间 SEPA+VCP 扫描
+# 安装:拷到 /etc/systemd/system/ → systemctl daemon-reload → systemctl enable --now stock-sepa-noon.timer
+[Unit]
+Description=Run SEPA+VCP monitor after morning session
+
+[Timer]
+OnCalendar=Mon..Fri 11:35
+Persistent=true
+Unit=stock-sepa.service
+
+[Install]
+WantedBy=timers.target

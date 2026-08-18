@@ -174,3 +174,16 @@ def test_news_list_and_detail():
 
 def test_news_detail_missing_code_404():
     assert client.get("/news/000000/0").status_code == 404
+
+
+def test_sepa_page_ok():
+    """监控页缺 view 也必须 200(空表),导航含 SEPA监控,免责必现。"""
+    r = client.get("/sepa")
+    assert r.status_code == 200
+    assert "SEPA" in r.text
+    assert "非投资建议" in r.text
+    assert "VCP 完成" not in r.text
+
+
+def test_sepa_detail_missing_404():
+    assert client.get("/sepa/000000").status_code == 404

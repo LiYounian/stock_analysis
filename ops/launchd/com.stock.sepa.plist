@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  本地 SEPA+VCP 监控(macOS):工作日 11:35 午间 + 15:35 收盘。
+  独立于 com.stock.autopush(全链路+LLM),避免绑死。
+  安装:
+    1. 把 __REPO__ 换成仓库绝对路径
+    2. chmod +x __REPO__/ops/launchd/sepa_monitor.sh
+    3. 拷到 ~/Library/LaunchAgents/com.stock.sepa.plist
+    4. launchctl load -w ~/Library/LaunchAgents/com.stock.sepa.plist
+  盘后/午间时段请保持开机不休眠。详见 docs/参考/本地部署与监控手册.md
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.stock.sepa</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>__REPO__/ops/launchd/sepa_monitor.sh</string>
+    </array>
+
+    <key>StartCalendarInterval</key>
+    <array>
+        <dict><key>Weekday</key><integer>1</integer><key>Hour</key><integer>11</integer><key>Minute</key><integer>35</integer></dict>
+        <dict><key>Weekday</key><integer>2</integer><key>Hour</key><integer>11</integer><key>Minute</key><integer>35</integer></dict>
+        <dict><key>Weekday</key><integer>3</integer><key>Hour</key><integer>11</integer><key>Minute</key><integer>35</integer></dict>
+        <dict><key>Weekday</key><integer>4</integer><key>Hour</key><integer>11</integer><key>Minute</key><integer>35</integer></dict>
+        <dict><key>Weekday</key><integer>5</integer><key>Hour</key><integer>11</integer><key>Minute</key><integer>35</integer></dict>
+        <dict><key>Weekday</key><integer>1</integer><key>Hour</key><integer>15</integer><key>Minute</key><integer>35</integer></dict>
+        <dict><key>Weekday</key><integer>2</integer><key>Hour</key><integer>15</integer><key>Minute</key><integer>35</integer></dict>
+        <dict><key>Weekday</key><integer>3</integer><key>Hour</key><integer>15</integer><key>Minute</key><integer>35</integer></dict>
+        <dict><key>Weekday</key><integer>4</integer><key>Hour</key><integer>15</integer><key>Minute</key><integer>35</integer></dict>
+        <dict><key>Weekday</key><integer>5</integer><key>Hour</key><integer>15</integer><key>Minute</key><integer>35</integer></dict>
+    </array>
+
+    <key>StandardOutPath</key>
+    <string>__REPO__/logs/sepa.log</string>
+    <key>StandardErrorPath</key>
+    <string>__REPO__/logs/sepa.err</string>
+
+    <key>RunAtLoad</key>
+    <false/>
+</dict>
+</plist>
