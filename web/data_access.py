@@ -357,16 +357,18 @@ def selection_page(date: str = "latest") -> dict:
     strategy2 = _strategy2_section(recs, date)     # 放量后缩量回踩 S02(全A view,待验证)
     strategy3 = _strategy3_section(recs, date)     # 箱体形态(全A view,待验证)
     strategy4 = _strategy4_section(recs, date)     # 动量组合(全A view,原策略2 改号 2→4)
+    strategy5 = _strategy5_section(recs, date)     # 自选池小市值(web 层实时跑策略D,不读 view)
     # config 兜底:自选池无记录时,退用策略0 view 里带的 council config(前端合成口径真源)
     if not config and strategy0.get("config"):
         config = strategy0["config"]
 
-    # 综合选股:5 策略入选代码并集(前端按勾选实时重算;后端给全并集 + 每票命中来源)
-    combined = _combined_section(strategy0, strategy1, strategy2, strategy3, strategy4, recs)
+    # 综合选股:6 策略入选代码并集(前端按勾选实时重算;后端给全并集 + 每票命中来源)
+    combined = _combined_section(strategy0, strategy1, strategy2, strategy3, strategy4, strategy5, recs)
 
     return {"rows": pool_rows, "total": len(recs),
             "combined": combined, "strategy0": strategy0, "strategy1": strategy1,
             "strategy2": strategy2, "strategy3": strategy3, "strategy4": strategy4,
+            "strategy5": strategy5,
             "config": config or {}, "as_of": as_of(date)}
 
 
@@ -496,31 +498,80 @@ def _strategy4_section(recs: dict, date: str = "latest") -> dict:
     return _view_picks_section("动量组合", recs, date)
 
 
+def _strategy5_section(recs: dict, date: str = "latest", top_k: int = 3) -> dict:
+    """策略5「自选池小市值组合」区块:web 层实时跑 tools.strategy.small_cap 策略D。
+
+    与策略0~4 不同——**不读预落盘 view**,自选池版数据已在 records 里,
+    直接调 strategy 函数拿结果(记不动 store)。传入 records = 自选池 ∩ recs。
+    top_k=3(策略D 默认);市值缺失/触涨跌停/停牌 由策略过滤,embargo 单独标透传前端。
+
+    输出与其他策略区块同构:{present, as_of, 扫描数, 入选数, rows:[{code, name, industry, ...}]}
+    额外一个 embargo 字段供模板显示"空仓月"提示,但不代买 ETF。
+    """
+    from tools.strategy import registry as _reg
+    from tools.strategy import small_cap as _sc  # noqa: F401 触发注册
+
+    pool = _pool_codes()
+    scoped = {c: r for c, r in (recs or {}).items() if c in pool}
+    empty = {"present": False, "as_of": as_of(date), "扫描数": len(scoped), "入选数": 0,
+             "rows": [], "picks": [], "embargo": False, "candidates": []}
+    if not scoped:
+        return empty
+
+    try:
+        out = _reg.run("策略D_自选池小市值组合", scoped, top_k=top_k)
+    except Exception:                                    # noqa: BLE001
+        return empty
+
+    rows = []
+    for code in out.get("codes", []):
+        r = scoped.get(code) or {}
+        meta = r.get("meta") or {}
+        val = r.get("valuation") or {}
+        snap = r.get("snapshot") or {}
+        rows.append({
+            "code": code, "name": _name(recs, code),
+            "industry": meta.get("industry") or meta.get("sector"),
+            "mktcap_yi": val.get("mktcap_yi"),
+            "close": snap.get("close"), "pct_chg": snap.get("pct_chg"),
+        })
+    return {
+        "present": True, "as_of": as_of(date),
+        "扫描数": len(scoped), "入选数": len(rows),
+        "top_k": out.get("top_k", top_k),
+        "月度池": out.get("monthly_pool_size"),
+        "候选池": out.get("candidates", []),
+        "embargo": out.get("embargo", False),
+        "rows": rows,
+        "picks": list(out.get("codes") or []),
+    }
+
+
 def _combined_section(strategy0: dict, strategy1: dict, strategy2: dict,
-                      strategy3: dict, strategy4: dict, recs: dict) -> dict:
-    """【综合选股】:5 策略入选代码的并集(去重),每票标注命中来源(被哪几个策略选中)。
+                      strategy3: dict, strategy4: dict, strategy5: dict,
+                      recs: dict) -> dict:
+    """【综合选股】:6 策略入选代码的并集(去重),每票标注命中来源(被哪几个策略选中)。
 
     后端产出**全并集**(所有可用策略入选代码);前端按勾选的策略实时过滤 + 重算命中来源
     (一个都没勾 → 前端显示"无")。默认全勾(展示全并集)。
     name 走 code_name 回退;行业优先中心记录 meta,再回退策略0 view 自带行业。
 
-    策略0~4 入选代码均来自各自全A screener 预落盘 view(与页面各区块展示口径一致,已截到 cap)。
-    策略2 = S02 放量后缩量回踩;策略3 = 箱体形态;策略4 = 动量组合。
+    策略0~4 入选代码均来自各自全A screener 预落盘 view(与页面各区块展示口径一致,已截到 cap);
+    策略5 = 自选池小市值(web 层实时跑,不读 view)。
     """
     s0_codes = [r["code"] for r in strategy0.get("rows", []) if r.get("code")]
     s1_codes = [r["code"] for r in strategy1.get("rows", []) if r.get("code")]
     s2_codes = list(strategy2.get("picks") or [])
     s3_codes = list(strategy3.get("picks") or [])
-    # 策略4:动量组合 view 入选(与展示 rows 对齐,已截到 cap)
-    s4 = strategy4 or {}
-    s4_codes = list(s4.get("picks") or [])
+    s4_codes = list((strategy4 or {}).get("picks") or [])
+    s5_codes = list((strategy5 or {}).get("picks") or [])
     # 行业 hint:策略0 view 自带行业(全A票多无中心记录)
     s0_industry = {r["code"]: r.get("industry") for r in strategy0.get("rows", [])}
 
     sources: dict[str, list[str]] = {}
     order: list[str] = []
     for key, codes in (("策略0", s0_codes), ("策略1", s1_codes), ("策略2", s2_codes),
-                       ("策略3", s3_codes), ("策略4", s4_codes)):
+                       ("策略3", s3_codes), ("策略4", s4_codes), ("策略5", s5_codes)):
         for c in codes:
             if c not in sources:
                 sources[c] = []
@@ -561,6 +612,11 @@ def _combined_section(strategy0: dict, strategy1: dict, strategy2: dict,
          "title": "移植自聚宽社区双策略:加权对数动量打分 + 拉普拉斯闸门(策略A提炼);"
                   "质地过滤 + BBI 站上 + 24 日动量排序(策略B红利腿提炼)。"
                   "全 A 筛选,读预落盘 view。"},
+        {"key": "策略5", "label": "自选池小市值", "codes": s5_codes,
+         "available": bool((strategy5 or {}).get("present")),
+         "title": "移植自聚宽「价值选股与RSRS择时」:自选池内按市值升序,"
+                  "剔除触涨跌停/停牌;空仓月(12-22~1-28、3-20~4-28)仅标记不代买 ETF。"
+                  "web 层实时跑,不读预落盘 view。"},
     ]
     return {"strategies": strategies, "rows": rows}
 

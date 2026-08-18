@@ -153,15 +153,18 @@ def test_combined_union_and_sources(monkeypatch):
     assert set(rows["300311"]["sources"]) == {"策略0", "策略1"}
     assert rows["603221"]["sources"] == ["策略1"]
     strat = {s["key"]: s for s in combined["strategies"]}
-    # 5 个策略勾选框都在,key/label 对齐新编号
-    assert [s["key"] for s in combined["strategies"]] == ["策略0", "策略1", "策略2", "策略3", "策略4"]
+    # 6 个策略勾选框都在,key/label 对齐新编号(策略5 = 自选池小市值,web 层实时跑)
+    assert [s["key"] for s in combined["strategies"]] == ["策略0", "策略1", "策略2", "策略3", "策略4", "策略5"]
     assert strat["策略2"]["label"] == "放量后缩量回踩"
     assert strat["策略3"]["label"] == "箱体形态"
     assert strat["策略4"]["label"] == "动量组合"
+    assert strat["策略5"]["label"] == "自选池小市值"
     assert strat["策略0"]["available"] and strat["策略1"]["available"]
     # 策略2/3/4 view 缺 → present=False → available=False、codes=[]
     for k in ("策略2", "策略3", "策略4"):
         assert strat[k]["available"] is False and strat[k]["codes"] == []
+    # 策略5 无自选池 records → present=False(本用例 recs 空)
+    assert strat["策略5"]["available"] is False and strat["策略5"]["codes"] == []
     # 全并集去重:000001, 300311, 603221
     assert set(rows.keys()) == {"000001", "300311", "603221"}
 
@@ -305,6 +308,55 @@ def test_strategy4_missing_view_fallback(monkeypatch):
     _patch(monkeypatch, {}, get_view=_dispatch(momentum=None))
     s4 = da.selection_page()["strategy4"]
     assert s4["present"] is False and s4["picks"] == [] and s4["rows"] == []
+
+
+# ————————————————————————————————————————————————
+# 策略5(自选池小市值,web 层实时跑,不读 view)
+# ————————————————————————————————————————————————
+def _mkt_rec(code, mktcap_yi, pct_chg=0.5, sector="半导体"):
+    """策略5 用最小 record:valuation.mktcap_yi + snapshot.pct_chg 即可。"""
+    return {
+        "meta": {"code": code, "name": "T" + code, "sector": sector, "industry": "芯片"},
+        "valuation": {"mktcap_yi": mktcap_yi},
+        "snapshot": {"close": 10.0, "pct_chg": pct_chg},
+    }
+
+
+def test_strategy5_runs_in_web_layer(monkeypatch):
+    """策略5 web 层实时跑:自选池 records 直接调 strategy D,不依赖 view。"""
+    recs = {
+        "002001": _mkt_rec("002001", 30.0),
+        "002002": _mkt_rec("002002", 20.0),      # 最小市值
+        "002003": _mkt_rec("002003", 50.0),
+        "300001": _mkt_rec("300001", 40.0),      # 创业板 D 不剥
+    }
+    _patch(monkeypatch, recs)
+    page = da.selection_page()
+    s5 = page["strategy5"]
+    assert s5["present"] is True and s5["扫描数"] == 4
+    assert s5["picks"] == ["002002", "002001", "300001"]          # 市值升序 top_k=3
+    assert [r["mktcap_yi"] for r in s5["rows"]] == [20.0, 30.0, 40.0]
+    strat = {s["key"]: s for s in page["combined"]["strategies"]}
+    assert strat["策略5"]["label"] == "自选池小市值" and strat["策略5"]["available"] is True
+    assert set(strat["策略5"]["codes"]) == {"002002", "002001", "300001"}
+
+
+def test_strategy5_still_filters_limit_up(monkeypatch):
+    """策略5 web 层仍剥触涨跌停(与策略D 一致)。"""
+    recs = {
+        "002001": _mkt_rec("002001", 20.0, pct_chg=9.9),   # 涨停 → 剔
+        "002002": _mkt_rec("002002", 30.0),
+        "002003": _mkt_rec("002003", 40.0),
+    }
+    _patch(monkeypatch, recs)
+    assert da.selection_page()["strategy5"]["picks"] == ["002002", "002003"]
+
+
+def test_strategy5_empty_pool(monkeypatch):
+    """自选池无 records → present=False,不炸,combined 里 available=False。"""
+    _patch(monkeypatch, {})
+    s5 = da.selection_page()["strategy5"]
+    assert s5["present"] is False and s5["rows"] == []
 
 
 def test_view_picks_top_n_cap(monkeypatch):
