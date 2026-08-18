@@ -48,16 +48,27 @@ _PROFIT_MAP = {
     "销售费用": "SALE_EXPENSE", "管理费用": "MANAGE_EXPENSE",
     "研发费用": "RESEARCH_EXPENSE", "财务费用": "FINANCE_EXPENSE",
     "利息费用": "FE_INTEREST_EXPENSE", "利息收入": "FE_INTEREST_INCOME",
-    "资产减值损失": "ASSET_IMPAIRMENT_LOSS", "信用减值损失": "CREDIT_IMPAIRMENT_LOSS",
+    # 减值(通用/非金融口径):新利润表用 *_INCOME(收入符号制,负数=损失);旧字段 *_LOSS 对
+    #   非金融票恒 NaN(实测格力/仲景 _LOSS 全空、_INCOME 有值)——此前误采 _LOSS 致减值全 null。
+    "资产减值损失": "ASSET_IMPAIRMENT_INCOME", "信用减值损失": "CREDIT_IMPAIRMENT_INCOME",
     "公允价值变动收益": "FAIRVALUE_CHANGE_INCOME", "投资收益": "INVEST_INCOME",
     "营业利润": "OPERATE_PROFIT", "利润总额": "TOTAL_PROFIT", "所得税": "INCOME_TAX",
     "净利润": "NETPROFIT", "归母净利润": "PARENT_NETPROFIT",
     "扣非归母净利润": "DEDUCT_PARENT_NETPROFIT", "基本每股收益": "BASIC_EPS",
+    # —— 银行/金融专属科目(非金融票为空;金融票营收=OPERATE_INCOME,营业总收入 TOTAL_* 常空)——
+    #   银行减值用 *_LOSS(正数=计提额,与通用相反),故独立字段、不与通用减值混符号制。
+    "利息净收入": "INTEREST_NI", "利息收入_金融": "INTEREST_INCOME",
+    "利息支出_金融": "INTEREST_EXPENSE",
+    "手续费及佣金净收入": "FEE_COMMISSION_NI",
+    "业务及管理费": "BUSINESS_MANAGE_EXPENSE",
+    "信用减值损失_金融": "CREDIT_IMPAIRMENT_LOSS", "资产减值损失_金融": "ASSET_IMPAIRMENT_LOSS",
 }
 # 资产负债表
 _BALANCE_MAP = {
     "货币资金": "MONETARYFUNDS", "应收账款": "ACCOUNTS_RECE", "应收票据及应收账款": "NOTE_ACCOUNTS_RECE",
     "存货": "INVENTORY", "商誉": "GOODWILL", "合同负债": "CONTRACT_LIAB",
+    # 银行/金融专属:发放贷款及垫款 / 吸收存款(存贷比、规模口径;非金融票为空)
+    "发放贷款及垫款": "LOAN_ADVANCE", "吸收存款": "ACCEPT_DEPOSIT",
     "预收账款": "ADVANCE_RECEIVABLES", "应付账款": "ACCOUNTS_PAYABLE",
     "其他应收款合计": "TOTAL_OTHER_RECE", "在建工程": "CIP", "固定资产": "FIXED_ASSET",
     "无形资产": "INTANGIBLE_ASSET", "开发支出": "DEVELOP_EXPENSE",
