@@ -96,6 +96,25 @@ def test_one_table_fail_degrades(monkeypatch, tmp_path):
     assert rec["现金流量表"] == {}                     # 该表降级为空
 
 
+def test_one_table_hang_times_out(monkeypatch):
+    """单表接口挂起(网络无响应)→ 硬超时降级 None,不无限阻塞。
+
+    锁根因回归:盘后闭环曾因某票财报接口连接挂起、akshare 无 timeout → 整条流水永久卡住,
+    从没走到 serialize → 当日 per-code 记录=0。护栏须保证一只挂死票最多拖 `_FETCH_TIMEOUT_SEC`。
+    """
+    import time
+    monkeypatch.setattr(fin, "_FETCH_TIMEOUT_SEC", 1)
+
+    def hang(symbol=None):
+        time.sleep(30)
+    ak = types.SimpleNamespace(stock_profit_sheet_by_report_em=hang)
+    t0 = time.time()
+    r = fin._fetch_one_table(ak, "stock_profit_sheet_by_report_em", "SH600000")
+    dt = time.time() - t0
+    assert r is None                                   # 挂起 → 降级
+    assert dt < 5                                       # 在超时(1s)附近返回,未无限阻塞
+
+
 def test_all_tables_fail_skips_stock(monkeypatch, tmp_path):
     monkeypatch.setattr(store, "_RAW_DIR", tmp_path)
     monkeypatch.setattr(fin.settings, "FETCH_SLEEP_SEC", 0)

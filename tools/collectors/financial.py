@@ -18,7 +18,9 @@
 """
 from __future__ import annotations
 
+import concurrent.futures
 import logging
+import os
 import time
 
 import pandas as pd
@@ -29,6 +31,11 @@ from tools.store import repo as store
 logger = logging.getLogger("collectors.financial")
 
 _SOURCE = "akshare-em(三大表 by_report)"
+
+# —— 单张表拉取超时(秒)——akshare/requests 底层不暴露 timeout,单只票连接挂起会
+#   无限阻塞、拖垮整条盘后闭环(实测:某票财报采集挂死 → 后续 serialize 永不执行 → 记录=0)。
+#   用工作线程包一层硬超时:超时即当作该表失败降级(与"任一表失败跳过、不炸整批"一致)。
+_FETCH_TIMEOUT_SEC = int(os.environ.get("FIN_FETCH_TIMEOUT_SEC", "45"))
 
 # —— 报告期回溯期数(近 12 期≈3 年,够算增速趋势与周转;方案 Q2 默认)——
 DEFAULT_PERIODS = 12
@@ -134,12 +141,26 @@ def _extract_row(row: pd.Series, colmap: dict) -> dict:
 
 
 def _fetch_one_table(ak, fn: str, symbol: str) -> pd.DataFrame | None:
-    """拉单张表;失败/空 → None(降级,不抛)。"""
+    """拉单张表;失败/空/超时 → None(降级,不抛)。
+
+    akshare 底层不暴露 timeout,单只连接挂起会无限阻塞整条闭环 → 用单工作线程包硬超时
+    (`_FETCH_TIMEOUT_SEC`):超时即降级返回 None,挂起的线程随进程退出回收(不 join,
+    避免继续阻塞)。这样一只票的网络挂死最多拖 45s,不会再卡死盘后 serialize。
+    """
+    ex = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+    fut = ex.submit(getattr(ak, fn), symbol=symbol)
     try:
-        df = getattr(ak, fn)(symbol=symbol)
+        df = fut.result(timeout=_FETCH_TIMEOUT_SEC)
+    except concurrent.futures.TimeoutError:
+        logger.warning("%s(%s) 采集超时(>%ds),该表降级", fn, symbol, _FETCH_TIMEOUT_SEC)
+        ex.shutdown(wait=False, cancel_futures=True)
+        return None
     except Exception as e:                       # noqa: BLE001
         logger.warning("%s(%s) 采集失败,该表降级: %s", fn, symbol, e)
+        ex.shutdown(wait=False)
         return None
+    else:
+        ex.shutdown(wait=False)
     if df is None or len(df) == 0 or "REPORT_DATE" not in df.columns:
         return None
     return df
