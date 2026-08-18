@@ -128,6 +128,9 @@ def compute_derived(periods: dict) -> dict[str, dict]:
         _减值_金融 = [x for x in (_f(rec, "利润表", "信用减值损失_金融"),
                               _f(rec, "利润表", "资产减值损失_金融")) if x is not None]
         减值合计_金融 = round(sum(_减值_金融), 4) if _减值_金融 else None
+        # 拨备前营业利润 PPOP = 营业利润 + 减值合计(把计提的减值加回,看拨备前的主业盈利)
+        拨备前营业利润 = (round(营业利润 + 减值合计_金融, 4)
+                    if (营业利润 is not None and 减值合计_金融 is not None) else None)
 
         # 有息负债 = 短期借款 + 一年内到期 + 长期借款 + 应付债券(缺项按 0 计入,全缺→None)
         有息_parts = [x for x in (短期借款, 一年内到期, 长期借款, 应付债券) if x is not None]
@@ -169,9 +172,15 @@ def compute_derived(periods: dict) -> dict[str, dict]:
             "非息收入占比": _pct((营业收入_金融 - 利息净收入)
                             if (营业收入_金融 is not None and 利息净收入 is not None) else None,
                             营业收入_金融),
-            "拨备前营业利润": (round(营业利润 + 减值合计_金融, 4)
-                          if (营业利润 is not None and 减值合计_金融 is not None) else None),
+            "拨备前营业利润": 拨备前营业利润,
             "ROA": _pct(归母 if 归母 is not None else 净利润, 总资产),        # 总资产回报(银行规模口径)
+            "总资产增速": _yoy_pct(总资产, _f(prev, "资产负债表", "资产总计")),      # 生息资产扩表(银行规模成长)
+            "贷款增速": _yoy_pct(发放贷款, _f(prev, "资产负债表", "发放贷款及垫款")),  # 信贷投放增速
+            # 减值占PPOP:减值合计/拨备前利润(反向,越低利润质量越好);PPOP≤0 时无意义→None
+            "减值占PPOP": (_div(减值合计_金融, 拨备前营业利润)
+                        if (拨备前营业利润 is not None and 拨备前营业利润 > 0) else None),
+            # PPOP覆盖减值倍数:拨备前利润/减值合计(缓冲厚度,越大越安全)
+            "PPOP覆盖减值倍数": _div(拨备前营业利润, 减值合计_金融),
             # 单季(供环比/单季同比;缺相邻期→None)
             "单季营收": _single_quarter(periods, p, "利润表", "营业总收入"),
             "单季归母净利": _single_quarter(periods, p, "利润表", "归母净利润"),

@@ -202,7 +202,9 @@ def _synthetic_bank_periods():
         "2024-12-31": {
             "report_date": "2024-12-31", "disclosure_date": "2025-04-01", "report_type": "年报",
             "利润表": {"营业收入": 100.0, "利息净收入": 65.0, "归母净利润": 38.0, "净利润": 38.0},
-            "资产负债表": dict(base_bs), "现金流量表": {},
+            # 上一年规模略小 → 供 总资产增速/贷款增速 同比(资产 1800→2000、贷款 800→900)
+            "资产负债表": {**base_bs, "资产总计": 1800.0, "发放贷款及垫款": 800.0},
+            "现金流量表": {},
         },
     }
 
@@ -218,6 +220,26 @@ def test_derived_bank_ratios():
     assert d["拨备前营业利润"] == pytest.approx(62.0)     # 营业利润50 + 减值(10+2)
     assert d["ROA"] == pytest.approx(2.0)               # 归母40/总资产2000
     assert d["毛利率"] is None                           # 无营业成本 → 不误算
+    # M4 新增银行 derived(救活"健康"维 + 补强质量/成长):
+    assert d["总资产增速"] == pytest.approx(11.1111, abs=1e-4)   # (2000-1800)/1800
+    assert d["贷款增速"] == pytest.approx(12.5)                  # (900-800)/800
+    assert d["减值占PPOP"] == pytest.approx(12.0 / 62.0)         # 减值合计12 / PPOP62(反向,越低越好)
+    assert d["PPOP覆盖减值倍数"] == pytest.approx(62.0 / 12.0)   # 缓冲厚度(越大越安全)
+
+
+def test_derived_bank_impairment_ratios_guard():
+    """减值占PPOP 在 PPOP≤0 时置 None(避免负比率污染打分);PPOP覆盖减值倍数按实算。"""
+    periods = {
+        "2025-12-31": {
+            "利润表": {"营业收入": 100.0, "营业利润": -20.0,
+                     "信用减值损失_金融": 5.0, "资产减值损失_金融": 1.0},  # PPOP = -20+6 = -14 <0
+            "资产负债表": {"资产总计": 1000.0},
+        },
+    }
+    d = metrics.compute_derived(periods)["2025-12-31"]
+    assert d["拨备前营业利润"] == pytest.approx(-14.0)
+    assert d["减值占PPOP"] is None                       # PPOP<0 → 不算(不污染反向打分)
+    assert d["PPOP覆盖减值倍数"] == pytest.approx(-14.0 / 6.0)
 
 
 def test_single_quarter_split():
