@@ -33,7 +33,7 @@ HOLD_PERIODS = ("1日", "5日", "10日")
 # 约定(类型/量纲统一)
 # ————————————————————————————————————————————————
 CONVENTIONS = {
-    "代码": "6 位字符串(如 '000021'),非 int",
+    "代码": "A股6位 / 港股5位字符串(如 '000021' / '00700'),非 int",
     "日期": "YYYY-MM-DD 字符串",
     "金额": "默认单位元;字段名以 _yi / 含'亿'结尾时为亿",
     "百分比": "数值(如 5.88 表示 5.88%),非字符串",
@@ -51,8 +51,8 @@ TOP_LEVEL_KEYS = REQUIRED_TOP[:2] + OPTIONAL_TOP + REQUIRED_TOP[2:]
 # 人读 + 机读 schema(字段 → 说明)。详尽结构见各生产者;此处固化契约要点。
 RECORD_SCHEMA = {
     "schema_version": "str,如 '1.0'",
-    "meta": {"code": "str(6)", "name": "str", "sector": "str|null",
-             "industry": "str|null", "as_of": "date(YYYY-MM-DD)"},
+    "meta": {"code": "str(5-6)", "name": "str", "sector": "str|null",
+             "industry": "str|null", "market": "str(A|HK)", "as_of": "date(YYYY-MM-DD)"},
     "snapshot": "null | {close, pct_chg, ma{ma5,ma10,ma20,ma60,排列}, "
                 "macd{dif,dea,macd,状态}, kdj{k,d,j,状态}, rsi{rsi6,rsi12,rsi24}, "
                 "bias20, vol_ratio, vol_state}",
@@ -79,7 +79,7 @@ RECORD_SCHEMA = {
 }
 
 _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}")
-_CODE_RE = re.compile(r"^\d{6}$")
+_CODE_RE = re.compile(r"^\d{5,6}$")
 
 
 def _enum_ok(val, key: str) -> bool:

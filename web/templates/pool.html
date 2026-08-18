@@ -6,7 +6,11 @@
 <section class="card wide">
   <h2>新增股票</h2>
   <form id="add-form" class="pool-form" autocomplete="off">
-    <input name="code" placeholder="代码(6位)" maxlength="6" required>
+    <select name="market">
+      <option value="A">A股</option>
+      <option value="HK">港股</option>
+    </select>
+    <input name="code" placeholder="代码(A股6位/港股5位)" maxlength="6" required>
     <input name="name" placeholder="名称" required>
     <input name="industry" placeholder="细分行业(可选)">
     <input name="sector" placeholder="大类板块(如 半导体)" required>
@@ -25,7 +29,7 @@
       <tr><th>股票</th><th>行业</th><th>数据</th><th></th></tr>
       {% for x in rows %}
       <tr>
-        <td><a href="/stock/{{ x.code }}">{{ x.name }}</a> <span class="muted">{{ x.code }}</span></td>
+        <td><a href="/stock/{{ x.code }}">{{ x.name }}</a> <span class="muted">{{ x.code }}{% if x.market == 'HK' %} HK{% endif %}</span></td>
         <td>{{ x.industry or '-' }}</td>
         <td class="{{ '' if x.has_data else 'muted' }}">{{ '✓' if x.has_data else '缺' }}</td>
         <td><button class="del-btn" data-code="{{ x.code }}" data-name="{{ x.name }}">删除</button></td>
@@ -56,6 +60,7 @@ document.getElementById("add-form").addEventListener("submit", async (e) => {
   const body = {
     code: f.code.value.trim(), name: f.name.value.trim(),
     industry: f.industry.value.trim(), sector: f.sector.value.trim(),
+    market: f.market.value,
   };
   btn.disabled = true; msg.textContent = "采集中,请稍候…"; msg.className = "muted";
   const {ok, data} = await postJSON("/api/pool", body);
