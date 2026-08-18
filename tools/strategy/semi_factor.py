@@ -1,12 +1,13 @@
 """半导体多因子选股(移植自聚宽社区「[半导体板块多因子策略](https://www.joinquant.com/post/63497)」——zyyoyo)。
 
-原脚本核心 = 半导体池 + 3 因子(rd/rev、rd/mcap、营收增速)winsor+zscore 加权
-打分 + 每 20 交易日调仓 + 涨跌停限价买卖。持仓管理/调仓/限价单 = 回测器/主观决策的
-职责(见 8650081 剥离规矩),这里**只提炼可分析层复用的选股**。
+原脚本核心 = **申万二级半导体池(801081)** + 3 因子(rd/rev、rd/mcap、营收增速)
+winsor+zscore 加权 + 每 20 交易日调仓 + 涨跌停限价买卖。持仓管理/调仓/限价单 =
+回测器/主观决策的职责(见 8650081 剥离规矩),这里只提炼可分析层复用的选股。
 
-    组合选股(1 个,面向自选池,与策略D 同款场景):
-      策略E_自选池半导体多因子:
-        1) 池 = 传入 records(通常 = 自选池 ∩ 有 financial.derived + valuation.mktcap_yi 的票)
+    组合选股(1 个,面向半导体池):
+      策略E_半导体多因子:
+        1) 限池 = 传入 records ∩ config/semi_universe.json(申万二级 801081 半导体 178 只)
+           缺池文件时降级为不限池(与策略C 同款语义)
         2) 因子提取(每票):
              rd_rev  = financial.derived["研发费用率"] / 100
              rd_mcap = (rd_rev × 营收) / (mktcap_yi × 1e8)
@@ -18,15 +19,14 @@
         6) 按综合分降序取 top_k
 
     差异(与原脚本相比,已剥离):
-      · 半导体池限定(申万二级 801081)——本项目 industry_map 只到申万一级,
-        依据用户拍板"不限行业":records 就是过滤输入,因子自然把非研发型票拓拨。
-      · 每 20 交易日调仓 / 限价买卖 / 持仓管理 —— 回测器/主观决策职责,不搬。
-      · 新股 <160 天过滤 —— 自选池天然长期持有,不搬(参见策略D 同理由)。
+      · 每 20 交易日调仓 / 限价买卖 / 新股 <160 天过滤 —— 回测器/主观决策职责,不搬。
 """
 from __future__ import annotations
 
+import json
 from statistics import median
 
+from tools.config import settings
 from tools.strategy.registry import strategy
 
 # 原脚本 3 因子权重(rd/rev=0.6, rd/mcap=0.2, 营收增速=0.2)
@@ -36,6 +36,17 @@ _W_REV_YOY = 0.2
 
 _WINSOR_SCALE = 3.0                  # winsorize_med(scale=3):中位数 ± 3×MAD
 _LIMIT_PCT_THRESHOLD = 9.7           # 与策略C/D 同款:|pct_chg|≥9.7% 视为触板
+
+_UNIVERSE_PATH = settings.PROJECT_ROOT / "config" / "semi_universe.json"
+
+
+def _load_universe() -> set[str]:
+    """申万二级 半导体池(801081)178 只;缺文件 → 空 set(降级为不限池)。"""
+    try:
+        codes = json.loads(_UNIVERSE_PATH.read_text("utf-8"))
+        return set(codes) if isinstance(codes, list) else set()
+    except FileNotFoundError:
+        return set()
 
 
 def _winsorize_med(values: list[float], scale: float = _WINSOR_SCALE) -> list[float]:
@@ -101,36 +112,42 @@ def _pass_business_filters(rec: dict) -> bool:
 
 
 @strategy(
-    "策略E_自选池半导体多因子", "选股",
+    "策略E_半导体多因子", "选股",
     params_schema={
-        "records": "dict[code, 中心记录](通常 = 自选池 records)",
-        "top_k": "目标持仓数(默认 3,与策略D 对齐;原脚本 8 只是全A半导体池)",
+        "records": "dict[code, 中心记录]",
+        "top_k": "目标持仓数(默认 8,原脚本 g.stocknum=8)",
     },
 )
-def combo_semi_factor_screen(records: dict[str, dict], top_k: int = 3) -> dict:
-    """半导体多因子(策略E):3 因子加权打分排序。
+def combo_semi_factor_screen(records: dict[str, dict], top_k: int = 8) -> dict:
+    """半导体多因子(策略E):申万二级 半导体池 178 只 + 3 因子加权打分排序。
 
-    输出结构:{codes, candidates, top_k, 因子明细}——candidates 与 codes 都截到 top_k,
-    因子明细供前端展示每票的原始/标准化后分数。数据缺失/触涨跌停/停牌 静默剔除。
+    输出结构:{codes, candidates, top_k, 因子明细, universe_size}。数据缺失/触涨跌停/
+    停牌 静默剔除。records ∩ 半导体池 = 空时返回空 + note(诚实降级)。
     """
-    scored: list[tuple[str, tuple[float, float, float]]] = []
+    universe = _load_universe()
+
+    scoped: list[tuple[str, tuple[float, float, float]]] = []
     for code, rec in (records or {}).items():
+        if universe and code not in universe:
+            continue
         if not _pass_business_filters(rec):
             continue
         factors = _extract_factors(rec)
         if factors is None:
             continue
-        scored.append((code, factors))
+        scoped.append((code, factors))
 
-    if len(scored) < 2:                                             # 少于 2 只无法标准化
+    if len(scoped) < 2:                                             # 少于 2 只无法标准化
+        note = ("records ∩ 半导体池 样本 <2,无法做横截面标准化;"
+                "本机 records 通常只覆盖自选池,半导体票需远端全A 闭环采集后才有数据")
         return {"codes": [], "candidates": [], "top_k": top_k,
-                "因子明细": [], "monthly_pool_size": len(scored),
-                "note": "样本 <2,无法做横截面标准化"}
+                "因子明细": [], "monthly_pool_size": len(scoped),
+                "universe_size": len(universe), "note": note}
 
-    codes = [c for c, _ in scored]
-    rd_rev = [f[0] for _, f in scored]
-    rd_mcap = [f[1] for _, f in scored]
-    rev_yoy = [f[2] for _, f in scored]
+    codes = [c for c, _ in scoped]
+    rd_rev = [f[0] for _, f in scoped]
+    rd_mcap = [f[1] for _, f in scoped]
+    rev_yoy = [f[2] for _, f in scoped]
 
     rd_rev_z = _zscore(_winsorize_med(rd_rev))
     rd_mcap_z = _zscore(_winsorize_med(rd_mcap))
@@ -154,7 +171,8 @@ def combo_semi_factor_screen(records: dict[str, dict], top_k: int = 3) -> dict:
         "codes": picked,
         "candidates": picked,
         "top_k": top_k,
-        "monthly_pool_size": len(scored),
+        "monthly_pool_size": len(scoped),
+        "universe_size": len(universe),
         "因子明细": detail,
         "权重": {"rd_rev": _W_RD_REV, "rd_mcap": _W_RD_MCAP, "rev_yoy": _W_REV_YOY},
     }

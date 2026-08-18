@@ -1,4 +1,4 @@
-"""策略E_自选池半导体多因子 单测(移植自聚宽「半导体板块多因子策略」)。"""
+"""策略E_半导体多因子 单测(移植自聚宽「半导体板块多因子策略」)。"""
 from __future__ import annotations
 
 import math
@@ -21,10 +21,40 @@ def _rec(rd_pct, rev_yoy_pct, 营收, mktcap_yi, pct_chg=0.5):
     }
 
 
+@pytest.fixture(autouse=True)
+def loose_universe(monkeypatch):
+    """默认所有测试**不限池**(用自造代码方便覆盖其它过滤;限池语义单独一测)。"""
+    monkeypatch.setattr(sf, "_load_universe", lambda: set())
+
+
 def test_registered():
-    meta = reg.get("策略E_自选池半导体多因子")
+    meta = reg.get("策略E_半导体多因子")
     assert meta.kind == "选股"
     assert callable(meta.fn)
+
+
+def test_universe_intersection(monkeypatch):
+    """限半导体池:池外票被剔,即使因子完美。"""
+    monkeypatch.setattr(sf, "_load_universe",
+                        lambda: {"688111", "688222"})
+    recs = {
+        "600001": _rec(20.0, 100.0, 1e10, 500.0),          # 池外 → 剔
+        "000001": _rec(15.0, 80.0, 1e10, 500.0),           # 池外 → 剔
+        "688111": _rec(5.0, 30.0, 1e10, 500.0),            # 池内 → 留
+        "688222": _rec(8.0, 40.0, 1e10, 500.0),            # 池内 → 留
+    }
+    out = reg.run("策略E_半导体多因子", recs, top_k=5)
+    assert set(out["codes"]) == {"688111", "688222"}
+    assert out["universe_size"] == 2
+
+
+def test_universe_missing_falls_back_to_unrestricted(monkeypatch):
+    """池文件缺失 → _load_universe 返空 set → 不限池(降级),与策略C 同款语义。"""
+    monkeypatch.setattr(sf, "_load_universe", lambda: set())
+    recs = {"A": _rec(5.0, 30.0, 1e10, 500.0),
+            "B": _rec(8.0, 50.0, 1e10, 500.0)}
+    out = reg.run("策略E_半导体多因子", recs, top_k=5)
+    assert set(out["codes"]) == {"A", "B"}                  # 都保留
 
 
 def test_score_weights_favor_rd_rev():
@@ -34,7 +64,7 @@ def test_score_weights_favor_rd_rev():
         "MID_RD":  _rec(rd_pct=3.3,  rev_yoy_pct=190.0, 营收=1.9e10, mktcap_yi=10113.29),
         "LOW_RD":  _rec(rd_pct=1.4,  rev_yoy_pct=105.0, 营收=1e10, mktcap_yi=5571.0),
     }
-    out = reg.run("策略E_自选池半导体多因子", recs, top_k=3)
+    out = reg.run("策略E_半导体多因子", recs, top_k=3)
     assert out["codes"][0] == "HIGH_RD"                          # 高研发排第一
     assert out["codes"][-1] == "LOW_RD"                          # 低研发垫底
 
@@ -54,7 +84,7 @@ def test_filter_missing_data():
         "NEG_RD": _rec(rd_pct=-1.0, rev_yoy_pct=30.0, 营收=1e10, mktcap_yi=500.0),
         "OK2": _rec(rd_pct=8.0, rev_yoy_pct=50.0, 营收=1e10, mktcap_yi=500.0),
     }
-    out = reg.run("策略E_自选池半导体多因子", recs, top_k=5)
+    out = reg.run("策略E_半导体多因子", recs, top_k=5)
     # 5 只被剔,只留 OK + OK2
     assert set(out["codes"]) == {"OK", "OK2"}
 
@@ -71,7 +101,7 @@ def test_filter_limit_up_and_paused():
         "PASS_A":    _rec(6.0, 30.0, 1e10, 500.0),
         "PASS_B":    _rec(4.0, 30.0, 1e10, 500.0),
     }
-    out = reg.run("策略E_自选池半导体多因子", recs, top_k=5)
+    out = reg.run("策略E_半导体多因子", recs, top_k=5)
     assert set(out["codes"]) == {"PASS_A", "PASS_B"}
 
 
@@ -102,7 +132,7 @@ def test_top_k_and_score_ordering():
     recs = {f"S{i:02d}": _rec(rd_pct=float(i), rev_yoy_pct=float(i * 10),
                               营收=1e10, mktcap_yi=500.0)
             for i in range(1, 8)}
-    out = reg.run("策略E_自选池半导体多因子", recs, top_k=3)
+    out = reg.run("策略E_半导体多因子", recs, top_k=3)
     scores = [d["综合分"] for d in out["因子明细"]]
     assert scores == sorted(scores, reverse=True)                 # 综合分降序
     assert out["codes"] == [d["code"] for d in out["因子明细"][:3]]
@@ -112,7 +142,7 @@ def test_top_k_and_score_ordering():
 def test_less_than_2_samples_returns_empty():
     """样本 <2 无法做横截面标准化 → 空结果 + note。"""
     recs = {"A": _rec(5.0, 30.0, 1e10, 500.0)}
-    out = reg.run("策略E_自选池半导体多因子", recs, top_k=5)
+    out = reg.run("策略E_半导体多因子", recs, top_k=5)
     assert out["codes"] == []
     assert "note" in out
 
@@ -120,7 +150,7 @@ def test_less_than_2_samples_returns_empty():
 def test_empty_records():
     """空 records / None → 空结果不炸。"""
     for rec in ({}, None):
-        out = reg.run("策略E_自选池半导体多因子", rec, top_k=3)
+        out = reg.run("策略E_半导体多因子", rec, top_k=3)
         assert out["codes"] == []
 
 
@@ -130,7 +160,7 @@ def test_details_include_raw_and_zscored():
         "A": _rec(rd_pct=5.0, rev_yoy_pct=30.0, 营收=1e10, mktcap_yi=500.0),
         "B": _rec(rd_pct=8.0, rev_yoy_pct=50.0, 营收=1e10, mktcap_yi=500.0),
     }
-    out = reg.run("策略E_自选池半导体多因子", recs, top_k=2)
+    out = reg.run("策略E_半导体多因子", recs, top_k=2)
     d0 = out["因子明细"][0]
     for k in ("code", "综合分", "rd_rev", "rd_mcap", "rev_yoy",
               "rd_rev_z", "rd_mcap_z", "rev_yoy_z"):
@@ -143,7 +173,7 @@ def test_weights_match_original_paper():
         "A": _rec(5.0, 30.0, 1e10, 500.0),
         "B": _rec(8.0, 50.0, 1e10, 500.0),
     }
-    out = reg.run("策略E_自选池半导体多因子", recs, top_k=2)
+    out = reg.run("策略E_半导体多因子", recs, top_k=2)
     w = out["权重"]
     assert w["rd_rev"] == 0.6 and w["rd_mcap"] == 0.2 and w["rev_yoy"] == 0.2
     # 综合分 = 加权和,验一次:

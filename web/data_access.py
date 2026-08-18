@@ -500,32 +500,34 @@ def _strategy4_section(recs: dict, date: str = "latest") -> dict:
     return _view_picks_section("动量组合", recs, date)
 
 
-def _strategy6_section(recs: dict, date: str = "latest", top_k: int = 3) -> dict:
-    """策略6「自选池半导体多因子」区块:web 层实时跑 tools.strategy.semi_factor 策略E。
+def _strategy6_section(recs: dict, date: str = "latest", top_k: int = 8) -> dict:
+    """策略6「半导体多因子」区块:web 层实时跑 tools.strategy.semi_factor 策略E。
 
-    与策略5 同套路(不读预落盘 view,自选池 records 现算);3 因子:研发/营收(权 0.6)、
-    研发/市值(权 0.2)、营收增速(权 0.2)按 winsor+zscore 加权。数据依赖 financial.derived
-    的「研发费用率/营收增速」(M2 财报块产出)+ valuation.mktcap_yi,任一缺失 → 该票剔。
+    与策略5 同套路(不读预落盘 view,records 现算);**限池由 strategy 自身完成**——
+    读 config/semi_universe.json(申万二级 801081 半导体 178 只),records ∩ 池 才进因子。
+    3 因子:研发/营收(权 0.6)+ 研发/市值(权 0.2)+ 营收增速(权 0.2)按 winsor+zscore 加权。
+    数据依赖 financial.derived(研发费用率/营收增速,M2 财报块产出)+ valuation.mktcap_yi。
+
+    **本机 records 通常只覆盖自选池 → records ∩ 半导体池 常为空**;远端全A 闭环采集后
+    该策略才会真正出结果。空样本时 present=True/rows=[](明确降级,不假装没跑)。
     """
     from tools.strategy import registry as _reg
     from tools.strategy import semi_factor as _sf  # noqa: F401 触发注册
 
-    pool = _pool_codes()
-    scoped = {c: r for c, r in (recs or {}).items() if c in pool}
-    empty = {"present": False, "as_of": as_of(date), "扫描数": len(scoped), "入选数": 0,
-             "rows": [], "picks": [], "候选池": []}
-    if not scoped:
+    empty = {"present": False, "as_of": as_of(date), "扫描数": 0, "入选数": 0,
+             "rows": [], "picks": [], "universe_size": None, "note": None}
+    if not recs:
         return empty
 
     try:
-        out = _reg.run("策略E_自选池半导体多因子", scoped, top_k=top_k)
+        out = _reg.run("策略E_半导体多因子", recs, top_k=top_k)
     except Exception:                                    # noqa: BLE001
         return empty
 
     detail_by_code = {d["code"]: d for d in out.get("因子明细", [])}
     rows = []
     for code in out.get("codes", []):
-        r = scoped.get(code) or {}
+        r = recs.get(code) or {}
         meta = r.get("meta") or {}
         d = detail_by_code.get(code, {})
         rows.append({
@@ -538,10 +540,13 @@ def _strategy6_section(recs: dict, date: str = "latest", top_k: int = 3) -> dict
         })
     return {
         "present": True, "as_of": as_of(date),
-        "扫描数": len(scoped), "入选数": len(rows),
+        "扫描数": out.get("monthly_pool_size", 0),
+        "入选数": len(rows),
         "top_k": out.get("top_k", top_k),
+        "universe_size": out.get("universe_size"),
         "样本数": out.get("monthly_pool_size"),
         "权重": out.get("权重"),
+        "note": out.get("note"),
         "rows": rows,
         "picks": list(out.get("codes") or []),
     }
@@ -668,12 +673,12 @@ def _combined_section(strategy0: dict, strategy1: dict, strategy2: dict,
          "title": "移植自聚宽「价值选股与RSRS择时」:自选池内按市值升序,"
                   "剔除触涨跌停/停牌;空仓月(12-22~1-28、3-20~4-28)仅标记不代买 ETF。"
                   "web 层实时跑,不读预落盘 view。"},
-        {"key": "策略6", "label": "自选池半导体多因子", "codes": s6_codes,
+        {"key": "策略6", "label": "半导体多因子", "codes": s6_codes,
          "available": bool((strategy6 or {}).get("present")),
-         "title": "移植自聚宽「半导体板块多因子策略」:3 因子 winsor+zscore 加权"
-                  "——研发/营收(权 0.6)+ 研发/市值(权 0.2)+ 营收增速(权 0.2);"
-                  "重研发投入 + 高增长。原脚本限半导体池,本项目已剥板块限定(自选池自然筛)。"
-                  "web 层实时跑,不读预落盘 view;缺 financial.derived 或 mktcap → 剔。"},
+         "title": "移植自聚宽「半导体板块多因子策略」:限申万二级 801081 半导体池 178 只 + "
+                  "3 因子 winsor+zscore 加权——研发/营收(权 0.6)+ 研发/市值(权 0.2)+ 营收增速(权 0.2);"
+                  "重研发投入 + 高增长。web 层实时跑,不读预落盘 view;"
+                  "本机 records 常只覆盖自选池,需远端全A 闭环采到半导体票后才出结果。"},
     ]
     return {"strategies": strategies, "rows": rows}
 
