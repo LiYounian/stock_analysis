@@ -110,6 +110,55 @@ def _fetch_eastmoney(code, start, end, adjust) -> pd.DataFrame:
 
 _FETCHERS = {"tencent": _fetch_tencent, "sina": _fetch_sina, "eastmoney": _fetch_eastmoney}
 
+# ————————————————————————————————————————————————
+# 港股行情(腾讯 fqkline 端点,代码格式 hk{5位})
+# ————————————————————————————————————————————————
+HK_SOURCES = ("tencent_hk",)
+
+
+def _fetch_tencent_hk(code, start, end, adjust) -> pd.DataFrame:
+    """腾讯港股日K:与A股同一 fqkline 端点,代码用 hk{5位}。
+
+    港股该端点 qfq 无效(只返回不复权 day),故统一用 day 数据。
+    每行:[date, open, close, high, low, volume(股)];港股 volume 已是股数,无需×100。
+    """
+    import os
+    import requests
+    sym = f"hk{code}"
+    param = f"{sym},day,,,{_TX_COUNT},"
+    r = requests.get(_TX_URL, params={"param": param},
+                     timeout=float(os.getenv("FETCH_TIMEOUT", "15")))
+    r.raise_for_status()
+    node = r.json().get("data", {}).get(sym) or {}
+    rows = node.get("day") or []
+    recs = [{"date": x[0], "open": x[1], "close": x[2], "high": x[3],
+             "low": x[4], "volume": float(x[5])} for x in rows if len(x) >= 6]
+    df = pd.DataFrame(recs)
+    if len(df) and start:
+        s = f"{start[:4]}-{start[4:6]}-{start[6:8]}" if (len(start) == 8 and start.isdigit()) else start
+        df = df[df["date"] >= s].reset_index(drop=True)
+    return df
+
+
+_HK_FETCHERS = {"tencent_hk": _fetch_tencent_hk}
+
+
+def fetch_one_hk(code: str, start: str, end: str, adjust: str = "",
+                 sources: tuple[str, ...] = HK_SOURCES) -> pd.DataFrame:
+    """拉单只港股日K(多源 fallback,不落盘)。全失败抛 ConnectionError。"""
+    errors = []
+    for src in sources:
+        try:
+            df = _HK_FETCHERS[src](code, start, end, adjust)
+            if df is None or len(df) == 0:
+                raise ValueError("空数据")
+            out = _normalize(df)
+            logger.debug("港股K线 %s 命中源 %s", code, src)
+            return out
+        except Exception as e:
+            errors.append(f"{src}: {type(e).__name__} {str(e)[:40]}")
+    raise ConnectionError(f"港股 {code} 所有源均失败: {errors}")
+
 
 def _fetch_one_with_source(code: str, start: str, end: str, adjust: str,
                            sources: tuple[str, ...] = DEFAULT_SOURCES
@@ -155,8 +204,9 @@ def _default_range(start: str | None, end: str | None) -> tuple[str, str]:
 def fetch_kline(codes: list[str], start: str | None = None,
                 end: str | None = None, adjust: str = settings.KLINE_ADJUST,
                 workers: int | None = None) -> dict[str, pd.DataFrame]:
-    """拉取多票 K线并落盘 parquet(逐只 akshare 多源 fallback;主档缺失时的兜底路径)。
+    """拉取多票 K线并落盘 parquet(逐只多源 fallback;主档缺失时的兜底路径)。
 
+    支持 A股 + 港股(通过 stock_pool.is_hk 判定),港股走 _fetch_tencent_hk。
     start/end 为 None 时:end=今天,start≈今天往前 KLINE_DAYS×2 自然日(覆盖非交易日)。
     单票失败记 logger 并跳过,不中断整批;返回成功票的 {code: DataFrame}。
 
@@ -164,6 +214,8 @@ def fetch_kline(codes: list[str], start: str | None = None,
       =1 串行(默认,含 FETCH_SLEEP_SEC 节流);
       >1 有界线程池 + 每请求 jitter(不 sleep,靠并发度而非节流控速)。
     """
+    from tools.config import stock_pool
+
     settings.ensure_dirs()
     start, end = _default_range(start, end)
     workers = settings.FETCH_WORKERS if workers is None else workers
@@ -174,7 +226,11 @@ def fetch_kline(codes: list[str], start: str | None = None,
     def _do(code: str) -> tuple[pd.DataFrame, str]:
         if workers > 1 and settings.FETCH_JITTER_SEC:
             time.sleep(random.uniform(0, settings.FETCH_JITTER_SEC))
-        df, src = _fetch_one_with_source(code, start, end, adjust)
+        if stock_pool.is_hk(code):
+            df = fetch_one_hk(code, start, end, adjust)
+            src = "tencent_hk"
+        else:
+            df, src = _fetch_one_with_source(code, start, end, adjust)
         store.put_raw("kline", code, df, meta={"source": src})
         return df, src
 
@@ -211,11 +267,14 @@ def fetch_kline(codes: list[str], start: str | None = None,
 # ————————————————————————————————————————————————
 def backfill_master(codes: list[str], start: str | None = None, end: str | None = None,
                     adjust: str = settings.KLINE_ADJUST) -> dict[str, int]:
-    """用 baostock 逐只拉全历史日K(前复权)→ 全量覆盖写滚动主档。
+    """用 baostock(A股) / 腾讯港股接口 逐只拉全历史日K → 全量覆盖写滚动主档。
 
-    baostock 不封 → 无 sleep 快速循环。start/end 用 YYYYMMDD 或 YYYY-MM-DD(缺省同 fetch_kline)。
+    baostock 不封 → 无 sleep 快速循环。港股走 _fetch_tencent_hk(baostock 不支持港股)。
+    start/end 用 YYYYMMDD 或 YYYY-MM-DD(缺省同 fetch_kline)。
     返回 {"ok": n, "failed": n};单只失败记 logger 跳过,不中断整批。
     """
+    from tools.config import stock_pool
+
     settings.ensure_dirs()
     start, end = _default_range(start, end)
     s = _to_dash(start)
@@ -223,17 +282,33 @@ def backfill_master(codes: list[str], start: str | None = None, end: str | None 
     n = len(codes)
     ok = 0
     failed: list[str] = []
-    with baostock_src.session():
-        for i, code in enumerate(codes, 1):
-            try:
-                df = baostock_src.fetch_one(code, s, e, adjust=adjust)
-                store.put_master_kline(code, df, meta={"source": "baostock", "adjust": adjust})
-                ok += 1
-                if i % 200 == 0 or i == n:
-                    logger.info("[%d/%d] 主档落地进行中(最新 %s %d 根)", i, n, code, len(df))
-            except Exception as ex:
-                failed.append(code)
-                logger.error("主档 %s 失败: %s", code, ex)
+
+    a_codes = [c for c in codes if not stock_pool.is_hk(c)]
+    hk_codes = [c for c in codes if stock_pool.is_hk(c)]
+
+    if a_codes:
+        with baostock_src.session():
+            for i, code in enumerate(a_codes, 1):
+                try:
+                    df = baostock_src.fetch_one(code, s, e, adjust=adjust)
+                    store.put_master_kline(code, df, meta={"source": "baostock", "adjust": adjust})
+                    ok += 1
+                    if i % 200 == 0 or i == len(a_codes):
+                        logger.info("[%d/%d] A股主档落地进行中(最新 %s %d 根)", i, len(a_codes), code, len(df))
+                except Exception as ex:
+                    failed.append(code)
+                    logger.error("主档 %s 失败: %s", code, ex)
+
+    for i, code in enumerate(hk_codes, 1):
+        try:
+            df = fetch_one_hk(code, s, e, adjust="")
+            store.put_master_kline(code, df, meta={"source": "tencent_hk", "adjust": "none"})
+            ok += 1
+            logger.info("[%d/%d] 港股主档落地(最新 %s %d 根)", i, len(hk_codes), code, len(df))
+        except Exception as ex:
+            failed.append(code)
+            logger.error("港股主档 %s 失败: %s", code, ex)
+
     if failed:
         logger.warning("主档落地失败票(%d): %s", len(failed), failed[:50])
     return {"ok": ok, "failed": len(failed)}
@@ -298,6 +373,32 @@ def update_master_from_spot(codes: list[str] | None = None, date: str | None = N
         store.append_master_kline(code, bar, meta={"source": "akshare_spot"})
         ok += 1
     logger.info("spot 增量 append:更新 %d 只,跳过(停牌/无 bar)%d 只 @ %s", ok, skipped, d)
+    return {"ok": ok, "skipped": skipped}
+
+
+def update_hk_master(codes: list[str], date: str | None = None) -> dict[str, int]:
+    """港股每日增量:逐只拉最新 K线尾部 append 到主档(幂等)。
+
+    港股没有"全A spot 一次拉全部"的批量接口,用腾讯日K取最后一根 bar 做增量。
+    """
+    d = date or pd.Timestamp.today().strftime("%Y-%m-%d")
+    ok = 0
+    skipped = 0
+    for code in codes:
+        try:
+            df = fetch_one_hk(code, d.replace("-", ""), d.replace("-", ""), adjust="")
+            if df is None or len(df) == 0:
+                skipped += 1
+                continue
+            tail = df[df["date"] == pd.Timestamp(d)]
+            if len(tail) == 0:
+                tail = df.tail(1)
+            store.append_master_kline(code, tail, meta={"source": "tencent_hk"})
+            ok += 1
+        except Exception as e:
+            skipped += 1
+            logger.error("港股增量 %s 失败: %s", code, e)
+    logger.info("港股增量 append:更新 %d 只,跳过 %d 只 @ %s", ok, skipped, d)
     return {"ok": ok, "skipped": skipped}
 
 
