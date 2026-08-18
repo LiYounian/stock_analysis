@@ -57,6 +57,17 @@ def _prev_year_period(period: str) -> str:
 _PREV_CUM = {"06-30": "03-31", "09-30": "06-30", "12-31": "09-30"}
 
 
+def _prev_adjacent_period(period: str) -> str | None:
+    """上一相邻报告期(时点类科目环比用):Q2→Q1、Q3→Q2、Q4→Q3;Q1→上一年 Q4。"""
+    mmdd = period[5:10]
+    prev_mmdd = _PREV_CUM.get(mmdd)
+    if prev_mmdd is not None:
+        return f"{period[:4]}-{prev_mmdd}"
+    if mmdd == "03-31":
+        return f"{int(period[:4]) - 1}-12-31"
+    return None
+
+
 def _single_quarter(periods: dict, period: str, table: str, field: str):
     """当期单季值 = 当期累计 − 同年上一相邻报告期累计;Q1 单季=累计;缺相邻期→None。"""
     cur = _f(periods.get(period, {}), table, field)
@@ -105,6 +116,18 @@ def compute_derived(periods: dict) -> dict[str, dict]:
 
         CFO = _f(rec, "现金流量表", "经营活动现金流量净额")
         capex = _f(rec, "现金流量表", "购建固定资产无形资产等支付现金")
+        合同负债 = _f(rec, "资产负债表", "合同负债")
+
+        # —— 银行/金融口径(相关科目非金融票为空 → 下方比率自然为 None,不误算)——
+        营业收入_金融 = _f(rec, "利润表", "营业收入")     # 银行营收(营业总收入 TOTAL_* 常空)
+        利息净收入 = _f(rec, "利润表", "利息净收入")
+        业务管理费 = _f(rec, "利润表", "业务及管理费")
+        营业利润 = _f(rec, "利润表", "营业利润")
+        发放贷款 = _f(rec, "资产负债表", "发放贷款及垫款")
+        吸收存款 = _f(rec, "资产负债表", "吸收存款")
+        _减值_金融 = [x for x in (_f(rec, "利润表", "信用减值损失_金融"),
+                              _f(rec, "利润表", "资产减值损失_金融")) if x is not None]
+        减值合计_金融 = round(sum(_减值_金融), 4) if _减值_金融 else None
 
         # 有息负债 = 短期借款 + 一年内到期 + 长期借款 + 应付债券(缺项按 0 计入,全缺→None)
         有息_parts = [x for x in (短期借款, 一年内到期, 长期借款, 应付债券) if x is not None]
@@ -139,12 +162,30 @@ def compute_derived(periods: dict) -> dict[str, dict]:
             # 现金流结构(资金来源分析)
             "自由现金流": (round(CFO - capex, 4) if (CFO is not None and capex is not None) else None),
             "研发费用率": _pct(研发, 营收),
+            # 银行/金融口径(非金融票各科目为空 → 下列自然为 None)
+            "营收增速_银行": _yoy_pct(营业收入_金融, _f(prev, "利润表", "营业收入")),
+            "存贷比": _pct(发放贷款, 吸收存款),                              # 发放贷款/吸收存款
+            "成本收入比": _pct(业务管理费, 营业收入_金融),                    # 业管费/营收(反向,越低越好)
+            "非息收入占比": _pct((营业收入_金融 - 利息净收入)
+                            if (营业收入_金融 is not None and 利息净收入 is not None) else None,
+                            营业收入_金融),
+            "拨备前营业利润": (round(营业利润 + 减值合计_金融, 4)
+                          if (营业利润 is not None and 减值合计_金融 is not None) else None),
+            "ROA": _pct(归母 if 归母 is not None else 净利润, 总资产),        # 总资产回报(银行规模口径)
             # 单季(供环比/单季同比;缺相邻期→None)
             "单季营收": _single_quarter(periods, p, "利润表", "营业总收入"),
             "单季归母净利": _single_quarter(periods, p, "利润表", "归母净利润"),
         }
         # 单季环比(vs 同年上一相邻报告期的单季)
         d["单季营收环比"] = _single_quarter_qoq(periods, p, "利润表", "营业总收入")
+        # —— 通用派生(依赖上面已算的增速 / 相邻期时点科目)——
+        # 应收营收增速差:应收增速跑赢营收多少 pct(正且大 → 应收激增预警,配 flags 用)
+        _ar_g, _rev_g = d.get("应收增速"), d.get("营收增速")
+        d["应收营收增速差"] = (round(_ar_g - _rev_g, 4)
+                          if (_ar_g is not None and _rev_g is not None) else None)
+        # 合同负债环比:时点科目 vs 上一相邻报告期(预收/订单景气,负增速→需求转弱)
+        _pa = _prev_adjacent_period(p)
+        d["合同负债环比"] = _yoy_pct(合同负债, _f(periods.get(_pa, {}), "资产负债表", "合同负债")) if _pa else None
         out[p] = d
     return out
 

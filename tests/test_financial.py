@@ -169,6 +169,57 @@ def test_derived_yoy_and_ratios():
     assert d["短债覆盖"] == pytest.approx(10.0 / 35.0)
 
 
+def test_derived_general_extra():
+    """通用派生:应收营收增速差 = 应收增速 − 营收增速(激增预警用)。"""
+    d = metrics.compute_derived(_synthetic_periods())["2025-12-31"]
+    # 应收增速 (60-30)/30=100 ; 营收增速 20 → 差 80
+    assert d["应收营收增速差"] == pytest.approx(80.0)
+
+
+def test_contract_liab_qoq():
+    """合同负债环比:时点科目 vs 上一相邻报告期(Q2 vs Q1);Q1 回落上一年 Q4。"""
+    periods = {
+        "2025-03-31": {"资产负债表": {"合同负债": 100.0}},
+        "2025-06-30": {"资产负债表": {"合同负债": 80.0}},
+    }
+    d = metrics.compute_derived(periods)
+    assert d["2025-06-30"]["合同负债环比"] == pytest.approx(-20.0)   # (80-100)/100
+    assert d["2025-03-31"]["合同负债环比"] is None                   # 无上一年 Q4 记录
+
+
+def _synthetic_bank_periods():
+    """银行两年年报:营收 100→110,无营业成本/存货(金融特征);带利息净收入/存贷款/减值计提。"""
+    base_bs = {"资产总计": 2000.0, "负债合计": 1800.0, "股东权益合计": 200.0,
+               "归母股东权益": 200.0, "发放贷款及垫款": 900.0, "吸收存款": 1000.0}
+    return {
+        "2025-12-31": {
+            "report_date": "2025-12-31", "disclosure_date": "2026-04-01", "report_type": "年报",
+            "利润表": {"营业收入": 110.0, "利息净收入": 70.0, "手续费及佣金净收入": 20.0,
+                     "业务及管理费": 33.0, "营业利润": 50.0, "归母净利润": 40.0, "净利润": 40.0,
+                     "信用减值损失_金融": 10.0, "资产减值损失_金融": 2.0},
+            "资产负债表": dict(base_bs), "现金流量表": {},
+        },
+        "2024-12-31": {
+            "report_date": "2024-12-31", "disclosure_date": "2025-04-01", "report_type": "年报",
+            "利润表": {"营业收入": 100.0, "利息净收入": 65.0, "归母净利润": 38.0, "净利润": 38.0},
+            "资产负债表": dict(base_bs), "现金流量表": {},
+        },
+    }
+
+
+def test_derived_bank_ratios():
+    """银行口径派生:营收增速用营业收入、存贷比/成本收入比/非息占比/拨备前利润/ROA。"""
+    d = metrics.compute_derived(_synthetic_bank_periods())["2025-12-31"]
+    assert d["营收增速"] is None                        # 营业总收入缺 → 通用增速不误算
+    assert d["营收增速_银行"] == pytest.approx(10.0)     # (110-100)/100
+    assert d["存贷比"] == pytest.approx(90.0)            # 900/1000
+    assert d["成本收入比"] == pytest.approx(30.0)        # 33/110
+    assert d["非息收入占比"] == pytest.approx(36.3636, abs=1e-4)     # (110-70)/110,_pct 保留4位
+    assert d["拨备前营业利润"] == pytest.approx(62.0)     # 营业利润50 + 减值(10+2)
+    assert d["ROA"] == pytest.approx(2.0)               # 归母40/总资产2000
+    assert d["毛利率"] is None                           # 无营业成本 → 不误算
+
+
 def test_single_quarter_split():
     """Q3=前三季累计−H1 单季拆分。"""
     periods = {
