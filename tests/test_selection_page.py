@@ -153,18 +153,21 @@ def test_combined_union_and_sources(monkeypatch):
     assert set(rows["300311"]["sources"]) == {"策略0", "策略1"}
     assert rows["603221"]["sources"] == ["策略1"]
     strat = {s["key"]: s for s in combined["strategies"]}
-    # 6 个策略勾选框都在,key/label 对齐新编号(策略5 = 自选池小市值,web 层实时跑)
-    assert [s["key"] for s in combined["strategies"]] == ["策略0", "策略1", "策略2", "策略3", "策略4", "策略5"]
+    # 7 个策略勾选框都在,key/label 对齐新编号(策略5=自选池小市值,策略6=自选池半导体多因子)
+    assert [s["key"] for s in combined["strategies"]] == [
+        "策略0", "策略1", "策略2", "策略3", "策略4", "策略5", "策略6"]
     assert strat["策略2"]["label"] == "放量后缩量回踩"
     assert strat["策略3"]["label"] == "箱体形态"
     assert strat["策略4"]["label"] == "动量组合"
     assert strat["策略5"]["label"] == "自选池小市值"
+    assert strat["策略6"]["label"] == "半导体多因子"
     assert strat["策略0"]["available"] and strat["策略1"]["available"]
     # 策略2/3/4 view 缺 → present=False → available=False、codes=[]
     for k in ("策略2", "策略3", "策略4"):
         assert strat[k]["available"] is False and strat[k]["codes"] == []
-    # 策略5 无自选池 records → present=False(本用例 recs 空)
-    assert strat["策略5"]["available"] is False and strat["策略5"]["codes"] == []
+    # 策略5/6 无自选池 records → present=False(本用例 recs 空)
+    for k in ("策略5", "策略6"):
+        assert strat[k]["available"] is False and strat[k]["codes"] == []
     # 全并集去重:000001, 300311, 603221
     assert set(rows.keys()) == {"000001", "300311", "603221"}
 
@@ -357,6 +360,82 @@ def test_strategy5_empty_pool(monkeypatch):
     _patch(monkeypatch, {})
     s5 = da.selection_page()["strategy5"]
     assert s5["present"] is False and s5["rows"] == []
+
+
+# ————————————————————————————————————————————————
+# 策略6(半导体多因子,限申万二级 801081 半导体池,web 层实时跑)
+# ————————————————————————————————————————————————
+def _sf_rec(code, rd_pct, rev_yoy_pct, 营收, mktcap_yi, pct_chg=0.5):
+    """策略6 用最小 record:financial.derived + 利润表摘要 + valuation + snapshot。"""
+    return {
+        "meta": {"code": code, "name": "T" + code, "sector": "半导体", "industry": "电子"},
+        "financial": {"derived": {"研发费用率": rd_pct, "营收增速": rev_yoy_pct},
+                      "利润表摘要": {"营业总收入": 营收}},
+        "valuation": {"mktcap_yi": mktcap_yi},
+        "snapshot": {"close": 10.0, "pct_chg": pct_chg},
+    }
+
+
+def _patch_semi_universe(monkeypatch, universe: set[str]):
+    """monkeypatch tools.strategy.semi_factor._load_universe → 自造半导体池。"""
+    from tools.strategy import semi_factor as _sf
+    monkeypatch.setattr(_sf, "_load_universe", lambda: universe)
+
+
+def test_strategy6_runs_in_web_layer(monkeypatch):
+    """策略6 web 层实时跑:限半导体池 + 3 因子加权。"""
+    _patch_semi_universe(monkeypatch, {"A", "B", "C"})
+    recs = {
+        "A": _sf_rec("A", 15.0, 45.0, 5e9, 569.0),                # 高 rd/rev → 排头
+        "B": _sf_rec("B", 3.3, 190.0, 1.9e10, 10113.29),
+        "C": _sf_rec("C", 1.4, 105.0, 1e10, 5571.0),              # 低 rd/rev → 垫底
+    }
+    _patch(monkeypatch, recs)
+    page = da.selection_page()
+    s6 = page["strategy6"]
+    assert s6["present"] is True and s6["universe_size"] == 3 and s6["样本数"] == 3
+    assert s6["picks"][0] == "A" and s6["picks"][-1] == "C"       # 高研发排头,低研发垫底
+    r = s6["rows"][0]
+    for k in ("综合分", "rd_rev", "rd_mcap", "rev_yoy"):
+        assert r[k] is not None
+    strat = {s["key"]: s for s in page["combined"]["strategies"]}
+    assert strat["策略6"]["label"] == "半导体多因子" and strat["策略6"]["available"] is True
+    assert strat["策略6"]["codes"][0] == "A"
+
+
+def test_strategy6_universe_filters_non_semi(monkeypatch):
+    """半导体池外的票即使因子完美也剔。"""
+    _patch_semi_universe(monkeypatch, {"A", "B"})                  # 只 A/B 在池
+    recs = {
+        "A": _sf_rec("A", 15.0, 45.0, 5e9, 569.0),
+        "B": _sf_rec("B", 8.0, 30.0, 1e10, 500.0),
+        "C": _sf_rec("C", 30.0, 200.0, 1e10, 500.0),                # 池外 → 剔
+    }
+    _patch(monkeypatch, recs)
+    s6 = da.selection_page()["strategy6"]
+    assert set(s6["picks"]) == {"A", "B"}
+
+
+def test_strategy6_missing_financial_derived(monkeypatch):
+    """financial.derived 缺失 → 该票剔;剩余 <2 样本无法标准化 → 空 picks + note。"""
+    _patch_semi_universe(monkeypatch, {"NO_FIN", "OK"})
+    recs = {
+        "NO_FIN": {"meta": {"code": "NO_FIN"}, "financial": None,
+                   "valuation": {"mktcap_yi": 500.0},
+                   "snapshot": {"pct_chg": 0.5}},
+        "OK": _sf_rec("OK", 5.0, 30.0, 1e10, 500.0),
+    }
+    _patch(monkeypatch, recs)
+    s6 = da.selection_page()["strategy6"]
+    assert s6["picks"] == [] and s6["present"] is True
+    assert s6["note"]                                              # 有降级说明
+
+
+def test_strategy6_empty_records(monkeypatch):
+    """无 records → present=False,不炸,combined 里 available=False。"""
+    _patch(monkeypatch, {})
+    s6 = da.selection_page()["strategy6"]
+    assert s6["present"] is False and s6["rows"] == []
 
 
 def test_view_picks_top_n_cap(monkeypatch):

@@ -288,6 +288,42 @@
   {% endif %}
 </section>
 
+<!-- 策略6:半导体多因子(限申万二级 801081 半导体池,web 层实时跑) -->
+<section class="card wide">
+  <h2>策略6 · 半导体多因子
+    {% if s.strategy6.present %}
+    <small>票池 <b>{{ s.strategy6.universe_size or '—' }}</b>(申万二级 801081)·
+      有效样本 <b>{{ s.strategy6.样本数 or 0 }}</b> ·
+      入选 <b class="pos">{{ s.strategy6.入选数 }}</b> · top_k=<b>{{ s.strategy6.top_k }}</b>
+      · 数据日期 <b>{{ s.strategy6.as_of }}</b></small>
+    {% endif %}</h2>
+  <p class="muted tiny">移植自聚宽「半导体板块多因子」:限 <b>申万二级 801081 半导体池</b>(178 只)+
+    3 因子 winsor+zscore 加权 → <b>研发/营收 × 0.6</b> + 研发/市值 × 0.2 + 营收增速 × 0.2;
+    重研发投入 + 高增长。web 层实时跑,不读预落盘 view;缺 <code>financial.derived</code> 或
+    <code>valuation.mktcap_yi</code> 的票剔除。</p>
+  {% if not s.strategy6.present or not s.strategy6.rows %}
+  <p class="muted">本日策略6 无入选标的{% if s.strategy6.note %}({{ s.strategy6.note }}){% else %}(records ∩ 半导体池样本 <2){% endif %}。</p>
+  {% else %}
+  <table>
+    <thead><tr><th>代码</th><th>名称</th><th>行业</th><th>综合分</th><th>研发/营收</th><th>研发/市值</th><th>营收增速</th></tr></thead>
+    <tbody>
+    {% for x in s.strategy6.rows %}
+      <tr data-code="{{ x.code }}">
+        <td>{{ x.code }}</td>
+        <td><a href="/stock/{{ x.code }}?date={{ s.as_of }}">{{ x.name }}</a></td>
+        <td class="muted">{{ x.industry or '-' }}</td>
+        <td class="pos">{{ x.综合分 if x.综合分 is not none else '—' }}</td>
+        <td>{% if x.rd_rev is not none %}{{ '%.2f'|format(x.rd_rev * 100) }}%{% else %}—{% endif %}</td>
+        <td class="muted tiny">{% if x.rd_mcap is not none %}{{ '%.4f'|format(x.rd_mcap * 100) }}%{% else %}—{% endif %}</td>
+        <td class="{{ 'pos' if (x.rev_yoy or 0) > 0 else ('neg' if (x.rev_yoy or 0) < 0 else '') }}">
+          {% if x.rev_yoy is not none %}{{ '%+.1f'|format(x.rev_yoy * 100) }}%{% else %}—{% endif %}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+</section>
+
 <p class="muted tiny">点名称进个股页看完整归因/K线。合议综合分同口径(前端同 councilSynth 公式,勾选专家实时重排)。</p>
 
 <script id="selectionExperts" type="application/json">{{ (s.rows|list)|tojson }}</script>

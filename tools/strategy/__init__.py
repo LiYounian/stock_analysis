@@ -14,6 +14,7 @@ from tools.strategy.registry import (
 )
 from tools.strategy import momentum as _momentum  # noqa: F401  导入即注册
 from tools.strategy import small_cap as _small_cap  # noqa: F401  导入即注册
+from tools.strategy import semi_factor as _semi_factor  # noqa: F401  导入即注册
 
 __all__ = ["STRATEGY_KINDS", "StrategyMeta", "strategy", "register",
            "get", "list_strategies", "run"]
