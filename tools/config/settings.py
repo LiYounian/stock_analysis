@@ -77,6 +77,8 @@ SCHED_FULL_INTERVAL_MIN = int(os.getenv("SCHED_FULL_INTERVAL_MIN", "1440"))   # 
 SCHED_BACKFILL_INTERVAL_MIN = int(os.getenv("SCHED_BACKFILL_INTERVAL_MIN", "0"))  # T5 兜底补数:默认关
 SCHED_FULL_ALL = os.getenv("SCHED_FULL_ALL", "true").lower() in ("1", "true", "yes")  # 全池 vs 开发子集
 SCHED_MISFIRE_GRACE_SEC = int(os.getenv("SCHED_MISFIRE_GRACE_SEC", "3600"))   # 错过触发的宽限(补跑)
+# SEPA+VCP 监控:工作日 11:35 午间 / 15:35 收盘。默认关,本地部署设 SCHED_SEPA_ENABLED=true。
+SCHED_SEPA_ENABLED = os.getenv("SCHED_SEPA_ENABLED", "false").lower() in ("1", "true", "yes")
 
 # —— 展示端数据同步(B 期:本地签名上传 → 展示端 ingest 落库)——
 # 全部走环境变量,禁硬编 URL/域名/密钥,禁入库。展示端与本地端各配所需项。
