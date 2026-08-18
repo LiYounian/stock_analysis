@@ -28,6 +28,7 @@ import logging
 from tools.analysis.financial import flags as flags_mod
 from tools.analysis.financial import metrics as metrics_mod
 from tools.analysis.financial import scoring as scoring_mod
+from tools.analysis.financial.industry import get_expert
 from tools.store import repo as store
 
 logger = logging.getLogger("analysis.financial.analyzer")
@@ -64,6 +65,23 @@ def _is_financial(code: str, industry: str | None = None) -> bool:
         except Exception:                                   # noqa: BLE001
             sw = None
     return sw in fin_set
+
+
+def _industry_key(code: str, industry: str | None = None) -> str | None:
+    """解析该票申万一级行业名(行业财报专家路由用)。
+
+    优先用传入 industry(record.meta.industry),否则回退 board.board_of(code)(证监会门类),
+    统一经 industry_map 对齐到申万一级。任一步失败 → None(退回通用兜底,不误路由)。
+    """
+    from tools.analysis import industry_map
+    sw = industry_map.to_sw(industry) if industry else None
+    if sw is None:
+        try:
+            from tools.collectors import board
+            sw = industry_map.to_sw(board.board_of(code) or "")
+        except Exception:                                   # noqa: BLE001
+            sw = None
+    return sw
 
 
 def _is_financial_structural(periods_raw: dict) -> bool:
@@ -150,6 +168,12 @@ def analyze(code: str, as_of: str | None = None, persist: bool = True,
     periods_raw = raw.get("periods", {})
     # 金融业判定:行业名(池/board)优先,结构信号(无营业成本+无存货)兜底,任一命中即金融业
     is_fin = _is_financial(code, industry) or _is_financial_structural(periods_raw)
+    # 行业财报专家路由:命中 → 用其五维区间/权重/跳过红旗/专属红旗;无 → 通用兜底
+    key = _industry_key(code, industry)
+    exp = get_expert(key)
+    exp_specs = exp.dimension_specs() if exp else None
+    exp_weights = exp.weights() if exp else None
+    exp_skip = getattr(exp, "SKIP_FLAGS", None) if exp else None
     derived_all = metrics_mod.compute_derived(periods_raw)
 
     # 注入「毛利率同比升」(供毛利率异常跳升红旗)
@@ -166,8 +190,10 @@ def analyze(code: str, as_of: str | None = None, persist: bool = True,
             continue                                        # 未来函数红线:未披露不可见
         derived = derived_all.get(p, {})
         struct = _struct_summary(rec)
-        flags = flags_mod.evaluate_flags(derived, rec, is_financial=is_fin)
-        score = scoring_mod.quality_score(derived, flags)
+        exp_extra = exp.extra_flags(derived, rec) if exp else None
+        flags = flags_mod.evaluate_flags(derived, rec, is_financial=is_fin,
+                                         skip=exp_skip, extra=exp_extra)
+        score = scoring_mod.quality_score(derived, flags, specs=exp_specs, weights=exp_weights)
         out_periods[p] = {
             "report_date": rec.get("report_date", p),
             "disclosure_date": disc,
@@ -175,6 +201,7 @@ def analyze(code: str, as_of: str | None = None, persist: bool = True,
             "is_forecast": rec.get("is_forecast", False),
             "audit_opinion": rec.get("audit_opinion"),     # 采集期落的审计意见(闸门本轮不判)
             "金融业口径": is_fin,                            # True=已按金融业跳过不适用红旗(高负债等)
+            "行业专家": key if exp else None,                # 命中的行业专家 KEY(无=通用兜底)
             "structured": struct,
             "derived": {k: v for k, v in derived.items() if k != "毛利率同比升"},
             "flags": flags,
@@ -193,6 +220,8 @@ def analyze(code: str, as_of: str | None = None, persist: bool = True,
         "code": code, "name": raw.get("name"), "as_of": as_of,
         "periods": out_periods, "latest_period": latest_p,
         "latest": out_periods.get(latest_p) if latest_p else None,
+        "行业专家": key if exp else None,
+        "口径说明": getattr(exp, "NOTE", None) if exp else None,
         "provenance": {"structured": bool(out_periods), "qualitative": False, "verdict": False},
     }
     if persist and out_periods:
@@ -229,6 +258,8 @@ def build_financial_block(code: str, as_of: str | None = None,
         "flags": [f["code"] for f in latest.get("flags", [])],   # 轻量:只列命中信号名
         "flags_detail": latest.get("flags", []),                  # 完整红旗:{code,命中,严重度,值}(详情页证据)
         "金融业口径": latest.get("金融业口径", False),
+        "行业专家": res.get("行业专家"),          # 命中的行业专家(无=通用兜底)
+        "口径说明": res.get("口径说明"),          # 行业专属口径标注(页面展示)
         "derived": latest.get("derived"),
         "verdict": None,   # LLM 层留口
     }

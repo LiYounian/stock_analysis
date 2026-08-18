@@ -339,6 +339,65 @@ def test_build_financial_block(monkeypatch):
     assert isinstance(blk["flags"], list)
 
 
+# ————————————————————— 行业专家覆写钩子 / 路由 —————————————————————
+def test_scoring_specs_and_weights_override():
+    """五维区间 / 权重可被行业专家覆写(specs/weights 传入即生效)。"""
+    derived = {"X": 50.0}
+    specs = {"成长": [("X", "X", 0, 100)], "质量": [("缺", "缺", 0, 100)]}
+    dims = scoring.five_dims(derived, specs=specs)
+    assert dims["成长"] == pytest.approx(50.0)   # 50 映射到 [0,100] → 50
+    assert dims["质量"] is None                   # 子项缺值 → None
+    # 权重覆写:只给"成长"权重 → 综合分=成长分
+    sc = scoring.quality_score(derived, [], specs=specs, weights={"成长": 1.0, "质量": 0.0})
+    assert sc["quality_score"] == pytest.approx(50.0)
+
+
+def test_flags_skip_and_extra_override():
+    """skip 抑制通用红旗;extra 注入行业专属红旗。"""
+    derived = {"营收增速": 20.0, "归母净利增速": -20.0}   # 默认命中"增收不增利"
+    base = [f["code"] for f in flags.evaluate_flags(derived)]
+    assert "增收不增利" in base
+    # skip 掉它
+    skipped = [f["code"] for f in flags.evaluate_flags(derived, skip=["增收不增利"])]
+    assert "增收不增利" not in skipped
+    # extra 注入(仅命中的并入)
+    extra = [{"code": "行业专属X", "命中": True, "严重度": "高", "值": {}},
+             {"code": "未命中Y", "命中": False, "严重度": "低", "值": {}}]
+    out = [f["code"] for f in flags.evaluate_flags(derived, extra=extra)]
+    assert "行业专属X" in out and "未命中Y" not in out
+
+
+def test_analyzer_routes_to_expert(monkeypatch):
+    """命中行业专家 → 用其 SKIP_FLAGS/extra_flags/NOTE;结果带 行业专家/口径说明。"""
+    _install_synthetic_raw(monkeypatch)
+    fake = types.SimpleNamespace(
+        KEY="测试业", NOTE="测试口径说明",
+        dimension_specs=lambda: scoring.dimension_specs(),
+        weights=lambda: None,
+        SKIP_FLAGS=["增收不增利"],
+        extra_flags=lambda derived, structured: [
+            {"code": "行业专属红旗", "命中": True, "严重度": "中", "值": {}}],
+    )
+    monkeypatch.setattr(analyzer, "_industry_key", lambda code, industry=None: "测试业")
+    monkeypatch.setattr(analyzer, "get_expert", lambda key: fake if key == "测试业" else None)
+    res = analyzer.analyze("000001", as_of="2026-05-01", persist=False)
+    assert res["行业专家"] == "测试业" and res["口径说明"] == "测试口径说明"
+    latest = res["latest"]
+    codes = [f["code"] for f in latest["flags"]]
+    assert "增收不增利" not in codes          # 被 SKIP_FLAGS 抑制
+    assert "行业专属红旗" in codes            # extra_flags 注入
+    assert latest["行业专家"] == "测试业"
+
+
+def test_analyzer_no_expert_backward_compat(monkeypatch):
+    """无行业专家 → 通用兜底,行业专家/口径说明 为 None(向后兼容)。"""
+    _install_synthetic_raw(monkeypatch)
+    monkeypatch.setattr(analyzer, "get_expert", lambda key: None)
+    res = analyzer.analyze("000001", as_of="2026-05-01", persist=False)
+    assert res["行业专家"] is None and res["口径说明"] is None
+    assert "增收不增利" in [f["code"] for f in res["latest"]["flags"]]   # 通用红旗照常
+
+
 # ————————————————————— 契约 financial 块 —————————————————————
 def test_contract_financial_block_enum():
     from tools.contracts import record as rc

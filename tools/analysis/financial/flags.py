@@ -37,7 +37,8 @@ def _num(rec: dict | None, *path: str):
 
 
 def evaluate_flags(derived: dict, structured: dict | None = None,
-                   is_financial: bool = False) -> list[dict]:
+                   is_financial: bool = False, skip: list[str] | None = None,
+                   extra: list[dict] | None = None) -> list[dict]:
     """对单期衍生指标算红旗清单。
 
     Args:
@@ -45,15 +46,19 @@ def evaluate_flags(derived: dict, structured: dict | None = None,
         structured: 单期三大表记录(取扣非绝对值 / 应收存货基数等原始科目;可 None)。
         is_financial: 该票是否金融业(银行/非银)。True 时跳过对金融业不适用的红旗
                       (高负债/现金含量/短债覆盖/应收存货激增),避免系统性误杀。
+        skip: 行业专家追加的"本行业不适用"通用红旗名(与 is_financial 的金融跳过并集)。
+        extra: 行业专家产出的**专属红旗清单**(已成形 {code,命中,严重度,值}),直接并入结果。
     Returns:
         list[flag];仅返回**命中**的红旗(未命中不列)。
     """
     thr = _thr()
     flags: list[dict] = []
-    skip = set(_cfg().get("金融业跳过红旗", [])) if is_financial else set()
+    skip_set = set(_cfg().get("金融业跳过红旗", [])) if is_financial else set()
+    if skip:
+        skip_set |= set(skip)
 
     def hit(name: str, val: dict):
-        if name in skip:                     # 金融业特判:该红旗对金融业不适用,不判
+        if name in skip_set:                 # 金融业/行业特判:该红旗不适用,不判
             return
         flags.append({"code": name, "命中": True, "严重度": _sev(name), "值": val})
 
@@ -133,6 +138,10 @@ def evaluate_flags(derived: dict, structured: dict | None = None,
     jump_thr = thr.get("毛利率跳升_pct")
     if jump is not None and jump_thr is not None and jump > jump_thr:
         hit("毛利率异常跳升", {"毛利率同比升pct": round(jump, 4), "阈值pct": jump_thr})
+
+    # 行业专属红旗(专家模块产出,已成形;不受通用 skip 影响)
+    if extra:
+        flags.extend(f for f in extra if f and f.get("命中"))
 
     return flags
 

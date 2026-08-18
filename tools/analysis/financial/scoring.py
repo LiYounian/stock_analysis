@@ -54,22 +54,26 @@ def dimension_specs() -> dict:
     }
 
 
-def five_dims(derived: dict) -> dict:
-    """五维得分(各 0~100,子项缺失该维用可得子项均值;全缺→None)。区间口径见 dimension_specs(config 真源)。"""
+def five_dims(derived: dict, specs: dict | None = None) -> dict:
+    """五维得分(各 0~100,子项缺失该维用可得子项均值;全缺→None)。
+
+    specs:行业专家覆写的五维区间(格式同 dimension_specs);None → 用通用 dimension_specs(config 真源)。"""
     out = {}
-    for dim, subs in dimension_specs().items():
+    for dim, subs in (specs or dimension_specs()).items():
         out[dim] = _avg([_score_linear(derived.get(key), lo, hi) for (_name, key, lo, hi) in subs])
     return out
 
 
-def quality_score(derived: dict, flags: list[dict]) -> dict:
+def quality_score(derived: dict, flags: list[dict], specs: dict | None = None,
+                  weights: dict | None = None) -> dict:
     """综合质地评分。
 
+    specs / weights:行业专家覆写(五维区间 / 五维权重);None → 用通用(config 真源)。
     Returns: {five_dims, quality_score(0~100 or None), 评级, 红旗扣分, 高危封顶}。
     """
     cfg = _cfg()
-    dims = five_dims(derived)
-    weights = cfg.get("五维权重", {})
+    dims = five_dims(derived, specs)
+    weights = weights if weights is not None else cfg.get("五维权重", {})
     # 加权均值(仅计可得维度,权重同步剔除)
     num = den = 0.0
     for k, v in dims.items():

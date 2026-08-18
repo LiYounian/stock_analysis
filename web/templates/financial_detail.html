@@ -13,6 +13,7 @@
     {% if fin.quality_score is not none %}<span class="badge">质地分 {{ fin.quality_score }}</span>{% endif %}
     {% if fin.报告期 %}<span class="badge">{{ fin.报告期 }}{{ '(预告)' if fin.is_forecast else '' }}</span>{% endif %}
     {% if fin.金融业口径 %}<span class="badge">金融业口径</span>{% endif %}
+    {% if fin.行业专家 %}<span class="badge" title="{{ fin.口径说明 or '' }}">{{ fin.行业专家 }}专家</span>{% endif %}
     <a class="badge news-entry" href="/stock/{{ d.code }}?date={{ _d }}">← 个股详情</a>
     <a class="badge news-entry" href="/financial?date={{ _d }}">← 财报榜</a>
   </div>
@@ -54,6 +55,7 @@
     {% endfor %}
   </table>
   <p class="muted tiny">综合 = 五维加权均值 − 红旗扣分,触发高危红旗封顶降"风险"(权重/区间/阈值口径见 §② 审计标准,占位待策略提供者标定)。</p>
+  {% if fin.行业专家 %}<p class="muted tiny"><b>{{ fin.行业专家 }}行业专家口径</b>:{{ fin.口径说明 or '按本行业专属五维区间/权重/红旗评分' }}</p>{% endif %}
 </section>
 
 <section class="card wide">
