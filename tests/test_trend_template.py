@@ -209,3 +209,73 @@ def test_rps_threshold_configurable_70_80_90():
         cfg = dict(THRESHOLDS["趋势模板"], min_rps=thr)
         r = cond.evaluate(df, rps250=85.0, cfg=cfg)
         assert r["conditions"]["a8"] is expect, f"门槛 {thr} 时 A8 应={expect}"
+
+
+# ————————————————————— 编排层:screen_trend_template —————————————————————
+
+from tools.pipeline import screen_trend_template as pipe  # noqa: E402
+
+
+def _dated(close, amount=None):
+    n = len(close)
+    dates = pd.date_range("2025-01-01", periods=n, freq="D").strftime("%Y-%m-%d")
+    df = pd.DataFrame({"date": dates, "close": close, "high": close, "low": close})
+    if amount is not None:
+        df["amount"] = [amount] * n
+    return df
+
+
+def test_passes_mode_gate():
+    assert pipe._passes("增强", "基础") and pipe._passes("完整", "完整")
+    assert not pipe._passes("完整", "增强")
+    assert not pipe._passes(None, "基础")
+
+
+def test_amount_of_last_row():
+    assert pipe._amount_of(_dated(_uptrend(), amount=3e8)) == 3e8
+    assert pipe._amount_of(_dated(_uptrend())) is None          # 无 amount 列 → None
+
+
+def test_pipeline_end_to_end(monkeypatch):
+    # 两只上升趋势(强弱不同)+ 一只横盘(不入选)
+    strong = _dated([100.0 + 0.3 * i for i in range(251)], amount=2e8)
+    weak = _dated([100.0 + 0.2 * i for i in range(251)], amount=2e8)
+    flat = _dated([100.0] * 251, amount=2e8)
+    kmap = {"000001": strong, "000002": weak, "000003": flat}
+    monkeypatch.setattr(pipe, "_load_or_fetch_kline", lambda code, fetch: kmap[code])
+    monkeypatch.setattr(pipe.store, "put_view", lambda *a, **k: None)
+
+    # 基础模式(A1–A7,不卡 RPS 门槛):两只上升趋势入选,横盘剔除
+    v = pipe.run_trend_template(list(kmap), as_of="2025-09-09", mode="基础",
+                                fetch=False, export=())
+    picks = [r["symbol"] for r in v["rows"]]
+    assert "000003" not in picks                     # 横盘不符合趋势模板(A1 即失败)
+    assert set(picks) == {"000001", "000002"}
+    # RPS 排序:强趋势(涨幅高)RPS 更高、排前
+    assert v["rows"][0]["symbol"] == "000001"
+    assert v["rows"][0]["rps250"] >= v["rows"][1]["rps250"]
+    # 结构化字段齐全(§7)
+    row = v["rows"][0]
+    for k in ("condition_a1", "condition_a8", "pass_mode", "rps250", "return250",
+              "trade_date", "generated_at", "amount"):
+        assert k in row
+    assert v["免责"].find("VCP") >= 0                # 显式声明未含 VCP 等
+
+
+def test_pipeline_lag_flag(monkeypatch):
+    kmap = {"000001": _dated(_uptrend(), amount=2e8)}   # 数据日 = 2025-09-08(251根)
+    monkeypatch.setattr(pipe, "_load_or_fetch_kline", lambda code, fetch: kmap[code])
+    monkeypatch.setattr(pipe.store, "put_view", lambda *a, **k: None)
+    v = pipe.run_trend_template(["000001"], as_of="2026-01-01", mode="完整",
+                                fetch=False, export=())
+    assert v["滞后"] is True and v["数据日期"] < "2026-01-01"
+
+
+def test_pipeline_base_mode_no_rps(monkeypatch):
+    # 基础模式:不喂 RPS 环境也应能出候选(A1–A7)。单票时 RPS 必=100,故另测 conditions 已覆盖;
+    # 这里验证基础模式下 A8 缺失不挡入选。
+    kmap = {"000001": _dated(_uptrend(), amount=2e8)}
+    monkeypatch.setattr(pipe, "_load_or_fetch_kline", lambda code, fetch: kmap[code])
+    monkeypatch.setattr(pipe.store, "put_view", lambda *a, **k: None)
+    v = pipe.run_trend_template(["000001"], mode="基础", fetch=False, export=())
+    assert v["rows"] and v["rows"][0]["pass_mode"] in ("基础", "完整", "增强")
