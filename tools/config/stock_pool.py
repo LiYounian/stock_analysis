@@ -20,15 +20,17 @@ from tools.config import settings
 _STORE = settings.PROJECT_ROOT / "config" / "stock_pool.json"
 _DEV_SAMPLE_FILE = settings.PROJECT_ROOT / "config" / "dev_sample.json"
 _LOCK = threading.RLock()
-_CODE_RE = re.compile(r"^\d{6}$")
+_CODE_RE_A = re.compile(r"^\d{6}$")
+_CODE_RE_HK = re.compile(r"^\d{5}$")
 
 
 @dataclass(frozen=True)
 class Stock:
-    code: str          # 6 位代码,如 "002156"
+    code: str          # A股6位 / 港股5位,如 "002156" / "00700"
     name: str          # 名称
     industry: str      # 细分行业
     sector: str        # 大类板块
+    market: str = "A"  # 市场:"A"(沪深京) / "HK"(港股)
 
 
 # 种子池(仅在 JSON 不存在时用于初始化;之后真源是 config/stock_pool.json)。
@@ -123,6 +125,17 @@ def get_codes() -> list[str]:
     return [s.code for s in get_pool()]
 
 
+def get_codes_by_market(market: str = "A") -> list[str]:
+    """按市场筛选代码列表。"""
+    return [s.code for s in get_pool() if s.market == market]
+
+
+def is_hk(code: str) -> bool:
+    """判断代码是否为港股(在池中且 market=HK)。"""
+    s = get(code)
+    return s is not None and s.market == "HK"
+
+
 def by_sector() -> dict[str, list[Stock]]:
     """按大类板块分组,供组合层聚合用。"""
     out: dict[str, list[Stock]] = {}
@@ -161,8 +174,9 @@ def get_dev_codes(n: int = 10) -> list[str]:
 # ————————————————————————————————————————————————
 # 增删接口(改内存 + 回写 JSON;供票池管理编排调用)
 # ————————————————————————————————————————————————
-def add_stock(code: str, name: str, industry: str, sector: str) -> Stock:
-    """新增一只票并持久化。校验:6 位代码、名称/板块非空、代码不重复。
+def add_stock(code: str, name: str, industry: str, sector: str,
+              market: str = "A") -> Stock:
+    """新增一只票并持久化。校验:代码格式(A股6位/港股5位)、名称/板块非空、代码不重复。
 
     返回新增的 Stock。校验失败或代码已存在抛 ValueError。
     """
@@ -170,26 +184,40 @@ def add_stock(code: str, name: str, industry: str, sector: str) -> Stock:
     name = (name or "").strip()
     industry = (industry or "").strip()
     sector = (sector or "").strip()
-    if not _CODE_RE.match(code):
-        raise ValueError(f"代码须为 6 位数字:{code!r}")
+    market = (market or "A").strip().upper()
+    if market not in ("A", "HK"):
+        raise ValueError(f"market 须为 'A' 或 'HK':{market!r}")
+    if market == "HK":
+        if not _CODE_RE_HK.match(code):
+            raise ValueError(f"港股代码须为 5 位数字:{code!r}")
+    else:
+        if not _CODE_RE_A.match(code):
+            raise ValueError(f"A股代码须为 6 位数字:{code!r}")
     if not name:
         raise ValueError("名称不能为空")
     if not sector:
         raise ValueError("大类板块(sector)不能为空")
     with _LOCK:
-        if any(s.code == code for s in _pool):
-            raise ValueError(f"代码已在票池中:{code}")
-        s = Stock(code, name, industry, sector)
+        if any(s.code == code and s.market == market for s in _pool):
+            raise ValueError(f"代码已在票池中:{code}({market})")
+        s = Stock(code, name, industry, sector, market)
         _pool.append(s)
         _persist()
     return s
 
 
-def remove_stock(code: str) -> Stock:
-    """从票池移除一只并持久化。返回被移除的 Stock;不存在抛 ValueError。"""
+def remove_stock(code: str, market: str | None = None) -> Stock:
+    """从票池移除一只并持久化。返回被移除的 Stock;不存在抛 ValueError。
+
+    market 不指定时按 code 匹配第一个(向后兼容);指定时精确匹配。
+    """
     code = (code or "").strip()
     with _LOCK:
-        idx = next((i for i, s in enumerate(_pool) if s.code == code), None)
+        if market:
+            idx = next((i for i, s in enumerate(_pool)
+                        if s.code == code and s.market == market.upper()), None)
+        else:
+            idx = next((i for i, s in enumerate(_pool) if s.code == code), None)
         if idx is None:
             raise ValueError(f"票池中无此代码:{code}")
         s = _pool.pop(idx)

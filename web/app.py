@@ -185,6 +185,7 @@ class PoolAdd(BaseModel):
     name: str
     industry: str = ""
     sector: str
+    market: str = "A"
 
 
 @app.post("/api/pool")
@@ -192,7 +193,8 @@ def api_pool_add(body: PoolAdd):
     """新增一只票:入池 → 联网采集 → 重建产物。校验失败返回 400。"""
     from tools import pool_service
     try:
-        res = pool_service.add_and_collect(body.code, body.name, body.industry, body.sector)
+        res = pool_service.add_and_collect(
+            body.code, body.name, body.industry, body.sector, market=body.market)
         return {"ok": True, **res}
     except ValueError as e:
         return JSONResponse({"ok": False, "error": str(e)}, status_code=400)

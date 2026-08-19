@@ -157,8 +157,18 @@ def sync_master(codes: list[str], as_of: str | None = None, *,
 
     logger.info("K线主档:当日增量(%s)→ fetch_spot_all + update_master_from_spot", reason)
     try:
+        from tools.config import stock_pool
+        a_codes = [c for c in codes if not stock_pool.is_hk(c)]
+        hk_codes = [c for c in codes if stock_pool.is_hk(c)]
+
         spot = market.fetch_spot_all()
-        r = market.update_master_from_spot(codes=codes, date=as_of, spot=spot)
+        r = market.update_master_from_spot(codes=a_codes, date=as_of, spot=spot)
+
+        if hk_codes:
+            hk_r = market.update_hk_master(hk_codes, date=as_of)
+            r["ok"] = r.get("ok", 0) + hk_r.get("ok", 0)
+            r["skipped"] = r.get("skipped", 0) + hk_r.get("skipped", 0)
+
         if r.get("ok", 0) == 0:
             raise RuntimeError(f"spot 增量 0 只更新({r})")
         logger.info("spot 当日增量完成:更新 %d / 跳过(停牌/无bar)%d @ %s",

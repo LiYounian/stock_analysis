@@ -80,14 +80,16 @@ def collect_one(code: str, date: str) -> dict:
     return result
 
 
-def add_and_collect(code: str, name: str, industry: str, sector: str) -> dict:
+def add_and_collect(code: str, name: str, industry: str, sector: str,
+                    market: str = "A") -> dict:
     """新增一只票 → 联网采集 → 重建产物。代码非法/重复抛 ValueError(由上层转 4xx)。"""
-    s = stock_pool.add_stock(code, name, industry, sector)
+    s = stock_pool.add_stock(code, name, industry, sector, market=market)
     date = _target_date()
     collected = collect_one(s.code, date)
     rebuild_artifacts(date)
     return {
-        "stock": {"code": s.code, "name": s.name, "industry": s.industry, "sector": s.sector},
+        "stock": {"code": s.code, "name": s.name, "industry": s.industry,
+                  "sector": s.sector, "market": s.market},
         "date": date,
         "collected": collected,
     }

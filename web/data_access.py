@@ -783,7 +783,7 @@ def pool_page(date: str = "latest") -> dict:
     from tools.config import stock_pool
     recs = _load_all(date)
     rows = [{"code": s.code, "name": s.name, "industry": s.industry,
-             "sector": s.sector, "has_data": s.code in recs}
+             "sector": s.sector, "market": s.market, "has_data": s.code in recs}
             for s in stock_pool.get_pool()]
     rows.sort(key=lambda x: (x["sector"], x["code"]))
     return {"pool": rows, "count": len(rows), "as_of": as_of(date)}

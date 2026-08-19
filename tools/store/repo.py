@@ -45,7 +45,7 @@ _JSON_KINDS = ("fundamental", "announcement", "news", "ugc", "policy", "llm_cach
 _RAW_KINDS = _PARQUET_KINDS + _JSON_KINDS
 _FLAT_KINDS = ("llm_cache",)   # 不按日期分区的 raw kind
 
-_CODE_RE = re.compile(r"^\d{6}$")             # 个股记录文件名
+_CODE_RE = re.compile(r"^\d{5,6}$")            # 个股记录文件名(A股6位/港股5位)
 _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")  # 日期目录名 YYYY-MM-DD
 
 # —— 编排期"当前运行日期":set 一次,本次所有写入落同一日期目录 ——
@@ -274,7 +274,7 @@ def is_stale(kind: str, code: str, max_days: float, date: str | None = "latest")
 # ————————————————————————————————————————————————
 def _master_path(code: str) -> Path:
     if not _CODE_RE.match(code):
-        raise ValueError(f"主档 code 需为 6 位数字: {code!r}")
+        raise ValueError(f"主档 code 需为 5-6 位数字: {code!r}")
     return _MASTER_DIR / "kline" / f"{code}.parquet"
 
 
