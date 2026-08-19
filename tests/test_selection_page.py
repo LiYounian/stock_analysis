@@ -83,10 +83,11 @@ def _momentum_view(codes=("000003",), combos="动量组合"):
             "入选清单": [{"code": c, "组合": [combos]} for c in codes]}
 
 
-def _dispatch(strategy0=None, s01=None, s02=None, box=None, momentum=None):
-    """按 view 名分派 5 个 view;未提供 → 抛 FileNotFoundError(触发该策略「待运行」降级)。"""
+def _dispatch(strategy0=None, s01=None, s02=None, box=None, momentum=None, semi=None):
+    """按 view 名分派 6 个 view;未提供 → 抛 FileNotFoundError(触发该策略「待运行」降级)。"""
     mapping = {"策略0合议": strategy0, "趋势深跌反包": s01,
-               "放量后缩量回踩": s02, "箱体形态": box, "动量组合": momentum}
+               "放量后缩量回踩": s02, "箱体形态": box, "动量组合": momentum,
+               "半导体多因子": semi}
 
     def _fn(name, date="latest"):
         v = mapping.get(name)
@@ -436,6 +437,40 @@ def test_strategy6_empty_records(monkeypatch):
     _patch(monkeypatch, {})
     s6 = da.selection_page()["strategy6"]
     assert s6["present"] is False and s6["rows"] == []
+
+
+def _semi_view(picks=("688981", "603986")):
+    """全A view「半导体多因子」(screen_semi_factor 产出):入选清单 [{code, 行业, 组合, 明细}]。"""
+    items = []
+    for i, c in enumerate(picks):
+        items.append({
+            "code": c, "行业": "半导体(申万二级 801081)",
+            "组合": ["半导体多因子"],
+            "明细": {"综合分": round(1.0 - i * 0.3, 4),
+                    "rd_rev": 0.1 + i * 0.02, "rd_mcap": 0.005 - i * 0.001,
+                    "rev_yoy": 0.5 - i * 0.1,
+                    "rd_rev_z": 1.0 - i, "rd_mcap_z": 0.5, "rev_yoy_z": 0.2},
+        })
+    return {"as_of": "2026-08-19", "策略": "半导体多因子",
+            "扫描数": 178, "universe_size": 178, "有效样本": 100,
+            "跳过数(缺数据)": 78, "入选数": len(picks), "top_k": 8,
+            "权重": {"rd_rev": 0.6, "rd_mcap": 0.2, "rev_yoy": 0.2},
+            "入选清单": items}
+
+
+def test_strategy6_reads_view_first(monkeypatch):
+    """view 存在时优先读 view(不做实时算),source=view。"""
+    _patch(monkeypatch, {}, get_view=_dispatch(semi=_semi_view()))
+    page = da.selection_page()
+    s6 = page["strategy6"]
+    assert s6["present"] is True and s6.get("source") == "view"
+    assert s6["picks"] == ["688981", "603986"]
+    assert s6["universe_size"] == 178 and s6["样本数"] == 100
+    r = s6["rows"][0]
+    assert r["综合分"] == 1.0 and r["rd_rev"] == 0.1        # view 明细透传
+    strat = {s["key"]: s for s in page["combined"]["strategies"]}
+    assert strat["策略6"]["available"] is True
+    assert strat["策略6"]["codes"] == ["688981", "603986"]
 
 
 def test_view_picks_top_n_cap(monkeypatch):

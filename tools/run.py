@@ -572,7 +572,7 @@ def run_screen_all(codes_all: list[str], as_of: str, no_llm: bool = False,
           组装/事件/多因子/合议 → 横表/选股视图,全对 llm_subset。
     """
     from tools.pipeline import (screen_box, screen_council, screen_momentum,
-                                 screen_s01, screen_s02)
+                                 screen_s01, screen_s02, screen_semi_factor)
     store.set_active_date(as_of)
     logger.info("===== 全A多策略选股开始(日期 %s,全A %d 只)%s=====",
                 as_of, len(codes_all), "(数据-only)" if no_llm else "")
@@ -592,6 +592,11 @@ def run_screen_all(codes_all: list[str], as_of: str, no_llm: bool = False,
         ("策略2·放量后缩量回踩", lambda: screen_s02.run_s02_screen(codes_all, as_of=as_of, fetch=False)),
         ("策略3·箱体形态", lambda: screen_box.run_box_screen(codes_all, as_of=as_of, fetch=False)),
         ("策略4·动量组合", lambda: screen_momentum.run_momentum_screen(codes_all, as_of=as_of, fetch=False)),
+        # 策略5·半导体多因子:限半导体池 178 只,财报三大表/fundamental 需**触网补采**
+        # (fetch=True),因为主闭环采数值面 collect_values 只对 llm_subset,半导体池票
+        # 大概率不在里面,需 pipeline 自采后才能算 3 因子。
+        ("策略5·半导体多因子", lambda: screen_semi_factor.run_semi_factor_screen(
+            codes_all, as_of=as_of, fetch=True)),
     ]
     news_topk = int(os.getenv("SCREENALL_NEWS_TOPK", "5"))  # 新闻/情绪 LLM 每策略只取前 N(省 token、去边缘票噪声)
     union: list[str] = []

@@ -358,7 +358,7 @@ def selection_page(date: str = "latest") -> dict:
     strategy3 = _strategy3_section(recs, date)     # 箱体形态(全A view,待验证)
     strategy4 = _strategy4_section(recs, date)     # 动量组合(全A view,原策略2 改号 2→4)
     strategy5 = _strategy5_section(recs, date)     # 自选池小市值(web 层实时跑策略D,不读 view)
-    strategy6 = _strategy6_section(recs, date)     # 自选池半导体多因子(web 层实时跑策略E,不读 view)
+    strategy6 = _strategy6_section(recs, date)     # 半导体多因子(优先读 view「半导体多因子」,缺则实时兜底)
     # config 兜底:自选池无记录时,退用策略0 view 里带的 council config(前端合成口径真源)
     if not config and strategy0.get("config"):
         config = strategy0["config"]
@@ -501,24 +501,61 @@ def _strategy4_section(recs: dict, date: str = "latest") -> dict:
 
 
 def _strategy6_section(recs: dict, date: str = "latest", top_k: int = 8) -> dict:
-    """策略6「半导体多因子」区块:web 层实时跑 tools.strategy.semi_factor 策略E。
+    """策略6「半导体多因子」区块:优先读全A screener view「半导体多因子」(screen_semi_factor
+    产出),缺 view 才回退 web 层实时跑(限半导体池,records ∩ 池)。
 
-    与策略5 同套路(不读预落盘 view,records 现算);**限池由 strategy 自身完成**——
-    读 config/semi_universe.json(申万二级 801081 半导体 178 只),records ∩ 池 才进因子。
-    3 因子:研发/营收(权 0.6)+ 研发/市值(权 0.2)+ 营收增速(权 0.2)按 winsor+zscore 加权。
-    数据依赖 financial.derived(研发费用率/营收增速,M2 财报块产出)+ valuation.mktcap_yi。
-
-    **本机 records 通常只覆盖自选池 → records ∩ 半导体池 常为空**;远端全A 闭环采集后
-    该策略才会真正出结果。空样本时 present=True/rows=[](明确降级,不假装没跑)。
+    数据链闭环后(cmd_all/screenall):view 覆盖全A 半导体池 178 只真实结果;
+    仅当 view 不存在时(如从未跑过 pipeline)才走实时算兜底,规避页面空。
+    3 因子:研发/营收(权 0.6)+ 研发/市值(权 0.2)+ 营收增速(权 0.2);限池由策略自身完成
+    (读 config/semi_universe.json 178 只)。
     """
+    # 优先读预落盘 view(schema 与 screen_semi_factor 产出一致)
+    try:
+        v = store.get_view("半导体多因子", date=date)
+    except FileNotFoundError:
+        v = None
+    if isinstance(v, dict) and v.get("入选清单"):
+        rows = []
+        picks = []
+        for item in v.get("入选清单", []) or []:
+            if not isinstance(item, dict):
+                continue
+            code = item.get("code")
+            if not code:
+                continue
+            d = item.get("明细") or {}
+            meta = (recs.get(code) or {}).get("meta") or {}
+            picks.append(code)
+            rows.append({
+                "code": code, "name": _name(recs, code),
+                "industry": meta.get("industry") or meta.get("sector") or item.get("行业"),
+                "综合分": d.get("综合分"),
+                "rd_rev": d.get("rd_rev"),
+                "rd_mcap": d.get("rd_mcap"),
+                "rev_yoy": d.get("rev_yoy"),
+            })
+        return {
+            "present": True, "as_of": v.get("as_of") or as_of(date),
+            "扫描数": v.get("扫描数"),
+            "universe_size": v.get("universe_size"),
+            "样本数": v.get("有效样本"),
+            "入选数": v.get("入选数", len(rows)),
+            "top_k": v.get("top_k", top_k),
+            "权重": v.get("权重"),
+            "note": None,
+            "rows": rows,
+            "picks": picks,
+            "source": "view",
+        }
+
+    # 回退:实时跑(records ∩ 半导体池;数据链未跑通时兜底)
     from tools.strategy import registry as _reg
     from tools.strategy import semi_factor as _sf  # noqa: F401 触发注册
 
     empty = {"present": False, "as_of": as_of(date), "扫描数": 0, "入选数": 0,
-             "rows": [], "picks": [], "universe_size": None, "note": None}
+             "rows": [], "picks": [], "universe_size": None, "note": None, "source": "live"}
     if not recs:
         return empty
-
     try:
         out = _reg.run("策略E_半导体多因子", recs, top_k=top_k)
     except Exception:                                    # noqa: BLE001
@@ -549,6 +586,7 @@ def _strategy6_section(recs: dict, date: str = "latest", top_k: int = 8) -> dict
         "note": out.get("note"),
         "rows": rows,
         "picks": list(out.get("codes") or []),
+        "source": "live",
     }
 
 
@@ -611,7 +649,7 @@ def _combined_section(strategy0: dict, strategy1: dict, strategy2: dict,
     name 走 code_name 回退;行业优先中心记录 meta,再回退策略0 view 自带行业。
 
     策略0~4 入选代码均来自各自全A screener 预落盘 view(与页面各区块展示口径一致,已截到 cap);
-    策略5 = 自选池小市值 · 策略6 = 自选池半导体多因子(均 web 层实时跑,不读 view)。
+    策略5 = 自选池小市值(web 实时跑) · 策略6 = 半导体多因子(优先读 view「半导体多因子」,缺则实时兜底)。
     """
     s0_codes = [r["code"] for r in strategy0.get("rows", []) if r.get("code")]
     s1_codes = [r["code"] for r in strategy1.get("rows", []) if r.get("code")]
