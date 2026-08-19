@@ -10,8 +10,21 @@ import math
 
 import pandas as pd
 
+from tools.analysis.trend_template import conditions as cond
 from tools.analysis.trend_template import indicators as ind
 from tools.config.strategy import THRESHOLDS
+
+
+def _kdf(close, high=None, low=None):
+    """按收盘序列造 kline;不传 high/low 默认与 close 同(便于构造)。"""
+    high = close if high is None else high
+    low = close if low is None else low
+    return pd.DataFrame({"close": list(close), "high": list(high), "low": list(low)})
+
+
+def _uptrend(n=251, start=100.0, step=0.2):
+    """平缓单调上升序列:价>MA50>MA150>MA200、MA200上升、距52低远、距52高近。"""
+    return [start + step * i for i in range(n)]
 
 
 # ————————————————————— 指标层:MA —————————————————————
@@ -101,3 +114,63 @@ def test_config_block_has_all_section8_params():
         assert k in cfg, f"缺配置参数 {k}"
     assert cfg["adjustment"] == "qfq"
     assert cfg["week52_window"] == 250 and cfg["min_bars"] == 250
+
+
+# ————————————————————— 条件层:A1–A8 —————————————————————
+
+def test_uptrend_passes_a1_to_a7():
+    df = _kdf(_uptrend())
+    r = cond.evaluate(df, rps250=None)
+    assert r["异常"] is None
+    for k in ("a1", "a2", "a3", "a4", "a5", "a6", "a7"):
+        assert r["conditions"][k] is True, f"{k} 应通过"
+    assert r["conditions"]["a8"] is None            # 无 RPS → A8 无法判
+
+
+def test_a6_boundary_equal_passes():
+    # 52 周低=100,收盘=130=100×1.30(等号)→ A6 通过
+    close = [110.0] * 250 + [130.0]
+    low = [100.0] * 251
+    r = cond.evaluate(_kdf(close, low=low), rps250=None)
+    assert r["conditions"]["a6"] is True
+
+
+def test_a7_boundary_equal_passes():
+    # 52 周高=200,收盘=150=200×0.75(等号)→ A7 通过
+    close = [150.0] * 251
+    high = [200.0] * 251
+    r = cond.evaluate(_kdf(close, high=high), rps250=None)
+    assert r["conditions"]["a7"] is True
+
+
+def test_a8_threshold_and_modes():
+    df = _kdf(_uptrend())
+    # 基础模式:无 RPS 也能通过 A1–A7
+    assert cond.evaluate(df, rps250=None)["pass_mode"] == "基础"
+    # 完整模式:RPS≥70
+    assert cond.evaluate(df, rps250=85.0)["pass_mode"] == "完整"
+    # RPS 未达门槛 → 只到基础
+    assert cond.evaluate(df, rps250=60.0)["pass_mode"] == "基础"
+    # 增强模式:完整 + 价≥5 + 当日成交额≥1e8
+    assert cond.evaluate(df, rps250=85.0, amount=2e8)["pass_mode"] == "增强"
+    # 成交额缺失 → 不进增强,仍是完整(不静默当 0、不报错)
+    assert cond.evaluate(df, rps250=85.0, amount=None)["pass_mode"] == "完整"
+    # 成交额不足 → 不进增强
+    assert cond.evaluate(df, rps250=85.0, amount=5e7)["pass_mode"] == "完整"
+
+
+def test_insufficient_and_invalid_data():
+    short = _kdf(_uptrend(n=100))
+    assert cond.evaluate(short)["异常"] == "INSUFFICIENT_DATA"
+    bad = _uptrend()
+    bad[-1] = -1.0                                  # 收盘为负
+    assert cond.evaluate(_kdf(bad))["异常"] == "INVALID_DATA"
+
+
+def test_conditions_no_lookahead_truncation_invariance():
+    close = _uptrend(n=260)
+    df_full = _kdf(close)
+    df_trunc = _kdf(close[:251])
+    a = cond.evaluate(df_full, t=250, rps250=75.0)["conditions"]
+    b = cond.evaluate(df_trunc, t=250, rps250=75.0)["conditions"]
+    assert a == b
