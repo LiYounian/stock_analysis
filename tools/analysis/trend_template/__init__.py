@@ -12,5 +12,7 @@ from tools.analysis.trend_template.indicators import (
     return_n,
     valid_bars,
 )
+from tools.analysis.trend_template.rps import rps_from_returns
 
-__all__ = ["ma", "lowest_low", "highest_high", "return_n", "valid_bars", "evaluate"]
+__all__ = ["ma", "lowest_low", "highest_high", "return_n", "valid_bars",
+           "evaluate", "rps_from_returns"]

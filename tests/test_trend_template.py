@@ -12,6 +12,7 @@ import pandas as pd
 
 from tools.analysis.trend_template import conditions as cond
 from tools.analysis.trend_template import indicators as ind
+from tools.analysis.trend_template import rps as rps_mod
 from tools.config.strategy import THRESHOLDS
 
 
@@ -174,3 +175,37 @@ def test_conditions_no_lookahead_truncation_invariance():
     a = cond.evaluate(df_full, t=250, rps250=75.0)["conditions"]
     b = cond.evaluate(df_trunc, t=250, rps250=75.0)["conditions"]
     assert a == b
+
+
+# ————————————————————— RPS250 横截面 —————————————————————
+
+def test_rps_ordering_and_percentile():
+    r = rps_mod.rps_from_returns({"A": 0.5, "B": 0.3, "C": 0.1, "D": -0.1})
+    assert r["A"] == 100.0                      # 最高收益 → 满分位
+    assert r["D"] == 25.0                        # 最低 → 1/4
+    assert r["A"] > r["B"] > r["C"] > r["D"]
+
+
+def test_rps_repeatable():
+    data = {"A": 0.2, "B": -0.05, "C": 0.4, "D": 0.4}
+    assert rps_mod.rps_from_returns(data) == rps_mod.rps_from_returns(dict(data))
+
+
+def test_rps_ties_use_mean_rank():
+    r = rps_mod.rps_from_returns({"A": 0.1, "B": 0.1, "C": 0.5})
+    assert r["A"] == r["B"] == 50.0             # 并列取均秩
+    assert r["C"] == 100.0
+
+
+def test_rps_drops_none_and_nan():
+    r = rps_mod.rps_from_returns({"A": 0.3, "B": None, "C": float("nan"), "D": 0.1})
+    assert set(r.keys()) == {"A", "D"}           # 无法计算的票不出现(§10 跳过)
+    assert rps_mod.rps_from_returns({}) == {}
+
+
+def test_rps_threshold_configurable_70_80_90():
+    df = _kdf(_uptrend())
+    for thr, expect in ((70, True), (80, True), (90, False)):
+        cfg = dict(THRESHOLDS["趋势模板"], min_rps=thr)
+        r = cond.evaluate(df, rps250=85.0, cfg=cfg)
+        assert r["conditions"]["a8"] is expect, f"门槛 {thr} 时 A8 应={expect}"
