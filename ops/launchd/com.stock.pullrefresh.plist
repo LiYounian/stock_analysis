@@ -9,6 +9,14 @@
     <string>/bin/bash</string>
     <string>/Users/yqg/Documents/projects/stock_analysis/ops/launchd/pull_refresh.sh</string>
   </array>
+  <!-- ① 全A自采 K 线:PULL_FETCH=1 开启;FETCH_WORKERS=1 单进程(避 mini_racer/V8 多进程崩,见 pull_refresh.sh 根因订正) -->
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PULL_FETCH</key>
+    <string>1</string>
+    <key>FETCH_WORKERS</key>
+    <string>1</string>
+  </dict>
   <key>StartCalendarInterval</key>
   <array>
     <dict><key>Weekday</key><integer>1</integer><key>Hour</key><integer>15</integer><key>Minute</key><integer>40</integer></dict>
