@@ -1,10 +1,12 @@
 #!/bin/bash
 # 本地盘后闭环(供 launchd 调用):[①全A自采K线·默认关] → 全A多策略选股(screenall --no-fetch,
 #   含 M2 财报) → 前瞻记分卡 → 签名上传。远端只负责展示(web 读上传的产物)。
-# **默认口径(PULL_FETCH!=1):跳过①自采**——ops.remote_fetch 的东财 mini_racer 在内存吃紧时原生崩溃、
-#   会拖垮整条闭环;日筛用近史护栏(load_kline_recent 500根)、财报/展示不依赖当日新K线,故默认用现有主档。
-#   需刷新全A K线时设 PULL_FETCH=1(内存充裕或 mini_racer 修复后);那时 ops.remote_fetch 走 spot增量→
-#   回退 fqkline 逐只推进主档(当日盘后即含收盘价)。
+# **①自采 K 线由 PULL_FETCH 控制(launchd plist 已设 PULL_FETCH=1 开启)**。
+#   历史根因订正(2026-08-20 实测):ops.remote_fetch 崩溃**不是内存吃紧**,而是**多进程 fork + V8**——
+#   mini_racer(V8)在 FETCH_WORKERS>1 的 fork 子进程里重复初始化,触发 PartitionAlloc 致命检查
+#   (address_pool_manager.cc `!pool->IsInitialized()`,SIGTRAP/退出码133)。**FETCH_WORKERS=1 单进程即不崩**
+#   (实测全A 5548 只跑通、退出码0、峰值414MB、耗时~73min,主档正常推进到当日)。故本脚本 ① 默认单进程。
+#   spot 增量偶发网络断连会自动回退逐只(腾讯/新浪)推进主档,当日盘后即含收盘价。
 # 密钥只放本机受限文件、不进 git:默认从 $HOME/.config/stock/sync.env 读(chmod 600)。
 # 仓库路径由脚本自身位置推出(ops/launchd/ 上两级),无需硬编用户名/绝对路径。
 set -uo pipefail
@@ -32,15 +34,15 @@ trap 'rmdir "$LOCK" 2>/dev/null' EXIT
 
 {
   echo "==================== $(date) pull_refresh $D ===================="
-  # ① 本地自采全A K线:**默认跳过**(PULL_FETCH!=1)。原因:ops.remote_fetch 走东财 JS 解密
-  #    (mini_racer)在内存吃紧时会**原生崩溃**(Trace/BPT trap)拖垮整条闭环;且财报/展示不依赖
-  #    当日新 K 线,日筛用近史护栏(load_kline_recent 500根)即可。需刷新全A K线时(内存充裕/
-  #    mini_racer 修复后)设 PULL_FETCH=1。ops.remote_fetch = spot增量→回退 fqkline 逐只推进主档。
+  # ① 本地自采全A K线(PULL_FETCH=1 开启;plist 已设)。**必须单进程 FETCH_WORKERS=1**——
+  #    多进程会触发 mini_racer/V8 的 PartitionAlloc 崩溃(见头部根因订正);单进程实测跑通不崩。
+  #    ops.remote_fetch = spot增量→回退逐只(腾讯/新浪)→抓完 _advance_master_from_raw 推进主档。
+  #    代价:串行 ~73min(盘后时间充裕,排在②前)。
   if [ "${PULL_FETCH:-0}" = "1" ]; then
-    echo "-- ① 本地自采全A K线(PULL_FETCH=1,fqkline ~5min) --"
-    FETCH_WORKERS="${FETCH_WORKERS:-10}" "$PY" -m ops.remote_fetch || echo "!! 本地全A采集失败(继续用本地已有)"
+    echo "-- ① 本地自采全A K线(PULL_FETCH=1,单进程 ~73min) --"
+    FETCH_WORKERS="${FETCH_WORKERS:-1}" "$PY" -m ops.remote_fetch || echo "!! 本地全A采集失败(继续用本地已有)"
   else
-    echo "-- ① 跳过全A自采(默认;PULL_FETCH=1 可开启)——用现有主档,规避 mini_racer 崩溃 --"
+    echo "-- ① 跳过全A自采(PULL_FETCH!=1)——用现有主档 --"
   fi
   echo "-- ② 全A多策略选股(策略0/1/2/3/4)+ 对(选出并集∪自选)做新闻/LLM/合议 + M2财报(数值+审计双闸门+LLM文本,仅news_subset) --"
   # --no-fetch:不触发 master_sync 回填/重采,直接用现有主档(近史护栏);财报三步在 run_screen_all 内对 news_subset 自然跑
