@@ -9,6 +9,8 @@ collectors/report/web)无需改动。界面「票池管理」经 tools.pool_serv
 2026-08-06 增补光模块板块(中际旭创/光迅科技,天孚通信由光通信改归光模块)→ 34 只。
 已剔除板块指数「机器人 BK1408」(非个股)。详见 docs/股票清单.md。
 """
+from __future__ import annotations           # PEP 563 延迟注解:X | None / list[X] 在 3.9 也能跑
+
 import json
 import random
 import re
