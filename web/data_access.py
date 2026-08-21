@@ -838,15 +838,15 @@ def _combined_section(strategy0: dict, strategy1: dict, strategy2: dict,
                   "本机 records 常只覆盖自选池,需远端全A 闭环采到半导体票后才出结果。"},
         {"key": "策略7", "label": "最大范围选股", "codes": s7_codes,
          "available": bool((strategy_mr or {}).get("present")),
-         "title": "PR#15 提取(S03,看多):高位强势(距250日高≥82%)+ 均线多头(>MA10/20/50)+ "
+         "title": "PR#15 提取(看多):高位强势(距250日高≥82%)+ 均线多头(>MA10/20/50)+ "
                   "近32日有过单日大阳(>6%)+ 当日未大跌(回撤≤4%)+ 非北交所。纯 OHLC 全A筛选,读预落盘 view。"},
         {"key": "策略8", "label": "量价放量", "codes": s8_codes,
          "available": bool((strategy_vol or {}).get("present")),
-         "title": "PR#15 提取(S04,看多):3 个可勾选子信号——单日放量 / 低位放量 / 连续放量,"
-                  "命中任一即入选,与 S02 放量后缩量回踩互补。全A筛选,读预落盘 view。"},
+         "title": "PR#15 提取(看多):3 个可勾选子信号——单日放量 / 低位放量 / 连续放量,"
+                  "命中任一即入选,与策略2 放量后缩量回踩互补。全A筛选,读预落盘 view。"},
         {"key": "策略9", "label": "最强选股", "codes": s9_codes,
          "available": bool((strategy_strong or {}).get("present")),
-         "title": "PR#15 提取(S05,看多,Tushare-only):六均线多头 + 11日内≥2日涨≥5% + 52周高90%~120% + "
+         "title": "PR#15 提取(看多,Tushare-only):六均线多头 + 11日内≥2日涨≥5% + 52周高90%~120% + "
                   "筹码高度获利(winner_rate>95% 或 HIGH≥cost_95pct)。依赖 Tushare cyq_perf 筹码,"
                   "未配 TUSHARE_TOKEN 时不出(面板提示需 Tushare)。"},
     ]
