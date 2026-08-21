@@ -86,7 +86,9 @@
 | 回测 BT.2 选股回测 · 情绪打分接入决策 · pipeline/registry | ⏳ 待做 |
 | 选股规则 N1 · 财报框架 N2 | 🔒 待用户 |
 
-数据源(避开东财 TLS 指纹墙):行情=腾讯/新浪,基本面=同花顺+百度,公告=巨潮,**资金流/新闻/政策/股吧=东财(curl_cffi 指纹伪装 / akshare)**,情绪=deepseek-v4-pro。
+数据源(避开东财 TLS 指纹墙):行情=腾讯/新浪(+baostock 主档 / akshare-spot 增量),基本面=同花顺+百度,公告=巨潮,**资金流/新闻/政策/股吧=东财(curl_cffi 指纹伪装 / akshare)**,情绪=deepseek-v4-pro。
+
+**可选增强源 · Tushare**(免费源之上,PR#15):设 `export TUSHARE_TOKEN=<你的token>` 后,全A 当日增量优先走 Tushare 全市场 `daily`+`daily_basic`(读得通才用,取不到**自动回退**免费源,不报错);并解锁「最强」策略的筹码获利比例(`cyq_perf`,免费源拿不到)。**未配 token 则链路与现状完全一致**。token 仅从环境变量读、不入库;网页页脚中性标注当前行情来源。
 
 ## 快速开始
 
