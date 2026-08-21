@@ -28,6 +28,55 @@ def json_safe(obj):
     return obj
 
 
+_SOURCE_LABELS = {
+    "tushare_daily": "Tushare",
+    "tushare_daily+adj_factor": "Tushare",
+    "baostock": "baostock(免费)",
+    "akshare_spot": "akshare/东财(免费)",
+    "tencent_hk": "腾讯港股(免费)",
+    "fallback_advance": "腾讯/新浪(免费回退)",
+}
+
+
+def current_data_source(sample: int = 20) -> dict:
+    """当前行情来源徽标(**中性提示,非报错**):抽样主档 meta,取最新交易日对应的来源。
+
+    读**已落盘的** meta.source(实际用了哪个源的地面真相)+ 是否配置了 Tushare,拼出一个
+    供 base.html 页脚展示的中性徽标:标明当前行情来源、最新交易日,以及"配了 Tushare 但当前
+    取数回退到免费源"这一情形。无主档 / 读失败一律给中性占位,**绝不抛异常**(展示层不炸)。
+
+    返回 {tushare_configured, source, label, last_date, fell_back}。
+    """
+    try:
+        from tools.config import settings
+        configured = bool(getattr(settings, "TUSHARE_ENABLED", False))
+    except Exception:
+        configured = False
+    info = {"tushare_configured": configured, "source": None,
+            "label": "免费源", "last_date": None, "fell_back": False}
+    try:
+        codes = store.list_master_codes()
+    except Exception:
+        codes = []
+    best = None  # (last_date_str, source)
+    for c in (codes or [])[:sample]:
+        try:
+            meta = store.get_master_kline_meta(c) or {}
+        except Exception:
+            continue
+        ld, src = meta.get("last_date"), meta.get("source")
+        if not ld:
+            continue
+        if best is None or str(ld) > str(best[0]):
+            best = (str(ld), src)
+    if best:
+        info["last_date"], info["source"] = best[0], best[1]
+        info["label"] = _SOURCE_LABELS.get(best[1], best[1] or "免费源")
+    is_tushare = str(info["source"] or "").startswith("tushare")
+    info["fell_back"] = bool(configured and not is_tushare)
+    return info
+
+
 def _num(v, default: float = 0.0) -> float:
     """排序键净化:None / 非数 / NaN / Inf → default。
 

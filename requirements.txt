@@ -32,7 +32,8 @@ APScheduler>=3.10
 pytest>=8.0
 
 # 缺口备选(可选,按需装)
-# tushare>=1.4.0        # 需 token;将来上真·申万 index_member 成分 + 申万板块指数
+# tushare>=1.4.0        # 可选行情增强源:需 TUSHARE_TOKEN。启用后全A日增量优先走 daily+daily_basic,
+#                       # 并解锁「最强」策略的筹码获利比例(cyq_perf)。未装/未配 → 自动回退免费源,不影响主流程。
 # scikit-learn / scipy  # P3-E ML 预测阶段再装
 
 # 精确版本见 requirements-lock.txt(conda 环境 stock_analysis 冻结)

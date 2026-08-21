@@ -19,6 +19,13 @@ KLINE_DAYS = 250            # 默认拉取天数(约一年交易日)
 # (MA200+52周高)。取 500(约2年)= 冗余 ~2x,不降级任何日筛信号。回测仍走 load_kline 全历史。
 DAILY_KLINE_ROWS = 500
 
+# —— Tushare 可选数据源(全 A 盘后批量日线 + 筹码;免费源之上的可选增强)——
+# token 仅从环境变量读,不入库、不打印。未配 → TUSHARE_ENABLED=False,链路与现状完全一致。
+# 配了且实际读得通 → 全 A 日增量优先走 Tushare(daily + daily_basic 换手),取不到静默回退免费源;
+# 「最强」策略的筹码获利比例(cyq_perf)为 Tushare 独有,免费源拿不到。
+TUSHARE_TOKEN = os.getenv("TUSHARE_TOKEN", "")
+TUSHARE_ENABLED = bool(TUSHARE_TOKEN)
+
 # —— 舆情/新闻采集参数 ——
 NEWS_LOOKBACK_DAYS = 7      # 新闻/公告回看窗口
 UGC_LIMIT = 50             # 每票 UGC 抓取条数上限

@@ -340,11 +340,14 @@ def fetch_spot_all() -> pd.DataFrame:
 
 
 def update_master_from_spot(codes: list[str] | None = None, date: str | None = None,
-                            spot: pd.DataFrame | None = None) -> dict[str, int]:
+                            spot: pd.DataFrame | None = None,
+                            source: str = "akshare_spot") -> dict[str, int]:
     """每日增量:一次 spot 拿全A当日 bar → 逐股按 date 去重 append 到主档(幂等)。
 
     codes=None → 更新所有已有主档的股票(spot 缺该股=停牌,跳过)+ 新股首次落。
-    date=None → 用今天(YYYY-MM-DD)。spot 可传入(测试/复用),否则实时拉。
+    date=None → 用今天(YYYY-MM-DD)。spot 可传入(测试/复用/换源),否则实时拉 akshare。
+    source:写进主档 meta.source 的来源标记(免费源 akshare_spot / 可选 tushare_daily),
+      供展示层标注当前行情来源;不同源的 spot 都是"未复权当日 bar",追加语义一致。
 
     幂等:同日多次跑,append_master_kline 按 date 覆盖,不产生重复行。
     注:spot 为未复权当日价;前复权主档在无新除权时"最新 bar 的 qfq 值=其实际价",
@@ -370,9 +373,10 @@ def update_master_from_spot(codes: list[str] | None = None, date: str | None = N
             "amount": row.get("amount"), "turnover": row.get("turnover"),
             "pct_chg": row.get("pct_chg"),
         }])
-        store.append_master_kline(code, bar, meta={"source": "akshare_spot"})
+        store.append_master_kline(code, bar, meta={"source": source})
         ok += 1
-    logger.info("spot 增量 append:更新 %d 只,跳过(停牌/无 bar)%d 只 @ %s", ok, skipped, d)
+    logger.info("spot 增量 append:更新 %d 只,跳过(停牌/无 bar)%d 只 @ %s(源 %s)",
+                ok, skipped, d, source)
     return {"ok": ok, "skipped": skipped}
 
 
