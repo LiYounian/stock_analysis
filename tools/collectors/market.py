@@ -62,8 +62,31 @@ def _normalize(df: pd.DataFrame) -> pd.DataFrame:
 
 
 # 腾讯 fqkline 端点(比 akshare stock_zh_a_hist_tx 新鲜约 1 个交易日:当日盘后即含当天 bar)
-_TX_URL = "https://web.ifzq.gtimg.cn/appstock/app/fqkline/get"
+# 主端点 web.ifzq.gtimg.cn 高频时会被腾讯 WAF 返回 501;备用走 qq 财经反代,字段兼容。
+_TX_URLS = (
+    "https://web.ifzq.gtimg.cn/appstock/app/fqkline/get",
+    "https://proxy.finance.qq.com/ifzqgtimg/appstock/app/newfqkline/get",
+)
 _TX_COUNT = 640   # 取最近 N 根(~2.5 年,覆盖 KLINE_DAYS 且含当天最新 bar)
+
+
+def _tencent_get_json(param: str) -> dict:
+    """依次尝试腾讯主端点与 qq 财经反代;主端点被 WAF 501 时自动换备用。"""
+    import os
+    import requests
+    timeout = float(os.getenv("FETCH_TIMEOUT", "15"))
+    errors = []
+    for url in _TX_URLS:
+        try:
+            r = requests.get(url, params={"param": param}, timeout=timeout)
+            r.raise_for_status()
+            payload = r.json()
+            if not isinstance(payload, dict):
+                raise ValueError("非 JSON 对象")
+            return payload
+        except Exception as e:
+            errors.append(f"{url.split('/')[2]}: {type(e).__name__} {str(e)[:40]}")
+    raise ConnectionError(f"腾讯K线端点均失败: {errors}")
 
 
 def _fetch_tencent(code, start, end, adjust) -> pd.DataFrame:
@@ -75,16 +98,11 @@ def _fetch_tencent(code, start, end, adjust) -> pd.DataFrame:
     该端点不给 成交额/换手率 → 缺列,由 _normalize 补 NA(screener 用 volume/OHLC,不受影响)。
     每行:[date, open, close, high, low, volume(手)]。
     """
-    import os
-    import requests
     sym = market_prefix(code)
     fq = "qfq" if adjust == "qfq" else ("hfq" if adjust == "hfq" else "")
     key = f"{fq}day" if fq else "day"
     param = f"{sym},day,,,{_TX_COUNT},{fq}"
-    r = requests.get(_TX_URL, params={"param": param},
-                     timeout=float(os.getenv("FETCH_TIMEOUT", "15")))
-    r.raise_for_status()
-    node = r.json().get("data", {}).get(sym) or {}
+    node = (_tencent_get_json(param).get("data") or {}).get(sym) or {}
     rows = node.get(key) or node.get("day") or []
     recs = [{"date": x[0], "open": x[1], "close": x[2], "high": x[3],
              "low": x[4], "volume": float(x[5]) * 100} for x in rows if len(x) >= 6]
@@ -122,14 +140,9 @@ def _fetch_tencent_hk(code, start, end, adjust) -> pd.DataFrame:
     港股该端点 qfq 无效(只返回不复权 day),故统一用 day 数据。
     每行:[date, open, close, high, low, volume(股)];港股 volume 已是股数,无需×100。
     """
-    import os
-    import requests
     sym = f"hk{code}"
     param = f"{sym},day,,,{_TX_COUNT},"
-    r = requests.get(_TX_URL, params={"param": param},
-                     timeout=float(os.getenv("FETCH_TIMEOUT", "15")))
-    r.raise_for_status()
-    node = r.json().get("data", {}).get(sym) or {}
+    node = (_tencent_get_json(param).get("data") or {}).get(sym) or {}
     rows = node.get("day") or []
     recs = [{"date": x[0], "open": x[1], "close": x[2], "high": x[3],
              "low": x[4], "volume": float(x[5])} for x in rows if len(x) >= 6]
