@@ -86,7 +86,7 @@
 | 回测 BT.2 选股回测 · 情绪打分接入决策 · pipeline/registry | ⏳ 待做 |
 | 选股规则 N1 · 财报框架 N2 | 🔒 待用户 |
 
-数据源(避开东财 TLS 指纹墙):行情=腾讯/新浪,基本面=同花顺+百度,公告=巨潮,**资金流/新闻/政策/股吧=东财(curl_cffi 指纹伪装 / akshare)**,情绪=deepseek-v4-pro。
+数据源(避开东财 TLS 指纹墙):策略扫描用的全 A 日线主档=**Tushare Pro**；其他通用行情采集保留腾讯/新浪及既有降级链路，基本面=同花顺+百度，公告=巨潮，**资金流/新闻/政策/股吧=东财(curl_cffi 指纹伪装 / akshare)**，情绪=deepseek-v4-pro。
 
 ## 快速开始
 
@@ -100,3 +100,40 @@ $PY -m uvicorn web.app:app --port 8801      # 起 Web:http://localhost:8801
 ```
 
 **Web 四页**:`/` 今日概览 · `/screen` 选股(预设筛选+组合概览)· `/news` 新闻(公司行为公告)· `/stock/{code}` 个股评估(K线+止盈止损+情景预测+基本面+资金流)。全站标注非投资建议。
+
+## 全 A 策略日线：Tushare Pro
+
+策略选股页面的全 A K 线数据改用 **Tushare Pro** 作为主数据源，覆盖沪深、创业板和科创板，排除北交所。数据以滚动主档形式保存在本机 `data/master/`；该目录已被 Git 忽略，避免把几百 MB 的历史行情或任何凭证上传到仓库。
+
+- **历史首灌**：按交易日批量调用 `daily + adj_factor`，得到 OHLCV 与复权因子；价格按复权因子缩放，保证均线、涨幅、阶段新高等策略计算在同一连续价格口径中。
+- **盘后增量**：每个交易日只需请求一次全市场 `daily(trade_date=...)`，再写入已有主档；最大范围选股会优先使用该路径。
+- **换手率策略**：额外从 `daily_basic` 读取全市场 `turnover_rate`，对应通达信公式中的 `HSL` 百分比口径。
+- **Token 安全**：仅从环境变量 `TUSHARE_TOKEN` 读取，既不写入数据文件，也不打印或提交到 Git。
+
+首次使用前，在本机终端配置 Token（请替换为自己的值，且不要把值写进 README、代码或 Git）：
+
+```bash
+export TUSHARE_TOKEN='你的_Tushare_Token'
+```
+
+然后执行一次近五年历史首灌；时间跨度可用 `--years` 调整：
+
+```bash
+PY=/opt/miniconda3/envs/stock_analysis/bin/python
+$PY -m tools.run bootstrap-history --years 5
+```
+
+策略回放所需的常用命令：
+
+```bash
+# 最大范围选股：同步最新日线并生成当日全 A 广度快照
+$PY -m tools.run maxrange
+
+# 回放近三个月的最大范围、最强、拉揉搓及三类量价策略
+$PY -m tools.run backfill-maxrange --months 3
+$PY -m tools.run backfill-strong
+$PY -m tools.run backfill-rub
+$PY -m tools.run backfill-volume --months 3
+```
+
+> Tushare 的日线为盘后数据。因此正式的日线选股应在收盘且数据源完成更新后运行；午间如需预览，应另接实时行情并将结果标记为“盘中预览”，不能与盘后确认结果混用。
