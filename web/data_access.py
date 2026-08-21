@@ -415,15 +415,18 @@ def selection_page(date: str = "latest") -> dict:
     # 综合选股:7 策略入选代码并集(前端按勾选实时重算;后端给全并集 + 每票命中来源)
     strategy_mr = _strategy_max_range_section(recs, date)   # S03 最大范围(PR#15)
     strategy_vol = _strategy_volume_section(recs, date)     # S04 量价放量(PR#15,3 子信号)
+    strategy_strong = _strategy_strong_section(recs, date)  # S05 最强(PR#15,Tushare-only)
     combined = _combined_section(strategy0, strategy1, strategy2, strategy3,
                                  strategy4, strategy5, strategy6, recs,
-                                 strategy_mr=strategy_mr, strategy_vol=strategy_vol)
+                                 strategy_mr=strategy_mr, strategy_vol=strategy_vol,
+                                 strategy_strong=strategy_strong)
 
     return {"rows": pool_rows, "total": len(recs),
             "combined": combined, "strategy0": strategy0, "strategy1": strategy1,
             "strategy2": strategy2, "strategy3": strategy3, "strategy4": strategy4,
             "strategy5": strategy5, "strategy6": strategy6,
             "strategy_mr": strategy_mr, "strategy_vol": strategy_vol,
+            "strategy_strong": strategy_strong,
             "config": config or {}, "as_of": as_of(date)}
 
 
@@ -579,6 +582,36 @@ def _strategy_volume_section(recs: dict, date: str = "latest") -> dict:
     return sec
 
 
+def _strategy_strong_section(recs: dict, date: str = "latest") -> dict:
+    """S05「最强选股」区块(PR#15,**Tushare-only**):读 view「最强选股」。
+
+    该策略硬依赖 Tushare 筹码获利比例(cyq_perf),免费源拿不到。screen_strong 在未配 token /
+    筹码取不到时写 present=False + 提示的占位 view;此处透出该提示(面板显示"需 Tushare",非报错)。
+    正常出结果时按标准 入选清单 shape 解析。缺 view / 未配 → present=False + 提示。
+    """
+    try:
+        from tools.config import settings
+        configured = bool(getattr(settings, "TUSHARE_ENABLED", False))
+    except Exception:
+        configured = False
+    notice = {"present": False, "需要Tushare": not configured, "rows": [], "picks": [],
+              "提示": ("「最强选股」依赖 Tushare 筹码获利比例(cyq_perf),需配置 TUSHARE_TOKEN 才出;"
+                       "当前未配置。" if not configured else "S05 待运行或本日无筹码数据。"),
+              "as_of": as_of(date)}
+    try:
+        v = store.get_view("最强选股", date=date)
+    except FileNotFoundError:
+        return notice
+    if not isinstance(v, dict):
+        return notice
+    if not v.get("present", True):     # 占位提示 view(未配 token / 筹码取不到)
+        return {"present": False, "需要Tushare": v.get("需要Tushare", not configured),
+                "提示": v.get("提示"), "rows": [], "picks": [], "as_of": v.get("as_of") or as_of(date)}
+    sec = _view_picks_section("最强选股", recs, date)
+    sec["需要Tushare"] = False
+    return sec
+
+
 def _strategy6_section(recs: dict, date: str = "latest", top_k: int = 8) -> dict:
     """策略6「半导体多因子」区块:优先读全A screener view「半导体多因子」(screen_semi_factor
     产出),缺 view 才回退 web 层实时跑(限半导体池,records ∩ 池)。
@@ -722,7 +755,8 @@ def _combined_section(strategy0: dict, strategy1: dict, strategy2: dict,
                       strategy3: dict, strategy4: dict, strategy5: dict,
                       strategy6: dict, recs: dict, *,
                       strategy_mr: dict | None = None,
-                      strategy_vol: dict | None = None) -> dict:
+                      strategy_vol: dict | None = None,
+                      strategy_strong: dict | None = None) -> dict:
     """【综合选股】:7 策略入选代码的并集(去重),每票标注命中来源(被哪几个策略选中)。
 
     后端产出**全并集**(所有可用策略入选代码);前端按勾选的策略实时过滤 + 重算命中来源
@@ -739,8 +773,9 @@ def _combined_section(strategy0: dict, strategy1: dict, strategy2: dict,
     s4_codes = list((strategy4 or {}).get("picks") or [])
     s5_codes = list((strategy5 or {}).get("picks") or [])
     s6_codes = list((strategy6 or {}).get("picks") or [])
-    s7_codes = list((strategy_mr or {}).get("picks") or [])   # S03 最大范围
-    s8_codes = list((strategy_vol or {}).get("picks") or [])  # S04 量价放量
+    s7_codes = list((strategy_mr or {}).get("picks") or [])     # S03 最大范围
+    s8_codes = list((strategy_vol or {}).get("picks") or [])    # S04 量价放量
+    s9_codes = list((strategy_strong or {}).get("picks") or [])  # S05 最强(Tushare-only)
     # 行业 hint:策略0 view 自带行业(全A票多无中心记录)
     s0_industry = {r["code"]: r.get("industry") for r in strategy0.get("rows", [])}
 
@@ -748,7 +783,8 @@ def _combined_section(strategy0: dict, strategy1: dict, strategy2: dict,
     order: list[str] = []
     for key, codes in (("策略0", s0_codes), ("策略1", s1_codes), ("策略2", s2_codes),
                        ("策略3", s3_codes), ("策略4", s4_codes), ("策略5", s5_codes),
-                       ("策略6", s6_codes), ("策略7", s7_codes), ("策略8", s8_codes)):
+                       ("策略6", s6_codes), ("策略7", s7_codes), ("策略8", s8_codes),
+                       ("策略9", s9_codes)):
         for c in codes:
             if c not in sources:
                 sources[c] = []
@@ -808,6 +844,11 @@ def _combined_section(strategy0: dict, strategy1: dict, strategy2: dict,
          "available": bool((strategy_vol or {}).get("present")),
          "title": "PR#15 提取(S04,看多):3 个可勾选子信号——单日放量 / 低位放量 / 连续放量,"
                   "命中任一即入选,与 S02 放量后缩量回踩互补。全A筛选,读预落盘 view。"},
+        {"key": "策略9", "label": "最强选股", "codes": s9_codes,
+         "available": bool((strategy_strong or {}).get("present")),
+         "title": "PR#15 提取(S05,看多,Tushare-only):六均线多头 + 11日内≥2日涨≥5% + 52周高90%~120% + "
+                  "筹码高度获利(winner_rate>95% 或 HIGH≥cost_95pct)。依赖 Tushare cyq_perf 筹码,"
+                  "未配 TUSHARE_TOKEN 时不出(面板提示需 Tushare)。"},
     ]
     return {"strategies": strategies, "rows": rows}
 

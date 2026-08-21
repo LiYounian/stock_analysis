@@ -327,6 +327,37 @@
   {% endif %}
 </section>
 
+<!-- S05:最强选股(PR#15,Tushare-only) -->
+<section class="card wide">
+  <h2>S05 · 最强选股 <span class="badge pos">看多</span> <span class="badge wait">需 Tushare</span>
+    {% if s.strategy_strong.present %}
+    <small>扫描 <b>{{ s.strategy_strong.扫描数 if s.strategy_strong.扫描数 is not none else '—' }}</b> ·
+      有效 <b>{{ s.strategy_strong.有效 if s.strategy_strong.有效 is not none else '—' }}</b> ·
+      入选 <b class="pos">{{ s.strategy_strong.入选数 if s.strategy_strong.入选数 is not none else (s.strategy_strong.rows|length) }}</b> ·
+      数据日期 <b>{{ s.strategy_strong.as_of }}</b></small>
+    {% endif %}</h2>
+  <p class="muted tiny">PR#15 提取。六均线多头 + 11 日内≥2 日涨≥5% + 52 周高 90%~120% +
+    <b>筹码高度获利</b>(winner_rate&gt;95% 或 HIGH≥cost_95pct)。<b>硬依赖 Tushare 筹码获利比例(cyq_perf),免费源拿不到</b>——未配 <code>TUSHARE_TOKEN</code> 时不出(非报错)。</p>
+  {% if not s.strategy_strong.present %}
+  <p class="muted">{{ s.strategy_strong.提示 or 'S05 待运行 / 需 Tushare。' }}</p>
+  {% elif not s.strategy_strong.rows %}
+  <p class="muted">本日 S05 无入选标的(筹码 + 形态未共振)。</p>
+  {% else %}
+  <table>
+    <thead><tr><th>代码</th><th>名称</th><th>行业</th></tr></thead>
+    <tbody>
+    {% for x in s.strategy_strong.rows %}
+      <tr data-code="{{ x.code }}">
+        <td>{{ x.code }}</td>
+        <td><a href="/stock/{{ x.code }}?date={{ s.as_of }}">{{ x.name }}</a></td>
+        <td class="muted">{{ x.industry or '-' }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+</section>
+
 <!-- 策略5:自选池小市值(web 层实时跑,不读 view) -->
 <section class="card wide">
   <h2>策略5 · 自选池小市值
