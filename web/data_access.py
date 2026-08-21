@@ -413,13 +413,17 @@ def selection_page(date: str = "latest") -> dict:
         config = strategy0["config"]
 
     # 综合选股:7 策略入选代码并集(前端按勾选实时重算;后端给全并集 + 每票命中来源)
+    strategy_mr = _strategy_max_range_section(recs, date)   # S03 最大范围(PR#15)
+    strategy_vol = _strategy_volume_section(recs, date)     # S04 量价放量(PR#15,3 子信号)
     combined = _combined_section(strategy0, strategy1, strategy2, strategy3,
-                                 strategy4, strategy5, strategy6, recs)
+                                 strategy4, strategy5, strategy6, recs,
+                                 strategy_mr=strategy_mr, strategy_vol=strategy_vol)
 
     return {"rows": pool_rows, "total": len(recs),
             "combined": combined, "strategy0": strategy0, "strategy1": strategy1,
             "strategy2": strategy2, "strategy3": strategy3, "strategy4": strategy4,
             "strategy5": strategy5, "strategy6": strategy6,
+            "strategy_mr": strategy_mr, "strategy_vol": strategy_vol,
             "config": config or {}, "as_of": as_of(date)}
 
 
@@ -547,6 +551,32 @@ def _strategy4_section(recs: dict, date: str = "latest") -> dict:
     动量入选可能达 top30,展示已截到 cap。
     """
     return _view_picks_section("动量组合", recs, date)
+
+
+def _strategy_max_range_section(recs: dict, date: str = "latest") -> dict:
+    """S03「最大范围选股」区块(PR#15):读全A screener view「最大范围选股」(screen_max_range 产出)。
+
+    schema:{as_of, 扫描数, 有效样本, 入选数, 入选清单:[{code, 明细}]};看多型。
+    与策略2/3/4 同构,复用 _view_picks_section;view 缺失 → present=False(前端「待运行」)。
+    """
+    return _view_picks_section("最大范围选股", recs, date)
+
+
+def _strategy_volume_section(recs: dict, date: str = "latest") -> dict:
+    """S04「量价放量」区块(PR#15):读全A screener view「量价放量」(screen_volume 产出)。
+
+    schema:{as_of, 扫描数, 有效样本, 入选数, 子信号:[...], 入选清单:[{code, 组合:[子信号], 明细}]}。
+    `组合` = 命中的子信号(单日/低位/连续放量),供页面 3 个子信号勾选框做并集过滤
+    (复用 combined-section 勾选并集,非 council 投票)。view 缺失 → present=False。
+    """
+    sec = _view_picks_section("量价放量", recs, date)
+    # 透出子信号清单(供前端渲染勾选框);缺 view 时给默认三项
+    try:
+        v = store.get_view("量价放量", date=date)
+        sec["子信号"] = list((v or {}).get("子信号") or ["单日放量", "低位放量", "连续放量"])
+    except FileNotFoundError:
+        sec["子信号"] = ["单日放量", "低位放量", "连续放量"]
+    return sec
 
 
 def _strategy6_section(recs: dict, date: str = "latest", top_k: int = 8) -> dict:
@@ -690,7 +720,9 @@ def _strategy5_section(recs: dict, date: str = "latest", top_k: int = 3) -> dict
 
 def _combined_section(strategy0: dict, strategy1: dict, strategy2: dict,
                       strategy3: dict, strategy4: dict, strategy5: dict,
-                      strategy6: dict, recs: dict) -> dict:
+                      strategy6: dict, recs: dict, *,
+                      strategy_mr: dict | None = None,
+                      strategy_vol: dict | None = None) -> dict:
     """【综合选股】:7 策略入选代码的并集(去重),每票标注命中来源(被哪几个策略选中)。
 
     后端产出**全并集**(所有可用策略入选代码);前端按勾选的策略实时过滤 + 重算命中来源
@@ -707,6 +739,8 @@ def _combined_section(strategy0: dict, strategy1: dict, strategy2: dict,
     s4_codes = list((strategy4 or {}).get("picks") or [])
     s5_codes = list((strategy5 or {}).get("picks") or [])
     s6_codes = list((strategy6 or {}).get("picks") or [])
+    s7_codes = list((strategy_mr or {}).get("picks") or [])   # S03 最大范围
+    s8_codes = list((strategy_vol or {}).get("picks") or [])  # S04 量价放量
     # 行业 hint:策略0 view 自带行业(全A票多无中心记录)
     s0_industry = {r["code"]: r.get("industry") for r in strategy0.get("rows", [])}
 
@@ -714,7 +748,7 @@ def _combined_section(strategy0: dict, strategy1: dict, strategy2: dict,
     order: list[str] = []
     for key, codes in (("策略0", s0_codes), ("策略1", s1_codes), ("策略2", s2_codes),
                        ("策略3", s3_codes), ("策略4", s4_codes), ("策略5", s5_codes),
-                       ("策略6", s6_codes)):
+                       ("策略6", s6_codes), ("策略7", s7_codes), ("策略8", s8_codes)):
         for c in codes:
             if c not in sources:
                 sources[c] = []
@@ -766,6 +800,14 @@ def _combined_section(strategy0: dict, strategy1: dict, strategy2: dict,
                   "3 因子 winsor+zscore 加权——研发/营收(权 0.6)+ 研发/市值(权 0.2)+ 营收增速(权 0.2);"
                   "重研发投入 + 高增长。web 层实时跑,不读预落盘 view;"
                   "本机 records 常只覆盖自选池,需远端全A 闭环采到半导体票后才出结果。"},
+        {"key": "策略7", "label": "最大范围选股", "codes": s7_codes,
+         "available": bool((strategy_mr or {}).get("present")),
+         "title": "PR#15 提取(S03,看多):高位强势(距250日高≥82%)+ 均线多头(>MA10/20/50)+ "
+                  "近32日有过单日大阳(>6%)+ 当日未大跌(回撤≤4%)+ 非北交所。纯 OHLC 全A筛选,读预落盘 view。"},
+        {"key": "策略8", "label": "量价放量", "codes": s8_codes,
+         "available": bool((strategy_vol or {}).get("present")),
+         "title": "PR#15 提取(S04,看多):3 个可勾选子信号——单日放量 / 低位放量 / 连续放量,"
+                  "命中任一即入选,与 S02 放量后缩量回踩互补。全A筛选,读预落盘 view。"},
     ]
     return {"strategies": strategies, "rows": rows}
 
