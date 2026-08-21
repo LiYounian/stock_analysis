@@ -1,0 +1,6 @@
+{% extends "base.html" %}
+{% block title %}多策略选股 · A股策略辅助工具{% endblock %}
+{% block content %}
+<section class="hero"><p><a href="/strategy?date={{m.as_of}}">策略选股</a> / 多策略选股</p><h1>多策略选股</h1><p class="muted">仅保留在同一交易日内，同时满足所有已勾选策略的股票。</p></section>
+<section class="card wide"><h2>{{m.as_of}} 交集结果 <small>勾选 {{m.views|length}} 个策略 / 交集 {{m.rows|length}} 只</small></h2><div class="multi-summary">{% for v in m.views %}<span>{{v.label}}：{{v.selected}} 只入选</span>{% endfor %}</div><table><tr><th>代码</th><th>名称</th><th>同时满足</th><th>走势</th></tr>{% for r in m.rows %}<tr><td>{{r.code}}</td><td><a href="/strategy/{{m.first_strategy}}/stock/{{r.code}}?signal_date={{m.as_of}}">{{r.name}}</a></td><td>{% for v in m.views %}<span class="tag wait">{{v.label}}</span>{% endfor %}</td><td><a href="/strategy/{{m.first_strategy}}/stock/{{r.code}}?signal_date={{m.as_of}}">查看K线 →</a></td></tr>{% else %}<tr><td colspan="4" class="muted">当前组合没有交集股票。可减少勾选策略，或切换到其他交易日。</td></tr>{% endfor %}</table></section>
+{% endblock %}

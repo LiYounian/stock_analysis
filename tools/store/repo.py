@@ -34,6 +34,7 @@ logger = logging.getLogger("store.repo")
 # —— 路径根(可被测试 monkeypatch 指到临时目录)——
 _RAW_DIR = settings.DATA_RAW                                   # data/raw
 _MASTER_DIR = settings.DATA_MASTER                            # data/master(滚动主档)
+_MASTER_DAILY_BASIC_DIR = _MASTER_DIR / "daily_basic"         # 全市场日度换手率/流通股本
 _ANALYSIS_DIR = settings.PROJECT_ROOT / "data" / "analysis"   # data/analysis
 
 # —— kind → 物理格式 ——
@@ -322,6 +323,21 @@ def append_master_kline(code: str, df_new, meta: dict | None = None) -> str:
     else:
         merged = df_new
     return put_master_kline(code, merged, meta)
+
+
+def put_master_daily_basic(date: str, df) -> str:
+    """写全市场某交易日 daily_basic 快照（换手率、流通股本）。"""
+    day = str(date)[:10]
+    return _write_parquet(_MASTER_DAILY_BASIC_DIR / f"{day}.parquet", df)
+
+
+def get_master_daily_basic(date: str):
+    """读全市场某交易日 daily_basic 快照；缺失抛 FileNotFoundError。"""
+    p = _MASTER_DAILY_BASIC_DIR / f"{str(date)[:10]}.parquet"
+    if not p.exists():
+        raise FileNotFoundError(f"无 daily_basic 快照: {p}")
+    import pandas as pd
+    return pd.read_parquet(p)
 
 
 def _dedup_sort_by_date(df):

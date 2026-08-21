@@ -53,6 +53,29 @@ def _run_backfill() -> None:
         logger.exception("[T5] 兜底补数失败(已捕获)")
 
 
+def _run_max_range() -> None:
+    """盘后全 A：Tushare 日线增量 → 最大范围选股 → 当日广度快照。"""
+    from tools import run
+    try:
+        logger.info("[最大范围] 盘后全A广度任务开始")
+        run.cmd_maxrange(["scheduler"])
+        logger.info("[最大范围] 盘后全A广度任务完成")
+    except Exception:
+        logger.exception("[最大范围] 盘后全A广度任务失败(已捕获)")
+
+
+def _run_strategy_daily() -> None:
+    """盘后策略快照：先日线同步，再落最大范围与最强选股当天结果。"""
+    from tools import run
+    try:
+        logger.info("[策略盘后] 开始")
+        run.cmd_maxrange(["scheduler"])
+        run.cmd_strong(["scheduler"])
+        logger.info("[策略盘后] 完成")
+    except Exception:
+        logger.exception("[策略盘后] 失败(已捕获)")
+
+
 # 任务表:id → (回调, 间隔配置项名)。加新层(T2/T3/T4)在此登记即可。
 _JOBS = [
     ("full", _run_full, "SCHED_FULL_INTERVAL_MIN"),
@@ -77,6 +100,14 @@ def build_scheduler(scheduler=None):
                               misfire_grace_time=grace, coalesce=True, max_instances=1,
                               replace_existing=True)
             logger.info("注册任务 %s:每 %d 分钟", job_id, minutes)
+    if settings.SCHED_MAX_RANGE_ENABLED:
+        scheduler.add_job(_run_strategy_daily, "cron", id="strategy_daily", timezone="Asia/Shanghai",
+                          hour=settings.SCHED_MAX_RANGE_HOUR,
+                          minute=settings.SCHED_MAX_RANGE_MINUTE,
+                          misfire_grace_time=grace, coalesce=True, max_instances=1,
+                          replace_existing=True)
+        logger.info("注册任务 strategy_daily:每日 %02d:%02d(Asia/Shanghai)",
+                    settings.SCHED_MAX_RANGE_HOUR, settings.SCHED_MAX_RANGE_MINUTE)
     return scheduler
 
 

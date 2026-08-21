@@ -1,0 +1,10 @@
+{% extends "base.html" %}
+{% block title %}策略选股 · A股策略辅助工具{% endblock %}
+{% block content %}
+<section class="hero"><h1>策略选股</h1><p class="muted">点击卡片进入单策略详情；勾选两项或更多项后，可生成当日交集股票池。</p></section>
+<form class="multi-picker" method="get" action="/strategy/multi"><input type="hidden" name="date" value="{{as_of}}"><div class="multi-picker-head"><div><h2>多策略选股</h2><p class="muted">只保留同时满足全部勾选策略的股票。</p></div><button type="submit">生成交集结果 →</button></div><input id="strategyKeys" type="hidden" name="strategies" value=""><div class="strategy-grid">
+  {% set cards = [('max-range','市场情绪','最大范围选股','衡量非北交所全 A 中仍处强势区间股票的覆盖广度。','/strategy/max-range'),('strong','强趋势','最强选股','筹码获利、六均线多头、近期强涨与 52 周高位区间同时满足。','/strategy/strong'),('rub','盘后确认','拉揉搓','趋势多头中盘中深跌、收盘翻红的洗盘回收形态。','/strategy/rub'),('single-volume','量价共振','单日放量','换手率显著放大、强势上涨且长期均线趋势向上。','/strategy/single-volume'),('low-volume','周线突破','低位单日放量','日线多头、上穿 30 周线并出现近 10 日最大成交量。','/strategy/low-volume'),('continuous-volume','加速放量','连续放量','连续走强、成交递增，并站稳中长期均线之上。','/strategy/continuous-volume')] %}
+  {% for key,tag,title,desc,url in cards %}<article class="strategy-card {{key}}"><label class="strategy-check"><input type="checkbox" value="{{key}}"><span>加入组合</span></label><span class="strategy-tag">{{tag}}</span><h2>{{title}}</h2><p>{{desc}}</p><a class="strategy-cta" href="{{url}}?date={{as_of}}">进入策略页 <b>→</b></a></article>{% endfor %}
+</div></form>
+{% endblock %}
+{% block scripts %}<script>const k=document.getElementById('strategyKeys');document.querySelector('.multi-picker').addEventListener('submit',e=>{const v=[...document.querySelectorAll('.strategy-check input:checked')].map(x=>x.value);if(v.length<2){e.preventDefault();alert('请至少勾选两个策略后再生成交集结果。');return;}k.value=v.join(',')});</script>{% endblock %}

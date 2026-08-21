@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>{% block title %}A股策略辅助工具{% endblock %}</title>
-  <link rel="stylesheet" href="/static/style.css">
+  <link rel="stylesheet" href="/static/style.css?v=20260821-multi">
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 </head>
 <body>
@@ -14,6 +14,7 @@
     <nav>
       <a href="/?date={{ _d }}">今日概览</a>
       <a href="/selection?date={{ _d }}">选股结果</a>
+      <a href="/strategy?date={{ _d }}">策略选股</a>
       <a href="/screen?date={{ _d }}">预设筛选</a>
       <a href="/news?date={{ _d }}">新闻</a>
       <a href="/pool">票池管理</a>

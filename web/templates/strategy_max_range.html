@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+{% block title %}最大范围选股 · A股策略辅助工具{% endblock %}
+{% block content %}
+<div class="crumb"><a href="/selection?date={{ s.as_of }}">选股结果</a> / 最大范围选股</div>
+<h1>最大范围选股 <small>全 A 强势广度 · 市场情绪温度计</small></h1>
+
+{% if not s.present %}
+<section class="card wide">
+  <p class="muted">{{ s.as_of }} 尚未运行本策略。运行 <code>python -m tools.run maxrange</code> 后，这里会展示当日结果及之后逐日积累的情绪曲线。</p>
+</section>
+{% else %}
+<section class="card wide">
+  <h2>市场情绪广度 <small>{{ s.view.范围 or '全A' }} · 入选数 ÷ 有效样本；仅展示真实跑过策略的日期</small></h2>
+  <div class="range-controls"><label>开始 <input type="date" id="breadthStart"></label><label>结束 <input type="date" id="breadthEnd"></label><button type="button" id="breadthApply">查看区间</button></div>
+  <div class="breadth-kpis">
+    <div><b>{{ s.view['占比%'] }}%</b><span>当日情绪广度</span></div>
+    <div><b>{{ s.view.入选数 }}</b><span>当日入选</span></div>
+    <div><b>{{ s.view.有效样本 }}</b><span>有效全 A 样本</span></div>
+    <div><b>{{ s.view['行情最新日期'] or '—' }}</b><span>行情最新日期</span></div>
+  </div>
+  <div class="chart-wrap"><canvas id="breadthChart"></canvas></div>
+  <p class="muted tiny">解释口径：高占比表示强势股票范围广；相邻日的陡升/陡降提示情绪变化。10% 以上、2% 首次触发、超卖钝化等属于你的经验阈值，页面展示原始数值，不把它们自动当作交易信号。</p>
+  {% if '试跑' in (s.view.范围 or '') %}<p class="muted tiny">当前是 <b>{{ s.view.范围 }}</b>，只用于验证程序，不能作为全市场情绪读数。请运行不带 <code>--universe</code> 的命令生成正式全 A 快照。</p>{% endif %}
+</section>
+
+<section class="card wide">
+  <h2>{{ s.as_of }} 入选结果 <small>扫描 {{ s.view.扫描数 }} · 有效 {{ s.view.有效样本 }} · 入选 {{ s.view.入选数 }}</small></h2>
+  <table><thead><tr><th>代码</th><th>名称</th><th>收盘</th><th>距250日高点</th><th>32日涨超6%次数</th><th>当日回撤</th><th>MA10 / MA20 / MA50</th></tr></thead>
+  <tbody>{% for r in s.rows %}<tr>
+    <td>{{ r.code }}</td><td><a href="/strategy/max-range/stock/{{ r.code }}?signal_date={{ s.as_of }}">{{ r.name }}</a></td>
+    <td>{{ r.close }}</td><td>{{ r.high_ratio }}%</td><td>{{ r.surge_count }}</td><td>{{ r.retrace }}%</td>
+    <td class="muted">{{ r.ma['10'] }} / {{ r.ma['20'] }} / {{ r.ma['50'] }}</td>
+  </tr>{% else %}<tr><td colspan="7" class="muted">当日没有满足条件的股票。</td></tr>{% endfor %}</tbody></table>
+</section>
+
+<section class="card wide"><h2>公式与范围</h2>
+  <p class="muted tiny">{{ s.view.公式 }}</p><p class="muted tiny">{{ s.view.口径 }}</p>
+</section>
+{% endif %}
+{% endblock %}
+{% block scripts %}
+{% if s.present %}<script id="breadthData" type="application/json">{{ s.history|tojson }}</script>
+<script>
+const breadth = JSON.parse(document.getElementById('breadthData').textContent);
+const start = document.getElementById('breadthStart'), end = document.getElementById('breadthEnd');
+if (breadth.length) { start.value = breadth[0].date; end.value = breadth[breadth.length - 1].date; }
+let chart;
+function drawBreadth() {
+  const rows = breadth.filter(x => (!start.value || x.date >= start.value) && (!end.value || x.date <= end.value));
+  if (chart) chart.destroy();
+  chart = new Chart(document.getElementById('breadthChart'), {type:'line', data:{labels:rows.map(x=>x.date), datasets:[{label:'最大范围选股占比 (%)',data:rows.map(x=>x.ratio),borderColor:'#4a90e2',backgroundColor:'rgba(74,144,226,.16)',fill:true,tension:.25,pointRadius:4}]}, options:{responsive:true,maintainAspectRatio:false,scales:{y:{beginAtZero:true,ticks:{color:'#aab'},grid:{color:'#2a2e37'}},x:{ticks:{color:'#aab'},grid:{color:'#2a2e37'}}},plugins:{legend:{labels:{color:'#d8dbe0'}},tooltip:{callbacks:{afterLabel:(ctx)=>{const x=rows[ctx.dataIndex]; return `入选 ${x.selected} / 有效 ${x.eligible}`;}}}}}});
+}
+document.getElementById('breadthApply').addEventListener('click', drawBreadth); drawBreadth();
+</script>{% endif %}
+{% endblock %}

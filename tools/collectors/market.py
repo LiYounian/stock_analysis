@@ -12,7 +12,7 @@ from __future__ import annotations
 import logging
 import random
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
 
 import pandas as pd
 
@@ -180,31 +180,46 @@ def fetch_kline(codes: list[str], start: str | None = None,
 # ————————————————————————————————————————————————
 # 滚动主档:①全量历史落地(baostock) ②每日增量(akshare spot)
 # ————————————————————————————————————————————————
+def _backfill_master_chunk(args: tuple[list[str], str, str, str]) -> tuple[int, list[str]]:
+    """一个子进程独立登录 Baostock 并写入自己负责的代码分片。"""
+    codes, start, end, adjust = args
+    ok, failed = 0, []
+    with baostock_src.session():
+        for code in codes:
+            try:
+                df = baostock_src.fetch_one(code, start, end, adjust=adjust)
+                store.put_master_kline(code, df, meta={"source": "baostock", "adjust": adjust})
+                ok += 1
+            except Exception as ex:
+                logger.error("主档 %s 失败: %s", code, ex)
+                failed.append(code)
+    return ok, failed
+
+
 def backfill_master(codes: list[str], start: str | None = None, end: str | None = None,
-                    adjust: str = settings.KLINE_ADJUST) -> dict[str, int]:
+                    adjust: str = settings.KLINE_ADJUST, workers: int = 1) -> dict[str, int]:
     """用 baostock 逐只拉全历史日K(前复权)→ 全量覆盖写滚动主档。
 
     baostock 不封 → 无 sleep 快速循环。start/end 用 YYYYMMDD 或 YYYY-MM-DD(缺省同 fetch_kline)。
-    返回 {"ok": n, "failed": n};单只失败记 logger 跳过,不中断整批。
+    workers>1 时按代码分片给多个独立 Baostock 连接并行执行；单只失败不中断整批。
     """
     settings.ensure_dirs()
     start, end = _default_range(start, end)
     s = _to_dash(start)
     e = _to_dash(end)
-    n = len(codes)
-    ok = 0
-    failed: list[str] = []
-    with baostock_src.session():
-        for i, code in enumerate(codes, 1):
-            try:
-                df = baostock_src.fetch_one(code, s, e, adjust=adjust)
-                store.put_master_kline(code, df, meta={"source": "baostock", "adjust": adjust})
-                ok += 1
-                if i % 200 == 0 or i == n:
-                    logger.info("[%d/%d] 主档落地进行中(最新 %s %d 根)", i, n, code, len(df))
-            except Exception as ex:
-                failed.append(code)
-                logger.error("主档 %s 失败: %s", code, ex)
+    workers = max(1, int(workers))
+    if workers == 1:
+        ok, failed = _backfill_master_chunk((codes, s, e, adjust))
+    else:
+        chunks = [codes[i::workers] for i in range(workers)]
+        ok, failed = 0, []
+        with ProcessPoolExecutor(max_workers=workers) as ex:
+            args = [(chunk, s, e, adjust) for chunk in chunks]
+            for done, (part_ok, part_failed) in enumerate(ex.map(_backfill_master_chunk, args), 1):
+                ok += part_ok
+                failed.extend(part_failed)
+                logger.info("[%d/%d] 主档分片完成:成功 %d / 失败 %d",
+                            done, len(chunks), part_ok, len(part_failed))
     if failed:
         logger.warning("主档落地失败票(%d): %s", len(failed), failed[:50])
     return {"ok": ok, "failed": len(failed)}
@@ -236,7 +251,8 @@ def fetch_spot_all() -> pd.DataFrame:
 
 
 def update_master_from_spot(codes: list[str] | None = None, date: str | None = None,
-                            spot: pd.DataFrame | None = None) -> dict[str, int]:
+                            spot: pd.DataFrame | None = None,
+                            source: str = "akshare_spot") -> dict[str, int]:
     """每日增量:一次 spot 拿全A当日 bar → 逐股按 date 去重 append 到主档(幂等)。
 
     codes=None → 更新所有已有主档的股票(spot 缺该股=停牌,跳过)+ 新股首次落。
@@ -266,7 +282,7 @@ def update_master_from_spot(codes: list[str] | None = None, date: str | None = N
             "amount": row.get("amount"), "turnover": row.get("turnover"),
             "pct_chg": row.get("pct_chg"),
         }])
-        store.append_master_kline(code, bar, meta={"source": "akshare_spot"})
+        store.append_master_kline(code, bar, meta={"source": source})
         ok += 1
     logger.info("spot 增量 append:更新 %d 只,跳过(停牌/无 bar)%d 只 @ %s", ok, skipped, d)
     return {"ok": ok, "skipped": skipped}

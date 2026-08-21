@@ -340,6 +340,89 @@ def cmd_pattern(argv):
     screen_pattern.run_pattern_screen(codes, as_of)
 
 
+def cmd_maxrange(argv):
+    """通达信「最大范围选股」全 A 广度策略。默认全 A；--universe N 供试跑。"""
+    from tools.collectors import master_sync, universe
+    from tools.pipeline import screen_max_range
+    as_of = _as_of()
+    store.set_active_date(as_of)
+    n = None
+    if argv and "--universe" in argv:
+        i = argv.index("--universe")
+        n = int(argv[i + 1]) if i + 1 < len(argv) and argv[i + 1].isdigit() else None
+    codes = universe.universe_codes(limit=n)
+    # 先保证滚动主档已覆盖全 A；之后策略只读主档，不为每只票重复联网。
+    sync = _safe("最大范围选股K线主档同步",
+                 lambda: master_sync.sync_master(codes, as_of=as_of, prefer_tushare=True)) or {}
+    logger.info("最大范围选股主档同步:模式=%s 成功 %s", sync.get("mode"), sync.get("ok"))
+    scope = f"全A前{n}只（试跑）" if n else "全A"
+    screen_max_range.run_max_range_screen(codes, as_of=as_of, fetch=False, scope=scope)
+
+
+def cmd_bootstrap_history(argv):
+    """一次性建立全 A 历史主档；默认 Tushare 日批量源、5 年。"""
+    from tools.collectors import tushare_daily
+    years = 5
+    if argv and "--years" in argv:
+        i = argv.index("--years")
+        years = int(argv[i + 1]) if i + 1 < len(argv) and argv[i + 1].isdigit() else 5
+    end = pd.Timestamp.today().normalize()
+    start = end - pd.DateOffset(years=years)
+    logger.info("开始 Tushare 全 A 历史首灌：%s 至 %s", start.date(), end.date())
+    r = tushare_daily.bootstrap_master(start.strftime("%Y-%m-%d"), end.strftime("%Y-%m-%d"))
+    logger.info("Tushare 历史主档完成：交易日 %d / 股票 %d / 行 %d", r["days"], r["stocks"], r["rows"])
+
+
+def cmd_backfill_maxrange(argv):
+    """回放最大范围选股；默认近三个月，历史主档须先覆盖250日热身期。"""
+    from tools.collectors import universe
+    from tools.pipeline import screen_max_range
+    months = 3
+    if argv and "--months" in argv:
+        i = argv.index("--months")
+        months = int(argv[i + 1]) if i + 1 < len(argv) else months
+    end = pd.Timestamp.today().normalize()
+    start = end - pd.DateOffset(months=months)
+    n = screen_max_range.backfill_max_range(universe.universe_codes(), str(start.date()), str(end.date()))
+    logger.info("最大范围选股历史回放完成：%d 个交易日", n)
+
+def cmd_backfill_strong(argv):
+    from tools.collectors import universe
+    from tools.pipeline import screen_strong
+    end=pd.Timestamp.today().normalize(); start=end-pd.DateOffset(months=3)
+    n=screen_strong.backfill(universe.universe_codes(),str(start.date()),str(end.date()))
+    logger.info("最强选股历史回放完成：%d 个交易日",n)
+
+def cmd_strong(argv):
+    """盘后生成最强选股当天快照（全 A 日线已由 maxrange 同步）。"""
+    from tools.collectors import universe
+    from tools.pipeline import screen_strong
+    as_of = _as_of()
+    n = screen_strong.backfill(universe.universe_codes(), as_of, as_of)
+    logger.info("最强选股当天快照完成：%d 个交易日", n)
+
+def cmd_backfill_rub(argv):
+    from tools.collectors import universe
+    from tools.pipeline import screen_rub
+    end=pd.Timestamp.today().normalize(); start=end-pd.DateOffset(months=3)
+    logger.info("拉揉搓历史回放：%d天",screen_rub.backfill(universe.universe_codes(),str(start.date()),str(end.date())))
+
+
+def cmd_backfill_volume(argv):
+    """补换手率并回放单日放量、低位单日放量、连续放量三套策略。"""
+    from tools.collectors import universe, tushare_daily
+    from tools.pipeline import screen_volume
+    months = 3
+    if argv and "--months" in argv:
+        i = argv.index("--months")
+        months = int(argv[i + 1]) if i + 1 < len(argv) else months
+    end = pd.Timestamp.today().normalize(); start = end - pd.DateOffset(months=months)
+    basic = tushare_daily.bootstrap_daily_basic(str(start.date()), str(end.date()))
+    logger.info("daily_basic：交易日 %d / 新补 %d", basic["days"], basic["written"])
+    result = screen_volume.backfill(universe.universe_codes(), str(start.date()), str(end.date()))
+    logger.info("量价策略历史回放完成：%s", result)
+
+
 def cmd_analyze(argv):
     """读缓存算技术指标,打印评级排行(不落盘)。"""
     codes, _ = _prep(argv)
@@ -495,7 +578,8 @@ _CMDS = {"collect": cmd_collect, "message": cmd_message, "sentiment": cmd_sentim
          "serialize": cmd_serialize, "panel": cmd_panel, "screen": cmd_screen,
          "events": cmd_events, "factor": cmd_factor, "council": cmd_council,
          "context": cmd_context, "pipeline": cmd_pipeline,
-         "pattern": cmd_pattern, "analyze": cmd_analyze, "all": cmd_all}
+         "pattern": cmd_pattern, "maxrange": cmd_maxrange, "backfill-maxrange": cmd_backfill_maxrange, "backfill-strong": cmd_backfill_strong, "strong": cmd_strong, "backfill-rub":cmd_backfill_rub, "backfill-volume":cmd_backfill_volume,
+         "bootstrap-history": cmd_bootstrap_history, "analyze": cmd_analyze, "all": cmd_all}
 
 
 def main(argv: list[str]) -> int:

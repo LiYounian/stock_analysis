@@ -1,0 +1,12 @@
+{% extends "base.html" %}
+{% block title %}拉揉搓 · A股策略辅助工具{% endblock %}
+{% block content %}
+<section class="hero"><p><a href="/strategy?date={{ s.as_of }}">策略选股</a> / 拉揉搓</p><h1>拉揉搓 <small>盘后确认策略</small></h1><p class="muted">趋势多头中的盘中深跌回收：当日最低较昨收跌 ≥ 4%，最终收阳。</p></section>
+<section class="panel"><h2>策略条件</h2><ol><li>MA10 &gt; MA20 &gt; MA30 &gt; MA60 &gt; MA200</li><li>收盘处于 250 日最高价的 90%–120%</li><li>近 10 个交易日阳线次数大于阴线次数</li><li>盘中最低较昨收跌 ≥ 4%，且当日收阳</li></ol></section>
+{% if s.present %}
+<section class="card wide"><h2>{{s.as_of}} 选股结果 <small>入选 {{s.view.入选数}} / 有效 {{s.view.有效样本}}</small></h2><label class="date-picker">交易日 <select onchange="location.href='/strategy/rub?date='+this.value">{% for d in s.dates|reverse %}<option value="{{d}}" {{'selected' if d==s.as_of}}>{{d}}</option>{% endfor %}</select></label><table><tr><th>代码</th><th>名称</th><th>收盘</th><th>盘中跌幅</th><th>10日阳/阴</th><th>走势</th></tr>{% for r in s.rows %}<tr><td>{{r.code}}</td><td><a href="/strategy/rub/stock/{{r.code}}?signal_date={{s.as_of}}">{{r.name}}</a></td><td>{{r.close}}</td><td>{{r['dip%']}}%</td><td>{{r.yang}} / {{r.yin}}</td><td><a href="/strategy/rub/stock/{{r.code}}?signal_date={{s.as_of}}">查看K线 →</a></td></tr>{% else %}<tr><td colspan="6" class="muted">该交易日无股票同时满足全部条件。</td></tr>{% endfor %}</table></section>
+<section class="card wide"><h2>历史占比</h2><p class="muted">入选数 ÷ 有效全 A 样本；切换上方交易日即可查看当天的入选清单。</p><div class="chart-wrap"><canvas id="rubChart"></canvas></div></section>
+<script id="rubData" type="application/json">{{s.history|tojson}}</script>
+<script>const rub=JSON.parse(document.getElementById('rubData').textContent);new Chart(document.getElementById('rubChart'),{type:'line',data:{labels:rub.map(x=>x.date),datasets:[{label:'拉揉搓占比 (%)',data:rub.map(x=>x.ratio),borderColor:'#8b7cff',backgroundColor:'rgba(139,124,255,.12)',fill:true,tension:.2}]},options:{responsive:true,maintainAspectRatio:false}});</script>
+{% else %}<p class="muted">尚未生成回放结果。</p>{% endif %}
+{% endblock %}

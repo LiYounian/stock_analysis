@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import pandas as pd
 
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse
@@ -52,6 +53,83 @@ def selection(request: Request, date: str = "latest"):
     return templates.TemplateResponse(
         request=request, name="selection.html",
         context={"s": da.selection_page(date), **_nav(date)})
+
+
+@app.get("/strategy/max-range", response_class=HTMLResponse)
+def max_range_strategy(request: Request, date: str = "latest"):
+    """最大范围选股：全 A 强势广度情绪曲线 + 当日/历史入选结果。"""
+    return templates.TemplateResponse(
+        request=request, name="strategy_max_range.html",
+        context={"s": da.max_range_page(date), **_nav(date)})
+
+
+@app.get("/strategy", response_class=HTMLResponse)
+def strategy_center(request: Request, date: str = "latest"):
+    return templates.TemplateResponse(request=request, name="strategy_index.html",
+        context={"as_of": da.as_of(date), **_nav(date)})
+
+
+@app.get("/strategy/multi", response_class=HTMLResponse)
+def multi_strategy(request: Request, date: str = "latest", strategies: str = ""):
+    return templates.TemplateResponse(request=request, name="strategy_multi.html",
+        context={"m": da.multi_strategy_page(strategies.split(","), date), **_nav(date)})
+
+
+@app.get("/strategy/strong", response_class=HTMLResponse)
+def strong_strategy(request: Request, date: str = "latest"):
+    return templates.TemplateResponse(request=request, name="strategy_strong.html",
+        context={"s": da.strong_page(date), **_nav(date)})
+
+@app.get("/strategy/rub", response_class=HTMLResponse)
+def rub_strategy(request: Request, date: str = "latest"):
+    return templates.TemplateResponse(request=request,name="strategy_rub.html",context={"s":da.strategy_page("拉揉搓",date),**_nav(date)})
+
+
+def _volume_page(request: Request, date: str, view_name: str, slug: str, subtitle: str, conditions: list[str], columns: list[tuple[str, str]]):
+    return templates.TemplateResponse(request=request, name="strategy_volume.html", context={
+        "s": da.strategy_page(view_name, date), "title": view_name, "slug": slug,
+        "subtitle": subtitle, "conditions": conditions, "columns": columns, **_nav(date),
+    })
+
+
+@app.get("/strategy/single-volume", response_class=HTMLResponse)
+def single_volume_strategy(request: Request, date: str = "latest"):
+    return _volume_page(request, date, "单日放量", "single-volume", "换手放大、放量上涨与长期均线趋势共振",
+        ["当日换手率 > 昨日换手率的 1.7 倍", "收盘价较昨收上涨超过 3%", "MA200 上行", "MA50 位于 MA200 上方"],
+        [("turnover", "当日换手%"), ("prior_turnover", "昨日换手%")])
+
+
+@app.get("/strategy/low-volume", response_class=HTMLResponse)
+def low_volume_strategy(request: Request, date: str = "latest"):
+    return _volume_page(request, date, "低位单日放量", "low-volume", "日线多头、上穿 30 周线与 10 日最大成交量",
+        ["收盘站上 MA5/10/20/30/200", "当日上穿动态 30 周均线", "成交量为近 10 日最高"],
+        [("ma30w", "30周均线"), ("volume", "成交量")])
+
+
+@app.get("/strategy/continuous-volume", response_class=HTMLResponse)
+def continuous_volume_strategy(request: Request, date: str = "latest"):
+    return _volume_page(request, date, "连续放量", "continuous-volume", "连续上涨、成交递增与中长期均线多头",
+        ["收盘连续两日走高，且相对昨日/前日均上涨超过 4%", "当日成交量大于昨日", "收盘站上 MA20/50/200", "MA5、MA10 均位于 MA20 上方"],
+        [("rise1%", "较昨收%"), ("rise2%", "较前日%")])
+
+@app.get("/strategy/{strategy}/stock/{code}", response_class=HTMLResponse)
+def strategy_stock(request: Request, strategy: str, code: str, signal_date: str):
+    from tools.collectors import market
+    try:
+        df=market.load_kline(code).tail(180)
+    except FileNotFoundError:
+        return HTMLResponse(f"<h2>无K线数据:{code}</h2>",status_code=404)
+    kline={"dates":[str(x)[:10] for x in df.date],"open":df.open.astype(float).tolist(),"close":df.close.astype(float).tolist(),"low":df.low.astype(float).tolist(),"high":df.high.astype(float).tolist(),"volume":df.volume.fillna(0).astype(float).tolist()}
+    for n in (5,20,60):
+        ma = df.close.rolling(n).mean().round(4)
+        # json.dumps 会把 float('nan') 写成 NaN，浏览器 JSON.parse 无法解析；必须转 null。
+        kline[f"ma{n}"] = [None if pd.isna(v) else float(v) for v in ma]
+    signal=df[pd.to_datetime(df.date).dt.strftime('%Y-%m-%d')==signal_date]
+    latest=float(df.close.iloc[-1]); entry=float(signal.close.iloc[-1]) if len(signal) else None
+    # 所有策略共用同一张日线 K 线图；策略仅通过这两个标准字段提供入选日标记。
+    kline["signal_date"] = signal_date if entry is not None else None
+    kline["signal_close"] = entry
+    return templates.TemplateResponse(request=request,name="strategy_stock.html",context={"code":code,"strategy":strategy,"signal_date":signal_date,"kline":kline,"entry":entry,"latest":latest,"return_pct":None if entry is None else round((latest/entry-1)*100,2),**_nav("latest")})
 
 
 @app.get("/news", response_class=HTMLResponse)

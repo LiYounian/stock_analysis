@@ -51,6 +51,14 @@
   }
 
   const chart = echarts.init(elChart, null, { renderer: "canvas" });
+  // 策略入选日由通用详情页传入。新增策略只需提供 signal_date/signal_close，
+  // 无须重写 K 线组件。
+  const entryMark = kl.signal_date && kl.signal_close != null ? {
+    symbol: "pin", symbolSize: 42,
+    itemStyle: { color: "#ff6255" },
+    label: { show: true, formatter: "入选", color: "#fff", fontSize: 10 },
+    data: [{ coord: [kl.signal_date, kl.signal_close] }],
+  } : undefined;
 
   const option = {
     animation: false,
@@ -121,6 +129,7 @@
         markLine: markLines.length
           ? { symbol: "none", data: markLines, silent: true }
           : undefined,
+        markPoint: entryMark,
         z: 2,
       },
       maSeries("MA5", kl.ma5, "#f5a623"),

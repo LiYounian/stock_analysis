@@ -87,6 +87,100 @@ def _name(recs, code):
     return _resolve_name((recs or {}).get(code), code)
 
 
+def max_range_page(date: str = "latest") -> dict:
+    """最大范围选股专页：当日 view + 所有真实落盘日期的广度序列。"""
+    view_name = "最大范围选股"
+    target = as_of(date)
+    try:
+        view = store.get_view(view_name, date=target)
+    except FileNotFoundError:
+        view = None
+
+    history = []
+    for day in store.list_dates("analysis"):
+        try:
+            item = store.get_view(view_name, date=day)
+        except FileNotFoundError:
+            continue
+        if isinstance(item, dict) and isinstance(item.get("占比%"), (int, float)):
+            history.append({"date": day, "ratio": item["占比%"],
+                            "selected": item.get("入选数", 0), "eligible": item.get("有效样本", 0)})
+
+    recs = _load_all(target)
+    rows = []
+    for item in (view or {}).get("入选清单", []) or []:
+        code = item.get("code")
+        if not code:
+            continue
+        d = item.get("明细") or {}
+        rows.append({"code": code, "name": _name(recs, code), "close": d.get("close"),
+                     "high_ratio": d.get("距250日高点%"), "surge_count": d.get("32日涨超6%次数"),
+                     "retrace": d.get("当日回撤%"), "ma": d.get("MA") or {}})
+    return {"present": view is not None, "as_of": target, "view": view or {},
+            "rows": rows, "history": history}
+
+def strong_page(date: str = "latest") -> dict:
+    target=as_of(date)
+    try: view=store.get_view("最强选股",date=target)
+    except FileNotFoundError: view=None
+    rows=[]
+    for x in (view or {}).get("入选清单",[]):
+        d=x.get("明细",{}); rows.append({"code":x["code"],"name":_name(_load_all(target),x["code"]),**d})
+    dates=[]; history=[]
+    for day in store.list_dates("analysis"):
+        try:
+            item=store.get_view("最强选股",date=day)
+            if item:
+                dates.append(day); history.append({"date":day,"ratio":item.get("占比%",0),"selected":item.get("入选数",0),"eligible":item.get("有效样本",0)})
+        except FileNotFoundError: pass
+    return {"present":view is not None,"as_of":target,"view":view or {},"rows":rows,"dates":dates,"history":history}
+
+def strategy_page(view_name: str, date: str = "latest") -> dict:
+    """通用策略页数据，新增日线策略只需传 view 名称。"""
+    target=as_of(date)
+    try: view=store.get_view(view_name,date=target)
+    except FileNotFoundError: view=None
+    rows=[]
+    for x in (view or {}).get("入选清单",[]):
+        d=x.get("明细",{}); rows.append({"code":x["code"],"name":_name(_load_all(target),x["code"]),**d})
+    history=[]
+    for day in store.list_dates("analysis"):
+        try:
+            v=store.get_view(view_name,date=day); history.append({"date":day,"ratio":v.get("占比%",0),"selected":v.get("入选数",0),"eligible":v.get("有效样本",0)})
+        except FileNotFoundError: pass
+    return {"present":view is not None,"as_of":target,"view":view or {},"rows":rows,"history":history,"dates":[x["date"] for x in history]}
+
+
+STRATEGY_CATALOG = {
+    "max-range": {"name": "最大范围选股", "label": "最大范围选股"},
+    "strong": {"name": "最强选股", "label": "最强选股"},
+    "rub": {"name": "拉揉搓", "label": "拉揉搓"},
+    "single-volume": {"name": "单日放量", "label": "单日放量"},
+    "low-volume": {"name": "低位单日放量", "label": "低位单日放量"},
+    "continuous-volume": {"name": "连续放量", "label": "连续放量"},
+}
+
+
+def multi_strategy_page(keys: list[str], date: str = "latest") -> dict:
+    """同一交易日多个策略入选清单的交集；仅使用已经落盘的回放结果。"""
+    target = as_of(date)
+    selected = [(k, STRATEGY_CATALOG[k]) for k in dict.fromkeys(keys) if k in STRATEGY_CATALOG]
+    views, code_sets = [], []
+    for key, info in selected:
+        try:
+            view = store.get_view(info["name"], date=target)
+        except FileNotFoundError:
+            continue
+        codes = {x.get("code") for x in (view.get("入选清单") or []) if x.get("code")}
+        views.append({"key": key, "label": info["label"], "selected": len(codes), "eligible": view.get("有效样本", 0)})
+        code_sets.append(codes)
+    common = set.intersection(*code_sets) if code_sets else set()
+    recs = _load_all(target)
+    return {"as_of": target, "keys": [x[0] for x in selected], "views": views,
+            "rows": [{"code": c, "name": _name(recs, c)} for c in sorted(common)],
+            "first_strategy": selected[0][0] if selected else None}
+
+
 def _pool_codes() -> set[str]:
     """当前自选池代码集合(区块①「自选股」过滤用)。读失败 → 空集合(区块① 空,不炸页)。"""
     try:

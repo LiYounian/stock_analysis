@@ -84,7 +84,8 @@ def _fallback(codes: list[str], workers: int | None, reason: str) -> dict:
 
 
 def sync_master(codes: list[str], as_of: str | None = None, *,
-                workers: int | None = None, fallback: bool = True) -> dict:
+                workers: int | None = None, fallback: bool = True,
+                prefer_tushare: bool = False) -> dict:
     """闭环 K线采集编排(主档 + spot 增量,失败回退逐只)。
 
     codes:本轮分析票池(全A 或子集)。as_of:当日 YYYY-MM-DD(缺省今天)。
@@ -109,8 +110,19 @@ def sync_master(codes: list[str], as_of: str | None = None, *,
                 raise
             return _fallback(codes, workers, f"backfill_master 异常: {e}")
 
-    logger.info("K线主档:当日增量(%s)→ fetch_spot_all + update_master_from_spot", reason)
+    logger.info("K线主档:当日增量(%s)", reason)
     try:
+        if prefer_tushare:
+            from tools.collectors import tushare_daily
+            if tushare_daily.is_configured():
+                spot = tushare_daily.fetch_daily_all(as_of)
+                r = market.update_master_from_spot(codes=codes, date=as_of, spot=spot,
+                                                   source="tushare_daily")
+                if r.get("ok", 0) == 0:
+                    raise RuntimeError(f"Tushare 日线增量 0 只更新({r})")
+                logger.info("Tushare 全A日线增量完成:更新 %d / 跳过 %d @ %s",
+                            r.get("ok"), r.get("skipped"), as_of)
+                return {"mode": "tushare", **r}
         spot = market.fetch_spot_all()
         r = market.update_master_from_spot(codes=codes, date=as_of, spot=spot)
         if r.get("ok", 0) == 0:

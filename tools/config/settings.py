@@ -42,6 +42,11 @@ FETCH_SLEEP_SEC = 0.5       # 单次请求间隔(串行兜底路径)
 FETCH_WORKERS = int(os.getenv("FETCH_WORKERS", "1"))
 FETCH_JITTER_SEC = 0.2      # 并发路径每请求前随机抖动上限(秒)
 
+# —— Tushare Pro（盘后全 A 日线批量增量）——
+# Token 只从环境变量读取；无 Token 时自动回退既有行情源。
+TUSHARE_TOKEN = os.getenv("TUSHARE_TOKEN", "")
+HISTORY_BACKFILL_WORKERS = int(os.getenv("HISTORY_BACKFILL_WORKERS", "6"))
+
 # —— 数据新鲜度(store 层用)——
 RAW_STALE_DAYS = 3          # raw 缓存超过此天数(或无采集元数据)视为陈旧,促使重采
 
@@ -61,6 +66,10 @@ SCHED_FULL_INTERVAL_MIN = int(os.getenv("SCHED_FULL_INTERVAL_MIN", "1440"))   # 
 SCHED_BACKFILL_INTERVAL_MIN = int(os.getenv("SCHED_BACKFILL_INTERVAL_MIN", "0"))  # T5 兜底补数:默认关
 SCHED_FULL_ALL = os.getenv("SCHED_FULL_ALL", "true").lower() in ("1", "true", "yes")  # 全池 vs 开发子集
 SCHED_MISFIRE_GRACE_SEC = int(os.getenv("SCHED_MISFIRE_GRACE_SEC", "3600"))   # 错过触发的宽限(补跑)
+# 最大范围选股：盘后全 A 日线更新 + 广度快照。默认关闭，显式开启才每日执行。
+SCHED_MAX_RANGE_ENABLED = os.getenv("SCHED_MAX_RANGE_ENABLED", "false").lower() in ("1", "true", "yes")
+SCHED_MAX_RANGE_HOUR = int(os.getenv("SCHED_MAX_RANGE_HOUR", "16"))
+SCHED_MAX_RANGE_MINUTE = int(os.getenv("SCHED_MAX_RANGE_MINUTE", "10"))
 
 # —— 展示端数据同步(B 期:本地签名上传 → 展示端 ingest 落库)——
 # 全部走环境变量,禁硬编 URL/域名/密钥,禁入库。展示端与本地端各配所需项。
