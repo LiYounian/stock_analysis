@@ -255,9 +255,9 @@
   {% endif %}
 </section>
 
-<!-- S03:最大范围选股(PR#15,纯 OHLC) -->
+<!-- 策略7:最大范围选股(PR#15,纯 OHLC) -->
 <section class="card wide">
-  <h2>S03 · 最大范围选股 <span class="badge pos">看多</span>
+  <h2>策略7 · 最大范围选股 <span class="badge pos">看多</span>
     {% if s.strategy_mr.present %}
     <small>扫描 <b>{{ s.strategy_mr.扫描数 if s.strategy_mr.扫描数 is not none else '—' }}</b> ·
       有效 <b>{{ s.strategy_mr.有效 if s.strategy_mr.有效 is not none else '—' }}</b> ·
@@ -267,9 +267,9 @@
   <p class="muted tiny">PR#15 提取。高位强势(距 250 日高 ≥82%)+ 均线多头(&gt;MA10/20/50)+
     近 32 日有过单日大阳(&gt;6%)+ 当日未大跌(回撤 ≤4%)+ 非北交所。纯 OHLC 全 A 筛选,读预落盘 view。</p>
   {% if not s.strategy_mr.present %}
-  <p class="muted">S03 待运行(<code>python -m tools.pipeline.screen_max_range</code>)。</p>
+  <p class="muted">策略7 待运行(<code>python -m tools.pipeline.screen_max_range</code>)。</p>
   {% elif not s.strategy_mr.rows %}
-  <p class="muted">本日 S03 无入选标的。</p>
+  <p class="muted">本日 策略7 无入选标的。</p>
   {% else %}
   <table>
     <thead><tr><th>代码</th><th>名称</th><th>行业</th></tr></thead>
@@ -286,16 +286,16 @@
   {% endif %}
 </section>
 
-<!-- S04:量价放量(PR#15,3 可勾选子信号,勾选并集过滤) -->
+<!-- 策略8:量价放量(PR#15,3 可勾选子信号,勾选并集过滤) -->
 <section class="card wide">
-  <h2>S04 · 量价放量 <span class="badge pos">看多</span>
+  <h2>策略8 · 量价放量 <span class="badge pos">看多</span>
     {% if s.strategy_vol.present %}
     <small>扫描 <b>{{ s.strategy_vol.扫描数 if s.strategy_vol.扫描数 is not none else '—' }}</b> ·
       有效 <b>{{ s.strategy_vol.有效 if s.strategy_vol.有效 is not none else '—' }}</b> ·
       入选 <b class="pos">{{ s.strategy_vol.入选数 if s.strategy_vol.入选数 is not none else (s.strategy_vol.rows|length) }}</b> ·
       数据日期 <b>{{ s.strategy_vol.as_of }}</b></small>
     {% endif %}</h2>
-  <p class="muted tiny">PR#15 提取。放量突破/上涨型(与 S02 放量后缩量回踩互补,不去重)。
+  <p class="muted tiny">PR#15 提取。放量突破/上涨型(与策略2 放量后缩量回踩互补,不去重)。
     勾选下方子信号 → 命中票单按<b>命中形态并集</b>实时过滤(勾选式,非投票)。</p>
   {% if s.strategy_vol.present and s.strategy_vol.rows %}
   <div class="council-experts">
@@ -306,9 +306,9 @@
   </div>
   {% endif %}
   {% if not s.strategy_vol.present %}
-  <p class="muted">S04 待运行(<code>python -m tools.pipeline.screen_volume</code>)。</p>
+  <p class="muted">策略8 待运行(<code>python -m tools.pipeline.screen_volume</code>)。</p>
   {% elif not s.strategy_vol.rows %}
-  <p class="muted">本日 S04 无入选标的。</p>
+  <p class="muted">本日 策略8 无入选标的。</p>
   {% else %}
   <table>
     <thead><tr><th>代码</th><th>名称</th><th>行业</th><th>命中形态</th></tr></thead>
@@ -327,9 +327,9 @@
   {% endif %}
 </section>
 
-<!-- S05:最强选股(PR#15,Tushare-only) -->
+<!-- 策略9:最强选股(PR#15,Tushare-only) -->
 <section class="card wide">
-  <h2>S05 · 最强选股 <span class="badge pos">看多</span> <span class="badge wait">需 Tushare</span>
+  <h2>策略9 · 最强选股 <span class="badge pos">看多</span> <span class="badge wait">需 Tushare</span>
     {% if s.strategy_strong.present %}
     <small>扫描 <b>{{ s.strategy_strong.扫描数 if s.strategy_strong.扫描数 is not none else '—' }}</b> ·
       有效 <b>{{ s.strategy_strong.有效 if s.strategy_strong.有效 is not none else '—' }}</b> ·
@@ -339,9 +339,9 @@
   <p class="muted tiny">PR#15 提取。六均线多头 + 11 日内≥2 日涨≥5% + 52 周高 90%~120% +
     <b>筹码高度获利</b>(winner_rate&gt;95% 或 HIGH≥cost_95pct)。<b>硬依赖 Tushare 筹码获利比例(cyq_perf),免费源拿不到</b>——未配 <code>TUSHARE_TOKEN</code> 时不出(非报错)。</p>
   {% if not s.strategy_strong.present %}
-  <p class="muted">{{ s.strategy_strong.提示 or 'S05 待运行 / 需 Tushare。' }}</p>
+  <p class="muted">{{ s.strategy_strong.提示 or '策略9 待运行 / 需 Tushare。' }}</p>
   {% elif not s.strategy_strong.rows %}
-  <p class="muted">本日 S05 无入选标的(筹码 + 形态未共振)。</p>
+  <p class="muted">本日 策略9 无入选标的(筹码 + 形态未共振)。</p>
   {% else %}
   <table>
     <thead><tr><th>代码</th><th>名称</th><th>行业</th></tr></thead>
@@ -479,7 +479,7 @@
 })();
 
 (function () {
-  // —— S04 量价放量:勾选子信号 → 按命中形态(combos)并集过滤(与综合选股同一勾选式,非投票)——
+  // —— 策略8 量价放量:勾选子信号 → 按命中形态(combos)并集过滤(与综合选股同一勾选式,非投票)——
   var body = document.getElementById("volBody");
   if (!body) return;
   var empty = document.getElementById("volEmpty");
