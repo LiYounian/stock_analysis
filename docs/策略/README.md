@@ -19,6 +19,7 @@
 | [板块轮动RRG.md](板块轮动RRG.md) | 行业相对轮动图(RS-Ratio + RS-Momentum 四象限) | 个股按所属行业象限给方向,产「板块轮动」专家供合议 | `tools/analysis/rrg.py` `experts.py` | 顶层"当前该配哪个板块"视角,合议一维 |
 | [最大范围选股.md](最大范围选股.md) | S03 看多型:高位强势+均线多头+近期大阳(纯OHLC,PR#15) | 全A筛强势股入综合面板 | `tools/pipeline/screen_max_range.py` | 过滤器/观察池,喂人工复核或合议(样本级方向性) |
 | [量价放量.md](量价放量.md) | S04 看多型:放量突破/上涨,3 勾选子信号(单日/低位/连续,PR#15) | 全A筛放量股入综合面板(勾选并集) | `tools/pipeline/screen_volume.py` | 与 S02 互补;过滤器,子信号可勾选(样本级方向性) |
+| [最强选股.md](最强选股.md) | S05 看多型:强势+筹码高度获利(**Tushare-only** cyq_perf,PR#15) | 全A筛,仅 Tushare 可用时出 | `tools/pipeline/screen_strong.py` | 筹码获利过滤;未配 token 不出+面板提示 |
 
 ## 策略如何串起来(端到端)
 
