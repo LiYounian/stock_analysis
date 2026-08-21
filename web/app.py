@@ -29,8 +29,9 @@ templates = Jinja2Templates(env=_env)
 
 
 def _nav(date: str) -> dict:
-    """全局导航上下文:可选日期列表 + 当前展示日期(供 base.html 日期下拉)。"""
-    return {"dates": da.available_dates(), "cur_date": da.as_of(date)}
+    """全局导航上下文:可选日期列表 + 当前展示日期(供 base.html 日期下拉)+ 行情来源徽标。"""
+    return {"dates": da.available_dates(), "cur_date": da.as_of(date),
+            "data_source": da.current_data_source()}
 
 
 @app.get("/", response_class=HTMLResponse)

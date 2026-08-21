@@ -28,6 +28,55 @@ def json_safe(obj):
     return obj
 
 
+_SOURCE_LABELS = {
+    "tushare_daily": "Tushare",
+    "tushare_daily+adj_factor": "Tushare",
+    "baostock": "baostock(免费)",
+    "akshare_spot": "akshare/东财(免费)",
+    "tencent_hk": "腾讯港股(免费)",
+    "fallback_advance": "腾讯/新浪(免费回退)",
+}
+
+
+def current_data_source(sample: int = 20) -> dict:
+    """当前行情来源徽标(**中性提示,非报错**):抽样主档 meta,取最新交易日对应的来源。
+
+    读**已落盘的** meta.source(实际用了哪个源的地面真相)+ 是否配置了 Tushare,拼出一个
+    供 base.html 页脚展示的中性徽标:标明当前行情来源、最新交易日,以及"配了 Tushare 但当前
+    取数回退到免费源"这一情形。无主档 / 读失败一律给中性占位,**绝不抛异常**(展示层不炸)。
+
+    返回 {tushare_configured, source, label, last_date, fell_back}。
+    """
+    try:
+        from tools.config import settings
+        configured = bool(getattr(settings, "TUSHARE_ENABLED", False))
+    except Exception:
+        configured = False
+    info = {"tushare_configured": configured, "source": None,
+            "label": "免费源", "last_date": None, "fell_back": False}
+    try:
+        codes = store.list_master_codes()
+    except Exception:
+        codes = []
+    best = None  # (last_date_str, source)
+    for c in (codes or [])[:sample]:
+        try:
+            meta = store.get_master_kline_meta(c) or {}
+        except Exception:
+            continue
+        ld, src = meta.get("last_date"), meta.get("source")
+        if not ld:
+            continue
+        if best is None or str(ld) > str(best[0]):
+            best = (str(ld), src)
+    if best:
+        info["last_date"], info["source"] = best[0], best[1]
+        info["label"] = _SOURCE_LABELS.get(best[1], best[1] or "免费源")
+    is_tushare = str(info["source"] or "").startswith("tushare")
+    info["fell_back"] = bool(configured and not is_tushare)
+    return info
+
+
 def _num(v, default: float = 0.0) -> float:
     """排序键净化:None / 非数 / NaN / Inf → default。
 
@@ -364,13 +413,20 @@ def selection_page(date: str = "latest") -> dict:
         config = strategy0["config"]
 
     # 综合选股:7 策略入选代码并集(前端按勾选实时重算;后端给全并集 + 每票命中来源)
+    strategy_mr = _strategy_max_range_section(recs, date)   # S03 最大范围(PR#15)
+    strategy_vol = _strategy_volume_section(recs, date)     # S04 量价放量(PR#15,3 子信号)
+    strategy_strong = _strategy_strong_section(recs, date)  # S05 最强(PR#15,Tushare-only)
     combined = _combined_section(strategy0, strategy1, strategy2, strategy3,
-                                 strategy4, strategy5, strategy6, recs)
+                                 strategy4, strategy5, strategy6, recs,
+                                 strategy_mr=strategy_mr, strategy_vol=strategy_vol,
+                                 strategy_strong=strategy_strong)
 
     return {"rows": pool_rows, "total": len(recs),
             "combined": combined, "strategy0": strategy0, "strategy1": strategy1,
             "strategy2": strategy2, "strategy3": strategy3, "strategy4": strategy4,
             "strategy5": strategy5, "strategy6": strategy6,
+            "strategy_mr": strategy_mr, "strategy_vol": strategy_vol,
+            "strategy_strong": strategy_strong,
             "config": config or {}, "as_of": as_of(date)}
 
 
@@ -498,6 +554,62 @@ def _strategy4_section(recs: dict, date: str = "latest") -> dict:
     动量入选可能达 top30,展示已截到 cap。
     """
     return _view_picks_section("动量组合", recs, date)
+
+
+def _strategy_max_range_section(recs: dict, date: str = "latest") -> dict:
+    """S03「最大范围选股」区块(PR#15):读全A screener view「最大范围选股」(screen_max_range 产出)。
+
+    schema:{as_of, 扫描数, 有效样本, 入选数, 入选清单:[{code, 明细}]};看多型。
+    与策略2/3/4 同构,复用 _view_picks_section;view 缺失 → present=False(前端「待运行」)。
+    """
+    return _view_picks_section("最大范围选股", recs, date)
+
+
+def _strategy_volume_section(recs: dict, date: str = "latest") -> dict:
+    """S04「量价放量」区块(PR#15):读全A screener view「量价放量」(screen_volume 产出)。
+
+    schema:{as_of, 扫描数, 有效样本, 入选数, 子信号:[...], 入选清单:[{code, 组合:[子信号], 明细}]}。
+    `组合` = 命中的子信号(单日/低位/连续放量),供页面 3 个子信号勾选框做并集过滤
+    (复用 combined-section 勾选并集,非 council 投票)。view 缺失 → present=False。
+    """
+    sec = _view_picks_section("量价放量", recs, date)
+    # 透出子信号清单(供前端渲染勾选框);缺 view 时给默认三项
+    try:
+        v = store.get_view("量价放量", date=date)
+        sec["子信号"] = list((v or {}).get("子信号") or ["单日放量", "低位放量", "连续放量"])
+    except FileNotFoundError:
+        sec["子信号"] = ["单日放量", "低位放量", "连续放量"]
+    return sec
+
+
+def _strategy_strong_section(recs: dict, date: str = "latest") -> dict:
+    """S05「最强选股」区块(PR#15,**Tushare-only**):读 view「最强选股」。
+
+    该策略硬依赖 Tushare 筹码获利比例(cyq_perf),免费源拿不到。screen_strong 在未配 token /
+    筹码取不到时写 present=False + 提示的占位 view;此处透出该提示(面板显示"需 Tushare",非报错)。
+    正常出结果时按标准 入选清单 shape 解析。缺 view / 未配 → present=False + 提示。
+    """
+    try:
+        from tools.config import settings
+        configured = bool(getattr(settings, "TUSHARE_ENABLED", False))
+    except Exception:
+        configured = False
+    notice = {"present": False, "需要Tushare": not configured, "rows": [], "picks": [],
+              "提示": ("「最强选股」依赖 Tushare 筹码获利比例(cyq_perf),需配置 TUSHARE_TOKEN 才出;"
+                       "当前未配置。" if not configured else "S05 待运行或本日无筹码数据。"),
+              "as_of": as_of(date)}
+    try:
+        v = store.get_view("最强选股", date=date)
+    except FileNotFoundError:
+        return notice
+    if not isinstance(v, dict):
+        return notice
+    if not v.get("present", True):     # 占位提示 view(未配 token / 筹码取不到)
+        return {"present": False, "需要Tushare": v.get("需要Tushare", not configured),
+                "提示": v.get("提示"), "rows": [], "picks": [], "as_of": v.get("as_of") or as_of(date)}
+    sec = _view_picks_section("最强选股", recs, date)
+    sec["需要Tushare"] = False
+    return sec
 
 
 def _strategy6_section(recs: dict, date: str = "latest", top_k: int = 8) -> dict:
@@ -641,7 +753,10 @@ def _strategy5_section(recs: dict, date: str = "latest", top_k: int = 3) -> dict
 
 def _combined_section(strategy0: dict, strategy1: dict, strategy2: dict,
                       strategy3: dict, strategy4: dict, strategy5: dict,
-                      strategy6: dict, recs: dict) -> dict:
+                      strategy6: dict, recs: dict, *,
+                      strategy_mr: dict | None = None,
+                      strategy_vol: dict | None = None,
+                      strategy_strong: dict | None = None) -> dict:
     """【综合选股】:7 策略入选代码的并集(去重),每票标注命中来源(被哪几个策略选中)。
 
     后端产出**全并集**(所有可用策略入选代码);前端按勾选的策略实时过滤 + 重算命中来源
@@ -658,6 +773,9 @@ def _combined_section(strategy0: dict, strategy1: dict, strategy2: dict,
     s4_codes = list((strategy4 or {}).get("picks") or [])
     s5_codes = list((strategy5 or {}).get("picks") or [])
     s6_codes = list((strategy6 or {}).get("picks") or [])
+    s7_codes = list((strategy_mr or {}).get("picks") or [])     # S03 最大范围
+    s8_codes = list((strategy_vol or {}).get("picks") or [])    # S04 量价放量
+    s9_codes = list((strategy_strong or {}).get("picks") or [])  # S05 最强(Tushare-only)
     # 行业 hint:策略0 view 自带行业(全A票多无中心记录)
     s0_industry = {r["code"]: r.get("industry") for r in strategy0.get("rows", [])}
 
@@ -665,7 +783,8 @@ def _combined_section(strategy0: dict, strategy1: dict, strategy2: dict,
     order: list[str] = []
     for key, codes in (("策略0", s0_codes), ("策略1", s1_codes), ("策略2", s2_codes),
                        ("策略3", s3_codes), ("策略4", s4_codes), ("策略5", s5_codes),
-                       ("策略6", s6_codes)):
+                       ("策略6", s6_codes), ("策略7", s7_codes), ("策略8", s8_codes),
+                       ("策略9", s9_codes)):
         for c in codes:
             if c not in sources:
                 sources[c] = []
@@ -717,6 +836,19 @@ def _combined_section(strategy0: dict, strategy1: dict, strategy2: dict,
                   "3 因子 winsor+zscore 加权——研发/营收(权 0.6)+ 研发/市值(权 0.2)+ 营收增速(权 0.2);"
                   "重研发投入 + 高增长。web 层实时跑,不读预落盘 view;"
                   "本机 records 常只覆盖自选池,需远端全A 闭环采到半导体票后才出结果。"},
+        {"key": "策略7", "label": "最大范围选股", "codes": s7_codes,
+         "available": bool((strategy_mr or {}).get("present")),
+         "title": "PR#15 提取(S03,看多):高位强势(距250日高≥82%)+ 均线多头(>MA10/20/50)+ "
+                  "近32日有过单日大阳(>6%)+ 当日未大跌(回撤≤4%)+ 非北交所。纯 OHLC 全A筛选,读预落盘 view。"},
+        {"key": "策略8", "label": "量价放量", "codes": s8_codes,
+         "available": bool((strategy_vol or {}).get("present")),
+         "title": "PR#15 提取(S04,看多):3 个可勾选子信号——单日放量 / 低位放量 / 连续放量,"
+                  "命中任一即入选,与 S02 放量后缩量回踩互补。全A筛选,读预落盘 view。"},
+        {"key": "策略9", "label": "最强选股", "codes": s9_codes,
+         "available": bool((strategy_strong or {}).get("present")),
+         "title": "PR#15 提取(S05,看多,Tushare-only):六均线多头 + 11日内≥2日涨≥5% + 52周高90%~120% + "
+                  "筹码高度获利(winner_rate>95% 或 HIGH≥cost_95pct)。依赖 Tushare cyq_perf 筹码,"
+                  "未配 TUSHARE_TOKEN 时不出(面板提示需 Tushare)。"},
     ]
     return {"strategies": strategies, "rows": rows}
 
