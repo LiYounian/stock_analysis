@@ -31,9 +31,9 @@
 - 「最强」硬依赖 Tushare 筹码获利比例 → 做成**仅 Tushare 可用时才出**,否则跳过 + 页面提示(别用免费源硬凑)。
 - 策略取值一律走我们自己的数据/派生(`load_kline_recent` / 指标),别在策略里 ad-hoc 重算或重复取数。
 - 架构整理:复用现有(近史加载器、指标、view schema、K线模板);重复的轮子合并掉。
-- 规矩:token 只从 env 读、不入库;push 前脱敏("同事 key(WANXIANG)"若带进来必须去掉);commit 不加 AI 署名;分步 commit;每策略单测 + A/B 历史回测报告 + 回执;变更记录写 `docs/日志/开发日志.md` + 本文件,策略文档补 `docs/策略/`。
+- 规矩:token 只从 env 读、不入库;push 前脱敏(他人 key(内部 key 名,已脱敏)若带进来必须去掉);commit 不加 AI 署名;分步 commit;每策略单测 + A/B 历史回测报告 + 回执;变更记录写 `docs/日志/开发日志.md` + 本文件,策略文档补 `docs/策略/`。
 
-> 脱敏预检结论:已全量 grep 两个真提交的 diff,**没有任何 "WANXIANG"/万象、硬编码 token/key、真实密钥**;token 一律 `os.getenv("TUSHARE_TOKEN","")`。唯一 PII 是 git author(提交元数据,不进文件,重做时用我们自己身份即可)。即"要脱敏的东西本就不在这两个提交里",但我仍会在重做后再扫一遍。
+> 脱敏预检结论:已全量 grep 两个真提交的 diff,**没有任何他人 key(内部 key 名,已脱敏)、硬编码 token/key、真实密钥**;token 一律 `os.getenv("TUSHARE_TOKEN","")`。唯一 PII 是 git author(提交元数据,不进文件,重做时用我们自己身份即可)。即"要脱敏的东西本就不在这两个提交里",但我仍会在重做后再扫一遍。
 
 ---
 
