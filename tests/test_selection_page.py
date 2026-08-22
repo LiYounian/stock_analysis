@@ -154,9 +154,9 @@ def test_combined_union_and_sources(monkeypatch):
     assert set(rows["300311"]["sources"]) == {"策略0", "策略1"}
     assert rows["603221"]["sources"] == ["策略1"]
     strat = {s["key"]: s for s in combined["strategies"]}
-    # 10 个策略勾选框都在(PR#15 增 策略7 最大范围 / 策略8 量价放量 / 策略9 最强);key/label 对齐编号
+    # 11 个策略勾选框都在(PR#15 增 策略7/8/9;策略10 反转低换手候选·前向观测中);key/label 对齐编号
     assert [s["key"] for s in combined["strategies"]] == [
-        "策略0", "策略1", "策略2", "策略3", "策略4", "策略5", "策略6", "策略7", "策略8", "策略9"]
+        "策略0", "策略1", "策略2", "策略3", "策略4", "策略5", "策略6", "策略7", "策略8", "策略9", "策略10"]
     assert strat["策略2"]["label"] == "放量后缩量回踩"
     assert strat["策略3"]["label"] == "箱体形态"
     assert strat["策略4"]["label"] == "动量组合"
@@ -165,6 +165,9 @@ def test_combined_union_and_sources(monkeypatch):
     assert strat["策略7"]["label"] == "最大范围选股"
     assert strat["策略8"]["label"] == "量价放量"
     assert strat["策略9"]["label"] == "最强选股"
+    assert strat["策略10"]["label"] == "反转低换手(前向观测中)"
+    # 策略10 view 缺(本测试未注入)→ present=False → available=False、codes=[]
+    assert strat["策略10"]["available"] is False and strat["策略10"]["codes"] == []
     assert strat["策略0"]["available"] and strat["策略1"]["available"]
     # 策略2/3/4 view 缺 → present=False → available=False、codes=[]
     for k in ("策略2", "策略3", "策略4"):

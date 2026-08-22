@@ -427,6 +427,45 @@
   {% endif %}
 </section>
 
+<!-- 策略10:反转低换手组合(候选·前向观测中,纯量价横截面复合) -->
+<section class="card wide">
+  <h2>策略10 · 反转低换手组合 <span class="badge wait">前向观测中</span>
+    {% if s.strategy_rt.present %}
+    <small>扫描 <b>{{ s.strategy_rt.扫描数 if s.strategy_rt.扫描数 is not none else '—' }}</b> ·
+      有效 <b>{{ s.strategy_rt.有效 if s.strategy_rt.有效 is not none else '—' }}</b> ·
+      入选 <b class="pos">{{ s.strategy_rt.入选数 if s.strategy_rt.入选数 is not none else (s.strategy_rt.rows|length) }}</b> ·
+      数据日期 <b>{{ s.strategy_rt.as_of }}</b></small>
+    {% endif %}</h2>
+  <p class="muted tiny"><b>候选策略,非已验证</b>——纯量价横截面复合:近 5 日跌得多(反转)+ 近 20 日换手冷清(低换手),
+    各自 winsor+zscore 后<b>等权</b>取 TopK。全 A 筛选,读预落盘 view。</p>
+  <p class="muted tiny" style="color:#a60">⚠️ 诚实口径:回测仅在「可交易池(成交额前 50%)+ 5–10 日持有 + TopK≤20」内 net(扣真实成本)转正、
+    相对纯 rev5 有稳健增量;<b>net 绝对水平存幸存者偏差水分</b>(样本仅当前在市票、漏退市输家),
+    <b>以前向观测为准,当前不作「已验证可用」推荐</b>。详见 docs/策略/策略总览 策略10 行。</p>
+  {% if not s.strategy_rt.present %}
+  <p class="muted">策略10 待运行(<code>python -m tools.pipeline.screen_reversal_turnover --no-fetch</code>)。</p>
+  {% elif not s.strategy_rt.rows %}
+  <p class="muted">本日 策略10 无入选标的。</p>
+  {% else %}
+  <table>
+    <thead><tr><th>代码</th><th>名称</th><th>行业</th><th>复合分</th><th>近5日跌幅</th><th>均换手</th><th>成交额(万)</th></tr></thead>
+    <tbody>
+    {% for x in s.strategy_rt.rows %}
+      <tr data-code="{{ x.code }}">
+        <td>{{ x.code }}</td>
+        <td><a href="/stock/{{ x.code }}?date={{ s.as_of }}">{{ x.name }}</a></td>
+        <td class="muted">{{ x.industry or '-' }}</td>
+        <td class="pos">{{ x.综合分 if x.综合分 is not none else '—' }}</td>
+        <td class="{{ 'pos' if (x['近5日跌幅%'] or 0) > 0 else '' }}">
+          {% if x['近5日跌幅%'] is not none %}{{ '%+.2f'|format(x['近5日跌幅%']) }}%{% else %}—{% endif %}</td>
+        <td class="muted">{% if x['均换手%'] is not none %}{{ '%.2f'|format(x['均换手%']) }}%{% else %}—{% endif %}</td>
+        <td class="muted tiny">{% if x.成交额万元 is not none %}{{ '%.0f'|format(x.成交额万元) }}{% else %}—{% endif %}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+</section>
+
 <p class="muted tiny">点名称进个股页看完整归因/K线。合议综合分同口径(前端同 councilSynth 公式,勾选专家实时重排)。</p>
 
 <script id="selectionExperts" type="application/json">{{ (s.rows|list)|tojson }}</script>
