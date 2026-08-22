@@ -13,7 +13,7 @@
 防未来函数:因子只读序列尾部窗口(反转仅最后 N+1 根、换手仅最后 N 根);本 screener
 用"截至当日"完整序列,尾部即当日。历史 < max(反转+1, 次新最少天数) 的票跳过。
 
-命名:候选策略,view 标「候选·未上面板」;回测达标评测上线后由统筹授面板编号(策略10)。
+命名:已授面板编号「策略10」,状态=前向观测中(非「已验证可用」;net 绝对水平存幸存者水分)。
 
 入口:`python -m tools.pipeline.screen_reversal_turnover
        [--codes ...|--universe N] [--date D] [--no-fetch] [--top-k K]`。
@@ -140,7 +140,7 @@ def run_reversal_turnover_screen(codes: list[str], as_of: str | None = None,
     selected = [d for d in (out.get("因子明细") or []) if d["code"] in set(out.get("codes") or [])]
     view = {
         "as_of": as_of,
-        "策略": "反转低换手组合(候选·未上面板)",
+        "策略": "反转低换手组合(策略10·前向观测中)",
         "口径": ("纯量价复合:反转 rev%d + 低换手 turn%d,各自 winsorize+zscore 后等权"
                  "(%.2f/%.2f)加权取 Top%d;近端 turnover 缺失按窗口有效值均值兜底。"
                  % (REV_N, TURN_N, out.get("权重", {}).get("反转", 0.5),
@@ -155,7 +155,7 @@ def run_reversal_turnover_screen(codes: list[str], as_of: str | None = None,
         "复用": "tools.strategy.reversal_turnover.combo_reversal_turnover_screen",
         "防未来函数": (f"因子只读序列尾部(反转最后{REV_N + 1}根/换手最后{TURN_N}根);"
                      f"尾部即当日;历史<{need}跳过"),
-        "命名": "候选策略,回测达标评测上线后由统筹授面板编号(策略10),当前不占面板",
+        "命名": "策略10(前向观测中,非已验证可用);诚实边界:可交易池+5-10日+TopK≤20,net绝对水平存幸存者水分,以前向观测为准",
     }
     if out.get("note"):
         view["note"] = out["note"]
