@@ -141,6 +141,29 @@ def load_klines(codes: list[str], min_bars: int = 80) -> dict[str, pd.DataFrame]
 
 
 # ── 情绪周期门(全市场横截面,逐日,只用 ≤t)──────────────────────────
+def _streak_with_halt(dates: list, is_zt: np.ndarray, cal_idx: dict,
+                      halt_reset: int = 5) -> np.ndarray:
+    """连板计数(§3 情绪门口径,挖掘者定义):连续相邻交易日收盘涨停根数;
+    首个非涨停清零;**停牌 <halt_reset 交易日不中断、≥halt_reset 清零重算**
+    (用全 A 交易日历序号判相邻 bar 间的交易日间隔;避免长停/重组误连)。
+    一字板照算(§3 要全市场涨停生态,与 §2 入场排一字口径分离,各自正确)。"""
+    n = len(is_zt)
+    out = np.zeros(n, dtype=int)
+    run = 0
+    for i in range(n):
+        if not is_zt[i]:
+            run = 0
+            out[i] = 0
+            continue
+        if i == 0 or run == 0:
+            run = 1
+        else:
+            gap = cal_idx[dates[i]] - cal_idx[dates[i - 1]]   # 相邻 bar 交易日间隔
+            run = run + 1 if gap < halt_reset else 1           # ≥5 交易日停牌 → 清零重算
+        out[i] = run
+    return out
+
+
 def build_regime(klines: dict[str, pd.DataFrame]) -> pd.DataFrame:
     """逐交易日全市场情绪面板 → regime。
 
@@ -151,11 +174,18 @@ def build_regime(klines: dict[str, pd.DataFrame]) -> pd.DataFrame:
 
     返回 DataFrame index=date,列 [N_lu,H_max,promote,regime,gate_open]。
     """
-    # 长表:每 (date, code) 的 is_zt / streak
+    # 全 A 交易日历序号(用于连板停牌间隔判定)
+    cal = sorted({dt for d in klines.values() for dt in d["date"]})
+    cal_idx = {dt: i for i, dt in enumerate(cal)}
+
+    # 长表:每 (date, code) 的 is_zt / streak_regime(停牌≥5交易日清零重算)
     frames = []
     for c, d in klines.items():
+        zt = d["is_zt"].to_numpy()
+        dts = d["date"].tolist()
+        streak_r = _streak_with_halt(dts, zt, cal_idx)
         frames.append(pd.DataFrame({"date": d["date"], "code": c,
-                                    "is_zt": d["is_zt"], "streak": d["streak"]}))
+                                    "is_zt": zt, "streak": streak_r}))
     long = pd.concat(frames, ignore_index=True)
     # 每日涨停家数 & 最高连板
     g = long.groupby("date")
@@ -263,16 +293,18 @@ def scan_candidates(klines: dict[str, pd.DataFrame], regime: pd.DataFrame,
 
 # ── 成本模型 ────────────────────────────────────────────────────────
 _SLIP = 0.0020         # 单边滑点 0.20%(主口径,注记1:DB01 与基线A 同此成本)
-_COMM = 0.0005         # 佣金单边 0.05%
+_COMM = 0.00025        # 佣金单边 0.025%(挖掘者精确口径:双边各 0.025%)
+_TRANSFER = 0.00001    # 过户费单边 0.001%(沪深已统一按成交额双边收取)
 
 
 def _round_trip_net(buy_open: float, sell_open: float, sell_date: pd.Timestamp,
                     slip: float = _SLIP) -> float:
     """扣费后净 round-trip 收益率(买卖两侧同成本模型)。
-    买入实付 = buy_open×(1+slip+comm);卖出实收 = sell_open×(1−slip−comm−印花)。
+    买入实付 = buy_open×(1+slip+佣金+过户费);
+    卖出实收 = sell_open×(1−slip−佣金−过户费−印花)。印花仅卖出侧、date-aware。
     """
-    buy_cost = buy_open * (1.0 + slip + _COMM)
-    sell_net = sell_open * (1.0 - slip - _COMM - stamp_tax_rate(sell_date))
+    buy_cost = buy_open * (1.0 + slip + _COMM + _TRANSFER)
+    sell_net = sell_open * (1.0 - slip - _COMM - _TRANSFER - stamp_tax_rate(sell_date))
     return sell_net / buy_cost - 1.0
 
 
@@ -318,6 +350,9 @@ def simulate_trade(d: pd.DataFrame, t: int, slip: float = _SLIP,
     rec["net"] = round(_round_trip_net(buy_open, sell_open, sell_date, slip), 6)
     rec["buy_date"] = str(d["date"].iloc[t + 1].date())
     rec["sell_date"] = str(sell_date.date())
+    rec["buy_open"] = buy_open           # 保留价格供 slippage sweep 解析重算
+    rec["sell_open"] = sell_open
+    rec["_sell_ts"] = sell_date
     return rec
 
 
@@ -440,6 +475,9 @@ def run_backtest(klines: dict[str, pd.DataFrame], regime: pd.DataFrame,
     excess_gross = (np.mean(db_gross) - np.mean([x["gross"] for x in baseA_trades])) \
         if db_gross and baseA_trades else None
 
+    # slippage sweep:0.10 / 0.20 / 0.30 %/side(交付①);两侧同 slip 重算
+    sweep = _slippage_sweep(db_trades, baseA_trades)
+
     # H6(命门):可交易层 = 当日成交额前 50% 或 ≥1亿;各层扣费净超额
     layers = _liquidity_layers(db_trades, baseA_trades)
 
@@ -499,10 +537,27 @@ def run_backtest(klines: dict[str, pd.DataFrame], regime: pd.DataFrame,
         "regime分层": reg_layers,
         "净收益分布": dist,
         "组合日频": _sharpe_maxdd(daily),
+        "slippage_sweep": sweep,
     }
     # 成立门槛 = H1 ∧ H4 ∧ H5 ∧ H6
     result["综合判定"] = _final_verdict(result)
     return result
+
+
+def _slippage_sweep(db_trades, baseA_trades, slips=(0.001, 0.002, 0.003)) -> list:
+    """交付①:滑点档 sweep。每档两侧同 slip 重算净收益(解析,不重扫)。"""
+    out = []
+    for s in slips:
+        dn = [_round_trip_net(x["buy_open"], x["sell_open"], x["_sell_ts"], s)
+              for x in db_trades if x.get("入场") and x.get("buy_open") is not None]
+        bn = [_round_trip_net(x["buy_open"], x["sell_open"], x["_sell_ts"], s)
+              for x in baseA_trades if x.get("buy_open") is not None]
+        exc = (np.mean(dn) - np.mean(bn)) if dn and bn else None
+        t, p = _welch_t(dn, bn)
+        out.append({"滑点/side": f"{s*100:.2f}%", "DB01净均": round(float(np.mean(dn)), 6) if dn else None,
+                    "净超额vs基线A": round(exc, 6) if exc is not None else None,
+                    "t": t, "p": p})
+    return out
 
 
 def _liquidity_layers(db_trades, baseA_trades) -> dict:

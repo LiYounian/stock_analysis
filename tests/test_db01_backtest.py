@@ -91,12 +91,19 @@ def test_印花税date_aware():
 
 
 def test_round_trip净小于毛():
-    """同买卖价:净收益必 < 毛收益(双边滑点+佣金+印花)。"""
+    """同买卖价:净收益必 < 毛收益(双边滑点+佣金+过户费+印花)。"""
     net = db._round_trip_net(10.0, 10.0, pd.Timestamp("2024-01-01"))
     assert net < 0, "平价进出扣费后必亏(成本存在)"
-    # 毛 0% 时净 ≈ -(2*slip + 2*comm + stamp)
-    expect = -(2 * db._SLIP + 2 * db._COMM + 0.0005)
+    # 毛 0% 时净 ≈ -(2*slip + 2*comm + 2*transfer + stamp)
+    expect = -(2 * db._SLIP + 2 * db._COMM + 2 * db._TRANSFER + 0.0005)
     assert abs(net - expect) < 1e-3
+
+
+def test_成本参数为挖掘者精确口径():
+    """锁死成本口径:佣金 0.025%/side、过户费 0.001%/side,防未来误改回默认。"""
+    assert db._COMM == 0.00025
+    assert db._TRANSFER == 0.00001
+    assert db._SLIP == 0.0020
 
 
 def test_基线A与DB01同成本():
@@ -127,6 +134,22 @@ def test_一字跌停顺延卖出():
     tr = db.simulate_trade(a, 1, apply_r_filter=False)
     assert tr["sell_delayed"], "应顺延卖出"
     assert tr["sell_date"] == dates[4], "顺延到 idx4 开盘卖"
+
+
+# ── ④b 连板计数(§3 情绪门)停牌≥5交易日清零 ───────────────────────
+def test_连板停牌5交易日清零():
+    """连续涨停中停牌 ≥5 交易日 → 复牌涨停连板清零重算;<5 不中断。"""
+    cal = pd.bdate_range("2022-01-03", periods=40)
+    cal_idx = {dt: i for i, dt in enumerate(cal)}
+    # 场景1:idx0,1 涨停(连板2);跳过 6 个交易日(停牌)后 idx8 涨停 → 应清零为 1
+    dates = [cal[0], cal[1], cal[8], cal[9]]
+    is_zt = np.array([True, True, True, True])
+    sk = db._streak_with_halt(dates, is_zt, cal_idx)
+    assert list(sk) == [1, 2, 1, 2], f"停牌≥5清零失败:{list(sk)}"
+    # 场景2:停牌仅 3 交易日(<5)→ 不中断
+    dates2 = [cal[0], cal[1], cal[4], cal[5]]
+    sk2 = db._streak_with_halt(dates2, is_zt, cal_idx)
+    assert list(sk2) == [1, 2, 3, 4], f"停牌<5不应中断:{list(sk2)}"
 
 
 # ── ⑤ ST 动态护栏 ──────────────────────────────────────────────────
