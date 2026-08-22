@@ -572,8 +572,8 @@ def run_screen_all(codes_all: list[str], as_of: str, no_llm: bool = False,
           组装/事件/多因子/合议 → 横表/选股视图,全对 llm_subset。
     """
     from tools.pipeline import (screen_box, screen_council, screen_max_range,
-                                 screen_momentum, screen_s01, screen_s02,
-                                 screen_semi_factor, screen_strong, screen_volume)
+                                 screen_momentum, screen_reversal_turnover, screen_s01,
+                                 screen_s02, screen_semi_factor, screen_strong, screen_volume)
     store.set_active_date(as_of)
     logger.info("===== 全A多策略选股开始(日期 %s,全A %d 只)%s=====",
                 as_of, len(codes_all), "(数据-only)" if no_llm else "")
@@ -603,6 +603,10 @@ def run_screen_all(codes_all: list[str], as_of: str, no_llm: bool = False,
         ("S04·量价放量", lambda: screen_volume.run_volume_screen(codes_all, as_of=as_of, fetch=False)),
         # S05 最强:硬依赖 Tushare 筹码(cyq_perf),run_strong_screen 自门控——未配 token / 取不到 → 写"需 Tushare"占位 view、不出选股
         ("S05·最强选股", lambda: screen_strong.run_strong_screen(codes_all, as_of=as_of, fetch=False)),
+        # 策略10·反转低换手组合(候选·前向观测中):纯量价横截面复合(rev5+turn20),fetch=False 只读主档。
+        # 诚实边界见 docs/策略/策略总览:限可交易池+5-10日+TopK≤20;net 绝对水平存幸存者水分,以前向观测为准。
+        ("策略10·反转低换手组合", lambda: screen_reversal_turnover.run_reversal_turnover_screen(
+            codes_all, as_of=as_of, fetch=False)),
     ]
     news_topk = int(os.getenv("SCREENALL_NEWS_TOPK", "5"))  # 新闻/情绪 LLM 每策略只取前 N(省 token、去边缘票噪声)
     union: list[str] = []
