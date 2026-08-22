@@ -242,11 +242,22 @@ def structure_anchor(kline: pd.DataFrame, price: float, atr_pct: float, sr: dict
     buf = max(_P["止损缓冲最小%"], _P["止损缓冲ATR倍数"] * atr_pct) / 100 if atr_pct == atr_pct else 0.01
     情景, sl, tp, why = _anchor(price, atr_pct, S, R, rating, 突破, dist_sup, buf, _P["贴近带%"])
     rr = round((tp - price) / (price - sl), 2) if (sl and tp and price > sl) else None
+    # F2b:MA10/20/60 中位于现价下方者 = 候选止跌锚(动态支撑),按就近排序。
+    # 仅作附加信息,不改上面已被 L3 调参的 swing 锚定 sl/tp;是否升级为主 sl 由回测(F6)定。
+    ma_anchors = []
+    _ma = tech.get("ma") or {}
+    for _name in ("ma10", "ma20", "ma60"):
+        _v = _ma.get(_name)
+        if _v and _v < price:
+            ma_anchors.append({"名称": _name.upper(), "价": round(float(_v), 2),
+                               "距今%": round((price - _v) / price * 100, 2)})
+    ma_anchors.sort(key=lambda x: x["距今%"])
     return {
         "支撑": [round(float(x), 2) for x in S[:2]], "压力": [round(float(x), 2) for x in R[:2]],
         "距支撑%": dist_sup, "距压力%": dist_res, "区间位置%": pos,
         "当日量比": round(vr, 2) if not pd.isna(vr) else None, "放量": 放量,
         "突破": 突破, "趋势": rating, "bias20": tech.get("bias20"),
+        "均线支撑": ma_anchors,   # F2b:候选止跌锚(MA10/20/60 在现价下方者)
         "锚定": {"情景": 情景, "止损位": sl, "止盈位": tp, "盈亏比": rr, "依据": why},
     }
 
