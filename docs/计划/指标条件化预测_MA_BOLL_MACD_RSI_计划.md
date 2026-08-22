@@ -178,4 +178,51 @@ def direction_view(cond_scen) -> dict:
 
 ---
 
+## 六、数据落实(2026-08-23 调研钉死,带证据)
+
+**数据源(全现成,不新采)**:
+- **全A universe**:`store.list_master_codes()` glob `data/master/kline/<code>.parquet`,主档实测 **5211 只**;回测有效池 `screen_forward_common.universe_codes()` 排北交所 + 历史≥250 → **约 5128 只**。(`repo.py:360-365`、`screen_forward_common.py:103-108`)
+- **K线**:`market.load_kline(code)` 主档优先,**全历史前复权 qfq**,9 字段(date/open/high/low/close/volume/amount/turnover/pct_chg)。历史**起始 2018-01-02**,老票约 **2096 交易日(≈8.6年)**。(`market.py:427-435`)
+- **全A横截面池化(F3 主口径 A1)所需**:每票×每日状态向量 ≈ 5128 × 2096 ≈ **10.7M stock-days**(×4前瞻窗 ≈ 43M cells)。**靠主档 parquet 现算,不落 record**(record 每日只 75-135 只,远不够池化)。
+
+**必须在开工第 0 步核实/规避的数据坑**:
+1. **深史要显式传 start**:默认 `backfill_master` 只回补 ~1.4年(KLINE_DAYS×2=500天);现有 2018 起是手工带 `start='2018-01-01'` 的产物。复现/延展深史必须显式传 start(`market.py:207-214`)。
+2. **近端 bar 的 amount/turnover 为 NaN**(spot 增量来源)→ 依赖成交额/换手率的过滤在近端失效。F1/F1b 用价格/带宽/ATR,不依赖 amount,天然规避;若后续要用成交额须注意。
+3. **worktree `data/` 为空**,真实数据在主检出 `/Users/yqg/Documents/projects/stock_analysis/data`;回测在主检出或同步数据后跑。
+4. **HS300 基准缓存** `data/backtest_local/hs300.parquet` 可能缺失,回测前需先由 akshare 抓取。
+
+## 七、流程设计与预期效果
+
+**接入每日流程 = 模式A(极小改动,调研确认)**:在 `predict.predict()` 返回 dict(`predict.py:268-279`)加一个键 `'指标条件化预测'`(新增 `conditional_scenarios()`/`direction_view()`)→ 因 `serialize.build_record:93` 已无条件调 predict 并把结果挂 `record['prediction']`,**新键自动随 record 落盘**;`serialize.py`/`run.py`/`store` **全不改**,`validate_record` 对 prediction 宽容不破。只需 web 加渲染(`stock.html` 已读 `r.prediction`)+ 可选更新 `record.schema.json`。
+
+**端到端 + 每环预期产物**:
+```
+主档K线(全A) ─┬─[F1 boll + F2/F2b 状态向量(纯函数,只用≤t)]→ 每票每日状态向量
+              └─[全A横截面池:所有票×所有历史日状态,防未来只纳≤t]
+当日某票状态 →[F3 在池中取相似样本→条件经验分布]→ 上涨概率% / 区间(q7/q50/q93) / 期望% + 相似样本数 / 是否退回
+            →[F4 方向映射]→ 看涨/看跌/中性 + 置信度
+            → record['prediction']['指标条件化预测'] → web 个股页展示
+每日运行:随 cmd_all 第5步 serialize 自动产出(自选池 / --all全池);全A 批量走 screenall 或独立回测脚本
+```
+**预期效果**:个股页新增"指标条件化"视图(方向+区间+期望+相似样本数,标不确定性);无条件 `scenarios` 保留作对照,可 A/B。
+
+## 八、回测设计与预期(预注册假设,遵 A3)
+
+**回测方式(复用现成)**:
+- 引擎:扩展 `backtest_predict.py`(五指标)+ walk-forward 复用 `screen_forward_common`(WINDOWS=1/5/10/20、双基准=全A等权 baseline + HS300、regime 打标、`pick_test_days` stride 抽样)。
+- 样本量:报告口径 `--stride 60` → 35 测试日、全A baseline 实测 **12.7万~13.1万**样本;逐日全A池化(stride=1)约放大 60 倍到**千万级 stock-days,需分块/落盘**(先做基准测试,列 open item)。
+- A/B:先跑现有 `backtest_predict` 得**无条件基线**,再比条件化。
+
+**我的预注册假设(诚实,先说死,不事后挑赢的报)**:
+
+| 对象 | 我的预期 |
+|---|---|
+| 方向(上涨概率) | **1日≈噪声;5/10日仅在趋势 regime 有弱改善**(Brier 从 ~0.25 基线降到 ~0.22-0.24 量级);**聚合大概率弱 / 无显著 alpha**(类比趋势模板聚合无 edge) |
+| 幅度(区间) | 覆盖维持 ~80%;BOLL 带宽让区间在缩口时收窄(自适应);**点位幅度不可靠,坚持只给区间** |
+| 主格 vs 探索格 | 预注册主状态格(如"趋势多头×动量强×BOLL中性")**必报**(无论输赢);背离/钝化仅二级佐证、归探索格 |
+
+> **诚实预判**:这套很可能结论=**分 regime 弱正 / 聚合无 alpha**,与趋势模板/SEPA 一贯口径一致。价值在于把条件化框架搭好 + 诚实标定"什么条件下有一点用",不承诺能赚钱的预测器。
+
+---
+
 > 完成后回填:实际与计划的偏差(哪些改了、为什么、遗留什么)→ 同步开发日志 / 问题台账 / 策略总览独立工具表。
