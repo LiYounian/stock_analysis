@@ -100,6 +100,7 @@ def build_state_pool(codes, warmup: int = None, horizons=_HORIZONS, save: bool =
 
 
 _POOL_CACHE = None
+_INDEX_CACHE = None
 
 
 def load_state_pool(path: str = POOL_LOCAL) -> pd.DataFrame | None:
@@ -113,6 +114,55 @@ def load_state_pool(path: str = POOL_LOCAL) -> pd.DataFrame | None:
         except Exception:
             return None
     return _POOL_CACHE
+
+
+def _build_index(pool: pd.DataFrame | None, horizons=_HORIZONS) -> dict:
+    """把池预处理成查询索引:按 (趋势,动量,BOLL) 分格,每格每 horizon 存(结局日int升序, r_N对齐)。
+
+    查询 O(log n):对目标格 bisect 出 od_N ≤ as_of 的前缀即无未来函数子集。放宽层级靠合并同 趋势(+动量) 的格。
+    r_N/od_N 任一 NaN 的样本在此丢弃(不入索引)。
+    """
+    idx = {"cells": {}, "by_tm": {}, "by_t": {}}
+    if pool is None or len(pool) == 0:
+        return idx
+    for cell, g in pool.groupby(["trend", "mom", "boll"], sort=False):
+        per = {}
+        for N in horizons:
+            sub = g[[f"od{N}", f"r{N}"]].dropna()
+            if len(sub) == 0:
+                per[N] = (np.empty(0, dtype="int64"), np.empty(0))
+                continue
+            od = sub[f"od{N}"].values.astype("datetime64[ns]").astype("int64")
+            r = sub[f"r{N}"].to_numpy(dtype=float)
+            order = np.argsort(od, kind="stable")
+            per[N] = (od[order], r[order])
+        idx["cells"][tuple(cell)] = per
+    for cell in idx["cells"]:
+        t, m, _ = cell
+        idx["by_tm"].setdefault((t, m), []).append(cell)
+        idx["by_t"].setdefault(t, []).append(cell)
+    return idx
+
+
+def get_pool_index() -> dict:
+    """载入池并建索引(进程内缓存),供 live predict / F6 回测快速查询。缺池返回空索引。"""
+    global _INDEX_CACHE
+    if _INDEX_CACHE is None:
+        _INDEX_CACHE = _build_index(load_state_pool())
+    return _INDEX_CACHE
+
+
+def _gather(idx: dict, cells: list, N: int, as_of_int: int) -> np.ndarray:
+    """合并给定格中 od_N ≤ as_of 的 r_N(bisect 前缀,无未来函数)。"""
+    parts = []
+    for c in cells:
+        od, r = idx["cells"][c][N]
+        if od.size == 0:
+            continue
+        k = int(np.searchsorted(od, as_of_int, side="right"))
+        if k:
+            parts.append(r[:k])
+    return np.concatenate(parts) if parts else np.empty(0)
 
 
 # ————————————————————————— 无条件退回 —————————————————————————
@@ -136,38 +186,37 @@ def _fallback(kline: pd.DataFrame, N: int, ql, qm, qh) -> dict:
 
 
 # ————————————————————————— F3 核心 —————————————————————————
-def conditional_scenarios(kline: pd.DataFrame, tech: dict, pool: pd.DataFrame | None,
-                          as_of, horizons=_HORIZONS, min_samples: int = None) -> dict:
+def conditional_scenarios(kline: pd.DataFrame, tech: dict, pool, as_of,
+                          horizons=_HORIZONS, min_samples: int = None) -> dict:
     """指标条件化情景预测。每 horizon 给 上涨概率/区间(q7/q50/q93)/期望/相似样本数/放宽层级/是否退回。
 
-    无未来函数:池样本仅当 od_N ≤ as_of 才入。匹配阶梯 精确→放宽BOLL→放宽动量→退回(min样本兜底)。
+    无未来函数:池样本仅当 od_N ≤ as_of 才入(索引内 bisect 前缀)。匹配阶梯 精确→放宽BOLL→放宽动量→退回。
+    `pool` 可为建好的索引(dict,live/回测走 get_pool_index)或原始池 DataFrame(单测,内部即时建索引)。
     """
     P = THRESHOLDS["指标条件化"]
     ql, qm, qh = THRESHOLDS["预测"]["情景分位"]
     min_samples = min_samples or P["min相似样本数"]
-    as_of = pd.Timestamp(as_of)
+    as_of_int = int(pd.Timestamp(as_of).value)
 
+    idx = pool if isinstance(pool, dict) else _build_index(pool, horizons)
     sv = ist.state_vector(kline, tech)
     trend, mom, boll = ist.primary_key(sv)
     no_key = "数据不足" in (trend, boll)
 
+    exact = [(trend, mom, boll)] if (trend, mom, boll) in idx["cells"] else []
+    tm = idx["by_tm"].get((trend, mom), [])
+    tr = idx["by_t"].get(trend, [])
+
     out = {}
     for N in horizons:
-        if pool is None or pool.empty or no_key:
+        if not idx["cells"] or no_key:
             out[f"{N}日"] = _fallback(kline, N, ql, qm, qh)
             continue
-        odcol, rcol = f"od{N}", f"r{N}"
-        base = pool[pool[odcol].notna() & (pool[odcol] <= as_of) & pool[rcol].notna()]
-        levels = [
-            ("精确", (base["trend"] == trend) & (base["mom"] == mom) & (base["boll"] == boll)),
-            ("放宽1", (base["trend"] == trend) & (base["mom"] == mom)),
-            ("放宽2", (base["trend"] == trend)),
-        ]
         chosen = None
-        for name, mask in levels:
-            m = base[mask]
-            if len(m) >= min_samples:
-                chosen = (name, m[rcol].to_numpy())
+        for name, cells in (("精确", exact), ("放宽1", tm), ("放宽2", tr)):
+            r = _gather(idx, cells, N, as_of_int)
+            if len(r) >= min_samples:
+                chosen = (name, r)
                 break
         if chosen is None:
             out[f"{N}日"] = _fallback(kline, N, ql, qm, qh)

@@ -108,6 +108,28 @@
     <p class="muted">买卖倾向依据:{{ p.买卖倾向.依据|join('、') }}</p>
   </section>
 
+  {% set cp = p.指标条件化预测 %}
+  {% if cp and not cp.error %}
+  <section class="card">
+    <h2>指标条件化预测(MA/BOLL/MACD/RSI 状态相似日 · 非投资建议)</h2>
+    <table>
+      <tr><th>持有期</th><th>方向</th><th>置信</th><th>上涨概率</th><th>悲观</th><th>中位</th><th>乐观</th><th>期望</th><th>相似样本</th><th>匹配</th></tr>
+      {% for hold, v in cp.items() %}
+      <tr><td>{{ hold }}</td>
+        <td>{{ v.方向 }}</td><td>{{ v.置信度 }}</td>
+        <td>{{ v['上涨概率%'] }}%</td>
+        {% for k in v.keys() if '悲观' in k %}<td class="neg">{{ v[k] }}%</td>{% endfor %}
+        {% for k in v.keys() if '中位' in k %}<td>{{ v[k] }}%</td>{% endfor %}
+        {% for k in v.keys() if '乐观' in k %}<td class="pos">{{ v[k] }}%</td>{% endfor %}
+        <td>{% if v['期望%'] is not none %}{{ v['期望%'] }}%{% else %}—{% endif %}</td>
+        <td>{{ v.相似样本数 }}</td>
+        <td>{{ v.放宽层级 }}{% if v.是否退回 %}(退回无条件){% endif %}</td></tr>
+      {% endfor %}
+    </table>
+    <p class="muted">条件化=在全A历史里找"当前指标状态相似"的日子看其后走势;退回=相似样本不足时降级为无条件历史频率。区间基于历史分布、非未来保证。</p>
+  </section>
+  {% endif %}
+
   <section class="card">
     <h2>近三次放量</h2>
     <table><tr><th>日期</th><th>收盘</th><th>量比</th></tr>

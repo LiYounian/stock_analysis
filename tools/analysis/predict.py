@@ -262,12 +262,31 @@ def structure_anchor(kline: pd.DataFrame, price: float, atr_pct: float, sr: dict
     }
 
 
+# ---------- 指标条件化预测(F3+F4)----------
+def _conditional_block(kline: pd.DataFrame, tech: dict) -> dict:
+    """指标条件化预测合并块:每 horizon = 方向/置信度(F4) + 条件化上涨概率/区间/期望/相似样本数/放宽层级(F3)。
+
+    与无条件「情景预测」并列、供对照。池缺失/异常时 conditional_scenarios 内部优雅退回,绝不让 predict 崩。
+    """
+    try:
+        from tools.analysis import conditional_predict as cpred
+        idx = cpred.get_pool_index()               # 进程内缓存的索引(O(log n) 查询)
+        as_of = kline["date"].iloc[-1]
+        cond = cpred.conditional_scenarios(kline, tech, idx, as_of)
+        dv = cpred.direction_view(cond)
+        return {k: {**dv.get(k, {}), **cond[k]} for k in cond}
+    except Exception:
+        return {"error": "指标条件化预测暂不可用"}
+
+
 # ---------- 汇总 ----------
 def predict(kline: pd.DataFrame, tech: dict, fundflow: dict | None = None,
-            sentiment: dict | None = None) -> dict:
+            sentiment: dict | None = None, with_conditional: bool = True) -> dict:
     """汇总预测/推荐。kline 需含 date/high/low/close/volume;tech=technical.compute 输出。
 
     sentiment 为 record 的 sentiment 块(可选),透传给买卖倾向作一维并入;None 时行为不变。
+    with_conditional:是否附「指标条件化预测」块(F3+F4)。live/serialize 默认 True;
+      旧两条线回测(backtest_predict)传 False 省去逐调用查池(F6 条件化 A/B 走独立高效路径)。
     """
     if kline is None or len(kline) < 30:
         return {"error": "数据不足", "n": 0 if kline is None else len(kline)}
@@ -276,7 +295,7 @@ def predict(kline: pd.DataFrame, tech: dict, fundflow: dict | None = None,
     atr_pct = atr_val / price * 100 if price else float("nan")
     sr = support_resistance(kline)
 
-    return {
+    out = {
         "现价": round(price, 2),
         "atr": round(atr_val, 3),
         "atr_pct": round(atr_pct, 2),
@@ -284,7 +303,10 @@ def predict(kline: pd.DataFrame, tech: dict, fundflow: dict | None = None,
         **sr,
         "持有期建议": stop_targets(price, atr_pct),
         "结构位": structure_anchor(kline, price, atr_pct, sr, tech),  # L3:支撑压力/突破/情景锚定
-        "情景预测": scenarios(kline),
+        "情景预测": scenarios(kline),                       # 无条件历史频率(保留作对照)
         "买卖倾向": bias_recommendation(tech, fundflow, sentiment),
         "免责": DISCLAIMER,
     }
+    if with_conditional:
+        out["指标条件化预测"] = _conditional_block(kline, tech)   # F3+F4:指标条件化(方向+区间+期望)
+    return out
