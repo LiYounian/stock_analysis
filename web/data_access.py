@@ -412,21 +412,22 @@ def selection_page(date: str = "latest") -> dict:
     if not config and strategy0.get("config"):
         config = strategy0["config"]
 
-    # 综合选股:7 策略入选代码并集(前端按勾选实时重算;后端给全并集 + 每票命中来源)
+    # 综合选股:11 策略(策略0-10)入选代码并集(前端按勾选实时重算;后端给全并集 + 每票命中来源)
     strategy_mr = _strategy_max_range_section(recs, date)   # S03 最大范围(PR#15)
     strategy_vol = _strategy_volume_section(recs, date)     # S04 量价放量(PR#15,3 子信号)
     strategy_strong = _strategy_strong_section(recs, date)  # S05 最强(PR#15,Tushare-only)
+    strategy_rt = _strategy_reversal_turnover_section(recs, date)  # 策略10 反转低换手(候选·前向观测中)
     combined = _combined_section(strategy0, strategy1, strategy2, strategy3,
                                  strategy4, strategy5, strategy6, recs,
                                  strategy_mr=strategy_mr, strategy_vol=strategy_vol,
-                                 strategy_strong=strategy_strong)
+                                 strategy_strong=strategy_strong, strategy_rt=strategy_rt)
 
     return {"rows": pool_rows, "total": len(recs),
             "combined": combined, "strategy0": strategy0, "strategy1": strategy1,
             "strategy2": strategy2, "strategy3": strategy3, "strategy4": strategy4,
             "strategy5": strategy5, "strategy6": strategy6,
             "strategy_mr": strategy_mr, "strategy_vol": strategy_vol,
-            "strategy_strong": strategy_strong,
+            "strategy_strong": strategy_strong, "strategy_rt": strategy_rt,
             "config": config or {}, "as_of": as_of(date)}
 
 
@@ -563,6 +564,53 @@ def _strategy_max_range_section(recs: dict, date: str = "latest") -> dict:
     与策略2/3/4 同构,复用 _view_picks_section;view 缺失 → present=False(前端「待运行」)。
     """
     return _view_picks_section("最大范围选股", recs, date)
+
+
+def _strategy_reversal_turnover_section(recs: dict, date: str = "latest", cap: int = 30) -> dict:
+    """策略10「反转低换手组合」区块(候选·前向观测中):读全A screener view「反转低换手组合」
+    (screen_reversal_turnover 产出),入选清单带因子明细(rev5/turn20/复合分/成交额)。
+
+    schema:{as_of, 扫描数, 有效样本, 跳过, 入选数, 入选清单:[{code, 综合分, rev, turn,
+    amount_wan, rev_z, turn_z}], 权重, 参数}。view 缺失 → present=False(前端「策略10 待运行」)。
+
+    ⚠️ 诚实口径(不夸大):回测仅在「可交易池(成交额前50%)+ 5-10日持有 + TopK≤20」内 net 转正、
+    相对纯 rev5 有稳健增量;net 绝对水平存幸存者偏差水分(样本仅当前在市票),**以前向观测为准,
+    当前不作『已验证可用』推荐,状态=前向观测中**。见 docs/策略/策略总览_定义计算与回测.md 策略10 行。
+    """
+    empty = {"present": False, "as_of": as_of(date), "扫描数": None, "有效": None,
+             "入选数": None, "rows": [], "picks": []}
+    try:
+        v = store.get_view("反转低换手组合", date=date)
+    except FileNotFoundError:
+        return empty
+    if not isinstance(v, dict):
+        return empty
+    rows, picks = [], []
+    for item in v.get("入选清单", []) or []:
+        if not isinstance(item, dict):
+            continue
+        code = item.get("code")
+        if not code or len(rows) >= cap:
+            continue
+        meta = (recs.get(code) or {}).get("meta") or {}
+        rev = item.get("rev")            # rev = -(近5日涨幅);>0=近5日下跌
+        turn = item.get("turn")          # turn = -(近20日均换手);均换手% = -turn
+        picks.append(code)
+        rows.append({
+            "code": code, "name": _name(recs, code),
+            "industry": meta.get("industry") or meta.get("sector"),
+            "综合分": item.get("综合分"),
+            "近5日跌幅%": round(rev * 100, 2) if isinstance(rev, (int, float)) else None,
+            "均换手%": round(-turn, 3) if isinstance(turn, (int, float)) else None,
+            "成交额万元": item.get("amount_wan"),
+        })
+    return {
+        "present": True, "as_of": v.get("as_of") or as_of(date),
+        "扫描数": v.get("扫描数"), "有效": v.get("有效样本", v.get("有效")),
+        "入选数": v.get("入选数", len(v.get("入选清单", []) or [])),
+        "rows": rows, "picks": picks,
+        "权重": v.get("权重"), "参数": v.get("参数"),
+    }
 
 
 def _strategy_volume_section(recs: dict, date: str = "latest") -> dict:
@@ -756,8 +804,9 @@ def _combined_section(strategy0: dict, strategy1: dict, strategy2: dict,
                       strategy6: dict, recs: dict, *,
                       strategy_mr: dict | None = None,
                       strategy_vol: dict | None = None,
-                      strategy_strong: dict | None = None) -> dict:
-    """【综合选股】:7 策略入选代码的并集(去重),每票标注命中来源(被哪几个策略选中)。
+                      strategy_strong: dict | None = None,
+                      strategy_rt: dict | None = None) -> dict:
+    """【综合选股】:11 策略(策略0-10)入选代码的并集(去重),每票标注命中来源(被哪几个策略选中)。
 
     后端产出**全并集**(所有可用策略入选代码);前端按勾选的策略实时过滤 + 重算命中来源
     (一个都没勾 → 前端显示"无")。默认全勾(展示全并集)。
@@ -776,6 +825,7 @@ def _combined_section(strategy0: dict, strategy1: dict, strategy2: dict,
     s7_codes = list((strategy_mr or {}).get("picks") or [])     # S03 最大范围
     s8_codes = list((strategy_vol or {}).get("picks") or [])    # S04 量价放量
     s9_codes = list((strategy_strong or {}).get("picks") or [])  # S05 最强(Tushare-only)
+    s10_codes = list((strategy_rt or {}).get("picks") or [])     # 策略10 反转低换手(候选·前向观测中)
     # 行业 hint:策略0 view 自带行业(全A票多无中心记录)
     s0_industry = {r["code"]: r.get("industry") for r in strategy0.get("rows", [])}
 
@@ -784,7 +834,7 @@ def _combined_section(strategy0: dict, strategy1: dict, strategy2: dict,
     for key, codes in (("策略0", s0_codes), ("策略1", s1_codes), ("策略2", s2_codes),
                        ("策略3", s3_codes), ("策略4", s4_codes), ("策略5", s5_codes),
                        ("策略6", s6_codes), ("策略7", s7_codes), ("策略8", s8_codes),
-                       ("策略9", s9_codes)):
+                       ("策略9", s9_codes), ("策略10", s10_codes)):
         for c in codes:
             if c not in sources:
                 sources[c] = []
@@ -849,6 +899,12 @@ def _combined_section(strategy0: dict, strategy1: dict, strategy2: dict,
          "title": "PR#15 提取(看多,Tushare-only):六均线多头 + 11日内≥2日涨≥5% + 52周高90%~120% + "
                   "筹码高度获利(winner_rate>95% 或 HIGH≥cost_95pct)。依赖 Tushare cyq_perf 筹码,"
                   "未配 TUSHARE_TOKEN 时不出(面板提示需 Tushare)。"},
+        {"key": "策略10", "label": "反转低换手(前向观测中)", "codes": s10_codes,
+         "available": bool((strategy_rt or {}).get("present")),
+         "title": "候选策略(前向观测中,非已验证):纯量价横截面复合——近5日跌得多(反转)+ 近20日换手冷清"
+                  "(低换手),各自 winsor+zscore 后等权取 TopK。回测仅在「可交易池(成交额前50%)+ 5-10日持有"
+                  "+ TopK≤20」内 net 转正、相对纯 rev5 有稳健增量;net 绝对水平存幸存者偏差水分(样本仅当前"
+                  "在市票),**以前向观测为准,当前不作『已验证可用』推荐**。全A筛选,读预落盘 view。"},
     ]
     return {"strategies": strategies, "rows": rows}
 
