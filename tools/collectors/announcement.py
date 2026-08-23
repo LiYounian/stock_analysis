@@ -83,26 +83,33 @@ def fetch_announcements(codes: list[str], days: int = None) -> dict[str, list[di
     start = (pd.Timestamp.today() - pd.Timedelta(days=days)).strftime("%Y%m%d")
     end = pd.Timestamp.today().strftime("%Y%m%d")
 
+    from tools.config import stock_pool
+
     out: dict[str, list[dict]] = {}
     failed: list[str] = []
     n = len(codes)
     for i, code in enumerate(codes, 1):
         logger.info("[%d/%d] 公告 %s 采集...", i, n, code)
         try:
-            df = _fetch_cninfo(code, start, end)
-            items = []
-            if df is not None and len(df):
-                for _, r in df.iterrows():
-                    title = str(r.get("公告标题", ""))
-                    items.append({
-                        "date": str(r.get("公告时间", ""))[:10],
-                        "title": title,
-                        "type": classify_title(title),
-                        "impact": impact_hint(title),
-                        "url": r.get("公告链接", ""),
-                    })
-                items.sort(key=lambda x: x["date"], reverse=True)
-            store.put_raw("announcement", code, items, meta={"source": _SOURCE})
+            if stock_pool.is_hk(code):
+                # 巨潮不支持港股,降级为空(港股重大事项由新闻源覆盖)
+                items = []
+                store.put_raw("announcement", code, items, meta={"source": "none(hk)"})
+            else:
+                df = _fetch_cninfo(code, start, end)
+                items = []
+                if df is not None and len(df):
+                    for _, r in df.iterrows():
+                        title = str(r.get("公告标题", ""))
+                        items.append({
+                            "date": str(r.get("公告时间", ""))[:10],
+                            "title": title,
+                            "type": classify_title(title),
+                            "impact": impact_hint(title),
+                            "url": r.get("公告链接", ""),
+                        })
+                    items.sort(key=lambda x: x["date"], reverse=True)
+                store.put_raw("announcement", code, items, meta={"source": _SOURCE})
             out[code] = items
             logger.info("公告 %s:%d 条", code, len(items))
         except Exception as e:

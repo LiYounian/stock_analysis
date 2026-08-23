@@ -135,7 +135,7 @@ def get_codes_by_market(market: str = "A") -> list[str]:
 def is_hk(code: str) -> bool:
     """判断代码是否为港股(在池中且 market=HK)。"""
     s = get(code)
-    return s is not None and s.market == "HK"
+    return s is not None and getattr(s, "market", "A") == "HK"
 
 
 def by_sector() -> dict[str, list[Stock]]:

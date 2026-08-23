@@ -197,6 +197,8 @@ def fetch_news(codes: list[str], days: int | None = None,
     n = len(codes)
     for i, code in enumerate(codes, 1):
         logger.info("[%d/%d] 新闻 %s 采集...", i, n, code)
+        from tools.config import stock_pool as _sp
+        is_hk = _sp.is_hk(code)
         contributors: list[str] = []
         em_items: list[dict] = []
         sina_items: list[dict] = []
@@ -209,13 +211,15 @@ def fetch_news(codes: list[str], days: int | None = None,
         except Exception as e:
             err = e
             logger.warning("新闻 %s 东财失败: %s", code, e)
-        try:
-            sina_items = _fetch_sina(code, cutoff)
-            if sina_items:
-                contributors.append(_SOURCE_SINA)
-        except Exception as e:
-            err = err or e
-            logger.warning("新闻 %s 新浪失败: %s", code, e)
+        if not is_hk:
+            # 新浪个股新闻页只支持 A 股代码格式,港股跳过
+            try:
+                sina_items = _fetch_sina(code, cutoff)
+                if sina_items:
+                    contributors.append(_SOURCE_SINA)
+            except Exception as e:
+                err = err or e
+                logger.warning("新闻 %s 新浪失败: %s", code, e)
         # 财联社电报(全市场快讯按名过滤)——改为**总是查并入**(不再只在个股源空时兜底):
         # 管制/宏观/突发类快讯常不进东财/新浪个股 feed,财联社快讯能补这类盲区。
         cls_items: list[dict] = []

@@ -29,7 +29,10 @@ _COLS = ["date", "主力净流入", "小单净流入", "中单净流入", "大�
 
 
 def _secid(code: str) -> str:
-    """6 位代码 → 东财 secid。沪(6/9)= 1.code;深/京(0/2/3/4/8)= 0.code。"""
+    """代码 → 东财 secid。沪(6/9)= 1.code;深/京(0/2/3/4/8)= 0.code;港股(5位)= 116.code。"""
+    from tools.config import stock_pool
+    if stock_pool.is_hk(code):
+        return f"116.{code}"
     return f"1.{code}" if code[0] in ("6", "9") else f"0.{code}"
 
 
