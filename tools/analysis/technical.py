@@ -61,6 +61,61 @@ def rsi(close: pd.Series, window: int) -> pd.Series:
     return out
 
 
+def boll(close: pd.Series, window: int = None, k: float = None) -> pd.DataFrame:
+    """布林带(BOLL,通达信口径)。中轨=window 日 SMA;上/下轨=中轨 ± k×总体标准差(ddof=0)。
+
+    返回 mid/upper/lower/bandwidth/percent_b:
+      - bandwidth = (upper − lower) / mid,量化带口宽窄(缩口/开口用)。
+      - percent_b = (close − lower) / (upper − lower),价在带内相对位置;
+        >1 破上轨、<0 破下轨、0.5=中轨。上/下轨等宽时(std=0)带宽为0、percent_b 记 NaN。
+    """
+    t = THRESHOLDS["BOLL"]
+    window = window or t["周期"]
+    k = k if k is not None else t["倍数"]
+    mid = close.rolling(window).mean()
+    std = close.rolling(window).std(ddof=0)          # 总体标准差,对齐通达信 STD
+    upper = mid + k * std
+    lower = mid - k * std
+    width = upper - lower
+    bandwidth = (width / mid).where(mid != 0)
+    percent_b = (close - lower) / width.where(width != 0)
+    return pd.DataFrame({"mid": mid, "upper": upper, "lower": lower,
+                         "bandwidth": bandwidth, "percent_b": percent_b})
+
+
+def _boll_state(bl: pd.DataFrame) -> dict:
+    """BOLL 快照:上/中/下轨、带宽、%B、%B 位置分档、挤压(带宽处于近 N 日低分位)。
+
+    位置分档(regime 依赖,方向须结合趋势判读,见计划 §F1b):破上轨/触上轨/中性/触下轨/破下轨。
+    挤压=缩口=当前带宽 ≤ 近 N 日带宽第 q 百分位 → 波动率压缩、常预示变盘。
+    """
+    t = THRESHOLDS["BOLL"]
+    last = bl.iloc[-1]
+    pctb, bw = last["percent_b"], last["bandwidth"]
+
+    def _r(x, nd=2):
+        return None if pd.isna(x) else round(float(x), nd)
+
+    if pd.isna(pctb):
+        pos = "数据不足"
+    elif pctb > 1:
+        pos = "破上轨"
+    elif pctb >= t["触轨上_percentB"]:
+        pos = "触上轨"
+    elif pctb < 0:
+        pos = "破下轨"
+    elif pctb <= t["触轨下_percentB"]:
+        pos = "触下轨"
+    else:
+        pos = "中性"
+
+    hist = bl["bandwidth"].iloc[-t["挤压回看"]:].dropna()
+    squeeze = bool((not pd.isna(bw)) and len(hist) >= 20
+                   and bw <= np.percentile(hist, t["挤压分位"]))
+    return {"上轨": _r(last["upper"]), "中轨": _r(last["mid"]), "下轨": _r(last["lower"]),
+            "带宽": _r(bw, 4), "percent_b": _r(pctb, 4), "位置": pos, "挤压": squeeze}
+
+
 # ---------- 汇总画像 ----------
 def _ma_arrangement(ma5, ma10, ma20, ma60) -> str:
     vals = [ma5, ma10, ma20, ma60]
@@ -106,6 +161,8 @@ def compute(kline: pd.DataFrame) -> dict:
 
     rsi6, rsi12, rsi24 = (rsi(close, w).iloc[-1] for w in (6, 12, 24))
 
+    bl = boll(close)
+
     bias20 = ((close.iloc[-1] - ma20) / ma20 * 100) if not pd.isna(ma20) and ma20 else np.nan
 
     vol = kline["volume"]
@@ -134,6 +191,7 @@ def compute(kline: pd.DataFrame) -> dict:
         "macd": {"dif": _f(dif, 3), "dea": _f(dea, 3), "macd": _f(bar, 3), "状态": macd_state},
         "kdj": {"k": _f(k), "d": _f(d), "j": _f(j), "状态": kdj_state},
         "rsi": {"rsi6": _f(rsi6), "rsi12": _f(rsi12), "rsi24": _f(rsi24)},
+        "boll": _boll_state(bl),
         "bias": {"bias20": _f(bias20)},
         "vol": {"量比": _f(vol_ratio), "状态": vol_state},
         "signal": signal,

@@ -94,7 +94,7 @@ def build_panel(codes, horizons=(1, 5, 10), warmup=_WARMUP, step=1) -> pd.DataFr
             sl_ = df.iloc[: t + 1]
             try:
                 tech = technical.compute(sl_)
-                p = pred.predict(sl_, tech)
+                p = pred.predict(sl_, tech, with_conditional=False)   # 两条线回测无需条件化(F6走独立路径)
             except Exception:
                 continue
             if p.get("error"):
