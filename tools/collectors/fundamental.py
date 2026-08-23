@@ -135,32 +135,80 @@ def fetch_dividends(codes: list[str], as_of: str | None = None) -> dict[str, flo
 
     baostock 会话整体建不起来(登录失败/未装)→ 返回空 dict(全体缺失,上层降级)。
     单票查不到分红 → 0.0(真 0);单票查询报错 → None(缺失)。
+    港股不经 baostock,直接置 None(缺失,上层降级)。
     """
+    from tools.config import stock_pool
+
     if not codes:
         return {}
     as_of = as_of or pd.Timestamp.today().strftime("%Y-%m-%d")
+    # 港股 baostock 不支持,直接标缺失
+    a_codes = [c for c in codes if not stock_pool.is_hk(c)]
+    hk_codes = [c for c in codes if stock_pool.is_hk(c)]
+    out: dict[str, float | None] = {c: None for c in hk_codes}
+    if not a_codes:
+        return out
     try:
         from tools.collectors.baostock_src import bs_code, session
     except Exception as e:                             # noqa: BLE001
         logger.warning("baostock 分红源不可用(降级缺失): %s", e)
-        return {}
-    out: dict[str, float | None] = {}
+        return out
     try:
         with session() as bs:
-            for code in codes:
+            for code in a_codes:
                 out[code] = _dividend_ttm_ps(bs, bs_code(code), as_of)
     except Exception as e:                             # noqa: BLE001 —— 登录失败等 → 全体缺失
         logger.warning("baostock 分红会话失败,股息率维度整体降级缺失: %s", e)
-        return {}
     return out
+
+
+def _fetch_hk_fundamental(code: str) -> dict:
+    """港股基本面:东财核心指标 + 百度港股估值。"""
+    import akshare as ak
+
+    rec: dict = {"报告期": None}
+    try:
+        df = ak.stock_hk_financial_indicator_em(symbol=code)
+        if df is not None and len(df):
+            row = df.iloc[0]
+            rec["营收"] = _to_float(row.get("营业总收入"))
+            rec["净利"] = _to_float(row.get("净利润"))
+            rec["营收增速"] = _to_float(row.get("营业总收入滚动环比增长(%)"))
+            rec["净利增速"] = _to_float(row.get("净利润滚动环比增长(%)"))
+            rec["ROE"] = _to_float(row.get("股东权益回报率(%)"))
+            rec["毛利率"] = None
+            rec["净利率"] = _to_float(row.get("销售净利率(%)"))
+            rec["负债率"] = None
+            rec["每股股利"] = _to_float(row.get("每股股息TTM(港元)"))
+    except Exception as e:
+        logger.warning("港股 %s 东财财务指标失败: %s", code, e)
+    # 百度港股估值
+    _HK_BAIDU_MAP = {"PE_TTM": "市盈率(TTM)", "PB": "市净率", "总市值": "总市值"}
+    for key, ind in _HK_BAIDU_MAP.items():
+        try:
+            df = ak.stock_hk_valuation_baidu(symbol=code, indicator=ind, period="近一年")
+            vals = [v for v in (_to_float(x) for x in df["value"].tolist())
+                    if v is not None] if len(df) else []
+            rec[key] = vals[-1] if vals else None
+            if key == "PE_TTM":
+                rec["PE分位"] = _percentile(vals, vals[-1]) if vals else None
+        except Exception as e:
+            logger.debug("港股 %s 百度 %s 失败: %s", code, ind, e)
+            rec[key] = None
+            if key == "PE_TTM":
+                rec["PE分位"] = None
+    return rec
 
 
 def fetch_fundamental(codes: list[str], as_of: str | None = None) -> dict[str, dict]:
     """拉取多票基本面并落盘。
 
-    合并同花顺财务摘要 + 百度估值 + baostock 每股现金分红(TTM)。
+    A股:同花顺财务摘要 + 百度估值 + baostock 每股现金分红(TTM)。
+    港股:东财核心指标 + 百度港股估值。
     单票整体失败记 logger 并跳过,不中断整批。分红维度整体不可得时不阻断其余字段。
     """
+    from tools.config import stock_pool
+
     settings.ensure_dirs()
     div_map = fetch_dividends(codes, as_of)            # 一次 baostock 会话取全批分红(best-effort)
     out: dict[str, dict] = {}
@@ -169,12 +217,16 @@ def fetch_fundamental(codes: list[str], as_of: str | None = None) -> dict[str, d
     for i, code in enumerate(codes, 1):
         logger.info("[%d/%d] 基本面 %s 采集...", i, n, code)
         try:
-            rec = _fetch_abstract(code)
-            rec.update(_fetch_baidu(code))
-            rec["每股股利"] = div_map.get(code)        # TTM 每股现金分红(0.0=无分红真值;None=缺失)
-            store.put_raw("fundamental", code, rec, meta={"source": _SOURCE})
+            if stock_pool.is_hk(code):
+                rec = _fetch_hk_fundamental(code)
+                store.put_raw("fundamental", code, rec, meta={"source": "eastmoney_hk+百度"})
+            else:
+                rec = _fetch_abstract(code)
+                rec.update(_fetch_baidu(code))
+                rec["每股股利"] = div_map.get(code)
+                store.put_raw("fundamental", code, rec, meta={"source": _SOURCE})
             out[code] = rec
-            logger.info("基本面 %s 落盘(报告期 %s,每股股利 %s)", code, rec["报告期"], rec["每股股利"])
+            logger.info("基本面 %s 落盘(报告期 %s)", code, rec.get("报告期"))
         except Exception as e:
             failed.append(code)
             logger.error("基本面 %s 失败: %s", code, e)
