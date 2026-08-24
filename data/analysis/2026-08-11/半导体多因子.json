@@ -1,0 +1,15 @@
+{
+  "as_of": "2026-08-11",
+  "策略": "半导体多因子(策略5·限申万二级 801081 池)",
+  "口径": "限申万二级 801081 半导体池 178 只;3 因子 winsor+zscore 加权 (研发/营收 × 0.6 + 研发/市值 × 0.2 + 营收增速 × 0.2);缺 financial.derived(研发费用率/营收增速)或 fundamental.总市值 → 剔。",
+  "扫描数": 0,
+  "universe_size": 178,
+  "有效样本": 0,
+  "跳过数(缺数据)": 0,
+  "入选数": 0,
+  "top_k": 8,
+  "权重": null,
+  "入选清单": [],
+  "复用": "tools.strategy.semi_factor.combo_semi_factor_screen(records)",
+  "防未来函数": "financial.derived / fundamental 均基于已披露报告期 + 当日估值"
+}
