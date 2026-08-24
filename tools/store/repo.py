@@ -123,6 +123,18 @@ def _resolve_read_date(root: Path, date: str | None, exists_fn) -> str | None:
     return None
 
 
+def _resolve_pinned_date(root: Path, pin_date: str, exists_fn) -> str | None:
+    """date-pin 读取:返回 **≤ pin_date** 且 exists_fn 为真的最新分区日期;无则 None。
+
+    与 _resolve_read_date("latest") 的区别:锚定到锁定日当天或之前,**绝不返回未来日期**
+    (回测复算无未来函数;当日跑锁定当日,缺当日才回退到最近历史)。
+    """
+    for d in _date_dirs_desc(root):
+        if d <= pin_date and exists_fn(d):
+            return d
+    return None
+
+
 def list_dates(root: str = "analysis") -> list[str]:
     """列出某根(analysis/raw)下所有日期,升序。analysis 侧受 STORE_BACKEND 影响(raw 恒文件)。"""
     if root == "analysis" and _use_db():
@@ -204,6 +216,58 @@ def get_raw(kind: str, code: str, date: str | None = "latest"):
         import pandas as pd
         return pd.read_parquet(p)
     return _read_json(p)
+
+
+def get_raw_resolved(kind: str, code: str, date: str | None = "latest"):
+    """读单票某类 raw,同时返回**实际读到的分区日期**与**采集时刻**(新鲜度判定用)。
+
+    返回 (payload, resolved_date, fetched_at):
+      - payload:同 get_raw(parquet→DataFrame,json→dict/list);
+      - resolved_date:实际命中的日期分区(可判「回退是否发生」);
+      - fetched_at:该份 raw 的采集时刻 ISO(取自 meta sidecar;无则 None)。
+
+    date 语义(与 get_raw 的黑盒回退不同,暴露解析结果给上层):
+      - None/"latest":回退到含该 (kind,code) 的**全局最新**日期(同 get_raw,当日跑用);
+      - 具体日期(date-pin):回退到 **≤ 该日** 的最新可用分区(杜绝未来函数);
+        resolved_date == date 即当日新鲜,< date 即发生回退(交上层判陈旧/超窗)。
+    缺数据抛 FileNotFoundError(与 get_raw 一致)。
+    """
+    if kind not in _RAW_KINDS:
+        raise ValueError(f"未知 raw kind: {kind!r}(支持 {_RAW_KINDS})")
+    if kind in _FLAT_KINDS:
+        d = None
+    elif date and date != "latest":
+        d = _resolve_pinned_date(_RAW_DIR, date, lambda dd: _raw_path(kind, code, dd).exists())
+    else:
+        d = _resolve_read_date(_RAW_DIR, "latest", lambda dd: _raw_path(kind, code, dd).exists())
+    if kind not in _FLAT_KINDS and d is None:
+        raise FileNotFoundError(f"{code} 无 {kind} 原始数据(≤{date} 各日期目录均无),请先采集")
+    p = _raw_path(kind, code, d)
+    if not p.exists():
+        raise FileNotFoundError(f"{code} 无 {kind} 原始数据,请先采集: {p}")
+    if kind in _PARQUET_KINDS:
+        import pandas as pd
+        payload = pd.read_parquet(p)
+    else:
+        payload = _read_json(p)
+    meta = get_raw_meta(kind, code, d)     # d 为具体日期 → 读该分区 meta(不再回退)
+    return payload, d, (meta or {}).get("fetched_at")
+
+
+def raw_exists(kind: str, code: str, date: str) -> bool:
+    """某具体日期分区下该 (kind, code) raw 文件是否存在(精确日,不回退)。"""
+    return _raw_path(kind, code, date).exists()
+
+
+def raw_staleness_rank(resolved_date: str, locked_date: str) -> int:
+    """resolved_date 与 locked_date 之间的「采集周期(交易日代理)」距离。
+
+    = raw 根下满足 resolved_date < d ≤ locked_date 的日期分区目录数。
+    每个盘后闭环日创建一个日期分区,故分区数≈期间实际采集/交易周期数,
+    作为「陈旧了几个交易日」的稳健代理(不依赖外部交易日历、可离线判定)。
+    resolved_date == locked_date → 0(当日新鲜)。
+    """
+    return sum(1 for d in _date_dirs_desc(_RAW_DIR) if resolved_date < d <= locked_date)
 
 
 def put_raw(kind: str, code: str, payload, meta: dict | None = None,

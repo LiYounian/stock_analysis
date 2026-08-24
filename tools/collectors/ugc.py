@@ -189,9 +189,13 @@ def fetch_ugc(codes: list[str], limit: int | None = None) -> dict[str, list[dict
     return out
 
 
-def load_ugc(code: str) -> list[dict]:
-    """从 store 读单票 UGC 帖子。缓存缺失抛 FileNotFoundError。"""
-    return store.get_raw("ugc", code)
+def load_ugc(code: str, date: str | None = None) -> list[dict]:
+    """从 store 读单票 UGC 帖子。缓存缺失抛 FileNotFoundError。
+
+    date:缺省 None → "latest"(向后兼容);显式传日期即锁定读该日分区(不回退,缺则抛)。
+    情绪引擎的 date-pin + 可识别回退走 store.get_raw_resolved,此处只做简单透传。
+    """
+    return store.get_raw("ugc", code, date=date or "latest")
 
 
 def _day_span(posts: list[dict]) -> int:
