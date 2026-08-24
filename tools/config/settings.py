@@ -68,6 +68,13 @@ FETCH_JITTER_SEC = 0.2      # 并发路径每请求前随机抖动上限(秒)
 # —— 数据新鲜度(store 层用)——
 RAW_STALE_DAYS = 3          # raw 缓存超过此天数(或无采集元数据)视为陈旧,促使重采
 
+# —— 情绪数据新鲜度(event 情绪引擎用,date-pin + 新鲜度标注)——
+# 回退策略:A2=可识别回退(默认,窗口内回退旧 raw 但标「陈旧」,超窗标「无数据」);
+#          A1=严格锁定(锁定日无 raw 即「无数据」,绝不回退旧数据)。
+SENTIMENT_FRESHNESS_MODE = os.getenv("SENTIMENT_FRESHNESS_MODE", "A2")
+# A2 允许回退的窗口(以 raw 分区/采集周期为「交易日」代理计数);超此距离标「无数据」。
+SENTIMENT_MAX_STALE_DAYS = int(os.getenv("SENTIMENT_MAX_STALE_DAYS", "3"))
+
 # —— 存储后端(store 层分析侧读写走哪个后端)——
 # file(默认):现文件后端,产物落 data/analysis/<日期>/。
 # db:SQLAlchemy 后端,记录/视图入库(SQLite 起步,可换 Postgres/MySQL,由 DB_URL 决定)。

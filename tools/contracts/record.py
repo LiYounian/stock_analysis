@@ -26,6 +26,7 @@ ENUMS = {
     "情绪三层": ("政策", "公司行为", "舆情"),      # sentiment.events[].层
     "与本股关系": ("直接", "间接", "无关"),        # sentiment.events[].与本股关系
     "财报评级": ("优", "良", "中", "差", "风险"),   # financial.评级(质地评分映射)
+    "新鲜度": ("新鲜", "陈旧", "无数据"),           # sentiment(顶层/三层).新鲜度:date-pin 采集新鲜度三态
 }
 HOLD_PERIODS = ("1日", "5日", "10日")
 
@@ -73,7 +74,13 @@ RECORD_SCHEMA = {
                   "指标条件化预测{1日/5日/10日:{方向∈看涨/看跌/中性/数据不足,置信度∈高/中/低,上涨概率%,悲观%,中位%,乐观%,期望%,期望标准误%,相似样本数,放宽层级∈精确/放宽1/放宽2/退回,是否退回}}, "  # F3+F4
                   "买卖倾向{结论∈买卖倾向,得分,依据[]}, 免责}",
     "sentiment": "null | {净情绪分:-1~1, 利好数, 利空数, 样本数, "
-                 "events[]{影响方向∈影响方向,影响强度:1~5,与本股关系∈与本股关系,层∈情绪三层,标题,time}}",
+                 "口径:str, "
+                 "采集日期:date|null(顶层聚合=三层最旧层日期), "
+                 "新鲜度:新鲜/陈旧/无数据|null(顶层聚合=最坏优先:任一层陈旧则陈旧,全无数据则无数据,否则新鲜), "
+                 "锁定日期:date|null(本次运行锁定的交易日 active_date,诊断回退用:≠采集日期即回退), "
+                 "三层{新闻,舆情,政策}{...原字段, 采集日期:date|null, 新鲜度:新鲜/陈旧/无数据|null}, "
+                 "events[]{影响方向∈影响方向,影响强度:1~5,与本股关系∈与本股关系,层∈情绪三层,标题,time}}"
+                 "(新鲜度/采集日期/锁定日期为附加可选字段,旧记录无此字段仍合规)",
     "fundflow": "null | {今日主力净流入(元), 今日主力净占比, 近5日主力合计(元), 主力连续净流入天数}",
     "events": "list[{date, type, impact∈公告方向, title}](公告)",
     "timeseries_refs": "{kline, fundflow, announcements}(文件路径指针)",
@@ -127,6 +134,23 @@ def validate_record(rec: dict) -> list[str]:
 
     sent = rec.get("sentiment")
     if isinstance(sent, dict):
+        # 新增(附加可选):新鲜度三态枚举 + 采集/锁定日期格式;null/缺失一律宽容(旧记录兼容)
+        if not _enum_ok(sent.get("新鲜度"), "新鲜度"):
+            errs.append(f"sentiment.新鲜度 非法: {sent.get('新鲜度')!r}")
+        for dk in ("采集日期", "锁定日期"):
+            dv = sent.get(dk)
+            if dv is not None and not _DATE_RE.match(str(dv)):
+                errs.append(f"sentiment.{dk} 非日期: {dv!r}")
+        three = sent.get("三层")
+        if isinstance(three, dict):
+            for lname, lval in three.items():
+                if not isinstance(lval, dict):
+                    continue
+                if not _enum_ok(lval.get("新鲜度"), "新鲜度"):
+                    errs.append(f"sentiment.三层.{lname}.新鲜度 非法: {lval.get('新鲜度')!r}")
+                av = lval.get("采集日期")
+                if av is not None and not _DATE_RE.match(str(av)):
+                    errs.append(f"sentiment.三层.{lname}.采集日期 非日期: {av!r}")
         for i, e in enumerate(sent.get("events") or []):
             if not _enum_ok(e.get("影响方向"), "影响方向"):
                 errs.append(f"sentiment.events[{i}].影响方向 非法: {e.get('影响方向')!r}")
