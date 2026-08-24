@@ -34,6 +34,85 @@ _REL_W = {"直接": 1.0, "间接": 0.5, "无关": 0.0}
 UGC_SAMPLE_N = 20                       # UGC 单次给 LLM 判整体情绪的取帖上限
 _LAYER_W = {"新闻": 0.5, "政策": 0.3, "舆情": 0.2}
 
+# —— 情绪数据新鲜度三态(与 contracts.record ENUMS["新鲜度"] 对齐)——
+FRESH, STALE, NODATA = "新鲜", "陈旧", "无数据"
+
+
+def _classify_freshness(resolved_date: str | None, locked_date: str | None,
+                        max_stale_days: int, mode: str) -> tuple[str, str | None]:
+    """由 (实际读到的分区日 resolved, 锁定日 locked) 判某层新鲜度 + 采集日期。
+
+    返回 (新鲜度, 采集日期);采集日期 = resolved_date(实际读到那份 raw 的分区日),
+    「无数据」时采集日期为 None。规则(见计划 §4.4):
+      - resolved 缺失 → 无数据。
+      - 无锁定日(未 set_active_date 且未显式传 date)→ 无法判回退,按现状视为新鲜。
+      - resolved == locked → 新鲜(当日锁定日采到)。
+      - resolved < locked(发生回退):
+          A1 严格锁定 → 无数据(绝不用旧数据);
+          A2 可识别回退 → 窗口内(staleness_rank ≤ max)标陈旧,超窗标无数据。
+    """
+    from tools.store import repo as store
+    if resolved_date is None:
+        return NODATA, None
+    if locked_date is None or resolved_date == locked_date:
+        return FRESH, resolved_date
+    if resolved_date > locked_date:        # 理论不应发生(pinned ≤ locked),保守当新鲜
+        return FRESH, resolved_date
+    # resolved < locked:回退发生
+    if mode == "A1":
+        return NODATA, None
+    rank = store.raw_staleness_rank(resolved_date, locked_date)
+    if rank > max_stale_days:
+        return NODATA, None                # 超窗:不使用旧数据
+    return STALE, resolved_date
+
+
+def _resolve_layer(kind: str, code: str, locked_date: str | None,
+                   max_stale_days: int, mode: str, legacy_loader):
+    """date-pin 解析某层 raw + 判新鲜度。返回 (items, 新鲜度, 采集日期)。
+
+    优先经 store.get_raw_resolved 解析(可判回退/超窗);store 无该 raw(或 mock/兼容环境)
+    时回退 legacy_loader(code)——此路径无法从 store 判新鲜度,按锁定日尽力标新鲜。
+    「无数据」/超窗 → items=[](不喂旧数据下游),新鲜度=无数据。
+    """
+    from tools.store import repo as store
+    try:
+        payload, resolved, _ = store.get_raw_resolved(kind, code, date=locked_date or "latest")
+    except FileNotFoundError:
+        payload, resolved = None, None
+    except Exception as e:                 # store 异常不阻断情绪主流程,降级到 legacy
+        logger.warning("%s %s get_raw_resolved 异常,回退 legacy loader:%s", code, kind, str(e)[:80])
+        payload, resolved = None, None
+    if resolved is not None:
+        fresh, asof = _classify_freshness(resolved, locked_date, max_stale_days, mode)
+        if fresh == NODATA:
+            return [], NODATA, None
+        return (payload if payload is not None else []), fresh, asof
+    # store 无该 raw:回退 legacy(含被测试 monkeypatch 的 load_news/load_ugc)
+    try:
+        items = legacy_loader(code)
+    except FileNotFoundError:
+        return [], NODATA, None
+    if not items:
+        return [], NODATA, None
+    return items, FRESH, locked_date       # 无法判定 → 保守按锁定日新鲜(兼容路径)
+
+
+def _aggregate_freshness(layer_freshness: list[str]) -> str:
+    """顶层新鲜度 = 三层「最坏优先」聚合(见计划 §4.3(3)):
+    任一层陈旧 → 陈旧;全部无数据 → 无数据;否则新鲜。"""
+    if any(f == STALE for f in layer_freshness):
+        return STALE
+    if layer_freshness and all(f == NODATA for f in layer_freshness):
+        return NODATA
+    return FRESH
+
+
+def _aggregate_asof(layer_asofs: list[str | None]) -> str | None:
+    """顶层采集日期 = 三层中**最旧**的一层日期(最保守,代表整块最陈旧成分);全 None → None。"""
+    present = [d for d in layer_asofs if d]
+    return min(present) if present else None
+
 
 # ---------- LLM 缓存 ----------
 def _cache_key(s: str) -> str:
@@ -75,16 +154,19 @@ def _cached_extract(client, text: str, instruction: str, schema: dict | None = N
 
 
 # ---------- L1 抽取 ----------
-def extract_news_events(code: str, client=None, limit: int | None = None) -> list[dict]:
+def extract_news_events(code: str, client=None, limit: int | None = None,
+                        items: list[dict] | None = None) -> list[dict]:
     """对单票新闻逐条 LLM 抽取(有界线程池并行,I/O 型)。失败的条目标 error(不中断)。
 
     limit:只截断送 LLM 抽取的条数,取最近 limit 条(load_news 已按 time 倒序);
     原始新闻的落盘/展示不受此影响(见 news_ai / store)。
+    items:可传入已由上层 date-pin 解析好的新闻列表(analyze_stock 走此路,避免二次读+统一新鲜度口径);
+    缺省 None → 自读 nw.load_news(code)(向后兼容既有调用方/测试)。
     并发下按输入顺序回填结果(index 对齐),下游可按序处理。
     """
     s = stock_pool.get(code)
     name = s.name if s else code
-    items = nw.load_news(code)
+    items = nw.load_news(code) if items is None else items
     if limit:
         items = items[:limit]           # 取最近 limit 条(倒序在前)
     client = client or lc.get_client()
@@ -189,6 +271,33 @@ def _stock_policy_items(code: str) -> list[dict]:
     return out
 
 
+def _policy_freshness(locked_date: str | None, max_stale_days: int,
+                      mode: str) -> tuple[str, str | None]:
+    """政策层新鲜度(见计划 §4.4 政策特例)。
+
+    政策按 policy_{锁定日} 聚合、文件名内嵌日期,不做「读旧文件冒充今天」的回退——
+    缺锁定日政策文件即视为回退/无当日政策:
+      - 锁定日政策 raw 存在 → 新鲜(即便命中本票行业条数=0,仍是「有当日政策文件」);
+      - 否则 date-pin 找 ≤锁定日的最近政策 raw:A2 窗口内标陈旧、超窗无数据;A1 无数据;
+      - store 无任何政策 raw(mock/兼容)但有政策打分视图 → 尽力按锁定日标新鲜;全无 → 无数据。
+    返回 (新鲜度, 采集日期)。
+    """
+    from tools.store import repo as store
+    if locked_date is not None:
+        if store.raw_exists("policy", f"policy_{locked_date}", locked_date):
+            return FRESH, locked_date
+        # 找 ≤锁定日的最近政策 raw(文件名内嵌日期,逐日回看)
+        resolved = None
+        for d in store.list_dates("raw")[::-1]:      # 降序
+            if d <= locked_date and store.raw_exists("policy", f"policy_{d}", d):
+                resolved = d
+                break
+        if resolved is not None:
+            return _classify_freshness(resolved, locked_date, max_stale_days, mode)
+    # store 无政策 raw:回退看是否有政策打分视图(mock/兼容路径)
+    return (FRESH, locked_date) if load_policy_scores() else (NODATA, None)
+
+
 def _policy_layer_net(items: list[dict]) -> tuple[float, int]:
     """政策条目 → 政策层净情绪 [-1,1] + 样本数。方向×强度/5 后取均值。"""
     total, n = 0.0, 0
@@ -206,17 +315,23 @@ def _policy_layer_net(items: list[dict]) -> tuple[float, int]:
 
 
 # ---------- 舆情层:一批股吧帖 → LLM 判整体情绪 ----------
-def ugc_sentiment(code: str, client=None, n: int = UGC_SAMPLE_N) -> dict:
+def ugc_sentiment(code: str, client=None, n: int = UGC_SAMPLE_N,
+                  posts: list[dict] | None = None) -> dict:
     """读 UGC 缓存 → 取前 n 帖批量给 LLM 判整体情绪(经缓存)。
 
     返回 {净情绪(-1~1), 多空, 样本数, 依据}。无 UGC 缓存 / LLM 失败 → 降级为
     中性 + degraded 标记(不抛,约法第5条)。
+    posts:可传入已由上层 date-pin 解析好的帖子列表(analyze_stock 走此路);
+    缺省 None → 自读 ug.load_ugc(code)(向后兼容既有调用方/测试)。
     """
-    try:
-        posts = ug.load_ugc(code)[:n]
-    except FileNotFoundError as e:
-        logger.warning("%s UGC 缓存缺失,舆情层降级:%s", code, e)
-        return {"净情绪": 0.0, "多空": "中性", "样本数": 0, "degraded": "no_ugc_cache"}
+    if posts is None:
+        try:
+            posts = ug.load_ugc(code)[:n]
+        except FileNotFoundError as e:
+            logger.warning("%s UGC 缓存缺失,舆情层降级:%s", code, e)
+            return {"净情绪": 0.0, "多空": "中性", "样本数": 0, "degraded": "no_ugc_cache"}
+    else:
+        posts = posts[:n]
     if not posts:
         return {"净情绪": 0.0, "多空": "中性", "样本数": 0, "degraded": "empty_ugc"}
 
@@ -251,7 +366,8 @@ def _weighted_net(layers: dict[str, tuple[float, int]]) -> float:
 
 
 # ---------- 编排 + 落盘 ----------
-def analyze_stock(code: str, client=None, limit: int | None = None) -> dict:
+def analyze_stock(code: str, client=None, limit: int | None = None,
+                  date: str | None = None, max_stale_days: int | None = None) -> dict:
     """单票情绪分析全流程,覆盖 新闻+舆情+政策 三层,落 sentiment/{code}.json。
 
     净情绪口径:三层加权(新闻0.5 / 政策0.3 / 舆情0.2,按信源可靠性),
@@ -260,19 +376,39 @@ def analyze_stock(code: str, client=None, limit: int | None = None) -> dict:
     顶层 sentiment 仍保留新闻聚合的 利好数/利空数/样本数(旧消费方兼容),
     三层明细见 sentiment["三层"]。
 
-    limit 缺省用 settings.NEWS_EXTRACT_MAX(只截断送 LLM 抽取的最近条数,原文全量保留);
-    显式传参可覆盖。
+    date-pin 与新鲜度(附加字段,不动上述打分口径):
+      - date 缺省取 store.active_date()(编排入口已 set_active_date)→ 当日跑锁当日;
+        回测复算传历史日;三层各自 date-pin 读取 ≤锁定日的最近 raw。
+      - 每层写 采集日期/新鲜度(新鲜/陈旧/无数据);顶层写 新鲜度(最坏优先聚合)/
+        采集日期(最旧层)/锁定日期(active_date,诊断回退)。
+      - 回退策略由 settings.SENTIMENT_FRESHNESS_MODE 决定(A2 默认可识别回退 / A1 严格锁定),
+        窗口 settings.SENTIMENT_MAX_STALE_DAYS(可被 max_stale_days 覆盖)。
+
+    limit 缺省用 settings.NEWS_EXTRACT_MAX(只截断送 LLM 抽取的最近条数,原文全量保留)。
     """
     if limit is None:
         limit = settings.NEWS_EXTRACT_MAX
-    news_events = classify_events(extract_news_events(code, client, limit))
+    if max_stale_days is None:
+        max_stale_days = getattr(settings, "SENTIMENT_MAX_STALE_DAYS", 3)
+    mode = getattr(settings, "SENTIMENT_FRESHNESS_MODE", "A2")
+    from tools.store import repo as store
+    locked = date or store.active_date()               # 本次锁定的交易日(诊断/回退判定用)
+
+    # 新闻层:date-pin 解析 → 抽取 → 聚合
+    news_items, news_fresh, news_asof = _resolve_layer(
+        "news", code, locked, max_stale_days, mode, nw.load_news)
+    news_events = classify_events(extract_news_events(code, client, limit, items=news_items))
     news_agg = aggregate_sentiment(news_events)
 
-    # 舆情层(降级不崩)
-    ugc = ugc_sentiment(code, client)
-    # 政策层:命中本票行业的政策条目(需先 score_policy;无则空,降级)
+    # 舆情层(降级不崩):date-pin 解析 → LLM 判情绪
+    ugc_items, ugc_fresh, ugc_asof = _resolve_layer(
+        "ugc", code, locked, max_stale_days, mode, ug.load_ugc)
+    ugc = ugc_sentiment(code, client, posts=ugc_items)
+
+    # 政策层:命中本票行业的政策条目(需先 score_policy;无则空,降级)。消费口径不变。
     pol_items = _stock_policy_items(code)
     pol_net, pol_n = _policy_layer_net(pol_items)
+    pol_fresh, pol_asof = _policy_freshness(locked, max_stale_days, mode)
 
     layers = {
         "新闻": (news_agg["净情绪分"], news_agg["样本数"]),
@@ -292,19 +428,28 @@ def analyze_stock(code: str, client=None, limit: int | None = None) -> dict:
     } for it in pol_items]
     events = news_events + pol_events
 
+    # 顶层新鲜度聚合(最坏优先)+ 采集日期(最旧层)
+    top_fresh = _aggregate_freshness([news_fresh, ugc_fresh, pol_fresh])
+    top_asof = _aggregate_asof([news_asof, ugc_asof, pol_asof])
+
     sentiment = {
         **news_agg,                       # 兼容旧字段(利好数/利空数/样本数 为新闻口径)
         "净情绪分": total,                # 三层加权后总分
         "口径": "三层加权 新闻0.5/政策0.3/舆情0.2,缺层重归一",
+        # —— 新增(附加、可选):顶层聚合新鲜度 ——
+        "采集日期": top_asof,
+        "新鲜度": top_fresh,
+        "锁定日期": locked,
         "三层": {
             "新闻": {"净情绪": news_agg["净情绪分"], "样本数": news_agg["样本数"],
-                     "利好数": news_agg["利好数"], "利空数": news_agg["利空数"]},
-            "舆情": ugc,
-            "政策": {"净情绪": pol_net, "样本数": pol_n},
+                     "利好数": news_agg["利好数"], "利空数": news_agg["利空数"],
+                     "采集日期": news_asof, "新鲜度": news_fresh},
+            "舆情": {**ugc, "采集日期": ugc_asof, "新鲜度": ugc_fresh},
+            "政策": {"净情绪": pol_net, "样本数": pol_n,
+                     "采集日期": pol_asof, "新鲜度": pol_fresh},
         },
     }
     rec = {"code": code, "sentiment": sentiment, "events": events}
-    from tools.store import repo as store
     store.put_code_view("sentiment", code, rec)        # 按日期/按票视图
     return rec
 
