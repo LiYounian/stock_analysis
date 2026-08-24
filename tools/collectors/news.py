@@ -256,6 +256,10 @@ def fetch_news(codes: list[str], days: int | None = None,
     return out
 
 
-def load_news(code: str) -> list[dict]:
-    """从本地缓存读单票新闻。缓存缺失抛 FileNotFoundError。"""
-    return store.get_raw("news", code)
+def load_news(code: str, date: str | None = None) -> list[dict]:
+    """从本地缓存读单票新闻。缓存缺失抛 FileNotFoundError。
+
+    date:缺省 None → "latest"(向后兼容);显式传日期即锁定读该日分区(不回退,缺则抛)。
+    情绪引擎的 date-pin + 可识别回退走 store.get_raw_resolved,此处只做简单透传。
+    """
+    return store.get_raw("news", code, date=date or "latest")

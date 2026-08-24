@@ -190,6 +190,8 @@ def run_sentiment(codes: list[str]) -> int:
         logger.warning("政策打分为空(缺政策缓存?),政策层降级")
     ok = 0
     n = len(codes)
+    fresh_stat = {"新鲜": 0, "陈旧": 0, "无数据": 0}          # 顶层新鲜度三态占比(验收观测点)
+    layer_stat = {"新闻": dict(fresh_stat), "舆情": dict(fresh_stat), "政策": dict(fresh_stat)}
     for i, code in enumerate(codes, 1):
         logger.info("[%d/%d] %s — 新闻情绪(LLM)...", i, n, code)
         try:
@@ -198,10 +200,22 @@ def run_sentiment(codes: list[str]) -> int:
             continue
         ok += 1
         s = rec["sentiment"]
-        logger.info("  %s 净情绪 %s(新闻%d/舆情%d/政策%d)", code, s["净情绪分"],
+        if s.get("新鲜度") in fresh_stat:
+            fresh_stat[s["新鲜度"]] += 1
+        for lname, lstat in layer_stat.items():
+            f = s.get("三层", {}).get(lname, {}).get("新鲜度")
+            if f in lstat:
+                lstat[f] += 1
+        logger.info("  %s 净情绪 %s 新鲜度=%s(新闻%d/舆情%d/政策%d)", code, s["净情绪分"],
+                    s.get("新鲜度"),
                     s["三层"]["新闻"]["样本数"], s["三层"]["舆情"].get("样本数", 0),
                     s["三层"]["政策"]["样本数"])
     logger.info("情绪打分完成:%d 只", ok)
+    logger.info("  顶层新鲜度:新鲜%d/陈旧%d/无数据%d",
+                fresh_stat["新鲜"], fresh_stat["陈旧"], fresh_stat["无数据"])
+    for lname, lstat in layer_stat.items():
+        logger.info("  %s层新鲜度:新鲜%d/陈旧%d/无数据%d",
+                    lname, lstat["新鲜"], lstat["陈旧"], lstat["无数据"])
     # 同阶段生产「新闻+AI」统一视图(复用本阶段已建的 LLM 抽取缓存,不额外烧钱)
     from tools.analysis import news_ai
     logger.info("新闻 AI 视图:%d 只", news_ai.write_news_ai(codes))
