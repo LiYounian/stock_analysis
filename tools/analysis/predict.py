@@ -176,6 +176,51 @@ def bias_recommendation_council(tech: dict, fundflow: dict | None = None,
     return council.bias_council(tech, fundflow, sentiment)
 
 
+# ---------- 消息面提示(第二步·保守版:只加一句话,绝不改任何预测数字)----------
+def _sentiment_note(sentiment: dict | None, tech: dict | None = None) -> str | None:
+    """保守版消息面提示:从 record 的 sentiment 块生成一句人话(看涨/看跌/中性 + 与技术面一致/背离 + 新鲜度)。
+
+    红线:纯文本、仅供留意,**不改任何预测方向/数字**(情景预测/指标条件化/持有期/买卖倾向一律不动)。
+    向后兼容:sentiment 缺失 / 样本数为 0 / 新鲜度=无数据 → 返回 None(不出提示)。
+    方向阈值复用买卖倾向的 ±情绪阈值(_P['情绪偏多/偏空阈值']),不新造参数。
+    与技术面比对用的是**纯技术趋势评级**(tech.signal.评级),避免与已并入情绪的买卖倾向循环。
+    """
+    if not sentiment:
+        return None
+    net = sentiment.get("净情绪分")
+    n = sentiment.get("样本数") or 0
+    if not isinstance(net, (int, float)) or n <= 0:
+        return None
+    fresh = sentiment.get("新鲜度")            # 新鲜/陈旧/无数据/None(旧记录无此字段)
+    if fresh == "无数据":
+        return None
+
+    if net >= _P["情绪偏多阈值"]:
+        mood, mdir = "看涨", "多"
+    elif net <= _P["情绪偏空阈值"]:
+        mood, mdir = "看跌", "空"
+    else:
+        mood, mdir = "中性", "中"
+
+    cnt = f"共 {int(n)} 条"
+    好, 坏 = sentiment.get("利好数"), sentiment.get("利空数")
+    if isinstance(好, (int, float)) and isinstance(坏, (int, float)):
+        cnt += f",利好 {int(好)}/利空 {int(坏)}"
+    parts = [f"消息面{mood}(净情绪 {net:+.2f},{cnt})"]
+
+    # 与纯技术趋势评级 一致/背离(仅在双方都有明确方向时说)
+    rating = (tech.get("signal") or {}).get("评级") if tech else None
+    tdir = {"偏多": "多", "偏空": "空"}.get(rating)   # 中性→None
+    if tdir and mdir in ("多", "空"):
+        parts.append("与技术面一致" if tdir == mdir
+                     else f"与技术面({rating})背离,留意分歧")
+
+    note = "、".join(parts) + "。仅供留意,不改预测。"
+    if fresh == "陈旧":
+        note += "(消息偏旧,仅参考)"
+    return note
+
+
 # ---------- L3:结构位 + 突破 + 情景锚定(纯数据,无 LLM)----------
 def _anchor(price, atr_pct, S, R, rating, 突破, dist_sup, buf, near):
     """按 情景 锚定止损/止盈(数据验证结论:支撑压力作锚点、放量作突破确认)。返回(情景,止损,止盈,依据)。
@@ -305,6 +350,7 @@ def predict(kline: pd.DataFrame, tech: dict, fundflow: dict | None = None,
         "结构位": structure_anchor(kline, price, atr_pct, sr, tech),  # L3:支撑压力/突破/情景锚定
         "情景预测": scenarios(kline),                       # 无条件历史频率(保留作对照)
         "买卖倾向": bias_recommendation(tech, fundflow, sentiment),
+        "消息面提示": _sentiment_note(sentiment, tech),   # 保守版:纯文本提示,不改上面任何数字
         "免责": DISCLAIMER,
     }
     if with_conditional:
