@@ -114,9 +114,15 @@ def _default_post(url: str, token: str, envelope: dict):
 
 
 def sign_and_post(shard_payload: dict, meta_base: dict, key: str, url: str, token: str,
-                  post_fn, retries: int, base_delay: float, sleep_fn) -> tuple[bool, int, str]:
+                  post_fn, retries: int, base_delay: float, sleep_fn,
+                  rate_window_s: float = 0.0) -> tuple[bool, int, str]:
     """对一个分片:每次尝试都新签(新 ts/nonce,防重放),失败按指数退避重试。
-    返回 (成功?, 最后状态码, 说明)。4xx 永久失败不重试;网络(0)/5xx 才重试。"""
+    返回 (成功?, 最后状态码, 说明)。
+    - 200-2xx:成功。
+    - **429 限流:可重试**,退避到限流窗口重置(≥rate_window_s),而非当永久失败——
+      否则一撞远端速率限制(120/60s)就永久丢分片(历史事故:全A view 分片尾部被 429 丢弃)。
+    - 其它 4xx(400/403…):永久失败不重试(签名/鉴权错,重试无用)。
+    - 网络(0)/5xx:指数退避重试。"""
     shard_payload = _json_safe(shard_payload)   # 清 NaN/Inf → null,防非法 JSON 被远端拒收(签名前)
     status, msg = 0, "no attempt"
     for attempt in range(retries + 1):
@@ -130,7 +136,11 @@ def sign_and_post(shard_payload: dict, meta_base: dict, key: str, url: str, toke
         if 200 <= status < 300:
             return True, status, "ok"
         msg = str(body)[:200]
-        if status != 0 and status < 500:             # 4xx:永久失败,别重试
+        if status == 429:                            # 限流:可重试,退避到窗口重置(≥window)
+            if attempt < retries:
+                sleep_fn(max(base_delay * (2 ** attempt), rate_window_s))
+            continue
+        if status != 0 and status < 500:             # 其它 4xx:永久失败,别重试
             return False, status, msg
         if attempt < retries:                        # 网络/5xx:退避后重试
             sleep_fn(base_delay * (2 ** attempt))
@@ -176,8 +186,15 @@ def _shard_hash(sp: dict) -> str:
 def upload_date(date: str, *, url: str, token: str, source: str, key_id: str, key: str,
                 analysis_dir: Path | None = None, receipt_path: Path | None = None,
                 post_fn=None, retries: int = 5, base_delay: float = 1.0,
-                sleep_fn=time.sleep, force: bool = False) -> dict:
-    """打包并上传某日产物;断点续传(跳过已成功分片)。返回回执 dict。"""
+                sleep_fn=time.sleep, force: bool = False,
+                min_interval: float | None = None, rate_window_s: float | None = None) -> dict:
+    """打包并上传某日产物;断点续传(跳过已成功分片)。返回回执 dict。
+
+    **节流(min_interval)**:每日 ~250 个分片一股脑发会超远端速率限制(默认 120/60s)→
+    尾部分片被 429 丢弃(历史事故:全A view 分片总在尾部被限流丢,面板"待运行")。
+    故对**实际发送**的分片按 min_interval 间隔发,默认从 settings.SYNC_RATE_MAX/WINDOW 推
+    (留 15% 余量压到限流以内)。断点续传跳过的分片不计间隔,故补传少量分片仍快。
+    """
     analysis_dir = analysis_dir or import_to_db._analysis_dir()
     payload = import_to_db.collect_date(analysis_dir, date)
     shards = build_shards(payload)
@@ -185,14 +202,24 @@ def upload_date(date: str, *, url: str, token: str, source: str, key_id: str, ke
     receipt = _load_receipt(receipt_path, date) if receipt_path else {"date": date, "shards": {}}
     meta_base = {"date": date, "source": source, "key_id": key_id,
                  "generated_at": _now_iso(), "sig_alg": sign.SIG_ALG}
+    if min_interval is None:                           # 节流间隔:压到远端限流以内(留15%余量)
+        rmax = max(1, int(settings.SYNC_RATE_MAX)); rwin = max(1, int(settings.SYNC_RATE_WINDOW_S))
+        min_interval = (rwin / rmax) * 1.15
+    if rate_window_s is None:
+        rate_window_s = float(settings.SYNC_RATE_WINDOW_S)
 
+    sent = 0
     for skey, sp in shards.items():
         h = _shard_hash(sp)                           # 内容指纹:内容变了即使已传也重发(根治"同日重传不覆盖")
         prev = receipt["shards"].get(skey)
         if prev and prev.get("ok") and prev.get("hash") == h and not force:
             continue                                  # 断点续传:已成功**且内容未变**才跳过
+        if sent > 0 and min_interval > 0:             # 节流:仅对实际发送的分片按间隔发(防尾部撞限流429)
+            sleep_fn(min_interval)
         ok, status, msg = sign_and_post(sp, dict(meta_base), key, url, token,
-                                        post_fn, retries, base_delay, sleep_fn)
+                                        post_fn, retries, base_delay, sleep_fn,
+                                        rate_window_s=rate_window_s)
+        sent += 1
         receipt["shards"][skey] = {"ok": ok, "status": status, "at": _now_iso(), "msg": msg, "hash": h}
         logger.info("分片 %s → %s (status=%s)", skey, "OK" if ok else "FAIL", status)
 

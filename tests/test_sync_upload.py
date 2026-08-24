@@ -110,6 +110,45 @@ def test_sign_and_post_no_retry_on_4xx():
     assert len(calls) == 1 and sleeps == []              # 4xx 永久失败,不重试
 
 
+def test_sign_and_post_retries_on_429():
+    """回归(2026-08-24事故):429 限流须**可重试**(退避≥限流窗口),不能当永久 4xx 直接丢。
+    历史:每日尾部全A view 分片撞远端 120/60s 限流被 429,旧码 status<500 当永久失败 → 面板天天"待运行"。"""
+    seq = [(429, {"error": "rate"}), (429, {"error": "rate"}), (200, {"ok": True})]
+    calls, sleeps = [], []
+
+    def post(url, token, env):
+        calls.append(env["meta"]["nonce"])
+        return seq[len(calls) - 1]
+
+    ok, status, _ = upload.sign_and_post(
+        {"records": {}, "views": {}, "code_views": {}},
+        {"date": "2026-08-24", "source": "s", "key_id": "k1", "sig_alg": "HMAC-SHA256"},
+        "K", "http://x", "t", post, retries=5, base_delay=1.0, sleep_fn=sleeps.append,
+        rate_window_s=60.0)
+    assert ok is True and status == 200                  # 429→429→200,重试到成功
+    assert len(calls) == 3
+    assert sleeps and all(s >= 60.0 for s in sleeps)     # 429 退避≥限流窗口(非短指数)
+    assert len(set(calls)) == 3                          # 每次新 nonce(防重放)
+
+
+def test_upload_date_throttles_sent_shards(tmp_path):
+    """节流:实际发送的分片之间按 min_interval 间隔发(压到远端限流以内、防尾部 429);跳过的不计间隔。"""
+    analysis = tmp_path / "analysis"
+    _seed_analysis(analysis, "2026-08-07")
+    sleeps = []
+
+    def post(url, token, env):
+        return 200, {"ok": True}
+
+    r = upload.upload_date("2026-08-07", url="http://x", token="t", source="s",
+                           key_id="k1", key="K", analysis_dir=analysis,
+                           post_fn=post, retries=0, base_delay=0,
+                           sleep_fn=sleeps.append, min_interval=0.5)
+    n = r["summary"]["total"]
+    assert n >= 2                                        # 至少两个分片才有间隔
+    assert len([s for s in sleeps if s == 0.5]) == n - 1  # 发 n 片 → 节流 n-1 次
+
+
 def test_sign_and_post_sanitizes_nan_to_valid_json():
     """回归:分片含 NaN/Inf(如 panel 视图 89 个 NaN)时,签名前须清成 null。
 
