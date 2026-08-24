@@ -106,6 +106,7 @@
       {% endfor %}
     </table>
     <p class="muted">买卖倾向依据:{{ p.买卖倾向.依据|join('、') }}</p>
+    {% if p.消息面提示 %}<p style="border-left:3px solid #4a90e2;padding-left:8px;margin-top:8px;color:#c9d4e2;">📰 消息面提示:{{ p.消息面提示 }}</p>{% endif %}
   </section>
 
   {% set cp = p.指标条件化预测 %}
