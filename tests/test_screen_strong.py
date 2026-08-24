@@ -72,3 +72,80 @@ def test_run_with_token_and_chip_produces_pick(monkeypatch):
     monkeypatch.setattr(market, "load_kline_recent", lambda code, rows=None: _strong_frame())
     v = ss.run_strong_screen(["000001"], as_of="2026-08-21", fetch=False)
     assert v["present"] is True and v["入选数"] == 1 and v["入选清单"][0]["code"] == "000001"
+
+
+def test_chip_gated_by_token_not_by_fetch(monkeypatch):
+    """回归锁:筹码 cyq_perf 的获取只由 token(is_configured)门控,**与 fetch 参数解耦**。
+
+    fetch 只管 OHLC 日线是否重拉;筹码链路(_chip_map → tushare_daily.fetch_chip)必须
+    与 fetch 无关。防以后有人误把筹码获取挂到 fetch 开关上(fetch=False 时不取筹码),
+    导致每日环境跑 fetch=False 时策略9 恒空(历史根因是缺 token,不是缺 fetch)。
+
+    做法:直接打桩 tushare_daily.fetch_chip 记录调用,分别以 fetch=False / fetch=True 跑,
+    断言两种 fetch 下 fetch_chip 都被调用、且都产出同样的入选结果。
+    """
+    calls: list[str] = []
+
+    def _fake_fetch_chip(as_of):
+        calls.append(as_of)
+        return pd.DataFrame({"code": ["000001"], "winner_rate": [97.0], "cost_95pct": [1.0]})
+
+    monkeypatch.setattr(store, "put_view", lambda *a, **k: None)   # 隔离,不写 data/analysis
+    monkeypatch.setattr(store, "set_active_date", lambda *a, **k: None)
+    monkeypatch.setattr(tushare_daily, "is_configured", lambda: True)
+    monkeypatch.setattr(tushare_daily, "fetch_chip", _fake_fetch_chip)  # 真链路 _chip_map→fetch_chip
+    monkeypatch.setattr(market, "load_kline_recent", lambda code, rows=None: _strong_frame())
+
+    v_no_fetch = ss.run_strong_screen(["000001"], as_of="2026-08-21", fetch=False)
+    assert len(calls) == 1, "fetch=False 时筹码链路仍必须被调用(筹码与 fetch 解耦)"
+    assert v_no_fetch["present"] is True and v_no_fetch["入选数"] == 1
+
+    v_fetch = ss.run_strong_screen(["000001"], as_of="2026-08-21", fetch=True)
+    assert len(calls) == 2, "fetch=True 时筹码链路同样被调用"
+    # 筹码逻辑对 fetch 不敏感:两种 fetch 下入选结果一致
+    assert v_fetch["入选数"] == v_no_fetch["入选数"] == 1
+    assert v_fetch["入选清单"][0]["code"] == v_no_fetch["入选清单"][0]["code"] == "000001"
+
+
+def test_warns_when_token_set_but_chip_missing(monkeypatch, caplog):
+    """回归锁 + 静默告警:配了 token 但筹码取不到 → 必打 WARNING(区分三分法)。
+
+    ③配 token 但 chip 空 → WARNING(唯一告警情形);对照:
+    ①无 token / ②配 token 但入选0 → 均不得误报 WARNING(另见下方 no-token 与 has-pick 用例)。
+    """
+    monkeypatch.setattr(store, "put_view", lambda *a, **k: None)
+    monkeypatch.setattr(store, "set_active_date", lambda *a, **k: None)
+    monkeypatch.setattr(tushare_daily, "is_configured", lambda: True)
+    monkeypatch.setattr(ss, "_chip_map", lambda as_of: None)   # 配了 token 却取不到筹码
+    with caplog.at_level("WARNING", logger="pipeline.screen_strong"):
+        v = ss.run_strong_screen(["000001"], as_of="2026-08-21", fetch=False)
+    assert v["present"] is False and v.get("需要Tushare") is True
+    warns = [r.getMessage() for r in caplog.records if r.levelname == "WARNING"]
+    assert any("TUSHARE_TOKEN" in m and "cyq_perf" in m for m in warns), \
+        "配 token 但筹码取不到时必须打 WARNING 提示 token 可能失效"
+
+
+def test_no_warn_when_no_token(monkeypatch, caplog):
+    """三分法①:未配 token → 正常占位,**不得**误报 WARNING。"""
+    monkeypatch.setattr(store, "put_view", lambda *a, **k: None)
+    monkeypatch.setattr(store, "set_active_date", lambda *a, **k: None)
+    monkeypatch.setattr(tushare_daily, "is_configured", lambda: False)
+    with caplog.at_level("WARNING", logger="pipeline.screen_strong"):
+        ss.run_strong_screen(["000001"], as_of="2026-08-21", fetch=False)
+    assert not [r for r in caplog.records if r.levelname == "WARNING"], \
+        "未配 token 是正常占位,不该告警"
+
+
+def test_no_warn_when_token_and_zero_picks(monkeypatch, caplog):
+    """三分法②:配 token + 筹码可取但当天0票入选 → 合法结果,**不得**误报 WARNING。"""
+    monkeypatch.setattr(store, "put_view", lambda *a, **k: None)
+    monkeypatch.setattr(store, "set_active_date", lambda *a, **k: None)
+    monkeypatch.setattr(tushare_daily, "is_configured", lambda: True)
+    # 筹码取得到,但 winner_rate 不足且 cost_95pct 极高 → C4 恒 False → 0 入选
+    monkeypatch.setattr(ss, "_chip_map", lambda as_of: {"000001": {"winner_rate": 10.0, "cost_95pct": 1e9}})
+    monkeypatch.setattr(market, "load_kline_recent", lambda code, rows=None: _strong_frame())
+    with caplog.at_level("WARNING", logger="pipeline.screen_strong"):
+        v = ss.run_strong_screen(["000001"], as_of="2026-08-21", fetch=False)
+    assert v["present"] is True and v["入选数"] == 0
+    assert not [r for r in caplog.records if r.levelname == "WARNING"], \
+        "配 token 且筹码可取、只是当天0票,是合法结果,不该告警"

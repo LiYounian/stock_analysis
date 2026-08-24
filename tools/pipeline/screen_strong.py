@@ -138,6 +138,14 @@ def run_strong_screen(codes: list[str], as_of: str | None = None,
                 "提示": "Tushare 筹码 cyq_perf 当日取不到(非交易日/未收盘/接口限权),本日「最强选股」不出。",
                 "入选清单": [], "入选数": 0}
         store.put_view("最强选股", view)
+        # 三分法告警:能走到这里说明 is_configured()=True(未配 token 已在上一分支 return),
+        # 却没取到筹码 → 极可能 token 失效/额度用尽/权限不足。这是唯一需要 WARNING 的情形:
+        #   ①未配 token → 上一分支正常占位,不告警;
+        #   ②配了 token 但入选0 → 合法结果(往下走,不告警);
+        #   ③配了 token 但筹码取不到/出不了 → 就是这里,静默回落占位最难察觉 → 显式告警。
+        logger.warning("最强选股:已配 TUSHARE_TOKEN 但筹码 cyq_perf(%s)未取到"
+                       "(可能 token 失效/额度用尽/权限不足),策略9 将回落「需 Tushare」占位、当日不出",
+                       as_of or "today")
         logger.info("最强选股:筹码取不到,跳过(写占位提示 view)")
         return view
 
