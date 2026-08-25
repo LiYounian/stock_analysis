@@ -74,6 +74,9 @@ trap 'rmdir "$LOCK" 2>/dev/null' EXIT
   echo "-- ② 全A多策略选股(策略0/1/2/3/4)+ 对(选出并集∪自选)做新闻/LLM/合议 + M2财报(数值+审计双闸门+LLM文本,仅news_subset) --"
   # --no-fetch:不触发 master_sync 回填/重采,直接用现有主档(近史护栏);财报三步在 run_screen_all 内对 news_subset 自然跑
   "$PY" -m tools.run screenall --no-fetch || echo "!! screenall 失败"
+  echo "-- ②.6 SEPA+VCP 监控(全A,--no-fetch 读①已推进的主档;纯日K判定,无傍晚发布依赖,15:40就绪) --"
+  # SEPA 三均线合格池落 view(全量),展示层取趋势最强前10;view 随③ upload 自动上传(枚举当天目录)
+  "$PY" -m tools.run sepa --no-fetch || echo "!! sepa 失败(不阻断)"
   echo "-- ②.5 前瞻记分卡(picks+预测+情绪 配到期实际收益,幂等滚存;消息面回测长期样本源) --"
   # 持久 --out:每天重跑把"新到期"的前瞻收益补进,累积几周后供 backtest_sentiment / PEAD 复验
   "$PY" -m tools.backtest.forward_scorecard --out "$REPO/data/analysis/backtest/forward_scorecard.csv" || echo "!! 记分卡(不阻断)"
