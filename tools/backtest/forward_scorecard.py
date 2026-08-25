@@ -42,6 +42,7 @@ from tools.store import repo as store
 logger = logging.getLogger("backtest.scorecard")
 
 _ROOT_LAYERS = ("政策", "公司行为")   # 根源层(公告/政策),非舆情
+_DIR_SIGN = {"看涨": 1, "看跌": -1, "中性": 0}   # 条件化方向 → 符号(数据不足→None)
 
 _DEFAULT_OUT = os.path.join(
     "/private/tmp/claude-501/-Users-yqg-Documents-projects-stock-analysis/"
@@ -115,14 +116,61 @@ def _persist_labeler(enabled: bool):
     return _label
 
 
-def build_scorecard(dates=None, horizons=(1, 5, 10), classify_persist=True) -> pd.DataFrame:
+def _load_pool_index():
+    """加载全A横截面池索引;缺失/异常 → None(激进版倾斜列降级留空,不崩)。"""
+    try:
+        from tools.analysis import conditional_predict as cpred
+        return cpred.get_pool_index()
+    except Exception as e:  # noqa: BLE001
+        logger.info("state_pool 不可用,激进版倾斜列降级留空: %s", str(e)[:80])
+        return None
+
+
+def _tilt_labels(rec, sub_kline, as_of, pool_idx, horizons) -> dict:
+    """激进版·后验倾斜的中间标签。**无未来函数**:sub_kline 必须已切到信号日 as_of(≤当日),
+    在其上算 tech/state_vector/conditional_scenarios;根源信号只读 record.sentiment。
+
+    返回 {signal, p_cond_N, dir_cond_N, p_adj_N, dir_adj_N}(方向为 +1/-1/0/None)。
+    pool_idx 缺失 / 数据不足 / 任一步失败 → 返回 {}(该行倾斜列留空)。
+    """
+    if pool_idx is None or sub_kline is None or len(sub_kline) < 30:
+        return {}
+    try:
+        from tools.analysis import conditional_predict as cpred
+        from tools.analysis import technical as ta
+        from tools.config.strategy import THRESHOLDS
+        tech = ta.compute(sub_kline)
+        cond = cpred.conditional_scenarios(sub_kline, tech, pool_idx, as_of)
+        P = THRESHOLDS["指标条件化"]
+        signal = cpred.root_structural_signal(rec.get("sentiment"))
+        dv = cpred.direction_view(
+            cond, signal=signal, k=P.get("倾斜增益k", 0.0),
+            tilt_horizons=tuple(f"{n}日" for n in P.get("倾斜持有期", [1, 5])))
+        out = {"signal": signal}
+        for N in horizons:
+            v = dv.get(f"{N}日", {})
+            out[f"p_cond_{N}"] = v.get("上涨概率%")
+            out[f"dir_cond_{N}"] = _DIR_SIGN.get(v.get("方向"))
+            out[f"p_adj_{N}"] = v.get("上涨概率%_修正")
+            out[f"dir_adj_{N}"] = _DIR_SIGN.get(v.get("方向_修正"))
+        return out
+    except Exception as e:  # noqa: BLE001
+        logger.debug("倾斜标签失败(%s),该行留空", str(e)[:60])
+        return {}
+
+
+def build_scorecard(dates=None, horizons=(1, 5, 10), classify_persist=True,
+                    tilt=True) -> pd.DataFrame:
     """重读全部历史 record → 逐 (date, code) 一行,回填已到期前瞻收益 + 方向命中 + 持续性标签。
 
     classify_persist:是否给每行打持续性标签(读根源 events→分类器)。LLM 不可用则自动降级留空。
+    tilt:是否附激进版·后验倾斜列(p_cond/dir_cond/hit_cond 基线 vs p_adj/dir_adj/hit_adj 倾斜)。
+      需 state_pool(缺失则该组列留空)。用于"倾斜 vs 纯技术"前向累积 A/B(k 标定/放行闸依据)。
     """
     if dates is None:
         dates = store.list_dates()
     label_persist = _persist_labeler(classify_persist)
+    pool_idx = _load_pool_index() if tilt else None
     kline_cache: dict[str, pd.DataFrame | None] = {}
 
     def _kline(code):
@@ -157,6 +205,12 @@ def build_scorecard(dates=None, horizons=(1, 5, 10), classify_persist=True) -> p
             kdates = [str(x)[:10] for x in df["date"].tolist()] if df is not None and "date" in df.columns else []
             idx = kdates.index(d) if d in kdates else None
             close = df["close"].to_numpy(float) if idx is not None else None
+
+            # 激进版倾斜标签:kline 切到信号日 d(≤d,无未来函数)再算条件化 p 与倾斜
+            tl = _tilt_labels(rec, df.iloc[:idx + 1].reset_index(drop=True), d, pool_idx, horizons) \
+                if (tilt and idx is not None and df is not None) else {}
+            row["signal"] = tl.get("signal")
+
             for N in horizons:
                 r = np.nan
                 hit = None
@@ -166,6 +220,14 @@ def build_scorecard(dates=None, horizons=(1, 5, 10), classify_persist=True) -> p
                         hit = int(np.sign(r) == np.sign(pdir))
                 row[f"r_{N}"] = r
                 row[f"hit_{N}"] = hit
+                # 倾斜 A/B 列(基线条件化 vs 含消息面倾斜);dir 为 +1/-1/0/None,0/None 不计命中
+                dc, da = tl.get(f"dir_cond_{N}"), tl.get(f"dir_adj_{N}")
+                row[f"p_cond_{N}"] = tl.get(f"p_cond_{N}")
+                row[f"dir_cond_{N}"] = dc
+                row[f"hit_cond_{N}"] = int(np.sign(r) == np.sign(dc)) if (not np.isnan(r) and dc) else None
+                row[f"p_adj_{N}"] = tl.get(f"p_adj_{N}")
+                row[f"dir_adj_{N}"] = da
+                row[f"hit_adj_{N}"] = int(np.sign(r) == np.sign(da)) if (not np.isnan(r) and da) else None
             rows.append(row)
     df = pd.DataFrame(rows)
     return df.sort_values(["date", "code"]).reset_index(drop=True) if not df.empty else df
@@ -185,11 +247,28 @@ def summarize(sc: pd.DataFrame, horizons=(1, 5, 10)) -> dict:
         labeled = sc["persist"].notna()
         out["持续性"] = {"已打标行": int(labeled.sum()),
                         "分布": sc.loc[labeled, "persist"].value_counts().to_dict()}
+    # 激进版倾斜 A/B:基线条件化 vs 含消息面倾斜(⚠️前向累积中,样本薄时不足为凭;放行闸看聚类t)
+    if "signal" in sc.columns:
+        ab = {"根源信号非零行": int(sc["signal"].fillna(0).ne(0).sum())}
+        for N in horizons:
+            cc, ca = f"hit_cond_{N}", f"hit_adj_{N}"
+            if cc not in sc.columns or ca not in sc.columns:
+                continue
+            mc, ma = sc.dropna(subset=[cc]), sc.dropna(subset=[ca])
+            both = sc.dropna(subset=[cc, ca, f"dir_cond_{N}", f"dir_adj_{N}"])
+            changed = both[both[f"dir_cond_{N}"] != both[f"dir_adj_{N}"]]
+            ab[f"{N}日"] = {
+                "基线命中率%": round(float(mc[cc].mean()) * 100, 1) if len(mc) else None,
+                "倾斜命中率%": round(float(ma[ca].mean()) * 100, 1) if len(ma) else None,
+                "倾斜改判行": int(len(changed)),   # 倾斜真正改变了方向的已到期行
+                "改判后命中率%": round(float(changed[ca].mean()) * 100, 1) if len(changed) else None,
+            }
+        out["激进版倾斜A/B"] = ab
     return out
 
 
-def run(out=_DEFAULT_OUT, horizons=(1, 5, 10), classify_persist=True):
-    sc = build_scorecard(horizons=horizons, classify_persist=classify_persist)
+def run(out=_DEFAULT_OUT, horizons=(1, 5, 10), classify_persist=True, tilt=True):
+    sc = build_scorecard(horizons=horizons, classify_persist=classify_persist, tilt=tilt)
     print("\n===== 前向累积记分卡(治本·滚存)=====")
     print("(无未来函数;历史回测≠未来保证,非投资建议)\n")
     if sc.empty:
@@ -209,7 +288,16 @@ def run(out=_DEFAULT_OUT, horizons=(1, 5, 10), classify_persist=True):
         p = summ["持续性"]
         print(f"  持续性: 已打标行={p['已打标行']}  分布={p['分布']}"
               + ("(LLM未配置/无根源消息→留空降级)" if p["已打标行"] == 0 else ""))
-    print("\n(样本仍薄;每日重跑此脚本即自动把新到期的前瞻收益补进记分卡,并滚存持续性×前瞻收益。)")
+    if "激进版倾斜A/B" in summ:
+        ab = summ["激进版倾斜A/B"]
+        print(f"  激进版倾斜A/B(根源信号非零行={ab['根源信号非零行']}):")
+        for N in horizons:
+            a = ab.get(f"{N}日")
+            if a:
+                print(f"    {N}日: 基线命中={a['基线命中率%']}%  倾斜命中={a['倾斜命中率%']}%  "
+                      f"改判行={a['倾斜改判行']}  改判后命中={a['改判后命中率%']}%")
+        print("    ⚠️ 样本薄不足为凭;放行闸=按日聚类t显著为正才上调k,否则收敛0/负(退出判据)。")
+    print("\n(样本仍薄;每日重跑此脚本即自动把新到期的前瞻收益补进记分卡,并滚存持续性×前瞻收益 + 倾斜A/B。)")
     return sc
 
 
@@ -220,6 +308,8 @@ if __name__ == "__main__":
     ap.add_argument("--horizon", default="1,5,10")
     ap.add_argument("--no-persistence", action="store_true",
                     help="不打持续性标签(跳过 LLM 分类,只出方向命中记分卡)")
+    ap.add_argument("--no-tilt", action="store_true",
+                    help="不算激进版倾斜 A/B 列(跳过条件化池查询,只出基础记分卡)")
     a = ap.parse_args()
     run(out=a.out, horizons=tuple(int(x) for x in a.horizon.split(",")),
-        classify_persist=not a.no_persistence)
+        classify_persist=not a.no_persistence, tilt=not a.no_tilt)
