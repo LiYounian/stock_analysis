@@ -74,6 +74,10 @@ RAW_STALE_DAYS = 3          # raw 缓存超过此天数(或无采集元数据)�
 SENTIMENT_FRESHNESS_MODE = os.getenv("SENTIMENT_FRESHNESS_MODE", "A2")
 # A2 允许回退的窗口(以 raw 分区/采集周期为「交易日」代理计数);超此距离标「无数据」。
 SENTIMENT_MAX_STALE_DAYS = int(os.getenv("SENTIMENT_MAX_STALE_DAYS", "3"))
+# —— 消息持续性研判(结构性 vs 短暂 + 印证强度)——
+# 只对根源消息(公司行为层新闻)逐条 LLM 研判并附加到情绪 event;附加、可选,不动净情绪口径。
+# 回测/批量若不需要该分量可置 false 省 LLM 调用(下游读不到字段=优雅退化)。
+SENTIMENT_PERSISTENCE_ON = os.getenv("SENTIMENT_PERSISTENCE_ON", "true").lower() in ("1", "true", "yes")
 
 # —— 存储后端(store 层分析侧读写走哪个后端)——
 # file(默认):现文件后端,产物落 data/analysis/<日期>/。

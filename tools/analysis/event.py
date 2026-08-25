@@ -193,6 +193,64 @@ def classify_events(events: list[dict]) -> list[dict]:
     return events
 
 
+# ---------- 消息持续性研判(结构性 vs 短暂 + 印证强度)----------
+def attach_persistence(news_events: list[dict], news_items: list[dict],
+                       client=None) -> dict:
+    """对根源消息(公司行为层新闻)逐条研判持续性 + 印证强度,**原地附加**到 event。
+
+    只判 层=='公司行为' 且无 error 的新闻事件(=公司公告/根源消息口径);政策层另有全局
+    打分、舆情层非根源,均不在此判。分类调用 news_persistence(单条一次 LLM,结果按文本 hash
+    缓存、可并行)。
+
+    无未来函数:仅用该条消息文本(标题+正文,news_items 已 date-pin ≤锁定日),不引外部/事后信息;
+    news_events[i] 与 news_items[i] 按 extract 时的 index 对齐(_pmap 顺序回填 + 同一 limit 截断)。
+
+    附加字段(全可选,不动任何既有字段/净情绪口径):
+      event['持续性']∈结构性持续/短暂事件/中性、['印证强度']∈强/中/弱、['持续性方向']∈利好/利空/中性、
+      ['持续性依据']:str。分类失败/降级的条目不写字段(下游读不到=未分类)。
+    返回顶层 rollup(供下游快速读,不必遍历 events);无可分类条目返回 {}。
+    """
+    if not getattr(settings, "SENTIMENT_PERSISTENCE_ON", True):
+        return {}
+    idxs = [i for i, e in enumerate(news_events)
+            if e.get("层") == "公司行为" and "error" not in e and i < len(news_items)]
+    if not idxs:
+        return {}
+    texts = [f"标题:{news_items[i].get('title', '')}\n正文:{news_items[i].get('content', '')}"
+             for i in idxs]
+    from tools.analysis import news_persistence as npst
+    results = npst.classify_batch(texts, client)
+
+    rank = {"强": 3, "中": 2, "弱": 1}
+    struct_bull = struct_bear = transient = classified = 0
+    best = 0
+    for i, r in zip(idxs, results):
+        if not isinstance(r, dict) or r.get("持续性") is None:
+            continue                      # LLM 失败/空文本降级:不写字段(未分类)
+        e = news_events[i]
+        e["持续性"] = r.get("持续性")
+        e["印证强度"] = r.get("印证强度")
+        e["持续性方向"] = r.get("方向")
+        e["持续性依据"] = r.get("依据") or ""
+        classified += 1
+        if r.get("持续性") == "结构性持续":
+            # 结构性利好/利空计数优先用该条新闻抽取的 影响方向(与净情绪同源),缺则回退分类器方向
+            d = e.get("影响方向") or r.get("方向")
+            if d == "利好":
+                struct_bull += 1
+            elif d == "利空":
+                struct_bear += 1
+            best = max(best, rank.get(r.get("印证强度"), 0))
+        elif r.get("持续性") == "短暂事件":
+            transient += 1
+    if classified == 0:
+        return {}
+    inv = {3: "强", 2: "中", 1: "弱"}
+    return {"结构性利好数": struct_bull, "结构性利空数": struct_bear,
+            "短暂事件数": transient, "已分类数": classified,
+            "最强结构印证": inv.get(best)}
+
+
 # ---------- L2 情感聚合(代码)----------
 def aggregate_sentiment(events: list[dict]) -> dict:
     """把单票多条事件聚合成情绪分。无关条目按关系权重 0 剔除。"""
@@ -399,6 +457,8 @@ def analyze_stock(code: str, client=None, limit: int | None = None,
         "news", code, locked, max_stale_days, mode, nw.load_news)
     news_events = classify_events(extract_news_events(code, client, limit, items=news_items))
     news_agg = aggregate_sentiment(news_events)
+    # 消息持续性研判(结构性 vs 短暂 + 印证强度):聚合之后附加,不改任何净情绪口径。
+    persist_summary = attach_persistence(news_events, news_items, client)
 
     # 舆情层(降级不崩):date-pin 解析 → LLM 判情绪
     ugc_items, ugc_fresh, ugc_asof = _resolve_layer(
@@ -449,6 +509,9 @@ def analyze_stock(code: str, client=None, limit: int | None = None,
                      "采集日期": pol_asof, "新鲜度": pol_fresh},
         },
     }
+    # 持续性 rollup(附加、可选):有可分类的公司行为消息才写,无则不加(旧记录/关闭时缺失)
+    if persist_summary:
+        sentiment["持续性研判"] = persist_summary
     rec = {"code": code, "sentiment": sentiment, "events": events}
     store.put_code_view("sentiment", code, rec)        # 按日期/按票视图
     return rec

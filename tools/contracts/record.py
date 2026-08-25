@@ -27,6 +27,8 @@ ENUMS = {
     "与本股关系": ("直接", "间接", "无关"),        # sentiment.events[].与本股关系
     "财报评级": ("优", "良", "中", "差", "风险"),   # financial.评级(质地评分映射)
     "新鲜度": ("新鲜", "陈旧", "无数据"),           # sentiment(顶层/三层).新鲜度:date-pin 采集新鲜度三态
+    "持续性": ("结构性持续", "短暂事件", "中性"),    # sentiment.events[].持续性:根源消息(公司行为)结构性 vs 短暂
+    "印证强度": ("强", "中", "弱"),                 # sentiment.events[].印证强度 / 持续性研判.最强结构印证
 }
 HOLD_PERIODS = ("1日", "5日", "10日")
 
@@ -84,8 +86,12 @@ RECORD_SCHEMA = {
                  "新鲜度:新鲜/陈旧/无数据|null(顶层聚合=最坏优先:任一层陈旧则陈旧,全无数据则无数据,否则新鲜), "
                  "锁定日期:date|null(本次运行锁定的交易日 active_date,诊断回退用:≠采集日期即回退), "
                  "三层{新闻,舆情,政策}{...原字段, 采集日期:date|null, 新鲜度:新鲜/陈旧/无数据|null}, "
-                 "events[]{影响方向∈影响方向,影响强度:1~5,与本股关系∈与本股关系,层∈情绪三层,标题,time}}"
-                 "(新鲜度/采集日期/锁定日期为附加可选字段,旧记录无此字段仍合规)",
+                 "持续性研判:null|{结构性利好数:int,结构性利空数:int,短暂事件数:int,已分类数:int,最强结构印证∈印证强度|null}"
+                 "(附加可选;仅当有可分类的公司行为根源消息时出现;供下游倾斜结构性信号快速读), "
+                 "events[]{影响方向∈影响方向,影响强度:1~5,与本股关系∈与本股关系,层∈情绪三层,标题,time, "
+                 "持续性∈持续性|缺失(仅公司行为根源消息且分类成功时写),印证强度∈印证强度|缺失,"
+                 "持续性方向∈影响方向|缺失,持续性依据:str}}"
+                 "(新鲜度/采集日期/锁定日期/持续性研判/事件级持续性字段均为附加可选,旧记录无此字段仍合规)",
     "fundflow": "null | {今日主力净流入(元), 今日主力净占比, 近5日主力合计(元), 主力连续净流入天数}",
     "events": "list[{date, type, impact∈公告方向, title}](公告)",
     "timeseries_refs": "{kline, fundflow, announcements}(文件路径指针)",
@@ -156,6 +162,10 @@ def validate_record(rec: dict) -> list[str]:
                 av = lval.get("采集日期")
                 if av is not None and not _DATE_RE.match(str(av)):
                     errs.append(f"sentiment.三层.{lname}.采集日期 非日期: {av!r}")
+        # 持续性 rollup(附加可选):存在且为 dict 时校验 最强结构印证 枚举;null/缺失宽容
+        pj = sent.get("持续性研判")
+        if isinstance(pj, dict) and not _enum_ok(pj.get("最强结构印证"), "印证强度"):
+            errs.append(f"sentiment.持续性研判.最强结构印证 非法: {pj.get('最强结构印证')!r}")
         for i, e in enumerate(sent.get("events") or []):
             if not _enum_ok(e.get("影响方向"), "影响方向"):
                 errs.append(f"sentiment.events[{i}].影响方向 非法: {e.get('影响方向')!r}")
@@ -163,6 +173,13 @@ def validate_record(rec: dict) -> list[str]:
                 errs.append(f"sentiment.events[{i}].与本股关系 非法: {e.get('与本股关系')!r}")
             if e.get("层") is not None and e.get("层") not in ENUMS["情绪三层"]:
                 errs.append(f"sentiment.events[{i}].层 非法: {e.get('层')!r}")
+            # 事件级持续性字段(附加可选):有值时校验枚举;缺失/None 宽容(旧记录/未分类)
+            if not _enum_ok(e.get("持续性"), "持续性"):
+                errs.append(f"sentiment.events[{i}].持续性 非法: {e.get('持续性')!r}")
+            if not _enum_ok(e.get("印证强度"), "印证强度"):
+                errs.append(f"sentiment.events[{i}].印证强度 非法: {e.get('印证强度')!r}")
+            if not _enum_ok(e.get("持续性方向"), "影响方向"):
+                errs.append(f"sentiment.events[{i}].持续性方向 非法: {e.get('持续性方向')!r}")
 
     for i, e in enumerate(rec.get("events") or []):
         if e.get("impact") is not None and e.get("impact") not in ENUMS["公告方向"]:
