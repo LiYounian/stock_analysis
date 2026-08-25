@@ -308,17 +308,23 @@ def structure_anchor(kline: pd.DataFrame, price: float, atr_pct: float, sr: dict
 
 
 # ---------- 指标条件化预测(F3+F4)----------
-def _conditional_block(kline: pd.DataFrame, tech: dict) -> dict:
+def _conditional_block(kline: pd.DataFrame, tech: dict, sentiment: dict | None = None) -> dict:
     """指标条件化预测合并块:每 horizon = 方向/置信度(F4) + 条件化上涨概率/区间/期望/相似样本数/放宽层级(F3)。
 
     与无条件「情景预测」并列、供对照。池缺失/异常时 conditional_scenarios 内部优雅退回,绝不让 predict 崩。
+    激进版(第二步):若有根源结构性消息信号,对 1/5日方向做后验倾斜(方向_修正/上涨概率%_修正/是否倾斜);
+    k=0 或无信号时逐字段等价纯技术(kill-switch)。
     """
     try:
         from tools.analysis import conditional_predict as cpred
         idx = cpred.get_pool_index()               # 进程内缓存的索引(O(log n) 查询)
         as_of = kline["date"].iloc[-1]
         cond = cpred.conditional_scenarios(kline, tech, idx, as_of)
-        dv = cpred.direction_view(cond)
+        P = THRESHOLDS["指标条件化"]
+        signal = cpred.root_structural_signal(sentiment)   # 根源(政策+公司公告)+结构性净信号[-1,1]或None
+        dv = cpred.direction_view(
+            cond, signal=signal, k=P.get("倾斜增益k", 0.0),
+            tilt_horizons=tuple(f"{n}日" for n in P.get("倾斜持有期", [1, 5])))
         return {k: {**dv.get(k, {}), **cond[k]} for k in cond}
     except Exception:
         return {"error": "指标条件化预测暂不可用"}
@@ -354,5 +360,5 @@ def predict(kline: pd.DataFrame, tech: dict, fundflow: dict | None = None,
         "免责": DISCLAIMER,
     }
     if with_conditional:
-        out["指标条件化预测"] = _conditional_block(kline, tech)   # F3+F4:指标条件化(方向+区间+期望)
+        out["指标条件化预测"] = _conditional_block(kline, tech, sentiment)   # F3+F4(+激进版倾斜)
     return out

@@ -114,12 +114,15 @@
   <section class="card">
     <h2>指标条件化预测(MA/BOLL/MACD/RSI 状态相似日 · 非投资建议)</h2>
     <p class="muted" style="color:#c0392b">⚠️ 回测诚实结论:本预测<b>聚合层面无显著超额</b>(Brier≈无条件基线、聚类t不显著),方向多为中性、区分力弱;<b>仅作状态参考,不作胜率/涨跌承诺</b>。详见回测报告。</p>
+    <p class="muted" style="color:#e67e22">🧪 「含消息面修正」列 = 用根源消息(政策+公司公告)+结构性信号对 <b>1/5日</b>方向做后验倾斜后重判,<b>实验中·未经回测标定·非未来保证</b>;蓝色高亮=该持有期被消息面改过方向。增益 k=0 时与基线完全一致(纯技术)。</p>
     <table>
-      <tr><th>持有期</th><th>方向</th><th>置信</th><th>上涨概率</th><th>悲观</th><th>中位</th><th>乐观</th><th>期望</th><th>相似样本</th><th>匹配</th></tr>
+      <tr><th>持有期</th><th>方向(基线)</th><th>方向(含消息面修正)</th><th>置信</th><th>上涨概率</th><th>悲观</th><th>中位</th><th>乐观</th><th>期望</th><th>相似样本</th><th>匹配</th></tr>
       {% for hold, v in cp.items() %}
       <tr><td>{{ hold }}</td>
-        <td>{{ v.方向 }}</td><td>{{ v.置信度 }}</td>
-        <td>{{ v['上涨概率%'] }}%</td>
+        <td>{{ v.方向 }}</td>
+        <td>{% if v.是否倾斜 %}<b style="color:#4a90e2">{{ v.方向_修正 }}</b>{% else %}{{ v.方向_修正 | default(v.方向) }}{% endif %}</td>
+        <td>{{ v.置信度 }}</td>
+        <td>{{ v['上涨概率%'] }}%{% if v.是否倾斜 and v['上涨概率%_修正'] != v['上涨概率%'] %} <span class="muted">→ {{ v['上涨概率%_修正'] }}%修正</span>{% endif %}</td>
         {% for k in v.keys() if '悲观' in k %}<td class="neg">{{ v[k] }}%</td>{% endfor %}
         {% for k in v.keys() if '中位' in k %}<td>{{ v[k] }}%</td>{% endfor %}
         {% for k in v.keys() if '乐观' in k %}<td class="pos">{{ v[k] }}%</td>{% endfor %}
