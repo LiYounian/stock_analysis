@@ -226,22 +226,110 @@ def conditional_scenarios(kline: pd.DataFrame, tech: dict, pool, as_of,
     return out
 
 
-# ————————————————————————— F4 方向映射 —————————————————————————
-def direction_view(cond: dict) -> dict:
+# ————————————————————————— 激进版·后验倾斜信号(第二步)—————————————————————————
+def _to_num(v):
+    """把可能是 str 的强度/情绪值转 float;失败返回 None。"""
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return None
+
+
+def root_structural_signal(sentiment: dict | None) -> float | None:
+    """激进版倾斜信号:根源(政策 + 公司公告)+ 近似结构性 的净信号 → [-1,1]。
+
+    只用根源层,**剔除舆情噪声与顶层净情绪分**(舆情已被多轮回测钉死为噪声;顶层常被舆情单层污染)。
+    · 政策:取 sentiment.三层.政策.净情绪(聚合值;政策专用条目已在 serialize 被过滤,不能数 events)。
+    · 公司公告:events 中 层=='公司行为' 且 |影响强度|≥根源强度门槛 且 关系∈{直接,间接} 且 方向∈{利好,利空}
+      (强度门槛=近似结构性,滤掉短暂/弱事件)。
+    · 两根源按 根源权重 合成,缺层重归一。新鲜度='陈旧' → 该分量×0.5;='无数据' → 该分量不计。
+    无根源信号 / sentiment 缺失 → 返回 None(不倾斜,等价纯技术,kill-switch 对齐点)。
+    """
+    if not sentiment:
+        return None
+    P = THRESHOLDS["指标条件化"]
+    strong = P.get("根源强度门槛", 3)
+    W = P.get("根源权重", {"公司公告": 0.6, "政策": 0.4})
+    three = sentiment.get("三层") or {}
+
+    # ① 政策根源(可靠,取聚合)
+    pol = three.get("政策") or {}
+    pol_sig, pol_ok = 0.0, False
+    if (pol.get("样本数") or 0) > 0 and pol.get("新鲜度") != "无数据":
+        v = _to_num(pol.get("净情绪"))
+        if v is not None:
+            pol_sig, pol_ok = max(-1.0, min(1.0, v)), True
+            if pol.get("新鲜度") == "陈旧":
+                pol_sig *= 0.5
+
+    # ② 公司公告根源(近似结构性:强度门槛过滤短暂/弱信号)
+    rel_w = {"直接": 1.0, "间接": 0.5}
+    sign = {"利好": 1, "利空": -1}
+    news_fresh = (three.get("新闻") or {}).get("新鲜度")   # 公司事件源自新闻层,借其新鲜度
+    comp_ok, num, den = False, 0.0, 0.0
+    if news_fresh != "无数据":
+        for e in sentiment.get("events") or []:
+            if not isinstance(e, dict) or e.get("层") != "公司行为" or "error" in e:
+                continue
+            if e.get("与本股关系") not in rel_w:
+                continue
+            s = sign.get(e.get("影响方向"))
+            st = _to_num(e.get("影响强度"))
+            if s is None or st is None or st < strong:
+                continue
+            w = rel_w[e["与本股关系"]]
+            num += s * (st / 5.0) * w
+            den += w
+            comp_ok = True
+    comp_sig = (num / den) if den else 0.0
+    if comp_ok and news_fresh == "陈旧":
+        comp_sig *= 0.5
+
+    # ③ 合成 + 缺层重归一
+    wc, wp = W.get("公司公告", 0.6), W.get("政策", 0.4)
+    n = (wc if comp_ok else 0) + (wp if pol_ok else 0)
+    if n == 0:
+        return None                       # 无根源信号 → 不倾斜
+    root = ((wc * comp_sig if comp_ok else 0) + (wp * pol_sig if pol_ok else 0)) / n
+    return max(-1.0, min(1.0, root))
+
+
+# ————————————————————————— F4 方向映射(+ 激进版倾斜)—————————————————————————
+def direction_view(cond: dict, signal: float | None = None, k: float = 0.0,
+                   tilt_horizons=("1日", "5日")) -> dict:
     """把条件化上涨概率映射为 看涨/看跌/中性 + 置信度(阈值 THRESHOLDS['指标条件化']['方向阈值'])。
 
     置信度看匹配质量:退回→低;精确→高;放宽1→中;放宽2→低。方向为倾向非承诺,非投资建议。
+
+    激进版·后验倾斜(第二步):对 tilt_horizons(默认 1/5日)按 p_adj=clip(p+k·signal,0,100) 重判方向,
+    结果放**新键** 方向_修正/上涨概率%_修正/是否倾斜(基线 方向/上涨概率% 原样保留,向后兼容)。
+    signal∈[-1,1](根源结构性净信号)或 None;k=倾斜增益(pp/单位信号)。
+    k=0 或 signal=None 或 该持有期不在 tilt_horizons 或 退回样本 → 不倾斜(方向_修正==方向,kill-switch)。
     """
     th = THRESHOLDS["指标条件化"]["方向阈值"]
     conf_map = {"精确": "高", "放宽1": "中", "放宽2": "低", "退回": "低"}
+    tilt_on = (signal is not None) and (k != 0.0)
+
+    def _dir(p):
+        return "看涨" if p >= th["看涨"] else ("看跌" if p <= th["看跌"] else "中性")
+
     out = {}
-    for k, v in cond.items():
+    for key, v in cond.items():
         p = v.get("上涨概率%")
-        if p is None:
-            out[k] = {"方向": "数据不足", "置信度": "低", "上涨概率%": None, "放宽层级": v.get("放宽层级")}
-            continue
-        direction = "看涨" if p >= th["看涨"] else ("看跌" if p <= th["看跌"] else "中性")
         lvl = v.get("放宽层级")
+        if p is None:
+            out[key] = {"方向": "数据不足", "置信度": "低", "上涨概率%": None, "放宽层级": lvl,
+                        "方向_修正": "数据不足", "上涨概率%_修正": None, "是否倾斜": False}
+            continue
         conf = "低" if v.get("是否退回") else conf_map.get(lvl, "低")
-        out[k] = {"方向": direction, "置信度": conf, "上涨概率%": p, "放宽层级": lvl}
+        base_dir = _dir(p)
+        do_tilt = tilt_on and (key in tilt_horizons) and (not v.get("是否退回"))
+        if do_tilt:
+            p_adj = max(0.0, min(100.0, p + k * signal))
+            adj_dir = _dir(p_adj)
+        else:
+            p_adj, adj_dir = p, base_dir
+        out[key] = {"方向": base_dir, "置信度": conf, "上涨概率%": p, "放宽层级": lvl,
+                    "方向_修正": adj_dir, "上涨概率%_修正": round(float(p_adj), 1),
+                    "是否倾斜": bool(do_tilt)}
     return out
