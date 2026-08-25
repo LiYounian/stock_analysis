@@ -94,12 +94,17 @@ def _prev_pool_index(as_of: str) -> dict[str, dict]:
     return {r["code"]: r for r in (v.get("rows") or []) if r.get("code")}
 
 
+# 展示标签字符串:措辞明确为"收盘态快照",避免"进行中"被误读成实时监控。
+# 注意:与内部布尔字段键 vcp["VCP进行中"] 区分——后者是判定位、不改;这里只是给用户看的标签文案。
+_TAG_VCP = "VCP收缩中(收盘)"
+
+
 def _tags(vcp: dict, first_day: bool, n_stars: int) -> list[str]:
     tags = []
     if first_day and n_stars >= 1:
         tags.append("新候选")
     if vcp.get("VCP进行中"):
-        tags.append("VCP进行中")
+        tags.append(_TAG_VCP)
     if vcp.get("接近枢纽"):
         tags.append("接近枢纽")
     if vcp.get("结构破坏"):
@@ -120,7 +125,7 @@ def _chain_short(chain, n: int = 3) -> str:
 def _radar(session: str, watch: list[dict]) -> str:
     focus = [r for r in watch if "结构破坏" not in (r.get("标签") or [])]
     broken = [r for r in watch if "结构破坏" in (r.get("标签") or [])]
-    vcp_on = [r for r in watch if "VCP进行中" in (r.get("标签") or [])]
+    vcp_on = [r for r in watch if _TAG_VCP in (r.get("标签") or [])]
     fresh = [r for r in watch if "新候选" in (r.get("标签") or [])]
     lines = [f"【{session}雷达】", f"重点：{len(focus)}只"]
     if vcp_on:
@@ -129,9 +134,9 @@ def _radar(session: str, watch: list[dict]) -> str:
             chain = _chain_short(r.get("回撤链"))
             n = r.get("轮数") or 0
             bits.append(f"{r['code']}（{chain}，第{n}轮）" if chain else r["code"])
-        lines.append("VCP进行中：" + "、".join(bits))
+        lines.append(_TAG_VCP + "：" + "、".join(bits))
     else:
-        lines.append("VCP进行中：无")
+        lines.append(_TAG_VCP + "：无")
     if fresh:
         bits = []
         for r in fresh[:8]:

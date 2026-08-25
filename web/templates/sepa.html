@@ -35,7 +35,7 @@
 </section>
 
 <section class="card wide">
-  <h2>表2 · 重点观察池 <small>满足任一:新候选 / VCP进行中 / 接近枢纽 / 结构破坏</small></h2>
+  <h2>表2 · 重点观察池 <small>满足任一:新候选 / VCP收缩中(收盘) / 接近枢纽 / 结构破坏 · 均为每日收盘快照,非实时监控</small></h2>
   {% if s.观察 %}
   <table>
     <tr>
@@ -49,7 +49,7 @@
       <td class="muted">{{ x.industry or '—' }}</td>
       <td>
         {% for t in x.标签 %}
-          <span class="badge {{ 'sell' if t=='结构破坏' else ('buy' if t=='VCP进行中' else 'wait') }}">{{ t }}</span>
+          <span class="badge {{ 'sell' if t=='结构破坏' else ('buy' if t=='VCP收缩中(收盘)' else 'wait') }}">{{ t }}</span>
         {% endfor %}
       </td>
       <td>{% if x.基本面星 %}基本面⭐{% endif %}{% if x.板块星 %} 板块⭐{% endif %}{% if x.星标数==0 %}—{% endif %}</td>

@@ -192,7 +192,7 @@ def test_chart_title_not_vcp_complete():
 
 def test_radar_mentions_session():
     text = pipe._radar("收盘", [
-        {"code": "300308", "标签": ["VCP进行中"], "回撤链": [25, 15, 8], "轮数": 3,
+        {"code": "300308", "标签": ["VCP收缩中(收盘)"], "回撤链": [25, 15, 8], "轮数": 3,
          "板块星": False, "基本面星": False},
         {"code": "002222", "标签": ["新候选"], "回撤链": [], "轮数": 0,
          "板块星": True, "基本面星": False},
@@ -202,6 +202,17 @@ def test_radar_mentions_session():
     assert "300308" in text
     assert "25%" in text and "8%" in text
     assert "非投资建议" not in text  # 雷达正文短;免责在 view
+    # 措辞锁:标签用"收盘态"表述,不再出现会被误读成实时监控的"VCP进行中"
+    assert "VCP收缩中(收盘)" in text
+    assert "VCP进行中" not in text
+
+
+def test_tag_wording_is_close_snapshot():
+    """措辞锁:VCP位判定为真时,标签串是'VCP收缩中(收盘)'(收盘态),非'VCP进行中'(像实时监控)。"""
+    tags = pipe._tags({"VCP进行中": True, "接近枢纽": False, "结构破坏": False},
+                      first_day=False, n_stars=0)
+    assert "VCP收缩中(收盘)" in tags
+    assert "VCP进行中" not in tags
 
 
 def test_pipeline_writes_views(monkeypatch, tmp_path):
