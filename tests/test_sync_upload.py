@@ -299,3 +299,41 @@ def test_upload_timeout_configurable(monkeypatch):
     monkeypatch.setenv("SYNC_UPLOAD_TIMEOUT_S", "not-a-number")
     upload._default_post("https://h/ingest", "tok", {"a": 1})
     assert captured["timeout"] == 120.0                  # 非法值回落默认
+
+
+def test_upload_date_only_view_single_shard(tmp_path):
+    """只补传(策略9傍晚补跑用):only_shards 只发指定 view 分片,record 与其它 view 一概不发。
+
+    锁死"零外溢":傍晚只补「最强选股」时,绝不能把 record/panel 等分片也重传出去。
+    """
+    analysis = tmp_path / "analysis"
+    d = analysis / "2026-08-25"
+    d.mkdir(parents=True)
+    (d / "000021.json").write_text(json.dumps({"meta": {"code": "000021"}}), encoding="utf-8")
+    (d / "600519.json").write_text(json.dumps({"meta": {"code": "600519"}}), encoding="utf-8")
+    (d / "panel.json").write_text(json.dumps({"rows": []}), encoding="utf-8")
+    (d / "最强选股.json").write_text(json.dumps({"入选数": 5, "入选清单": []}), encoding="utf-8")
+    posted = []
+
+    def post(url, token, env):
+        posted.append(env)
+        return 200, {"ok": True}
+
+    upload.upload_date("2026-08-25", url="http://x", token="t", source="s",
+                       key_id="k1", key="K", analysis_dir=analysis,
+                       post_fn=post, retries=0, base_delay=0, sleep_fn=lambda *_: None,
+                       only_shards={"__view__:最强选股"})
+    assert len(posted) == 1                               # 只 POST 1 次
+    env = posted[0]
+    assert set(env["views"]) == {"最强选股"}               # 片内只含这一个 view
+    assert env["records"] == {} and env["code_views"] == {}   # record/按票视图一律不发
+    assert env["views"]["最强选股"] == {"入选数": 5, "入选清单": []}
+    assert env["meta"].get("sig")                         # 已签名
+
+
+def test_only_view_key_matches_build_shards():
+    """--only-view <name> 拼出的过滤键 == build_shards 对该 view 生成的分片键(防前缀漂移)。"""
+    payload = {"records": {}, "views": {"最强选股": {"入选数": 5}}, "code_views": {}}
+    shards = upload.build_shards(payload)
+    assert set(shards) == {"__view__:最强选股"}
+    assert f"{upload.VIEW_SHARD_PREFIX}最强选股" in shards   # CLI 拼键与 build 键一致

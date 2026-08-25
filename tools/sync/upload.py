@@ -187,17 +187,23 @@ def upload_date(date: str, *, url: str, token: str, source: str, key_id: str, ke
                 analysis_dir: Path | None = None, receipt_path: Path | None = None,
                 post_fn=None, retries: int = 5, base_delay: float = 1.0,
                 sleep_fn=time.sleep, force: bool = False,
-                min_interval: float | None = None, rate_window_s: float | None = None) -> dict:
+                min_interval: float | None = None, rate_window_s: float | None = None,
+                only_shards: set[str] | None = None) -> dict:
     """打包并上传某日产物;断点续传(跳过已成功分片)。返回回执 dict。
 
     **节流(min_interval)**:每日 ~250 个分片一股脑发会超远端速率限制(默认 120/60s)→
     尾部分片被 429 丢弃(历史事故:全A view 分片总在尾部被限流丢,面板"待运行")。
     故对**实际发送**的分片按 min_interval 间隔发,默认从 settings.SYNC_RATE_MAX/WINDOW 推
     (留 15% 余量压到限流以内)。断点续传跳过的分片不计间隔,故补传少量分片仍快。
+
+    **only_shards**:只补传指定分片键(如 {"__view__:最强选股"})。用于傍晚 Tushare 筹码
+    发布后单独补跑+补传策略9,不重传其它 300+ 分片。为 None 则全量(日常路径)。
     """
     analysis_dir = analysis_dir or import_to_db._analysis_dir()
     payload = import_to_db.collect_date(analysis_dir, date)
     shards = build_shards(payload)
+    if only_shards is not None:                        # 单分片补传:只保留指定键(其余分片根本不进循环,零外溢)
+        shards = {k: v for k, v in shards.items() if k in only_shards}
     post_fn = post_fn or _default_post
     receipt = _load_receipt(receipt_path, date) if receipt_path else {"date": date, "shards": {}}
     meta_base = {"date": date, "source": source, "key_id": key_id,
@@ -234,6 +240,8 @@ def main(argv=None) -> int:
     ap.add_argument("--date", required=True, help="要上传的日期 YYYY-MM-DD")
     ap.add_argument("--force", action="store_true", help="忽略回执,全部分片重发")
     ap.add_argument("--retries", type=int, default=5, help="每分片最大重试次数(指数退避)")
+    ap.add_argument("--only-view", action="append", default=None, metavar="视图名",
+                    help="只补传指定 view 分片(可多次),如 --only-view 最强选股;省略=全量上传")
     args = ap.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s")
 
@@ -243,11 +251,15 @@ def main(argv=None) -> int:
         print(f"缺少必需环境变量:{', '.join(missing)}(见 settings.py 同步配置块)")
         return 2
 
+    only = {f"{VIEW_SHARD_PREFIX}{v}" for v in args.only_view} if args.only_view else None
     receipt = upload_date(
         args.date, url=settings.SYNC_INGEST_URL, token=settings.SYNC_INGEST_TOKEN,
         source=settings.SYNC_SOURCE_ID, key_id=settings.SYNC_KEY_ID, key=settings.SYNC_SIGNING_KEY,
-        receipt_path=_receipt_dir() / f"{args.date}.json", retries=args.retries, force=args.force)
+        receipt_path=_receipt_dir() / f"{args.date}.json", retries=args.retries, force=args.force,
+        only_shards=only)
     s = receipt["summary"]
+    if only:
+        print(f"只补传 {sorted(only)}")
     print(f"上传完成 {args.date}:共 {s['total']} 分片,成功 {s['ok']},失败 {s['failed']}")
     print(f"回执:{_receipt_dir() / (args.date + '.json')}")
     return 0 if s["failed"] == 0 else 1
