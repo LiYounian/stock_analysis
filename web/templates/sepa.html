@@ -13,6 +13,28 @@
 {% endif %}
 
 <section class="card wide">
+  <h2>表1 · 技术合格池(每日筛选) <small>SEPA 均线三条全满足 · 合格 {{ s.合格数 }},按 60 日涨幅取最强前 {{ s.展示数 or 10 }}</small></h2>
+  {% if s.合格 %}
+  <table>
+    <tr><th>代码</th><th>名称</th><th>行业</th><th>60日涨幅</th><th>入池天数</th><th>星标数</th><th>今日首入</th></tr>
+    {% for x in s.合格 %}
+    <tr>
+      <td>{{ x.code }}</td>
+      <td>{{ x.name }}</td>
+      <td class="muted">{{ x.industry or '—' }}</td>
+      <td>{{ '%+.1f%%' | format((x.趋势分 or 0) * 100) }}</td>
+      <td>{{ x.入池天数 }}</td>
+      <td>{{ x.星标数 }}{% if x.基本面星 %} 基本面⭐{% endif %}{% if x.板块星 %} 板块⭐{% endif %}</td>
+      <td class="muted">{{ '是' if x.今日首入 else '' }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% else %}
+  <p class="muted">当日无合格池。本地部署见文档《本地部署与监控手册》。</p>
+  {% endif %}
+</section>
+
+<section class="card wide">
   <h2>表2 · 重点观察池 <small>满足任一:新候选 / VCP进行中 / 接近枢纽 / 结构破坏</small></h2>
   {% if s.观察 %}
   <table>
@@ -39,28 +61,6 @@
   </table>
   {% else %}
   <p class="muted">当日无观察池(先跑 <code>python -m tools.run sepa --no-fetch</code>)。</p>
-  {% endif %}
-</section>
-
-<section class="card wide">
-  <h2>表1 · 技术合格池 <small>SEPA 均线三条全满足 · 合格 {{ s.合格数 }},按 60 日涨幅取最强前 {{ s.展示数 or 10 }}</small></h2>
-  {% if s.合格 %}
-  <table>
-    <tr><th>代码</th><th>名称</th><th>行业</th><th>60日涨幅</th><th>入池天数</th><th>星标数</th><th>今日首入</th></tr>
-    {% for x in s.合格 %}
-    <tr>
-      <td>{{ x.code }}</td>
-      <td>{{ x.name }}</td>
-      <td class="muted">{{ x.industry or '—' }}</td>
-      <td>{{ '%+.1f%%' | format((x.趋势分 or 0) * 100) }}</td>
-      <td>{{ x.入池天数 }}</td>
-      <td>{{ x.星标数 }}{% if x.基本面星 %} 基本面⭐{% endif %}{% if x.板块星 %} 板块⭐{% endif %}</td>
-      <td class="muted">{{ '是' if x.今日首入 else '' }}</td>
-    </tr>
-    {% endfor %}
-  </table>
-  {% else %}
-  <p class="muted">当日无合格池。本地部署见文档《本地部署与监控手册》。</p>
   {% endif %}
 </section>
 {% endblock %}
