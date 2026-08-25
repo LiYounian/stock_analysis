@@ -123,3 +123,43 @@ def test_signal_strength_may_be_string():
     s = _sent(events=[{"层": "公司行为", "影响方向": "利好", "影响强度": "4", "与本股关系": "直接"}])
     r = cp.root_structural_signal(s)
     assert r is not None and r > 0
+
+
+# ———————— 真结构性门(持续性接入 record 后)————————
+def _comp(direction="利好", strength=4, rel="直接", persist=None, pdir=None):
+    e = {"层": "公司行为", "影响方向": direction, "影响强度": strength, "与本股关系": rel}
+    if persist is not None:
+        e["持续性"] = persist
+    if pdir is not None:
+        e["持续性方向"] = pdir
+    return _sent(events=[e])
+
+
+def test_structural_event_counts():
+    """持续性=结构性持续 → 计入(方向取持续性方向)。"""
+    r = cp.root_structural_signal(_comp(persist="结构性持续", pdir="利好", strength=4))
+    assert r is not None and r > 0
+
+
+def test_transient_or_neutral_persist_excluded():
+    """持续性=短暂事件/中性 → 见光死,不进倾斜(即便强度5);无其它根源 → None。"""
+    assert cp.root_structural_signal(_comp(persist="短暂事件", pdir="利好", strength=5)) is None
+    assert cp.root_structural_signal(_comp(persist="中性", strength=5)) is None
+
+
+def test_structural_dir_falls_back_to_impact_dir():
+    """持续性方向=中性 时退回原 影响方向。"""
+    r = cp.root_structural_signal(_comp(direction="利空", persist="结构性持续", pdir="中性", strength=3))
+    assert r is not None and r < 0
+
+
+def test_unclassified_event_uses_strength_proxy():
+    """无持续性字段(未分类)→ 退回旧强度近似(≥门槛计入,<门槛不计)。"""
+    assert cp.root_structural_signal(_comp(persist=None, strength=4)) is not None
+    assert cp.root_structural_signal(_comp(persist=None, strength=2)) is None
+
+
+def test_switch_off_ignores_persistence(monkeypatch):
+    """SENTIMENT_PERSISTENCE_ON=False → 忽略持续性,退回强度近似(短暂事件也按强度计)。"""
+    monkeypatch.setattr(cp.settings, "SENTIMENT_PERSISTENCE_ON", False)
+    assert cp.root_structural_signal(_comp(persist="短暂事件", direction="利好", strength=4)) is not None
