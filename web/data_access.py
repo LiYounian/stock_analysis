@@ -1186,13 +1186,17 @@ def sepa_page(date: str = "latest") -> dict:
     pool = _v("SEPA合格池")
     watch = _v("SEPA观察池")
     radar = _v("SEPA雷达")
+    # 合格池:view 存全量(保入池天数续期+全量上传),展示层按趋势分(60日涨幅)降序取 Top10。
+    _pool_rows = pool.get("rows") or []
+    _pool_top = sorted(_pool_rows, key=lambda r: r.get("趋势分") or 0.0, reverse=True)[:10]
     return {
         "as_of": pool.get("as_of") or as_of(date),
         "session": pool.get("session") or watch.get("session") or "",
-        "合格": pool.get("rows") or [],
+        "合格": _pool_top,
         "观察": watch.get("rows") or [],
         "雷达": radar.get("文本") or watch.get("雷达") or "",
-        "合格数": pool.get("合格数") or len(pool.get("rows") or []),
+        "合格数": pool.get("合格数") or len(_pool_rows),
+        "展示数": len(_pool_top),
         "观察数": watch.get("观察数") or len(watch.get("rows") or []),
         "规则": pool.get("规则") or "",
     }

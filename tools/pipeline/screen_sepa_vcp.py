@@ -199,11 +199,17 @@ def run_sepa_vcp(codes: list[str], as_of: str | None = None,
         n_stars = int(fstar) + int(sstar)
         vcp = vcp_mod.analyze_vcp(kdf)
         tags = _tags(vcp, row["今日首入"], n_stars)
+        # 趋势分:60日涨幅(Minervini 动量语义),供展示层按强度取 Top10 排序。
+        # SEPA 已保证 ≥220 根历史,close[-61] 恒安全;不足则退化用最早一根。
+        _close = kdf["close"]
+        趋势分 = round(float(_close.iloc[-1] / _close.iloc[-61] - 1.0), 4) \
+            if len(_close) >= 61 else round(float(_close.iloc[-1] / _close.iloc[0] - 1.0), 4)
         rec = {
             "code": code, "name": row["name"], "industry": row["industry"],
             "入池日": row["入池日"], "入池天数": row["入池天数"],
             "今日首入": row["今日首入"],
             "基本面星": fstar, "板块星": sstar, "星标数": n_stars,
+            "趋势分": 趋势分,
             "轮数": vcp.get("轮数") or 0,
             "回撤链": vcp.get("回撤链") or [],
             "VCP进行中": vcp.get("VCP进行中"),

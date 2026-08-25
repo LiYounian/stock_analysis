@@ -220,8 +220,35 @@ def test_pipeline_writes_views(monkeypatch, tmp_path):
     assert "非投资建议" in v["合格池"]["免责"]
     rows = store.get_view("SEPA合格池")["rows"]
     assert all(r["星标数"] >= 1 for r in rows)
+    # 趋势分(60日涨幅):每行必带,供展示层按强度取 Top10 排序
+    assert all(isinstance(r.get("趋势分"), (int, float)) for r in rows)
     # 今日首入 + 有星 → 新候选进观察池
     watch = store.get_view("SEPA观察池")["rows"]
     assert any("新候选" in (r.get("标签") or []) for r in watch)
     ch = store.get_code_view("sepa_vcp_chart", watch[0]["code"])
     assert ch["title"] == "收缩结构参考"
+
+
+def test_sepa_page_top10_by_trend(monkeypatch):
+    """展示层:合格池 view 存全量,sepa_page 按趋势分降序取 Top10;合格数仍报全量真值。
+
+    锁语义:防未来改动把"存全量/展示Top10"退化成"pipeline 截断"(那会破坏入池天数续期)。
+    """
+    from web import data_access as da
+    rows = [{"code": f"{i:06d}", "name": f"T{i}", "industry": "x",
+             "入池天数": 1, "星标数": 1, "今日首入": False, "趋势分": round(i * 0.01, 4)}
+            for i in range(15)]                          # 趋势分 0.00..0.14
+
+    def fake_get_view(name, date="latest"):
+        if name == "SEPA合格池":
+            return {"as_of": "2026-08-25", "session": "收盘", "合格数": 15, "rows": rows}
+        raise FileNotFoundError(name)                    # 观察池/雷达缺失 → 空表不崩
+
+    monkeypatch.setattr(da.store, "get_view", fake_get_view)
+    out = da.sepa_page("2026-08-25")
+    assert len(out["合格"]) == 10                          # 只展示前10
+    assert out["展示数"] == 10
+    assert out["合格数"] == 15                             # 合格数仍是全量真值,不被 Top10 截断误报
+    trends = [r["趋势分"] for r in out["合格"]]
+    assert trends == sorted(trends, reverse=True)         # 按趋势分降序
+    assert trends[0] == 0.14 and min(trends) == 0.05      # 取的是最强10只(0.05..0.14),弱的5只被截掉

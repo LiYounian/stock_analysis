@@ -399,6 +399,17 @@ def cmd_sepa(argv):
     sepa._main(rest)
 
 
+def cmd_strong(argv):
+    """策略9 最强选股(Tushare 筹码 cyq_perf,傍晚才发布)。单独跑,供 20:00 补跑任务用。
+
+    --no-fetch 只读本地主档(K线);--universe N 截前 N;--date 指定日。
+    筹码当日未发布→写"需 Tushare"占位 view、不出;发布后补跑即出真结果。
+    """
+    from tools.pipeline import screen_strong
+    rest = argv[2:] if argv else []
+    screen_strong._main(rest)
+
+
 def cmd_analyze(argv):
     """读缓存算技术指标,打印评级排行(不落盘)。"""
     codes, _ = _prep(argv)
@@ -696,7 +707,8 @@ _CMDS = {"collect": cmd_collect, "message": cmd_message, "sentiment": cmd_sentim
          "serialize": cmd_serialize, "panel": cmd_panel, "screen": cmd_screen,
          "events": cmd_events, "factor": cmd_factor, "council": cmd_council,
          "context": cmd_context, "pipeline": cmd_pipeline, "screenall": cmd_screenall,
-         "pattern": cmd_pattern, "sepa": cmd_sepa, "analyze": cmd_analyze, "all": cmd_all}
+         "pattern": cmd_pattern, "sepa": cmd_sepa, "strong": cmd_strong,
+         "analyze": cmd_analyze, "all": cmd_all}
 
 
 def main(argv: list[str]) -> int:
