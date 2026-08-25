@@ -22,6 +22,7 @@ import pandas as pd
 
 from tools.analysis import indicator_state as ist
 from tools.analysis import technical as ta
+from tools.config import settings
 from tools.config.strategy import THRESHOLDS
 
 logger = logging.getLogger("analysis.conditional_predict")
@@ -240,8 +241,9 @@ def root_structural_signal(sentiment: dict | None) -> float | None:
 
     只用根源层,**剔除舆情噪声与顶层净情绪分**(舆情已被多轮回测钉死为噪声;顶层常被舆情单层污染)。
     · 政策:取 sentiment.三层.政策.净情绪(聚合值;政策专用条目已在 serialize 被过滤,不能数 events)。
-    · 公司公告:events 中 层=='公司行为' 且 |影响强度|≥根源强度门槛 且 关系∈{直接,间接} 且 方向∈{利好,利空}
-      (强度门槛=近似结构性,滤掉短暂/弱事件)。
+    · 公司公告:events 中 层=='公司行为' 且 关系∈{直接,间接}。**真结构性门**:开关 SENTIMENT_PERSISTENCE_ON 且
+      事件带 持续性 分类时,只认 持续性=='结构性持续'(短暂事件/中性=见光死,不进倾斜),方向取 持续性方向(退 影响方向);
+      未分类/开关关 → 退回旧近似(影响强度≥根源强度门槛)。幅度始终用 影响强度/5。
     · 两根源按 根源权重 合成,缺层重归一。新鲜度='陈旧' → 该分量×0.5;='无数据' → 该分量不计。
     无根源信号 / sentiment 缺失 → 返回 None(不倾斜,等价纯技术,kill-switch 对齐点)。
     """
@@ -262,9 +264,10 @@ def root_structural_signal(sentiment: dict | None) -> float | None:
             if pol.get("新鲜度") == "陈旧":
                 pol_sig *= 0.5
 
-    # ② 公司公告根源(近似结构性:强度门槛过滤短暂/弱信号)
+    # ② 公司公告根源(真结构性门:优先用持续性分类 持续性=='结构性持续';缺失/开关关→退回旧强度近似)
     rel_w = {"直接": 1.0, "间接": 0.5}
     sign = {"利好": 1, "利空": -1}
+    use_persist = getattr(settings, "SENTIMENT_PERSISTENCE_ON", True)
     news_fresh = (three.get("新闻") or {}).get("新鲜度")   # 公司事件源自新闻层,借其新鲜度
     comp_ok, num, den = False, 0.0, 0.0
     if news_fresh != "无数据":
@@ -273,12 +276,20 @@ def root_structural_signal(sentiment: dict | None) -> float | None:
                 continue
             if e.get("与本股关系") not in rel_w:
                 continue
-            s = sign.get(e.get("影响方向"))
             st = _to_num(e.get("影响强度"))
-            if s is None or st is None or st < strong:
+            persist = e.get("持续性") if use_persist else None
+            if persist is not None:                        # 有真结构性分类
+                if persist != "结构性持续":                # 短暂事件/中性 → 见光死,不进倾斜
+                    continue
+                s = sign.get(e.get("持续性方向")) or sign.get(e.get("影响方向"))  # 方向:持续性方向优先,退原影响方向
+            else:                                          # 未分类/开关关 → 退回旧强度近似(≥门槛)
+                if st is None or st < strong:
+                    continue
+                s = sign.get(e.get("影响方向"))
+            if s is None or st is None:
                 continue
             w = rel_w[e["与本股关系"]]
-            num += s * (st / 5.0) * w
+            num += s * (st / 5.0) * w                       # 幅度仍用影响强度;结构性只作方向门
             den += w
             comp_ok = True
     comp_sig = (num / den) if den else 0.0
