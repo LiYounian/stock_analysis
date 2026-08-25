@@ -34,6 +34,33 @@ trap 'rmdir "$LOCK" 2>/dev/null' EXIT
 
 {
   echo "==================== $(date) pull_refresh $D ===================="
+  # ⓪ 跑最新已合并 main 代码(选项B:主仓内 ff-only 自更,不破坏数据流)——
+  #    背景:本项目多窗口并发,主仓可能落后 origin/main(别的 worktree 合并并 push 后,主仓没同步)。
+  #    若不自更,当天会用旧代码产数据、新字段漏。这里在主仓内直接 fetch + ff-only 快进到 origin/main。
+  #    为什么不切到专用 worktree(选项A):本任务的数据流强依赖"在同一仓库里滚存"——
+  #      · forward_scorecard 每次 build_scorecard() 从 store.list_dates() 全量重扫 data/analysis/<日期>/ 重建 CSV;
+  #      · 而这些每日日期目录是**未跟踪产物**,靠常年跑在同一主仓才逐日累积(git status 里一片 ?? data/analysis/2026-08-*)。
+  #    worktree 每次 reset --hard 只会保留 origin/main 已提交的日期目录 + 当天新产,历史未跟踪日期目录不累积,
+  #    记分卡的多周滚存样本会被打断。故选 ff-only 自更:只快进代码,data/analysis 滚存原样不动。
+  #    安全性:fetch 只碰共享对象库;merge --ff-only 绝不产生合并提交/改写历史,冲突即中止;仅当 HEAD==main 时才动,
+  #    不触碰其它 worktree/feature 分支。拿不到最新时**打 WARNING 照跑当前代码**(不静默,便于事后定位漏字段)。
+  _CUR_BRANCH="$(git -C "$REPO" rev-parse --abbrev-ref HEAD 2>/dev/null || echo unknown)"
+  git -C "$REPO" fetch --quiet origin 2>/dev/null || echo "!! ⓪ git fetch origin 失败,用主仓现有 origin/main 尝试快进"
+  if [ "$_CUR_BRANCH" = "main" ]; then
+    _OLD_HEAD="$(git -C "$REPO" rev-parse --short HEAD 2>/dev/null || echo unknown)"
+    if git -C "$REPO" merge --ff-only origin/main >/dev/null 2>&1; then
+      _NEW_HEAD="$(git -C "$REPO" rev-parse --short HEAD 2>/dev/null || echo unknown)"
+      if [ "$_OLD_HEAD" = "$_NEW_HEAD" ]; then
+        echo "-- ⓪ 代码已是最新 main($_NEW_HEAD),无需更新 --"
+      else
+        echo "-- ⓪ 已快进到最新 main:$_OLD_HEAD -> $_NEW_HEAD --"
+      fi
+    else
+      echo "!! ⓪ WARNING:ff-only 快进失败(主仓可能领先/有对同一跟踪文件的本地改动/与 origin/main 分叉)——用当前代码($_OLD_HEAD)跑,可能漏新字段"
+    fi
+  else
+    echo "!! ⓪ WARNING:主仓 HEAD 不在 main 分支(当前=$_CUR_BRANCH)——不自更,用当前代码跑,可能漏新字段。请把主仓切回 main"
+  fi
   # ① 本地自采全A K线(PULL_FETCH=1 开启;plist 已设)。**必须单进程 FETCH_WORKERS=1**——
   #    多进程会触发 mini_racer/V8 的 PartitionAlloc 崩溃(见头部根因订正);单进程实测跑通不崩。
   #    ops.remote_fetch = spot增量→回退逐只(腾讯/新浪)→抓完 _advance_master_from_raw 推进主档。
