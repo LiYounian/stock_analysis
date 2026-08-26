@@ -103,6 +103,38 @@ def test_enrich_news_no_raw_returns_empty(monkeypatch):
     assert news_ai.enrich_news("000021") == []
 
 
+def test_enrich_news_extract_capped_at_budget(monkeypatch):
+    """预算闸门:>NEWS_EXTRACT_MAX 条新闻时,enrich_news 送 LLM 抽取的条数
+    被限制在 settings.NEWS_EXTRACT_MAX(而非 len(items)),超限条 ai 降级中性;
+    原始新闻仍全量落盘(输出长度 == len(items))。锁住预算不泄漏语义。"""
+    cap = news_ai.settings.NEWS_EXTRACT_MAX
+    n_items = cap + 15
+    many = [{"title": f"t{i}", "content": f"c{i}", "time": f"2026-08-07 {i:02d}:00",
+             "source": "s", "url": f"u{i}"} for i in range(n_items)]
+    monkeypatch.setattr(news_ai.store, "get_raw",
+                        lambda kind, code, date="latest": list(many))
+
+    # 冒充 event.extract_news_events:复用其真实 limit 截断语义,统计"送抽取条数"
+    seen = {}
+
+    def _fake_extract(code, client=None, limit=None):
+        used = many[:limit] if limit else many
+        seen["limit"] = limit
+        seen["n_extracted"] = len(used)
+        return [{"影响方向": "利好", "影响强度": 3, "与本股关系": "直接",
+                 "摘要": f"s{i}", "原因": ""} for i in range(len(used))]
+
+    monkeypatch.setattr(news_ai.event, "extract_news_events", _fake_extract)
+
+    out = news_ai.enrich_news("000021")
+    assert seen["limit"] == cap                    # 传入的 limit 是预算上限而非 len(items)
+    assert seen["n_extracted"] == cap              # 实际只对 cap 条送 LLM(不泄漏)
+    assert len(out) == n_items                     # 原文全量落盘,输出长度对齐
+    assert out[0]["ai"]["方向"] == "利好"           # 前 cap 条拿到真实抽取
+    assert out[cap]["ai"] == {"方向": "中性", "强度": 0, "与本股关系": "",
+                              "评论": "", "原因": ""}  # 超限条降级中性
+
+
 def test_write_news_ai_persists(store, monkeypatch):
     """write_news_ai 落盘 news_ai 按票视图,可经 store 读回。"""
     store.put_raw("news", "000021", list(_NEWS))
