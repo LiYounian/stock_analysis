@@ -159,35 +159,158 @@ def _tilt_labels(rec, sub_kline, as_of, pool_idx, horizons) -> dict:
         return {}
 
 
+def _columns(horizons) -> list[str]:
+    """记分卡列的**权威顺序**(全量/增量两条路径都按此拼行,保证列序与 schema 幂等一致)。"""
+    cols = ["date", "code", "name", "trend", "senti", "pred_dir",
+            "persist", "persist_dir", "persist_strength", "persist_basis", "signal"]
+    for N in horizons:
+        cols += [f"r_{N}", f"hit_{N}", f"p_cond_{N}", f"dir_cond_{N}",
+                 f"hit_cond_{N}", f"p_adj_{N}", f"dir_adj_{N}", f"hit_adj_{N}"]
+    return cols
+
+
+def _path_mtime(path) -> float:
+    """文件 mtime;取不到路径/不存在/异常 → +inf(**保守判定失效**,宁可重算不可漏)。"""
+    try:
+        if path is not None and os.path.exists(path):
+            return os.path.getmtime(path)
+    except Exception:  # noqa: BLE001
+        pass
+    return float("inf")
+
+
+def _record_mtime(code: str, date: str) -> float:
+    """该 (code, date) record json 的 mtime(store 私有布局,零改动只读)。缺路径 → +inf。"""
+    try:
+        return _path_mtime(store._record_path(code, date))
+    except Exception:  # noqa: BLE001
+        return float("inf")
+
+
+def _kline_mtime(code: str) -> float:
+    """该 code 主档 K线 parquet 的 mtime。除权 backfill 会静默改写整份前复权价 →
+    只要文件比 CSV 新就判失效(比只看 record json 更保守,兜住静默改写)。
+    主档缺失(回退 raw 分区等无法定位)→ +inf 保守重算。
+    """
+    try:
+        return _path_mtime(store._master_path(code))
+    except Exception:  # noqa: BLE001
+        return float("inf")
+
+
+def _all_matured(prev_row: dict, horizons) -> bool:
+    """prev 行是否所有 r_N 都已到期(非 NaN)→ 整行永久冻结,可直接复用。"""
+    for N in horizons:
+        v = prev_row.get(f"r_{N}")
+        if v is None or (isinstance(v, float) and np.isnan(v)):
+            return False
+    return True
+
+
+def _reuse_row(prev_row: dict, cols) -> dict:
+    """按权威列序原样复用 prev 行(冻结行:跳过 kline/tilt/persist)。"""
+    return {c: prev_row.get(c) for c in cols}
+
+
+def _refresh_pending(prev_row: dict, cols, horizons, kline_fn, kidx_cache,
+                     code: str, date: str) -> dict:
+    """pending 行只做**到期刷新**:补新到期的 r_N/hit_N/hit_cond_N/hit_adj_N,
+    **不调 _tilt_labels**——命中用缓存里已冻结的 pred_dir/dir_cond_N/dir_adj_N,
+    收益口径与全算完全一致(close[idx+N]/close[idx])。已到期的 N 保留 prev 值。
+    """
+    row = {c: prev_row.get(c) for c in cols}
+    df = kline_fn(code)
+    idx = kidx_cache.get(code, {}).get(date)
+    close = df["close"].to_numpy(float) if (df is not None and idx is not None) else None
+    pdir = prev_row.get("pred_dir")
+    try:
+        pdir = int(pdir) if (pdir is not None and not (isinstance(pdir, float) and np.isnan(pdir))) else 0
+    except (TypeError, ValueError):
+        pdir = 0
+    for N in horizons:
+        pr = prev_row.get(f"r_{N}")
+        if pr is not None and not (isinstance(pr, float) and np.isnan(pr)):
+            continue   # 该 N 已到期 → 冻结,保留 prev
+        r = np.nan
+        hit = None
+        if close is not None and idx is not None and idx + N < len(close) and close[idx] > 0:
+            r = float(close[idx + N] / close[idx] - 1.0) * 100.0
+            if pdir != 0:
+                hit = int(np.sign(r) == np.sign(pdir))
+        row[f"r_{N}"] = r
+        row[f"hit_{N}"] = hit
+        dc, da = prev_row.get(f"dir_cond_{N}"), prev_row.get(f"dir_adj_{N}")
+        row[f"hit_cond_{N}"] = int(np.sign(r) == np.sign(dc)) if (not np.isnan(r) and pd.notna(dc) and dc) else None
+        row[f"hit_adj_{N}"] = int(np.sign(r) == np.sign(da)) if (not np.isnan(r) and pd.notna(da) and da) else None
+    return row
+
+
 def build_scorecard(dates=None, horizons=(1, 5, 10), classify_persist=True,
-                    tilt=True) -> pd.DataFrame:
+                    tilt=True, prev=None, csv_mtime=None) -> pd.DataFrame:
     """重读全部历史 record → 逐 (date, code) 一行,回填已到期前瞻收益 + 方向命中 + 持续性标签。
 
     classify_persist:是否给每行打持续性标签(读根源 events→分类器)。LLM 不可用则自动降级留空。
     tilt:是否附激进版·后验倾斜列(p_cond/dir_cond/hit_cond 基线 vs p_adj/dir_adj/hit_adj 倾斜)。
       需 state_pool(缺失则该组列留空)。用于"倾斜 vs 纯技术"前向累积 A/B(k 标定/放行闸依据)。
+
+    增量(方案 B):prev = 上次 CSV(pd.read_csv),csv_mtime = 其 mtime。逐 (date,code) 判失效:
+      失效(任一为真即整行走全算)= prev 无此行 / record json mtime > csv_mtime /
+      该 code K线 parquet mtime > csv_mtime / prev 列集不匹配当前 schema(整表回退全量)。
+    未失效且全 r_N 到期 → 原样复用 prev 行;未失效但仍 pending → 只补到期(不跑 tilt)。
+    prev=None(或 --rebuild)→ 全量从零。输出仍全量覆盖同一 --out,幂等不变。
     """
     if dates is None:
         dates = store.list_dates()
     label_persist = _persist_labeler(classify_persist)
     pool_idx = _load_pool_index() if tilt else None
+    cols = _columns(horizons)
+
+    # prev 索引 + schema 校验(失效条件④):列集不匹配当前 horizon → prev 作废,整表全量重算
+    prev_index: dict[tuple[str, str], dict] = {}
+    if prev is not None and not prev.empty and set(cols).issubset(set(prev.columns)):
+        for pr in prev.to_dict("records"):
+            prev_index[(str(pr.get("date")), str(pr.get("code")))] = pr
+
     kline_cache: dict[str, pd.DataFrame | None] = {}
+    kidx_cache: dict[str, dict] = {}
 
     def _kline(code):
         if code not in kline_cache:
             try:
-                kline_cache[code] = market.load_kline(code).reset_index(drop=True)
+                dfk = market.load_kline(code).reset_index(drop=True)
+                kline_cache[code] = dfk
+                kidx_cache[code] = ({str(x)[:10]: i for i, x in enumerate(dfk["date"].tolist())}
+                                    if "date" in dfk.columns else {})
             except Exception:
                 kline_cache[code] = None
+                kidx_cache[code] = {}
         return kline_cache[code]
 
     rows = []
     for d in dates:
+        d = str(d)
         for rec in store.iter_records(date=d):
             meta = rec.get("meta") or {}
             code = meta.get("code")
             if not code:
                 continue
+            code = str(code)
+
+            # ---- 失效判定(双 mtime + prev 命中)----
+            prev_row = prev_index.get((d, code))
+            stale = True
+            if prev_row is not None and csv_mtime is not None:
+                stale = (_record_mtime(code, d) > csv_mtime
+                         or _kline_mtime(code) > csv_mtime)
+            if not stale:
+                if _all_matured(prev_row, horizons):
+                    rows.append(_reuse_row(prev_row, cols))            # 冻结行:整行复用
+                else:
+                    rows.append(_refresh_pending(prev_row, cols, horizons,
+                                                 _kline, kidx_cache, code, d))  # pending:只补到期
+                continue
+
+            # ---- 失效/新增:全算路径 ----
             trend = ((rec.get("signals") or {}).get("trend") or {}).get("评级")
             senti = ((rec.get("sentiment") or {}).get("净情绪分"))
             try:
@@ -196,15 +319,14 @@ def build_scorecard(dates=None, horizons=(1, 5, 10), classify_persist=True,
                 senti = None
             pdir = _pred_dir(trend, senti)
             plab = label_persist(rec)
-            row = {"date": d, "code": str(code), "name": meta.get("name"),
+            row = {"date": d, "code": code, "name": meta.get("name"),
                    "trend": trend, "senti": senti, "pred_dir": pdir,
                    "persist": plab.get("持续性"), "persist_dir": plab.get("方向"),
                    "persist_strength": plab.get("印证强度"), "persist_basis": plab.get("依据")}
 
-            df = _kline(str(code))
-            kdates = [str(x)[:10] for x in df["date"].tolist()] if df is not None and "date" in df.columns else []
-            idx = kdates.index(d) if d in kdates else None
-            close = df["close"].to_numpy(float) if idx is not None else None
+            df = _kline(code)
+            idx = kidx_cache.get(code, {}).get(d)
+            close = df["close"].to_numpy(float) if (df is not None and idx is not None) else None
 
             # 激进版倾斜标签:kline 切到信号日 d(≤d,无未来函数)再算条件化 p 与倾斜
             tl = _tilt_labels(rec, df.iloc[:idx + 1].reset_index(drop=True), d, pool_idx, horizons) \
@@ -214,7 +336,7 @@ def build_scorecard(dates=None, horizons=(1, 5, 10), classify_persist=True,
             for N in horizons:
                 r = np.nan
                 hit = None
-                if idx is not None and idx + N < len(close) and close[idx] > 0:
+                if idx is not None and close is not None and idx + N < len(close) and close[idx] > 0:
                     r = float(close[idx + N] / close[idx] - 1.0) * 100.0
                     if pdir != 0:
                         hit = int(np.sign(r) == np.sign(pdir))
@@ -229,7 +351,7 @@ def build_scorecard(dates=None, horizons=(1, 5, 10), classify_persist=True,
                 row[f"dir_adj_{N}"] = da
                 row[f"hit_adj_{N}"] = int(np.sign(r) == np.sign(da)) if (not np.isnan(r) and da) else None
             rows.append(row)
-    df = pd.DataFrame(rows)
+    df = pd.DataFrame(rows, columns=cols)
     return df.sort_values(["date", "code"]).reset_index(drop=True) if not df.empty else df
 
 
@@ -267,8 +389,20 @@ def summarize(sc: pd.DataFrame, horizons=(1, 5, 10)) -> dict:
     return out
 
 
-def run(out=_DEFAULT_OUT, horizons=(1, 5, 10), classify_persist=True, tilt=True):
-    sc = build_scorecard(horizons=horizons, classify_persist=classify_persist, tilt=tilt)
+def run(out=_DEFAULT_OUT, horizons=(1, 5, 10), classify_persist=True, tilt=True,
+        rebuild=False):
+    # 增量:build 前载入上次 CSV 作 prev,并记其 mtime(失效判定基线)。
+    # 首次无 CSV / --rebuild → prev=None 走全量。code 强制读为 str(防 600000/000001 被推成 int 丢零)。
+    prev, csv_mtime = None, None
+    if not rebuild and os.path.exists(out):
+        try:
+            prev = pd.read_csv(out, dtype={"code": str})
+            csv_mtime = os.path.getmtime(out)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("载入上次记分卡失败,回退全量重算: %s", str(e)[:80])
+            prev, csv_mtime = None, None
+    sc = build_scorecard(horizons=horizons, classify_persist=classify_persist, tilt=tilt,
+                         prev=prev, csv_mtime=csv_mtime)
     print("\n===== 前向累积记分卡(治本·滚存)=====")
     print("(无未来函数;历史回测≠未来保证,非投资建议)\n")
     if sc.empty:
@@ -310,6 +444,8 @@ if __name__ == "__main__":
                     help="不打持续性标签(跳过 LLM 分类,只出方向命中记分卡)")
     ap.add_argument("--no-tilt", action="store_true",
                     help="不算激进版倾斜 A/B 列(跳过条件化池查询,只出基础记分卡)")
+    ap.add_argument("--rebuild", action="store_true",
+                    help="强制忽略上次 CSV 全量重算(排障/纠偏兜底,绕过增量)")
     a = ap.parse_args()
     run(out=a.out, horizons=tuple(int(x) for x in a.horizon.split(",")),
-        classify_persist=not a.no_persistence, tilt=not a.no_tilt)
+        classify_persist=not a.no_persistence, tilt=not a.no_tilt, rebuild=a.rebuild)
