@@ -417,10 +417,12 @@ def selection_page(date: str = "latest") -> dict:
     strategy_vol = _strategy_volume_section(recs, date)     # S04 量价放量(PR#15,3 子信号)
     strategy_strong = _strategy_strong_section(recs, date)  # S05 最强(PR#15,Tushare-only)
     strategy_rt = _strategy_reversal_turnover_section(recs, date)  # 策略10 反转低换手(候选·前向观测中)
+    strategy_cr = _strategy_conditional_rank_section(recs, date)   # 策略11 指标条件化状态排序(状态参考·非alpha)
     combined = _combined_section(strategy0, strategy1, strategy2, strategy3,
                                  strategy4, strategy5, strategy6, recs,
                                  strategy_mr=strategy_mr, strategy_vol=strategy_vol,
-                                 strategy_strong=strategy_strong, strategy_rt=strategy_rt)
+                                 strategy_strong=strategy_strong, strategy_rt=strategy_rt,
+                                 strategy_cr=strategy_cr)
 
     return {"rows": pool_rows, "total": len(recs),
             "combined": combined, "strategy0": strategy0, "strategy1": strategy1,
@@ -428,6 +430,7 @@ def selection_page(date: str = "latest") -> dict:
             "strategy5": strategy5, "strategy6": strategy6,
             "strategy_mr": strategy_mr, "strategy_vol": strategy_vol,
             "strategy_strong": strategy_strong, "strategy_rt": strategy_rt,
+            "strategy_cr": strategy_cr,
             "config": config or {}, "as_of": as_of(date)}
 
 
@@ -610,6 +613,50 @@ def _strategy_reversal_turnover_section(recs: dict, date: str = "latest", cap: i
         "入选数": v.get("入选数", len(v.get("入选清单", []) or [])),
         "rows": rows, "picks": picks,
         "权重": v.get("权重"), "参数": v.get("参数"),
+    }
+
+
+def _strategy_conditional_rank_section(recs: dict, date: str = "latest", cap: int = 10) -> dict:
+    """策略11「指标条件化状态排序」区块(状态参考·非alpha):读全A screener view「指标条件化状态排序」
+    (screen_conditional_rank 产出),1/5/10 日三维度各 Top10。
+
+    ⚠️ 诚实口径:上涨概率%/置信度为**指标状态格级**(同状态的票取值相同),Top 由 成交额(流动性)破并列——
+    即"最强历史状态格里挑流动性好的票",**非个股 alpha 排名**;回测聚合无超额、1日弱区分、5/10日近噪声。
+    view 缺失 → present=False(前端「策略11 待运行」)。综合选股并集取 1日 榜。
+    """
+    horizons = ["1日", "5日", "10日"]
+    empty = {"present": False, "as_of": as_of(date), "扫描数": None, "有效样本": {},
+             "排行": {h: [] for h in horizons}, "picks": []}
+    try:
+        v = store.get_view("指标条件化状态排序", date=date)
+    except FileNotFoundError:
+        return empty
+    if not isinstance(v, dict):
+        return empty
+    src = v.get("排行") or {}
+    out_rank: dict[str, list] = {}
+    picks: list[str] = []
+    for h in horizons:
+        rows = []
+        for item in (src.get(h) or [])[:cap]:
+            if not isinstance(item, dict) or not item.get("code"):
+                continue
+            code = item["code"]
+            meta = (recs.get(code) or {}).get("meta") or {}
+            rows.append({
+                "code": code, "name": _name(recs, code),
+                "industry": meta.get("industry") or meta.get("sector"),
+                "上涨概率%": item.get("上涨概率%"), "方向": item.get("方向"),
+                "置信度": item.get("置信度"), "相似样本数": item.get("相似样本数"),
+                "成交额万元": item.get("成交额万元"), "过下限": item.get("过下限"),
+            })
+        out_rank[h] = rows
+        if h == "1日":
+            picks = [r["code"] for r in rows]
+    return {
+        "present": True, "as_of": v.get("as_of") or as_of(date),
+        "扫描数": v.get("扫描数"), "有效样本": v.get("有效样本") or {},
+        "排行": out_rank, "picks": picks, "命名": v.get("命名"),
     }
 
 
@@ -805,7 +852,8 @@ def _combined_section(strategy0: dict, strategy1: dict, strategy2: dict,
                       strategy_mr: dict | None = None,
                       strategy_vol: dict | None = None,
                       strategy_strong: dict | None = None,
-                      strategy_rt: dict | None = None) -> dict:
+                      strategy_rt: dict | None = None,
+                      strategy_cr: dict | None = None) -> dict:
     """【综合选股】:11 策略(策略0-10)入选代码的并集(去重),每票标注命中来源(被哪几个策略选中)。
 
     后端产出**全并集**(所有可用策略入选代码);前端按勾选的策略实时过滤 + 重算命中来源
@@ -826,6 +874,7 @@ def _combined_section(strategy0: dict, strategy1: dict, strategy2: dict,
     s8_codes = list((strategy_vol or {}).get("picks") or [])    # S04 量价放量
     s9_codes = list((strategy_strong or {}).get("picks") or [])  # S05 最强(Tushare-only)
     s10_codes = list((strategy_rt or {}).get("picks") or [])     # 策略10 反转低换手(候选·前向观测中)
+    s11_codes = list((strategy_cr or {}).get("picks") or [])     # 策略11 指标条件化状态排序(1日榜;状态参考·非alpha)
     # 行业 hint:策略0 view 自带行业(全A票多无中心记录)
     s0_industry = {r["code"]: r.get("industry") for r in strategy0.get("rows", [])}
 
@@ -834,7 +883,7 @@ def _combined_section(strategy0: dict, strategy1: dict, strategy2: dict,
     for key, codes in (("策略0", s0_codes), ("策略1", s1_codes), ("策略2", s2_codes),
                        ("策略3", s3_codes), ("策略4", s4_codes), ("策略5", s5_codes),
                        ("策略6", s6_codes), ("策略7", s7_codes), ("策略8", s8_codes),
-                       ("策略9", s9_codes), ("策略10", s10_codes)):
+                       ("策略9", s9_codes), ("策略10", s10_codes), ("策略11", s11_codes)):
         for c in codes:
             if c not in sources:
                 sources[c] = []
@@ -905,6 +954,12 @@ def _combined_section(strategy0: dict, strategy1: dict, strategy2: dict,
                   "(低换手),各自 winsor+zscore 后等权取 TopK。回测仅在「可交易池(成交额前50%)+ 5-10日持有"
                   "+ TopK≤20」内 net 转正、相对纯 rev5 有稳健增量;net 绝对水平存幸存者偏差水分(样本仅当前"
                   "在市票),**以前向观测为准,当前不作『已验证可用』推荐**。全A筛选,读预落盘 view。"},
+        {"key": "策略11", "label": "指标条件化状态排序(状态参考)", "codes": s11_codes,
+         "available": bool((strategy_cr or {}).get("present")),
+         "title": "⚠️ 状态排序参考,非已验证 alpha:按当日指标状态相似的历史上涨概率排序(1日榜)。"
+                  "上涨概率%/置信度为**指标状态格级**(同状态票取值相同),Top 由近20日成交额均值(流动性)破并列——"
+                  "即『最强历史状态格里挑流动性好的票』,非个股涨跌排名。回测聚合无显著超额、方向多中性、"
+                  "1日弱区分/5-10日近噪声;不作胜率/涨跌承诺。全A筛选,读预落盘 view。"},
     ]
     return {"strategies": strategies, "rows": rows}
 

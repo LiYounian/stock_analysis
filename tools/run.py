@@ -596,9 +596,9 @@ def run_screen_all(codes_all: list[str], as_of: str, no_llm: bool = False,
       ⑤  补缺数值面(skip-if-cached)→ 新闻(no_llm 跳过)→ 板块指数 → LLM 情绪(no_llm 跳过)→
           组装/事件/多因子/合议 → 横表/选股视图,全对 llm_subset。
     """
-    from tools.pipeline import (screen_box, screen_council, screen_max_range,
-                                 screen_momentum, screen_reversal_turnover, screen_s01,
-                                 screen_s02, screen_semi_factor, screen_strong, screen_volume)
+    from tools.pipeline import (screen_box, screen_conditional_rank, screen_council,
+                                 screen_max_range, screen_momentum, screen_reversal_turnover,
+                                 screen_s01, screen_s02, screen_semi_factor, screen_strong, screen_volume)
     store.set_active_date(as_of)
     logger.info("===== 全A多策略选股开始(日期 %s,全A %d 只)%s=====",
                 as_of, len(codes_all), "(数据-only)" if no_llm else "")
@@ -631,6 +631,11 @@ def run_screen_all(codes_all: list[str], as_of: str, no_llm: bool = False,
         # 策略10·反转低换手组合(候选·前向观测中):纯量价横截面复合(rev5+turn20),fetch=False 只读主档。
         # 诚实边界见 docs/策略/策略总览:限可交易池+5-10日+TopK≤20;net 绝对水平存幸存者水分,以前向观测为准。
         ("策略10·反转低换手组合", lambda: screen_reversal_turnover.run_reversal_turnover_screen(
+            codes_all, as_of=as_of, fetch=False)),
+        # 策略11·指标条件化状态排序(状态参考·非alpha):按当日指标状态相似的历史上涨概率排 Top10(1/5/10日),
+        # 成交额破同状态格并列。⚠️需先建 state_pool(数据线在 remote_fetch/主档同步 后 build_state_pool);
+        # 缺池则优雅出空。fetch=False 只读主档。回测聚合无超额、1日弱区分/5-10日近噪声,页面已诚实标注。
+        ("策略11·指标条件化状态排序", lambda: screen_conditional_rank.run_conditional_rank_screen(
             codes_all, as_of=as_of, fetch=False)),
     ]
     news_topk = int(os.getenv("SCREENALL_NEWS_TOPK", "5"))  # 新闻/情绪 LLM 每策略只取前 N(省 token、去边缘票噪声)

@@ -466,6 +466,49 @@
   {% endif %}
 </section>
 
+<!-- 策略11:指标条件化状态排序(状态参考·非alpha,1/5/10日三维度) -->
+<section class="card wide">
+  <h2>策略11 · 指标条件化状态排序 <span class="badge wait">状态参考</span>
+    {% if s.strategy_cr.present %}
+    <small>扫描 <b>{{ s.strategy_cr.扫描数 if s.strategy_cr.扫描数 is not none else '—' }}</b> ·
+      数据日期 <b>{{ s.strategy_cr.as_of }}</b></small>
+    {% endif %}</h2>
+  <p class="muted tiny" style="color:#c0392b">⚠️ 回测诚实结论:本预测<b>聚合层面无显著超额</b>(Brier≈无条件基线、聚类t不显著),
+    方向多为中性、区分力弱;<b>仅作状态参考,不作胜率/涨跌承诺</b>。</p>
+  <p class="muted tiny" style="color:#a60">口径:按当日指标状态相似的历史上涨概率排序。<b>上涨概率%/置信度是「指标状态格」级</b>
+    (同一状态的票取值相同),Top 由<b>近20日成交额均值(流动性)破并列</b>——即「最强历史状态格里挑流动性好的票」,<b>非个股涨跌排名</b>;
+    <b>1 日略有区分力、5/10 日基本是噪声</b>。全A筛选,读预落盘 view。</p>
+  {% if not s.strategy_cr.present %}
+  <p class="muted">策略11 待运行(<code>python -m tools.pipeline.screen_conditional_rank --no-fetch</code>;需先建 state_pool)。</p>
+  {% else %}
+  {% for h in ['1日','5日','10日'] %}
+  <h3 class="sub">{{ h }}榜{% if h != '1日' %} <span class="muted tiny">(区分力弱/近噪声,仅参考)</span>{% endif %}
+    <small class="muted">有效样本 {{ s.strategy_cr.有效样本[h] if (s.strategy_cr.有效样本 and h in s.strategy_cr.有效样本) else '—' }}</small></h3>
+  {% if not s.strategy_cr.排行[h] %}
+  <p class="muted tiny">本日 {{ h }} 无入选。</p>
+  {% else %}
+  <table>
+    <thead><tr><th>代码</th><th>名称</th><th>行业</th><th>上涨概率</th><th>方向</th><th>置信</th><th>相似样本</th><th>近20日均额(万)</th></tr></thead>
+    <tbody>
+    {% for x in s.strategy_cr.排行[h] %}
+      <tr data-code="{{ x.code }}">
+        <td>{{ x.code }}</td>
+        <td><a href="/stock/{{ x.code }}?date={{ s.as_of }}">{{ x.name }}</a></td>
+        <td class="muted">{{ x.industry or '-' }}</td>
+        <td class="{{ 'pos' if x.过下限 else '' }}">{% if x['上涨概率%'] is not none %}{{ x['上涨概率%'] }}%{% else %}—{% endif %}</td>
+        <td class="muted">{{ x.方向 or '-' }}</td>
+        <td class="muted">{{ x.置信度 or '-' }}</td>
+        <td class="muted tiny">{{ x.相似样本数 if x.相似样本数 is not none else '—' }}</td>
+        <td class="muted tiny">{% if x.成交额万元 is not none %}{{ '%.0f'|format(x.成交额万元) }}{% else %}—{% endif %}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+  {% endfor %}
+  {% endif %}
+</section>
+
 <p class="muted tiny">点名称进个股页看完整归因/K线。合议综合分同口径(前端同 councilSynth 公式,勾选专家实时重排)。</p>
 
 <script id="selectionExperts" type="application/json">{{ (s.rows|list)|tojson }}</script>
