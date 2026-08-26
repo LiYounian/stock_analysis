@@ -83,6 +83,22 @@ def sepa(request: Request, date: str = "latest"):
         context={"s": da.sepa_page(date), **_nav(date)})
 
 
+@app.get("/watch", response_class=HTMLResponse)
+def watch(request: Request, date: str = "latest"):
+    """自选池实时盯盘(方案1):自选票实时价/涨跌幅 + 当日SEPA收盘态形态。前端轮询 /api/watch。"""
+    from web import realtime
+    return templates.TemplateResponse(
+        request=request, name="watch.html",
+        context={"w": realtime.watch_quotes(date), **_nav(date)})
+
+
+@app.get("/api/watch", response_class=JSONResponse)
+def api_watch(date: str = "latest"):
+    """自选池实时盯盘 JSON(前端 15s 轮询):行情=盘中快照,形态=每日收盘态。"""
+    from web import realtime
+    return JSONResponse(realtime.watch_quotes(date))
+
+
 @app.get("/sepa/{code}", response_class=HTMLResponse)
 def sepa_detail(request: Request, code: str, date: str = "latest"):
     """单票收缩结构参考图(不叫 VCP 完成)。"""
