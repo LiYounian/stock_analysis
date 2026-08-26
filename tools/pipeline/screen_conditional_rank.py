@@ -93,7 +93,11 @@ def run_conditional_rank_screen(codes: list[str], as_of: str | None = None,
             _skip("条件化不可用(池缺失/异常)")
             continue
         scanned += 1
+        amounts = kdf["amount"].tolist() if "amount" in kdf.columns else []
+        valid_amt = [float(a) for a in amounts[-20:] if isinstance(a, (int, float)) and a == a]
+        amount_wan = (sum(valid_amt) / len(valid_amt) / 1e4) if valid_amt else None
         records[str(code)] = {"meta": {"code": str(code)},
+                              "snapshot": {"amount_wan": amount_wan},   # 流动性:破同状态格并列的 per-stock 次级键
                               "prediction": {"指标条件化预测": block}}
 
     out = conditional_rank_screen(records, top_k=top_k)

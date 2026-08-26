@@ -94,6 +94,17 @@ def test_missing_prediction_block_skipped():
     assert out["跳过"]["1日"]["无预测块"] == 2
 
 
+def test_liquidity_breaks_same_state_tie():
+    """同上涨概率+同置信度(同指标状态格)→ 按成交额(流动性)破并列、高者靠前;不再由 code 序决定(命门修复)。"""
+    recs = {
+        "1": {**_rec("1", "A", **{"1日": _h(55.0, conf="高")}), "snapshot": {"amount_wan": 100.0}},
+        "2": {**_rec("2", "B", **{"1日": _h(55.0, conf="高")}), "snapshot": {"amount_wan": 900.0}},
+        "3": {**_rec("3", "C", **{"1日": _h(55.0, conf="高")}), "snapshot": {"amount_wan": 500.0}},
+    }
+    out = cr.conditional_rank_screen(recs, horizons=["1日"])
+    assert _codes(out["排行"]["1日"]) == ["2", "3", "1"]   # 900>500>100,而非 code 序 1/2/3
+
+
 def test_registered_in_registry():
     from tools.strategy import registry
     assert "指标条件化状态排序" in registry.list_strategies("选股")

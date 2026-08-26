@@ -84,16 +84,22 @@ def conditional_rank_screen(
             if p is None:
                 sk["概率缺失"] += 1
                 continue
+            snap = (rec or {}).get("snapshot") or {}
             rows.append({
                 "code": str(code),
                 "name": ((rec or {}).get("meta") or {}).get("name"),
                 "上涨概率%": round(p, 1), "方向": v.get("方向"),
                 "置信度": v.get("置信度"), "放宽层级": v.get("放宽层级"),
+                "相似样本数": v.get("相似样本数"),          # 状态格样本量(展示;同格相同)
+                "成交额万元": _num(snap.get("amount_wan")),  # per-stock 流动性(破同状态格并列)
                 "是否退回": bool(v.get("是否退回")),
                 "过下限": bool(floor is not None and p >= floor),
             })
-        # 排序:上涨概率% 降序;相同则置信度(高>中>低)靠前
-        rows.sort(key=lambda r: (r["上涨概率%"], conf_order.get(r["置信度"], 0)), reverse=True)
+        # 排序:上涨概率%(状态格级)→ 置信度(高>中>低)→ 成交额(流动性)。
+        # ⚠️ 上涨概率%/置信度 都是**状态格级**(同一指标状态的票取值相同),故 Top 的真正 tiebreak 是
+        # 成交额(唯一 per-stock 键)——即"最强状态格里挑流动性好的",不是个股 alpha 排名。
+        rows.sort(key=lambda r: (r["上涨概率%"], conf_order.get(r["置信度"], 0), r["成交额万元"] or 0.0),
+                  reverse=True)
         rankings[h] = rows[:top_k]
         valid_cnt[h] = len(rows)
         skip[h] = sk
@@ -105,5 +111,7 @@ def conditional_rank_screen(
         "top_k": top_k,
         "参数": {"持有期": horizons, "上涨概率下限%": prob_floor,
                  "剔除退回": drop_fallback, "剔除数据不足": drop_insufficient},
-        "口径": "基线上涨概率%降序+置信度tiebreak;状态排序参考·非alpha(聚合无超额;1日弱区分、5/10日近噪声)",
+        "口径": ("上涨概率%(状态格级)降序 → 置信度 → 成交额(流动性,唯一per-stock次级键,破同状态格并列)。"
+                 "⚠️同上涨概率=同指标状态格(个股间无区分),同格内按流动性排、非个股alpha排名;"
+                 "状态排序参考·非alpha(聚合无超额;1日弱区分、5/10日近噪声)"),
     }
