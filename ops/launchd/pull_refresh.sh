@@ -71,6 +71,12 @@ trap 'rmdir "$LOCK" 2>/dev/null' EXIT
   else
     echo "-- ① 跳过全A自采(PULL_FETCH!=1)——用现有主档 --"
   fi
+  echo "-- ①.4 消化远端自选提案(方案2:pull→裁决→采集/清理) --"
+  # 远端网页(POOL_WRITE_MODE=enqueue)把加/删写 pool_pending 表;这里拉下来裁决→add_and_collect/
+  # remove_and_cleanup(本地有 raw,采集+重建 panel 不塌),产出 consumed_ids→data/sync_receipts/pool_ack.json,
+  # 随③末轮 upload --pool-ack 回推。排在①主档推进后、①.5建池前:新票先进主档→当天 state_pool/screenall 即纳入。
+  # 远端不可达/无提案时优雅跳过(consume 内部 ok:False),不阻断闭环。
+  "$PY" -m ops.consume_pool_pending || echo "!! 消化远端提案失败(不阻断,下轮重试)"
   echo "-- ①.5 建状态池(策略11 指标条件化状态排序依赖;全A主档,实测~68s) --"
   # 必须排在①主档推进之后、②screenall之前:screenall 里的策略11 screener 只读 state_pool 索引、不建池;
   # 缺池则策略11 优雅出空(view 带 note、不崩)。落 data/backtest_local/state_pool.parquet(gitignore)。
@@ -87,6 +93,6 @@ trap 'rmdir "$LOCK" 2>/dev/null' EXIT
   echo "-- ③ 上传远端(先不带 --force:只补未确认分片,规避 ingest 429 限速) --"
   "$PY" -m tools.sync.upload --date "$D" || echo "!! 上传第一轮"
   sleep 65   # 限速窗口(120/60s);分片>120 时首轮部分 429,等窗口重置补齐
-  "$PY" -m tools.sync.upload --date "$D" || echo "!! 上传补齐"
+  "$PY" -m tools.sync.upload --date "$D" --pool-ack || echo "!! 上传补齐"
   echo "==================== done $(date) ===================="
 } >> "$LOG" 2>&1
