@@ -32,36 +32,54 @@ _HORIZONS = (1, 5, 10)
 
 
 # ————————————————————————— 建池(向量化,每股一次)—————————————————————————
-def _pool_labels(df: pd.DataFrame) -> tuple[pd.Series, pd.Series, pd.Series]:
-    """向量化算 3 主维度(趋势方向/动量/BOLL位置),口径与 technical.compute + state_vector 严格一致。"""
-    close = df["close"]
+def _labels_from_indicators(ma5, ma10, ma20, ma60, macd_bar, macd_bar_prev, rsi12, percent_b):
+    """连续指标 → 3 主维度离散标签 (trend/mom/boll)。**全算 (_pool_labels) 与 O(1) 递推 (_labels_recur)
+    共用的唯一离散化实现**——阈值/状态阶梯语义只此一份,从结构上杜绝双份实现漂移(设计文档 §3)。
+
+    入参可为 pd.Series 或 np.ndarray(等长,一一对应);返回三个 np.ndarray(object,字符串标签)。
+    口径与 technical._ma_arrangement / macd 状态 / boll._boll_state 位置严格一致。
+    macd_bar_prev 为逐行"上一根 MACD 柱"(全算里即 bar.shift(1),首行 NaN → 判不出金叉/死叉)。
+    """
     cfg = THRESHOLDS["指标状态"]
     tb = THRESHOLDS["BOLL"]
+    ma5 = np.asarray(ma5, float); ma10 = np.asarray(ma10, float)
+    ma20 = np.asarray(ma20, float); ma60 = np.asarray(ma60, float)
+    bar = np.asarray(macd_bar, float); prev = np.asarray(macd_bar_prev, float)
+    rsi12 = np.asarray(rsi12, float); pb = np.asarray(percent_b, float)
 
-    ma5, ma10, ma20, ma60 = (ta.ma(close, w) for w in (5, 10, 20, 60))
-    valid_ma = ma5.notna() & ma10.notna() & ma20.notna() & ma60.notna()
-    up = (ma5 >= ma10) & (ma10 >= ma20) & (ma20 >= ma60)
-    dn = (ma5 <= ma10) & (ma10 <= ma20) & (ma20 <= ma60)
-    # 标签必须与 technical._ma_arrangement 严格一致(多头排列/空头排列/纠缠/数据不足)
-    trend = pd.Series(np.select([~valid_ma, up, dn], ["数据不足", "多头排列", "空头排列"], "纠缠"),
-                      index=df.index)
+    with np.errstate(invalid="ignore"):   # NaN 比较返回 False(与 pandas 一致),仅抑制告警
+        valid_ma = ~(np.isnan(ma5) | np.isnan(ma10) | np.isnan(ma20) | np.isnan(ma60))
+        up = (ma5 >= ma10) & (ma10 >= ma20) & (ma20 >= ma60)
+        dn = (ma5 <= ma10) & (ma10 <= ma20) & (ma20 <= ma60)
+        # 标签必须与 technical._ma_arrangement 严格一致(多头排列/空头排列/纠缠/数据不足)
+        trend = np.select([~valid_ma, up, dn], ["数据不足", "多头排列", "空头排列"], "纠缠")
 
-    md = ta.macd(close)
-    bar = md["macd"]
-    prev = bar.shift(1)
-    macd_state = pd.Series(np.select([(prev <= 0) & (bar > 0), (prev >= 0) & (bar < 0), bar > 0],
-                                     ["金叉", "死叉", "多头"], "空头"), index=df.index)
-    rsi12 = ta.rsi(close, 12)
-    bull = macd_state.isin(["金叉", "多头"])
-    bear = macd_state.isin(["死叉", "空头"])
-    mom = pd.Series(np.select([bull & (rsi12 >= cfg["动量RSI强"]), bear & (rsi12 <= cfg["动量RSI弱"])],
-                              ["强", "弱"], "中"), index=df.index)
+        macd_state = np.select([(prev <= 0) & (bar > 0), (prev >= 0) & (bar < 0), bar > 0],
+                               ["金叉", "死叉", "多头"], "空头")
+        bull = np.isin(macd_state, ["金叉", "多头"])
+        bear = np.isin(macd_state, ["死叉", "空头"])
+        mom = np.select([bull & (rsi12 >= cfg["动量RSI强"]), bear & (rsi12 <= cfg["动量RSI弱"])],
+                        ["强", "弱"], "中")
 
-    pb = ta.boll(close)["percent_b"]
-    boll = pd.Series(np.select(
-        [pb.isna(), pb > 1, pb >= tb["触轨上_percentB"], pb < 0, pb <= tb["触轨下_percentB"]],
-        ["数据不足", "破上轨", "触上轨", "破下轨", "触下轨"], "中性"), index=df.index)
+        boll = np.select(
+            [np.isnan(pb), pb > 1, pb >= tb["触轨上_percentB"], pb < 0, pb <= tb["触轨下_percentB"]],
+            ["数据不足", "破上轨", "触上轨", "破下轨", "触下轨"], "中性")
     return trend, mom, boll
+
+
+def _pool_labels(df: pd.DataFrame) -> tuple[pd.Series, pd.Series, pd.Series]:
+    """向量化算 3 主维度(趋势方向/动量/BOLL位置),口径与 technical.compute + state_vector 严格一致。
+
+    连续指标(MA/MACD/RSI/BOLL)在此全量算出,离散化统一委托 _labels_from_indicators(单一实现,防漂移)。
+    """
+    close = df["close"]
+    ma5, ma10, ma20, ma60 = (ta.ma(close, w) for w in (5, 10, 20, 60))
+    bar = ta.macd(close)["macd"]
+    rsi12 = ta.rsi(close, 12)
+    pb = ta.boll(close)["percent_b"]
+    trend, mom, boll = _labels_from_indicators(ma5, ma10, ma20, ma60, bar, bar.shift(1), rsi12, pb)
+    return (pd.Series(trend, index=df.index), pd.Series(mom, index=df.index),
+            pd.Series(boll, index=df.index))
 
 
 # EWM(MACD)/递归SMA(RSI)无限记忆:算新增 bar 标签用尾窗时需回看足够根数,使递归项
