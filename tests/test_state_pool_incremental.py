@@ -129,7 +129,7 @@ def test_new_bar_appended(tmp_path, monkeypatch):
     # 确认前 900 根历史价逐值一致(纯 append 前提)
     assert np.allclose(new_kl["A"]["close"].iloc[:900], old_kl["A"]["close"])
 
-    # 记录 _pool_labels 调用输入长度
+    # 记录 _pool_labels 调用输入长度(sidecar 深度重构后:新 bar 走 O(1) 递推,增量阶段应零调用)
     calls = []
     orig = cp._pool_labels
     monkeypatch.setattr(cp, "_pool_labels", lambda df: calls.append(len(df)) or orig(df))
@@ -140,9 +140,8 @@ def test_new_bar_appended(tmp_path, monkeypatch):
     full = _full(codes, new_kl, monkeypatch, str(tmp_path / "f.parquet"))
     _assert_pool_equal(inc, full)
 
-    # 增量阶段的标签调用:只在尾窗(<< 全史 901),且不为空
-    assert inc_calls, "增量应对新增 bar 在尾窗算一次标签"
-    assert max(inc_calls) <= cp._LABEL_CONVERGE + 5, f"标签在全史重算了:{inc_calls}"
+    # 上一步 rebuild=True 已写 sidecar → 本次增量新 bar 走 O(1) 递推、彻底不调 _pool_labels
+    assert inc_calls == [], f"新 bar 应走 O(1) 递推、不调 _pool_labels:{inc_calls}"
 
 
 # ---------- ③ pending 到期 ----------
@@ -191,9 +190,9 @@ def test_qfq_rewrite_recompute(tmp_path, monkeypatch):
     inc_ret = {}
     orig_inc = cp._incremental_code_frame
 
-    def _spy(df, code, old, warmup, horizons):
-        r = orig_inc(df, code, old, warmup, horizons)
-        inc_ret[str(code)] = (r is None)
+    def _spy(df, code, old, warmup, horizons, sidecar=None):
+        r = orig_inc(df, code, old, warmup, horizons, sidecar)
+        inc_ret[str(code)] = (r[0] is None)   # 返回 (frame, state);frame None = 失效→全算
         return r
 
     monkeypatch.setattr(cp, "_incremental_code_frame", _spy)

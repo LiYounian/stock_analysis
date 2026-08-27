@@ -229,6 +229,70 @@ def _recur_new_bars(state: dict, new_close: np.ndarray, horizons):
     return trend, mom, boll, new_state
 
 
+def _sidecar_path(pool_path: str) -> str:
+    """sidecar 文件:与 state_pool.parquet 并排(<stem>_sidecar.parquet)。"""
+    from pathlib import Path
+    p = Path(pool_path)
+    return str(p.with_name(p.stem + "_sidecar.parquet"))
+
+
+_SIDECAR_COLS = ["code", "last_date", "ema_fast", "ema_slow", "dea", "macd_bar_last",
+                 "rsi_up", "rsi_down", "prev_close", "tail_close"]
+
+
+def _read_sidecar_index(pool_path: str, warmup: int, horizons) -> dict:
+    """读 sidecar 表 → {code: state}。schema_version / param_hash 任一不符 → 返回 {}(整表作废,§4)。
+
+    sidecar 永不作唯一真源:读不到/失效只会让相应票走全算/768尾窗兜底并重建,绝不产生错值。
+    """
+    try:
+        sc = pd.read_parquet(_sidecar_path(pool_path))
+    except Exception:
+        return {}
+    if sc.empty or "param_hash" not in sc.columns or "schema_version" not in sc.columns:
+        return {}
+    want = _param_hash(warmup, horizons)
+    if not (sc["schema_version"] == _SIDECAR_SCHEMA_VERSION).all() or not (sc["param_hash"] == want).all():
+        logger.info("sidecar 口径/版本不符 → 整表作废重建(schema/param_hash)")
+        return {}
+    sc["last_date"] = pd.to_datetime(sc["last_date"])
+    idx = {}
+    for row in sc.itertuples(index=False):
+        d = row._asdict()
+        idx[str(d["code"])] = {
+            "last_date": d["last_date"],
+            "ema_fast": float(d["ema_fast"]), "ema_slow": float(d["ema_slow"]),
+            "dea": float(d["dea"]), "macd_bar_last": float(d["macd_bar_last"]),
+            "rsi_up": float(d["rsi_up"]), "rsi_down": float(d["rsi_down"]),
+            "prev_close": float(d["prev_close"]),
+            "tail_close": list(np.asarray(d["tail_close"], float)),
+        }
+    return idx
+
+
+def _write_sidecar(pool_path: str, states: dict, warmup: int, horizons) -> None:
+    """把 {code: state} 落成单表 sidecar parquet(每票一行 + schema_version/param_hash 戳)。"""
+    if not states:
+        return
+    from pathlib import Path
+    ph = _param_hash(warmup, horizons)
+    rows = []
+    for code, s in states.items():
+        rows.append({
+            "code": str(code), "last_date": pd.Timestamp(s["last_date"]),
+            "ema_fast": float(s["ema_fast"]), "ema_slow": float(s["ema_slow"]),
+            "dea": float(s["dea"]), "macd_bar_last": float(s["macd_bar_last"]),
+            "rsi_up": float(s["rsi_up"]), "rsi_down": float(s["rsi_down"]),
+            "prev_close": float(s["prev_close"]),
+            "tail_close": list(np.asarray(s["tail_close"], float)),
+            "schema_version": _SIDECAR_SCHEMA_VERSION, "param_hash": ph,
+        })
+    df = pd.DataFrame(rows)
+    p = Path(_sidecar_path(pool_path))
+    p.parent.mkdir(parents=True, exist_ok=True)
+    df.to_parquet(str(p), index=False)
+
+
 def _forward_returns(pos_idx: np.ndarray, close: np.ndarray, dates: np.ndarray,
                      horizons) -> dict:
     """按 position 计算给定行的前瞻收益/结局日(t+N 越界→NaN/NaT),口径与全算逐字一致、无未来函数。"""
@@ -246,14 +310,44 @@ def _forward_returns(pos_idx: np.ndarray, close: np.ndarray, dates: np.ndarray,
     return out
 
 
-def _incremental_code_frame(df: pd.DataFrame, code, old: pd.DataFrame,
-                            warmup: int, horizons) -> pd.DataFrame | None:
-    """对单 code 做增量:复用历史标签(冻结)+ 按新 kline 回填全部前瞻收益 + 全算新增 bar。
+def _new_bar_frame_via_recur(df, code, close, dates, nd_i, od_i, sidecar, warmup, horizons):
+    """新增 bar 标签的 O(1) 递推路径(路线甲热路径)。sidecar 可用(末态锚点落在新 kline 内、
+    新 bar 恰在锚点之后)→ 从末态精确续推、彻底不调 _pool_labels;返回 (new_frame, new_state)。
+    锚点不匹配/无 sidecar → 返回 (None, None),调用方回退 768 尾窗并重建末态。
+    """
+    if sidecar is None:
+        return None, None
+    anchor_i = pd.Timestamp(sidecar["last_date"]).value
+    apos = int(np.searchsorted(nd_i, anchor_i))
+    if apos >= len(nd_i) or nd_i[apos] != anchor_i:     # 末态锚点不在新 kline → 不可递推
+        return None, None
+    positions = np.arange(apos + 1, len(nd_i))          # 锚点之后的连续新位置
+    if positions.size == 0:                             # 无新 bar:末态原样(last_date 已=末日)
+        return pd.DataFrame(), {**sidecar, "last_date": pd.Timestamp(dates[-1])}
+    trend, mom, boll, new_state = _recur_new_bars(sidecar, close[positions], horizons)
+    new_state["last_date"] = pd.Timestamp(dates[-1])
+    fwd = _forward_returns(positions.astype("int64"), close, dates, horizons)
+    cols = {"code": code, "date": dates[positions], "trend": trend, "mom": mom, "boll": boll}
+    cols.update(fwd)
+    nf = pd.DataFrame(cols)
+    # 只保留主维度有效 + 位置≥warmup + 不在旧池(与全算/冻结复用不重叠)
+    keep = (positions >= warmup) & (~np.isin(nd_i[positions], od_i))
+    nf = nf[keep.tolist()]
+    nf = nf[(nf["trend"] != "数据不足") & (nf["boll"] != "数据不足")]
+    return nf, new_state
 
-    失效兜底(结构变 / 除权 backfill 改写历史前复权价)→ 返回 None,调用方 fallback 到全算。
+
+def _incremental_code_frame(df: pd.DataFrame, code, old: pd.DataFrame,
+                            warmup: int, horizons, sidecar: dict | None = None):
+    """对单 code 做增量:复用历史标签(冻结)+ 按新 kline 回填全部前瞻收益 + 新增 bar 走 O(1) 递推。
+
+    返回 (frame, new_state):frame 为该 code 池行;new_state 为推进后的 sidecar 末态(供写回)。
+    失效兜底(结构变 / 除权 backfill 改写历史前复权价)→ 返回 (None, None),调用方 fallback 到全算。
+
     值校验:对旧池每行按新 kline 的 position **重算全部前瞻收益**,凡旧已兑现的 r_N/od_N 必须逐值一致;
-    任一不符即判历史价被改写(比 mtime / 抽样锚定更强:覆盖每一行,能捕获任意位置的非等比改写)。
-    前瞻收益本就便宜(数组切片),重算不影响提速大头(标签复用)。
+    任一不符即判历史价被改写(覆盖每一行,能捕获任意位置的非等比改写 → 除权零漏检,路线甲不省此 I/O)。
+    新增 bar 标签:sidecar 末态可用 → O(1) 递推(bit-exact,不调 _pool_labels);否则回退 768 尾窗
+    _pool_cols 并从全史重建末态(一次性 bootstrap,下轮即走 O(1))。
     """
     # 全程走 int64(ns)日期数组 + searchsorted,避免逐行 pd.Timestamp(百万级对象)/重复 to_datetime 拖慢增量。
     dates = pd.to_datetime(df["date"]).to_numpy("datetime64[ns]")
@@ -264,9 +358,9 @@ def _incremental_code_frame(df: pd.DataFrame, code, old: pd.DataFrame,
     # 结构校验:旧池每行 date 必须仍在新 kline 中,且映射位置严格递增(否则历史被删/插/重排)
     opos = np.searchsorted(nd_i, od_i)
     if np.any(opos >= len(nd_i)) or not np.array_equal(nd_i[np.clip(opos, 0, len(nd_i) - 1)], od_i):
-        return None
+        return None, None
     if len(opos) > 1 and np.any(np.diff(opos) <= 0):
-        return None
+        return None, None
 
     # 按新 kline 重算旧行全部前瞻收益(向量化);凡旧已兑现的必须逐值一致,否则历史价被改写 → 失效
     fwd = _forward_returns(opos.astype("int64"), close, dates, horizons)
@@ -275,34 +369,40 @@ def _incremental_code_frame(df: pd.DataFrame, code, old: pd.DataFrame,
         m = ~np.isnan(oldr)
         if m.any():
             if not np.allclose(oldr[m], fwd[f"r{N}"][m], rtol=1e-9, atol=1e-9):
-                return None
+                return None, None
             oldod = old[f"od{N}"].to_numpy("datetime64[ns]")   # 读盘时已 to_datetime
             if not np.array_equal(oldod[m], fwd[f"od{N}"][m]):
-                return None
+                return None, None
 
     reused = old.copy()                       # 复用历史标签(不重算 _pool_labels)
     for k, v in fwd.items():                  # 回填前瞻收益:已兑现原样、pending 到期兑现
         reused[k] = v
     parts = [reused]
 
-    # 新增 bar:旧池无、position≥warmup 的新交易日 → 尾窗算标签(EWM 收敛到逐值一致)+ 全序前瞻收益
-    all_pos = np.arange(len(nd_i))
-    new_pos = all_pos[(all_pos >= warmup) & (~np.isin(nd_i, od_i))]
-    if new_pos.size:
-        start = max(0, int(new_pos.min()) - _LABEL_CONVERGE)
-        sub = df.iloc[start:].reset_index(drop=True)
-        new_frame = _pool_cols(sub, code, warmup=0, horizons=horizons)
-        nf_i = new_frame["date"].to_numpy("datetime64[ns]").view("int64")
-        new_frame = new_frame[np.isin(nf_i, nd_i[new_pos])]
-        if not new_frame.empty:
-            npos = np.searchsorted(nd_i, new_frame["date"].to_numpy("datetime64[ns]").view("int64"))
-            f2 = _forward_returns(npos.astype("int64"), close, dates, horizons)   # 全序边界,与全算逐值一致
-            for k, v in f2.items():
-                new_frame[k] = v
-            parts.append(new_frame)
+    # 新增 bar:优先 O(1) 递推(sidecar 末态);锚点不匹配/无 sidecar → 768 尾窗 + 重建末态
+    new_frame, new_state = _new_bar_frame_via_recur(
+        df, code, close, dates, nd_i, od_i, sidecar, warmup, horizons)
+    if new_frame is None:
+        all_pos = np.arange(len(nd_i))
+        new_pos = all_pos[(all_pos >= warmup) & (~np.isin(nd_i, od_i))]
+        if new_pos.size:
+            start = max(0, int(new_pos.min()) - _LABEL_CONVERGE)
+            sub = df.iloc[start:].reset_index(drop=True)
+            nf = _pool_cols(sub, code, warmup=0, horizons=horizons)
+            nf_i = nf["date"].to_numpy("datetime64[ns]").view("int64")
+            nf = nf[np.isin(nf_i, nd_i[new_pos])]
+            if not nf.empty:
+                npos = np.searchsorted(nd_i, nf["date"].to_numpy("datetime64[ns]").view("int64"))
+                f2 = _forward_returns(npos.astype("int64"), close, dates, horizons)
+                for k, v in f2.items():
+                    nf[k] = v
+                parts.append(nf)
+        new_state = _build_sidecar_state(df["close"], dates[-1])   # bootstrap 末态,下轮走 O(1)
+    elif not new_frame.empty:
+        parts.append(new_frame)
 
     out = pd.concat(parts, ignore_index=True)
-    return out.sort_values("date").reset_index(drop=True)
+    return out.sort_values("date").reset_index(drop=True), new_state
 
 
 def build_state_pool(codes, warmup: int = None, horizons=_HORIZONS, save: bool = False,
@@ -320,6 +420,7 @@ def build_state_pool(codes, warmup: int = None, horizons=_HORIZONS, save: bool =
     warmup = warmup or THRESHOLDS["指标条件化"]["池预热根数"]
 
     old_index: dict = {}
+    sidecar_index: dict = {}
     if save and not rebuild:
         try:
             old_pool = pd.read_parquet(pool_path)
@@ -332,8 +433,10 @@ def build_state_pool(codes, warmup: int = None, horizons=_HORIZONS, save: bool =
                     old_index[str(c)] = g
         except Exception:
             old_index = {}
+        sidecar_index = _read_sidecar_index(pool_path, warmup, horizons)
 
     frames = []
+    states: dict = {}                 # code → 推进后的 sidecar 末态(全票落盘)
     n_inc, n_full = 0, 0
     for code in codes:
         try:
@@ -345,12 +448,17 @@ def build_state_pool(codes, warmup: int = None, horizons=_HORIZONS, save: bool =
         df = df.reset_index(drop=True)
         old = old_index.get(str(code))
         if old is not None and not old.empty:
-            inc = _incremental_code_frame(df, code, old, warmup, horizons)
+            inc, st = _incremental_code_frame(df, code, old, warmup, horizons,
+                                              sidecar_index.get(str(code)))
             if inc is not None:
                 frames.append(inc)
+                if st is not None:
+                    states[str(code)] = st
                 n_inc += 1
                 continue
+        # 全算(rebuild / 无旧池 / 增量失效)+ 建末态(与全算同源)
         frames.append(_pool_cols(df, code, warmup, horizons))
+        states[str(code)] = _build_sidecar_state(df["close"], df["date"].iloc[-1])
         n_full += 1
 
     pool = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
@@ -358,8 +466,9 @@ def build_state_pool(codes, warmup: int = None, horizons=_HORIZONS, save: bool =
         from pathlib import Path
         Path(pool_path).parent.mkdir(parents=True, exist_ok=True)
         pool.to_parquet(pool_path, index=False)
-        logger.info("state_pool 落盘 %s:%d 行 / %d 票 (增量 %d / 全算 %d)",
-                    pool_path, len(pool), pool["code"].nunique(), n_inc, n_full)
+        _write_sidecar(pool_path, states, warmup, horizons)
+        logger.info("state_pool 落盘 %s:%d 行 / %d 票 (增量 %d / 全算 %d;sidecar %d 票)",
+                    pool_path, len(pool), pool["code"].nunique(), n_inc, n_full, len(states))
     return pool
 
 
