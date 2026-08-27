@@ -144,6 +144,25 @@ def _persist_kline(data: dict) -> tuple[int, str | None]:
     return n, max_date
 
 
+def _pool_pending_buffer() -> Path:
+    return _receipt_dir() / "pool_pending.json"
+
+
+def _persist_pool_pending(rows: list) -> Path:
+    """把远端 pending 行整份覆盖写本地缓冲(供 ops.consume_pool_pending 读)。返回路径。
+
+    pool_pending 不用日期水位(去重靠 consumed 回执):每次拉全部 pending,消化标 consumed
+    后下次自然变少。故整份覆盖(非 append),原子替换避免半写。
+    """
+    p = _pool_pending_buffer()
+    p.parent.mkdir(parents=True, exist_ok=True)
+    tmp = p.parent / (p.name + ".tmp")
+    tmp.write_text(json.dumps({"pulled_at": _now_iso(), "rows": rows or []},
+                              ensure_ascii=False, indent=2), encoding="utf-8")
+    tmp.replace(p)
+    return p
+
+
 # ————————————————————————————————————————————————
 # 主流程
 # ————————————————————————————————————————————————
@@ -171,8 +190,14 @@ def pull(kind: str = "kline", *, url: str, token: str, key: str, key_id: str,
         logger.error("拉取失败(status=%s):%s;保留本地旧数据不动", status, err)
         return {"ok": False, "kind": kind, "since": since, "status": status, "error": err}
 
+    if kind == "pool_pending":
+        # 提案队列:整份落缓冲,不走 kline 主档/水位逻辑(去重靠 consumed 回执)
+        rows = (body or {}).get("data") or []
+        path = _persist_pool_pending(rows)
+        logger.info("拉取完成 pool_pending:%d 条 → %s", len(rows), path)
+        return {"ok": True, "kind": kind, "rows": len(rows), "buffer": str(path)}
     if kind != "kline":
-        return {"ok": False, "kind": kind, "error": f"客户端暂只支持 kline(收到 kind={kind})"}
+        return {"ok": False, "kind": kind, "error": f"客户端不支持 kind={kind}"}
 
     data = (body or {}).get("data") or {}
     n, max_date = _persist_kline(data)
