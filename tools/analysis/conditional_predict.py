@@ -64,15 +64,130 @@ def _pool_labels(df: pd.DataFrame) -> tuple[pd.Series, pd.Series, pd.Series]:
     return trend, mom, boll
 
 
-def build_state_pool(codes, warmup: int = None, horizons=_HORIZONS, save: bool = False) -> pd.DataFrame:
+# EWM(MACD)/递归SMA(RSI)无限记忆:算新增 bar 标签用尾窗时需回看足够根数,使递归项
+# (1-α)^n 衰减到 float ULP 之下 → 尾窗标签与全史逐值一致。MACD slow(26)/RSI(12) 最慢,768 根足矣。
+_LABEL_CONVERGE = 768
+
+
+def _pool_cols(df: pd.DataFrame, code, warmup: int, horizons) -> pd.DataFrame:
+    """在整段 df 上产出该 code 的池行(标签 + 前瞻收益),跳过预热、丢"数据不足"。全算/尾窗共用。"""
+    close = df["close"]
+    date = pd.to_datetime(df["date"])          # 只转一次(重复 pd.to_datetime 会触发昂贵的 should_cache 扫描)
+    trend, mom, boll = _pool_labels(df)
+    cols = {"code": code, "date": date, "trend": trend, "mom": mom, "boll": boll}
+    for N in horizons:
+        cols[f"r{N}"] = (close.shift(-N) / close - 1) * 100
+        cols[f"od{N}"] = date.shift(-N)
+    out = pd.DataFrame(cols).iloc[warmup:]
+    return out[(out["trend"] != "数据不足") & (out["boll"] != "数据不足")]
+
+
+def _forward_returns(pos_idx: np.ndarray, close: np.ndarray, dates: np.ndarray,
+                     horizons) -> dict:
+    """按 position 计算给定行的前瞻收益/结局日(t+N 越界→NaN/NaT),口径与全算逐字一致、无未来函数。"""
+    L = len(close)
+    out = {}
+    for N in horizons:
+        tgt = pos_idx + N
+        ok = tgt < L
+        r = np.full(len(pos_idx), np.nan)
+        r[ok] = (close[tgt[ok]] / close[pos_idx[ok]] - 1.0) * 100.0
+        od = np.full(len(pos_idx), np.datetime64("NaT"), dtype="datetime64[ns]")
+        od[ok] = dates[tgt[ok]]
+        out[f"r{N}"] = r
+        out[f"od{N}"] = od
+    return out
+
+
+def _incremental_code_frame(df: pd.DataFrame, code, old: pd.DataFrame,
+                            warmup: int, horizons) -> pd.DataFrame | None:
+    """对单 code 做增量:复用历史标签(冻结)+ 按新 kline 回填全部前瞻收益 + 全算新增 bar。
+
+    失效兜底(结构变 / 除权 backfill 改写历史前复权价)→ 返回 None,调用方 fallback 到全算。
+    值校验:对旧池每行按新 kline 的 position **重算全部前瞻收益**,凡旧已兑现的 r_N/od_N 必须逐值一致;
+    任一不符即判历史价被改写(比 mtime / 抽样锚定更强:覆盖每一行,能捕获任意位置的非等比改写)。
+    前瞻收益本就便宜(数组切片),重算不影响提速大头(标签复用)。
+    """
+    # 全程走 int64(ns)日期数组 + searchsorted,避免逐行 pd.Timestamp(百万级对象)/重复 to_datetime 拖慢增量。
+    dates = pd.to_datetime(df["date"]).to_numpy("datetime64[ns]")
+    close = df["close"].to_numpy(float)
+    nd_i = dates.view("int64")                       # 新 kline 日期(升序,主档已排序)
+    od_i = old["date"].to_numpy("datetime64[ns]").view("int64")   # 旧池 date 已在读盘时 to_datetime
+
+    # 结构校验:旧池每行 date 必须仍在新 kline 中,且映射位置严格递增(否则历史被删/插/重排)
+    opos = np.searchsorted(nd_i, od_i)
+    if np.any(opos >= len(nd_i)) or not np.array_equal(nd_i[np.clip(opos, 0, len(nd_i) - 1)], od_i):
+        return None
+    if len(opos) > 1 and np.any(np.diff(opos) <= 0):
+        return None
+
+    # 按新 kline 重算旧行全部前瞻收益(向量化);凡旧已兑现的必须逐值一致,否则历史价被改写 → 失效
+    fwd = _forward_returns(opos.astype("int64"), close, dates, horizons)
+    for N in horizons:
+        oldr = old[f"r{N}"].to_numpy(float)
+        m = ~np.isnan(oldr)
+        if m.any():
+            if not np.allclose(oldr[m], fwd[f"r{N}"][m], rtol=1e-9, atol=1e-9):
+                return None
+            oldod = old[f"od{N}"].to_numpy("datetime64[ns]")   # 读盘时已 to_datetime
+            if not np.array_equal(oldod[m], fwd[f"od{N}"][m]):
+                return None
+
+    reused = old.copy()                       # 复用历史标签(不重算 _pool_labels)
+    for k, v in fwd.items():                  # 回填前瞻收益:已兑现原样、pending 到期兑现
+        reused[k] = v
+    parts = [reused]
+
+    # 新增 bar:旧池无、position≥warmup 的新交易日 → 尾窗算标签(EWM 收敛到逐值一致)+ 全序前瞻收益
+    all_pos = np.arange(len(nd_i))
+    new_pos = all_pos[(all_pos >= warmup) & (~np.isin(nd_i, od_i))]
+    if new_pos.size:
+        start = max(0, int(new_pos.min()) - _LABEL_CONVERGE)
+        sub = df.iloc[start:].reset_index(drop=True)
+        new_frame = _pool_cols(sub, code, warmup=0, horizons=horizons)
+        nf_i = new_frame["date"].to_numpy("datetime64[ns]").view("int64")
+        new_frame = new_frame[np.isin(nf_i, nd_i[new_pos])]
+        if not new_frame.empty:
+            npos = np.searchsorted(nd_i, new_frame["date"].to_numpy("datetime64[ns]").view("int64"))
+            f2 = _forward_returns(npos.astype("int64"), close, dates, horizons)   # 全序边界,与全算逐值一致
+            for k, v in f2.items():
+                new_frame[k] = v
+            parts.append(new_frame)
+
+    out = pd.concat(parts, ignore_index=True)
+    return out.sort_values("date").reset_index(drop=True)
+
+
+def build_state_pool(codes, warmup: int = None, horizons=_HORIZONS, save: bool = False,
+                     rebuild: bool = False, pool_path: str = POOL_LOCAL) -> pd.DataFrame:
     """建全A横截面状态池:每 (code,date) 的 3 主维度 + 前瞻收益 r_N + 结局日 od_N。
 
     r_N/od_N 未实现(历史末端/停牌无对应 bar)→ 该行该 horizon 为 NaN/NaT,查询时按 horizon 丢弃。
     只保留主维度有效(非"数据不足")的行。前瞻收益用主档 qfq 一致口径。
+
+    增量(save=True 且旧 pool_path 存在且非 rebuild):历史静态行冻结复用、末端 pending 只补前瞻收益、
+    新增 bar 走全算;除权 backfill 改写历史价时靠廉价值校验捕获并对该 code 全量重算。产物列/格式/顺序
+    与全量逐值一致(下游 screener 只读索引,不受影响)。rebuild=True 强制全量重建。
     """
     from tools.collectors import market
     warmup = warmup or THRESHOLDS["指标条件化"]["池预热根数"]
+
+    old_index: dict = {}
+    if save and not rebuild:
+        try:
+            old_pool = pd.read_parquet(pool_path)
+            if not old_pool.empty:
+                for N in horizons:
+                    if f"od{N}" in old_pool.columns:
+                        old_pool[f"od{N}"] = pd.to_datetime(old_pool[f"od{N}"])
+                old_pool["date"] = pd.to_datetime(old_pool["date"])
+                for c, g in old_pool.groupby("code", sort=False):
+                    old_index[str(c)] = g
+        except Exception:
+            old_index = {}
+
     frames = []
+    n_inc, n_full = 0, 0
     for code in codes:
         try:
             df = market.load_kline(code)
@@ -81,22 +196,23 @@ def build_state_pool(codes, warmup: int = None, horizons=_HORIZONS, save: bool =
         if df is None or len(df) < warmup + 5:
             continue
         df = df.reset_index(drop=True)
-        close = df["close"]
-        trend, mom, boll = _pool_labels(df)
-        cols = {"code": code, "date": pd.to_datetime(df["date"]),
-                "trend": trend, "mom": mom, "boll": boll}
-        for N in horizons:
-            cols[f"r{N}"] = (close.shift(-N) / close - 1) * 100
-            cols[f"od{N}"] = pd.to_datetime(df["date"]).shift(-N)
-        out = pd.DataFrame(cols).iloc[warmup:]
-        out = out[(out["trend"] != "数据不足") & (out["boll"] != "数据不足")]
-        frames.append(out)
+        old = old_index.get(str(code))
+        if old is not None and not old.empty:
+            inc = _incremental_code_frame(df, code, old, warmup, horizons)
+            if inc is not None:
+                frames.append(inc)
+                n_inc += 1
+                continue
+        frames.append(_pool_cols(df, code, warmup, horizons))
+        n_full += 1
+
     pool = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
     if save and not pool.empty:
         from pathlib import Path
-        Path(POOL_LOCAL).parent.mkdir(parents=True, exist_ok=True)
-        pool.to_parquet(POOL_LOCAL, index=False)
-        logger.info("state_pool 落盘 %s:%d 行 / %d 票", POOL_LOCAL, len(pool), pool["code"].nunique())
+        Path(pool_path).parent.mkdir(parents=True, exist_ok=True)
+        pool.to_parquet(pool_path, index=False)
+        logger.info("state_pool 落盘 %s:%d 行 / %d 票 (增量 %d / 全算 %d)",
+                    pool_path, len(pool), pool["code"].nunique(), n_inc, n_full)
     return pool
 
 
@@ -344,3 +460,29 @@ def direction_view(cond: dict, signal: float | None = None, k: float = 0.0,
                     "方向_修正": adj_dir, "上涨概率%_修正": round(float(p_adj), 1),
                     "是否倾斜": bool(do_tilt)}
     return out
+
+
+# ————————————————————————— CLI(建池)—————————————————————————
+def _main(argv=None) -> int:
+    import argparse
+
+    logging.basicConfig(level=logging.INFO, format="%(name)s %(levelname)s %(message)s")
+    ap = argparse.ArgumentParser(description="建/增量重建 state_pool(策略11 状态池)")
+    ap.add_argument("--codes", help="逗号分隔代码(默认全A主档)")
+    ap.add_argument("--rebuild", action="store_true", help="强制全量重建(忽略旧池,不走增量)")
+    ap.add_argument("--out", default=POOL_LOCAL, help=f"落盘路径(默认 {POOL_LOCAL})")
+    a = ap.parse_args(argv)
+    if a.codes:
+        codes = [c.strip() for c in a.codes.split(",") if c.strip()]
+    else:
+        from tools.store import repo as store
+        codes = sorted(store.list_master_codes())
+    pool = build_state_pool(codes, save=True, rebuild=a.rebuild, pool_path=a.out)
+    logger.info("完成:%d 行 / %d 票 → %s", len(pool), pool["code"].nunique() if not pool.empty else 0, a.out)
+    return 0
+
+
+if __name__ == "__main__":
+    import sys
+
+    sys.exit(_main(sys.argv[1:]))
