@@ -207,22 +207,32 @@ class PoolAdd(BaseModel):
 
 @app.post("/api/pool")
 def api_pool_add(body: PoolAdd):
-    """新增一只票:入池 → 联网采集 → 重建产物。校验失败返回 400。"""
+    """新增一只票。POOL_WRITE_MODE=direct(本地默认):入池 → 采集 → 重建(逐字节不变);
+    =enqueue(远端):只写 pool_pending 提案表,本地闭环采集后生效。校验失败返回 400。"""
     from tools import pool_service
+    from tools.config import settings
     try:
+        if settings.POOL_WRITE_MODE == "enqueue":
+            return {"mode": "enqueue",
+                    **pool_service.enqueue_pending("add", body.code, name=body.name,
+                        industry=body.industry, sector=body.sector, market=body.market)}
         res = pool_service.add_and_collect(
             body.code, body.name, body.industry, body.sector, market=body.market)
-        return {"ok": True, **res}
+        return {"ok": True, "mode": "direct", **res}
     except ValueError as e:
         return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
 
 
 @app.post("/api/pool/{code}/delete")
 def api_pool_delete(code: str):
-    """删除一只票:出池 → 清缓存 → 重建产物。不存在返回 404。"""
+    """删除一只票。direct(本地):出池 → 清缓存 → 重建(逐字节不变);
+    enqueue(远端):只写 remove 提案。不存在返回 404。"""
     from tools import pool_service
+    from tools.config import settings
     try:
+        if settings.POOL_WRITE_MODE == "enqueue":
+            return {"mode": "enqueue", **pool_service.enqueue_pending("remove", code)}
         res = pool_service.remove_and_cleanup(code)
-        return {"ok": True, **res}
+        return {"ok": True, "mode": "direct", **res}
     except ValueError as e:
         return JSONResponse({"ok": False, "error": str(e)}, status_code=404)
