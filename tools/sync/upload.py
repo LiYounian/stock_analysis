@@ -252,6 +252,9 @@ def main(argv=None) -> int:
     ap.add_argument("--retries", type=int, default=5, help="每分片最大重试次数(指数退避)")
     ap.add_argument("--only-view", action="append", default=None, metavar="视图名",
                     help="只补传指定 view 分片(可多次),如 --only-view 最强选股;省略=全量上传")
+    ap.add_argument("--pool-ack", action="store_true",
+                    help="方案2回执:随本次上传顺带 data/sync_receipts/pool_ack.json 里已消化的 pending id"
+                         "(__pool_ack__ 分片→远端标 consumed);上传全成功后清空该待发文件")
     args = ap.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s")
 
@@ -262,12 +265,19 @@ def main(argv=None) -> int:
         return 2
 
     only = {f"{VIEW_SHARD_PREFIX}{v}" for v in args.only_view} if args.only_view else None
+    pool_ack_ids = None
+    if args.pool_ack:
+        from ops.consume_pool_pending import read_ack
+        pool_ack_ids = read_ack() or None      # 缺失/空 → None,不追加 __pool_ack__ 分片
     receipt = upload_date(
         args.date, url=settings.SYNC_INGEST_URL, token=settings.SYNC_INGEST_TOKEN,
         source=settings.SYNC_SOURCE_ID, key_id=settings.SYNC_KEY_ID, key=settings.SYNC_SIGNING_KEY,
         receipt_path=_receipt_dir() / f"{args.date}.json", retries=args.retries, force=args.force,
-        only_shards=only)
+        only_shards=only, pool_ack_ids=pool_ack_ids)
     s = receipt["summary"]
+    if pool_ack_ids and s["failed"] == 0:       # 全成功才清:失败保留待发,下轮重发(mark_consumed 幂等)
+        from ops.consume_pool_pending import clear_ack
+        clear_ack()
     if only:
         print(f"只补传 {sorted(only)}")
     print(f"上传完成 {args.date}:共 {s['total']} 分片,成功 {s['ok']},失败 {s['failed']}")
