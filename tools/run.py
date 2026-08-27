@@ -567,14 +567,33 @@ def cmd_pipeline(argv):
 def _picks_from_view(view: dict | None) -> list[str]:
     """从单个 screener view 抽出选出票 code。
 
-    兼容两种落法:规则型 screener 落 `入选清单`([{code,...}]),打分型(策略0)落 `top`。
+    兼容三种落法:
+      - 规则型 screener 落 `入选清单`([{code,...}]);
+      - 打分型(策略0)落 `top`([{code,...}]);
+      - 排行型(策略11·指标条件化状态排序)落 `排行`({维度→[{code,...}]}),
+        无 `入选清单`/`top`——从各维度榜取 code,并集去重保序。
+    只在前两者都缺时才走 `排行` 分支,保证原有两种 view 行为完全不变。
     view 为 None(screener 被 _safe 隔离失败)/字段缺失 → 返回空(不中止汇总)。
     """
     if not isinstance(view, dict):
         return []
-    items = view.get("入选清单") or view.get("top") or []
-    return [x["code"] for x in items
-            if isinstance(x, dict) and x.get("code")]
+    items = view.get("入选清单") or view.get("top")
+    if items:
+        return [x["code"] for x in items
+                if isinstance(x, dict) and x.get("code")]
+    # 排行型:各维度榜(dict of 维度→list)取 code,并集去重保序;元素可为 dict 或 code 串
+    rank = view.get("排行")
+    if isinstance(rank, dict):
+        codes: list[str] = []
+        for lst in rank.values():
+            if not isinstance(lst, list):
+                continue
+            for x in lst:
+                code = x.get("code") if isinstance(x, dict) else x
+                if isinstance(code, str) and code:
+                    codes.append(code)
+        return _dedup(codes)
+    return []
 
 
 def run_screen_all(codes_all: list[str], as_of: str, no_llm: bool = False,
