@@ -162,12 +162,16 @@ def _build_sidecar_state(close: pd.Series, last_date) -> dict:
 from tools.analysis.technical import _sma_cn as ta_technical_sma_cn  # noqa: E402
 
 
-def _recur_new_bars(state: dict, new_close: np.ndarray, horizons):
+def _recur_new_bars(state: dict, new_close: np.ndarray, horizons, ma_pb: dict | None = None):
     """O(1) 递推:给 sidecar 末态 + 新增 close 序列,产出每根新 bar 的连续指标 → 调**同一段**
     _labels_from_indicators 出标签,并返回推进后的新末态(供写回 sidecar)。**彻底不调 _pool_labels。**
 
-    MACD 5 项(ema_fast/ema_slow/dea)/ RSI 2 项(up/down)递归项从末态精确续推(bit-exact);
-    MA5/10/20/60、BOLL(percent_b) 用 tail_close ⊕ new_close 的有限窗精确重算(无递归、不漂移)。
+    MACD 5 项(ema_fast/ema_slow/dea)/ RSI 2 项(up/down)是线性递归,从末态精确续推(bit-exact,
+    避开 RSI `_sma_cn` 的 python 全史循环——建池 CPU 大头)。
+    MA5/10/20/60、BOLL(percent_b) 为滚动窗:pandas rolling 的末窗值经 Welford/running-sum 从序列首
+    累加,**不可**由有限尾窗 bit-exact 复现(实测尾窗 vs 全序列有 ~1e-15 残差,会在均线并列处翻档)。
+    故生产热路径由调用方传入 `ma_pb`——在**全 close**上用同一 `ta.ma`/`ta.boll` 复算后按新位置切片
+    (向量化 C,~0.6s/800 码,与全算逐值 bit-exact)。`ma_pb=None` 时退化为尾窗复算(仅供单测/兜底)。
     """
     af = 2.0 / (_MACD_FAST + 1); as_ = 2.0 / (_MACD_SLOW + 1); asig = 2.0 / (_MACD_SIGNAL + 1)
     k = len(new_close)
@@ -184,11 +188,13 @@ def _recur_new_bars(state: dict, new_close: np.ndarray, horizons):
         dea = asig * dif + (1 - asig) * dea
         bars[j] = (dif - dea) * 2.0
         bars_prev[j] = bar_prev0 if j == 0 else bars[j - 1]
-        # RSI:_sma_cn 口径 y_t=(x_t+(n-1)y_{t-1})/n。末态 up/down 恒为有效 float(自全史建立);
-        # close 无内嵌 NaN(assumption C 已抽查证实),NaN 输入时沿用前值(与 _sma_cn 一致,防回归)。
+        # RSI:_sma_cn 口径 y_t=(x_t+(n-1)y_{t-1})/n。末态 up/down 恒为有效 float(自全史建立)。
+        # close 无内嵌 NaN(assumption C 已抽查证实);NaN 输入沿用前值(prev-carry),且 prev_c 取**字面**
+        # 上一根 close(即使 NaN)以严格对齐 close.diff()——NaN close 会令当根与下一根 diff 皆 NaN、皆 carry。
         d = x - prev_c
+        prev_c = x
         if np.isnan(d):
-            pass                         # 沿用 up/down(prev-carry)
+            pass                         # 沿用 up/down(prev-carry,与 _sma_cn 对 NaN 输入一致)
         else:
             u = d if d > 0 else 0.0
             dn = -d if d < 0 else 0.0
@@ -196,26 +202,28 @@ def _recur_new_bars(state: dict, new_close: np.ndarray, horizons):
             down = (dn + (_RSI_WIN - 1) * down) / _RSI_WIN
         denom = up + down
         rsis[j] = 50.0 if denom == 0 else 100.0 * up / denom
-        if not np.isnan(x):
-            prev_c = x
 
-    # MA/BOLL:有限窗精确重算
-    work = np.concatenate([np.asarray(state["tail_close"], float), new_close])
-    base = len(state["tail_close"])   # 新 bar j 在 work 中的位置 = base + j
-    tb = THRESHOLDS["BOLL"]
-    bw = tb.get("周期") or 20; bk = tb.get("倍数") if tb.get("倍数") is not None else 2.0
-    ma5 = np.full(k, np.nan); ma10 = np.full(k, np.nan)
-    ma20 = np.full(k, np.nan); ma60 = np.full(k, np.nan); pb = np.full(k, np.nan)
-    for j in range(k):
-        p = base + j
-        for arr, w in ((ma5, 5), (ma10, 10), (ma20, 20), (ma60, 60)):
-            if p - w + 1 >= 0:
-                arr[j] = work[p - w + 1:p + 1].mean()
-        if p - bw + 1 >= 0:
-            win = work[p - bw + 1:p + 1]
-            mid = win.mean(); std = win.std(ddof=0)
-            width = 2 * bk * std
-            pb[j] = np.nan if width == 0 else (work[p] - (mid - bk * std)) / width
+    work = np.concatenate([np.asarray(state["tail_close"], float), new_close])   # 供 new_state.tail_close
+    if ma_pb is not None:
+        # 生产热路径:MA/BOLL 已在全 close 上用同一 ta.ma/ta.boll 复算(bit-exact),按新位置切片传入。
+        ma5, ma10, ma20, ma60 = ma_pb["ma5"], ma_pb["ma10"], ma_pb["ma20"], ma_pb["ma60"]
+        pb = ma_pb["pb"]
+    else:
+        # 兜底/单测:tail_close ⊕ new_close 有限窗复算(与全序列有 ~1e-15 残差,极稀疏并列处可翻档)。
+        base = len(state["tail_close"])   # 新 bar j 在 work 中的位置 = base + j
+        tb = THRESHOLDS["BOLL"]
+        bw = tb.get("周期") or 20; bk = tb.get("倍数") if tb.get("倍数") is not None else 2.0
+        ws = pd.Series(work)
+        sl = slice(base, base + k)
+        ma5 = ws.rolling(5).mean().to_numpy()[sl]
+        ma10 = ws.rolling(10).mean().to_numpy()[sl]
+        ma20 = ws.rolling(20).mean().to_numpy()[sl]
+        ma60 = ws.rolling(60).mean().to_numpy()[sl]
+        mid = ws.rolling(bw).mean().to_numpy()[sl]
+        std = ws.rolling(bw).std(ddof=0).to_numpy()[sl]
+        width = 2 * bk * std
+        with np.errstate(invalid="ignore", divide="ignore"):
+            pb = np.where(width == 0, np.nan, (new_close - (mid - bk * std)) / width)
 
     trend, mom, boll = _labels_from_indicators(ma5, ma10, ma20, ma60, bars, bars_prev, rsis, pb)
     new_state = {
@@ -324,7 +332,17 @@ def _new_bar_frame_via_recur(df, code, close, dates, nd_i, od_i, sidecar, warmup
     positions = np.arange(apos + 1, len(nd_i))          # 锚点之后的连续新位置
     if positions.size == 0:                             # 无新 bar:末态原样(last_date 已=末日)
         return pd.DataFrame(), {**sidecar, "last_date": pd.Timestamp(dates[-1])}
-    trend, mom, boll, new_state = _recur_new_bars(sidecar, close[positions], horizons)
+    # MA/BOLL 在**全 close**上用与全算同一的 ta.ma/ta.boll 复算(rolling 末窗值经序列首累加、不可由尾窗
+    # bit-exact 复现),再按新位置切片 → 与全量逐值 bit-exact;MACD/RSI 走末态线性递推(bit-exact)。
+    cs = pd.Series(close)
+    ma_pb = {
+        "ma5": ta.ma(cs, 5).to_numpy()[positions],
+        "ma10": ta.ma(cs, 10).to_numpy()[positions],
+        "ma20": ta.ma(cs, 20).to_numpy()[positions],
+        "ma60": ta.ma(cs, 60).to_numpy()[positions],
+        "pb": ta.boll(cs)["percent_b"].to_numpy()[positions],
+    }
+    trend, mom, boll, new_state = _recur_new_bars(sidecar, close[positions], horizons, ma_pb=ma_pb)
     new_state["last_date"] = pd.Timestamp(dates[-1])
     fwd = _forward_returns(positions.astype("int64"), close, dates, horizons)
     cols = {"code": code, "date": dates[positions], "trend": trend, "mom": mom, "boll": boll}
