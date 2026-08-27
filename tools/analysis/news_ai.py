@@ -16,6 +16,7 @@ from __future__ import annotations
 import logging
 
 from tools.analysis import event
+from tools.config import settings
 from tools.store import repo as store
 
 logger = logging.getLogger("analysis.news_ai")
@@ -76,7 +77,11 @@ def enrich_news(code: str, date: str | None = None, client=None) -> list[dict]:
         return []
 
     try:
-        events = event.extract_news_events(code, client=client, limit=len(items))
+        # 抽取套用与 sentiment 路径同一预算闸门 settings.NEWS_EXTRACT_MAX
+        # (单一出处),只对最近 NEWS_EXTRACT_MAX 条送 LLM;超限条按索引对齐时
+        # ev=None → ai 降级中性。原始新闻仍全量落盘/展示,语义仍是「取最近前 N 条」。
+        events = event.extract_news_events(code, client=client,
+                                           limit=settings.NEWS_EXTRACT_MAX)
     except Exception as e:                       # LLM 未配置 / 网络等 → 全条降级
         logger.warning("%s 新闻抽取失败,ai 全部降级中性:%s", code, str(e)[:80])
         events = []
