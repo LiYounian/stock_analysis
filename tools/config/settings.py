@@ -117,6 +117,12 @@ SYNC_RATE_WINDOW_S = int(os.getenv("SYNC_RATE_WINDOW_S", "60")) # 速率限制:�
 SYNC_MAX_BODY_BYTES = int(os.getenv("SYNC_MAX_BODY_BYTES", str(32 * 1024 * 1024)))  # 请求体上限(默认 32MiB);超限 413
 SYNC_NONCE_KEEP_S = int(os.getenv("SYNC_NONCE_KEEP_S", "86400"))  # nonce 保留秒数(定时清理早于此的,>防重放窗口即安全)
 
+# —— 票池写模式(方案2:本地=直采重建,远端=入队提案)——
+# 本地默认 direct = 现状零行为变化;远端 stock-web unit 设 POOL_WRITE_MODE=enqueue → 网页加/删
+# 只写 pool_pending 提案表(不碰会被 reset --hard 抹掉的 config/stock_pool.json),本地闭环消化。
+POOL_WRITE_MODE = os.getenv("POOL_WRITE_MODE", "direct")           # direct / enqueue
+POOL_PENDING_SOURCE = os.getenv("POOL_PENDING_SOURCE", "remote")   # 入队提案的 source 标识
+
 
 def ensure_dirs() -> None:
     """确保缓存/报告目录存在。"""
