@@ -23,8 +23,23 @@
 2. `build_scorecard(..., prev=None, csv_mtime=None)`:`{(date,code): row}` 索引 prev。逐 record 判失效:
    - **失效条件(任一为真即重算整行,走现有全算路径)**:
      ① prev 无此行;② record json 的 mtime > csv_mtime(record 被回补/修正);
-     ③ **该 code 的 K线 parquet mtime > csv_mtime**(除权 backfill 会静默改写该股全部前复权价);
+     ③ **值校验(替代原"K线 parquet mtime",见下"修订")**;
      ④ CSV 列集与当前 schema/`--horizon` 不匹配(缺列)→ 整表回退全量。
+
+### 修订(2025-… 复工):规则③从 mtime 改为**值校验**
+**因由**:用 K线 parquet mtime 判失效太钝——每日给主档 append 当日新 bar 也 bump mtime,
+但**未改历史前复权价**(老行仍有效);而除权/回补重写才真改历史价。mtime 分不清二者 →
+当日有交易的 code 全部历史行都被误判失效走全算,日常提速几乎不兑现。
+**改法**(`_kline_price_stable`,仍只动 forward_scorecard.py):对 prev 命中且 record 未失效的复用候选,
+从当前 kline(`_kline` 已缓存)取价**重算某个已到期 r_N**(只价格查表,**绝不调 `_tilt_labels`**),
+与 prev 存的同一 r_N 用相对容差 `abs(a-b) <= 1e-6*max(1,|b|)` 比对:
+- 一致 → 前复权价链未变 → 冻结/刷新复用,跳过昂贵 tilt;
+- 不一致 / 现在取不到该窗口 → 除权/回补改写 → 该行全算;
+- 全 pending(无已到期 r_N 可校验,prev 未存锚定价)→ 保守全算(该类行仅当日最新一批,量极小)。
+**注意(遗留)**:r_N 是两日收盘价之比,对**均匀等比的前复权再缩放不变**(close[idx]、close[idx+N]
+同乘一个因子,比值不变)→ 值校验对"纯等比 backfill"不敏感。技术/倾斜列多为收益率/比值口径
+(同样对等比缩放不变),故此情形复用通常仍正确;若 tilt 里存在绝对价位阈值特征,等比再缩放会被漏检。
+非等比的历史价纠错(真正会改结论的)则必被 r_N 比对捕获。返回值收成 **python bool**(防 `np.bool_ is True` 恒假)。
    - **未失效且全 r_N 非空** → 直接复用 prev 行(跳过 kline / tilt / persist)。
    - **未失效但仍 pending** → 只做到期刷新:读 kline(`_kline` 缓存)取 idx 算 `r_N`,
      用**缓存里的** `pred_dir/dir_cond_N/dir_adj_N` 补 `hit_N/hit_cond_N/hit_adj_N`,**不调 `_tilt_labels`**。
