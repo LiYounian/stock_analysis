@@ -393,3 +393,64 @@ def test_pool_ack_shard_survives_only_shards_filter(tmp_path):
     keys_posted = [set((e.get("views") or {}).keys()) for e in posted]
     assert {"panel"} in keys_posted                        # 指定的 view 发了
     assert {upload.POOL_ACK_KEY} in keys_posted            # 回执也发了(未被 only_shards 滤掉)
+
+
+# ———————————— CLI --pool-ack 接线(main 读 pool_ack.json → pool_ack_ids;全成功清待发)————————————
+def _stub_settings(monkeypatch):
+    for n, v in [("SYNC_INGEST_URL", "http://x"), ("SYNC_INGEST_TOKEN", "t"),
+                 ("SYNC_SIGNING_KEY", "K"), ("SYNC_SOURCE_ID", "s"), ("SYNC_KEY_ID", "k1")]:
+        monkeypatch.setattr(upload.settings, n, v, raising=False)
+
+
+def test_cli_pool_ack_passes_ids(monkeypatch, tmp_path):
+    """--pool-ack:CLI 读 read_ack() 的 id 透传给 upload_date 的 pool_ack_ids。"""
+    _stub_settings(monkeypatch)
+    from ops import consume_pool_pending as cpp
+    monkeypatch.setattr(cpp, "read_ack", lambda *a, **k: [1, 2])
+    monkeypatch.setattr(cpp, "clear_ack", lambda *a, **k: None)
+    monkeypatch.setattr(upload, "_receipt_dir", lambda: tmp_path)
+    captured = {}
+
+    def fake_upload_date(date, **kw):
+        captured.update(kw)
+        return {"summary": {"total": 1, "ok": 1, "failed": 0}}
+
+    monkeypatch.setattr(upload, "upload_date", fake_upload_date)
+    assert upload.main(["--date", "2026-08-07", "--pool-ack"]) == 0
+    assert captured.get("pool_ack_ids") == [1, 2]           # 透传
+
+
+def test_cli_no_pool_ack_flag(monkeypatch, tmp_path):
+    """不带 --pool-ack:pool_ack_ids=None(日常上传零回归)。"""
+    _stub_settings(monkeypatch)
+    monkeypatch.setattr(upload, "_receipt_dir", lambda: tmp_path)
+    captured = {}
+
+    def fake_upload_date(date, **kw):
+        captured.update(kw)
+        return {"summary": {"total": 1, "ok": 1, "failed": 0}}
+
+    monkeypatch.setattr(upload, "upload_date", fake_upload_date)
+    assert upload.main(["--date", "2026-08-07"]) == 0
+    assert captured.get("pool_ack_ids") is None
+
+
+def test_cli_pool_ack_clears_only_on_success(monkeypatch, tmp_path):
+    """回执全成功(failed==0)→ clear_ack 被调;有失败 → 不清(保留待发下轮重试),退出码1。"""
+    _stub_settings(monkeypatch)
+    from ops import consume_pool_pending as cpp
+    monkeypatch.setattr(cpp, "read_ack", lambda *a, **k: [9])
+    calls = {"cleared": 0}
+    monkeypatch.setattr(cpp, "clear_ack",
+                        lambda *a, **k: calls.__setitem__("cleared", calls["cleared"] + 1))
+    monkeypatch.setattr(upload, "_receipt_dir", lambda: tmp_path)
+
+    monkeypatch.setattr(upload, "upload_date",
+                        lambda date, **kw: {"summary": {"total": 2, "ok": 2, "failed": 0}})
+    assert upload.main(["--date", "2026-08-07", "--pool-ack"]) == 0
+    assert calls["cleared"] == 1                            # 全成功 → 清
+
+    monkeypatch.setattr(upload, "upload_date",
+                        lambda date, **kw: {"summary": {"total": 2, "ok": 1, "failed": 1}})
+    assert upload.main(["--date", "2026-08-07", "--pool-ack"]) == 1  # 有失败 → 退出码1
+    assert calls["cleared"] == 1                            # 不再清(计数不变)

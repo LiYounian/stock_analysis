@@ -77,6 +77,15 @@ def read_ack(path: Path | None = None) -> list[int]:
         return []
 
 
+def clear_ack(path: Path | None = None) -> None:
+    """上传成功回推后清空待发回执文件(避免下轮重复回推;缺失即 no-op)。"""
+    p = path or _ack_path()
+    try:
+        p.unlink()
+    except OSError:
+        pass
+
+
 def consume(*, url: str, token: str, key: str, key_id: str,
             dry_run: bool = False, pull_fn=None) -> dict:
     """跑一次消化。返回 {pulled, added, removed, failed, consumed_ids}(dry_run 时另含裁决预览)。
