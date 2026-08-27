@@ -187,15 +187,35 @@ def _record_mtime(code: str, date: str) -> float:
         return float("inf")
 
 
-def _kline_mtime(code: str) -> float:
-    """该 code 主档 K线 parquet 的 mtime。除权 backfill 会静默改写整份前复权价 →
-    只要文件比 CSV 新就判失效(比只看 record json 更保守,兜住静默改写)。
-    主档缺失(回退 raw 分区等无法定位)→ +inf 保守重算。
+def _kline_price_stable(prev_row: dict, horizons, df, idx) -> bool | None:
+    """**值校验**(替代旧"K线 parquet mtime"判定):对 prev 命中行,用当前 K线做一次
+    廉价价格查表,重算某个**已到期**窗口的 r_N,与 prev 存的同一 r_N 比对(相对容差)。
+
+    为什么不看 parquet mtime:每日 append 当日新 bar 也 bump mtime,但**未改历史前复权价**
+    (老行仍有效);而除权 backfill 会**改写整段前复权价**(老行才真失效)。mtime 分不清二者,
+    值校验直接看"锚定价链变没变":
+      · 返回 True  → 已到期 r_N 与 prev 一致 → 前复权价链未变 → 可冻结/复用(跳过昂贵 _tilt_labels);
+      · 返回 False → 不一致 / 现在反而取不到该窗口 / 拿不到价 → 发生改写(或数据缺)→ 保守重算;
+      · 返回 None  → 该行无任何已到期 r_N 可校验(全 pending,prev 未存锚定价)→ 交上层保守处理。
+    **绝不调 _tilt_labels/conditional_scenarios**,只读已缓存 kline + 常数次查表。
+    无未来函数:校验用的 close[idx+N] 与全算口径完全一致。
     """
-    try:
-        return _path_mtime(store._master_path(code))
-    except Exception:  # noqa: BLE001
-        return float("inf")
+    if df is None or idx is None:
+        return False   # 拿不到价 → 保守重算
+    close = df["close"].to_numpy(float)
+    for N in horizons:
+        pr = prev_row.get(f"r_{N}")
+        if pr is None or (isinstance(pr, float) and np.isnan(pr)):
+            continue   # 该 N pending,无值可比
+        try:
+            prv = float(pr)
+        except (TypeError, ValueError):
+            return False
+        if idx + N < len(close) and close[idx] > 0:
+            r = float((close[idx + N] / close[idx] - 1.0) * 100.0)
+            return bool(abs(r - prv) <= 1e-6 * max(1.0, abs(prv)))   # 收成 python bool(防 np.bool_ 破坏 `is True`)
+        return False   # prev 说到期了但现在取不到该窗口 → 价链变了 → 重算
+    return None        # 全 pending,无已到期 r_N
 
 
 def _all_matured(prev_row: dict, horizons) -> bool:
@@ -253,10 +273,12 @@ def build_scorecard(dates=None, horizons=(1, 5, 10), classify_persist=True,
     tilt:是否附激进版·后验倾斜列(p_cond/dir_cond/hit_cond 基线 vs p_adj/dir_adj/hit_adj 倾斜)。
       需 state_pool(缺失则该组列留空)。用于"倾斜 vs 纯技术"前向累积 A/B(k 标定/放行闸依据)。
 
-    增量(方案 B):prev = 上次 CSV(pd.read_csv),csv_mtime = 其 mtime。逐 (date,code) 判失效:
-      失效(任一为真即整行走全算)= prev 无此行 / record json mtime > csv_mtime /
-      该 code K线 parquet mtime > csv_mtime / prev 列集不匹配当前 schema(整表回退全量)。
-    未失效且全 r_N 到期 → 原样复用 prev 行;未失效但仍 pending → 只补到期(不跑 tilt)。
+    增量(方案 B·值校验版):prev = 上次 CSV(pd.read_csv),csv_mtime = 其 mtime。逐 (date,code):
+      失效 = prev 无此行 / record json mtime > csv_mtime(规则②) / prev 列集不匹配 schema(规则④,整表回退)。
+      **规则③改为值校验(不再看 K线 parquet mtime)**:对 prev 命中且 record 未失效的复用候选,
+      用当前 K线重算某个已到期 r_N 与 prev 比对(_kline_price_stable):一致→前复权价链未变→冻结/刷新;
+      不一致→除权 backfill 改写→重算。全 pending 无值可校验的候选保守全算。
+    未失效且全 r_N 到期 → 复用 prev 行;未失效但仍 pending → 只补到期(不跑 tilt)。
     prev=None(或 --rebuild)→ 全量从零。输出仍全量覆盖同一 --out,幂等不变。
     """
     if dates is None:
@@ -296,19 +318,23 @@ def build_scorecard(dates=None, horizons=(1, 5, 10), classify_persist=True,
                 continue
             code = str(code)
 
-            # ---- 失效判定(双 mtime + prev 命中)----
+            # ---- 失效判定(规则② record mtime + 规则③值校验 + prev 命中)----
             prev_row = prev_index.get((d, code))
-            stale = True
-            if prev_row is not None and csv_mtime is not None:
-                stale = (_record_mtime(code, d) > csv_mtime
-                         or _kline_mtime(code) > csv_mtime)
-            if not stale:
-                if _all_matured(prev_row, horizons):
-                    rows.append(_reuse_row(prev_row, cols))            # 冻结行:整行复用
-                else:
-                    rows.append(_refresh_pending(prev_row, cols, horizons,
-                                                 _kline, kidx_cache, code, d))  # pending:只补到期
-                continue
+            record_ok = (prev_row is not None and csv_mtime is not None
+                         and _record_mtime(code, d) <= csv_mtime)
+            if record_ok:
+                # 规则③值校验:重算已到期 r_N 与 prev 比对,判前复权价链是否被除权 backfill 改写
+                df = _kline(code)               # 已按 code 缓存;顺带建 date→idx 映射
+                idx = kidx_cache.get(code, {}).get(d)
+                stable = _kline_price_stable(prev_row, horizons, df, idx)
+                if stable is True:
+                    if _all_matured(prev_row, horizons):
+                        rows.append(_reuse_row(prev_row, cols))        # 冻结行:整行复用
+                    else:
+                        rows.append(_refresh_pending(prev_row, cols, horizons,
+                                                     _kline, kidx_cache, code, d))  # pending:只补到期
+                    continue
+                # stable False(价链被改写)/ None(全 pending 无值可校验)→ 落到全算(保守)
 
             # ---- 失效/新增:全算路径 ----
             trend = ((rec.get("signals") or {}).get("trend") or {}).get("评级")

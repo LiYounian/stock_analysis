@@ -201,7 +201,11 @@ def test_stale_record_recompute(env):
 
 
 def test_stale_kline_recompute(env):
-    """该 code K线 parquet mtime > csv_mtime → 该 code 行重算(除权 backfill 兜底)。"""
+    """除权 backfill **改写历史前复权价** → 值校验捕获已到期 r_N 不一致 → 该 code 行重算。
+
+    关键:parquet mtime 甚至可以**不**新于 csv_mtime(纯值校验,不再看 mtime),
+    重算仍被正确触发——证明规则③已从 mtime 改为值校验。
+    """
     code = "600005"
     d0 = _DATES[0]
     env.write_kline(code, _DATES, [10, 11, 12, 13, 14, 15, 16])
@@ -212,16 +216,50 @@ def test_stale_kline_recompute(env):
     assert not pd.isna(old_r5)
 
     T = 1_000_000.0
-    env.set_mtime(env.rec_path(code, d0), T - 100)   # record 不失效
-    # 静默改写 K线(模拟除权 backfill 改前复权价)并把 mtime 顶到 csv_mtime 之后
-    env.write_kline(code, _DATES, [10, 11, 12, 13, 14, 30, 16])   # close[idx+5] 30→r_5 变大
-    env.set_mtime(env.mst_path(code), T + 100)
+    env.set_mtime(env.rec_path(code, d0), T - 100)      # record 不失效
+    # 非均匀改写历史价(模拟数据回补/纠错,改变了窗口收益率);mtime 故意压在 csv 之前,证明不靠 mtime
+    env.write_kline(code, _DATES, [10, 20, 12, 13, 14, 30, 16])   # r_1、r_5 都变(非等比缩放)
+    env.set_mtime(env.mst_path(code), T - 50)
 
     inc = fs.build_scorecard(dates=None, horizons=_HZ, classify_persist=False, tilt=False,
                              prev=prev, csv_mtime=T)
     new_r5 = inc[(inc["code"] == code)].iloc[0]["r_5"]
-    assert new_r5 == pytest.approx((30.0 / 10.0 - 1.0) * 100.0)   # 用新价重算
+    assert new_r5 == pytest.approx((30.0 / 10.0 - 1.0) * 100.0)   # 用改写后的新价重算 → 200
     assert new_r5 != pytest.approx(old_r5)
+
+
+def test_append_new_bar_reuses(env):
+    """纯 append 一根**未改历史前复权价**的新 bar → 值校验一致 → 冻结行不重算(不走 tilt)。
+
+    反例对照 test_stale_kline_recompute:daily append 会 bump parquet mtime,若仍按旧规则③
+    (parquet mtime)会误判失效重算;值校验只看历史价链是否变,append 不改历史 → 正确复用。
+    monkeypatch _tilt_labels 抛异常来证明冻结行确实没走全算。
+    """
+    code = "600007"
+    d0 = _DATES[0]
+    # 历史只到 _DATES[:6](6 根),d0 的 r_1/r_5 均已到期(idx0,idx+5=5<6)→ 冻结
+    hist = _DATES[:6]
+    env.write_kline(code, hist, [10, 11, 12, 13, 14, 15])
+    env.write_record(code, d0)
+    prev_full = fs.build_scorecard(dates=None, horizons=_HZ, classify_persist=False, tilt=True)
+    prev = _via_csv(prev_full, env.tmp, "prev")
+    assert not pd.isna(prev.iloc[0]["r_5"])
+
+    T = 1_000_000.0
+    env.set_mtime(env.rec_path(code, d0), T - 100)      # record 不失效
+    # 纯 append:历史 6 根价原样不动,仅在尾部加一根新 bar;parquet 被重写 → mtime 变新
+    env.write_kline(code, _DATES[:7], [10, 11, 12, 13, 14, 15, 99])
+    env.set_mtime(env.mst_path(code), T + 100)          # mtime 新于 csv(旧规则③会误判失效)
+
+    def _boom(*a, **k):
+        raise RuntimeError("append 未改历史价,冻结行不应重算/调 _tilt_labels")
+
+    env.monkeypatch.setattr(fs, "_tilt_labels", _boom)
+    inc = fs.build_scorecard(dates=None, horizons=_HZ, classify_persist=False, tilt=True,
+                             prev=prev, csv_mtime=T)
+    # 值校验一致 → 冻结复用,不崩;r_5 沿用 prev(历史价未变)
+    _assert_same(prev_full, inc, env.tmp)
+    assert inc.iloc[0]["r_5"] == pytest.approx(prev.iloc[0]["r_5"])
 
 
 def test_rebuild_flag(env):
