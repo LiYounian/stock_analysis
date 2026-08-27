@@ -127,3 +127,30 @@ def test_picks_extractor_handles_top_and_selected():
     assert run._picks_from_view(None) == []               # screener 被 _safe 隔离失败
     assert run._picks_from_view({}) == []
     assert run._picks_from_view({"入选清单": [{"no_code": 1}]}) == []
+
+
+def test_picks_extractor_handles_rank_view():
+    """_picks_from_view 兼容排行型 view(策略11):无 入选清单/top,从 排行 各维度榜取 code 并集去重保序。"""
+    view = {
+        "策略": "指标条件化状态排序",
+        "排行": {
+            "1日": [{"code": "A", "上涨概率%": 60}, {"code": "B"}],
+            "5日": [{"code": "B"}, {"code": "C"}],          # B 与 1日 重复 → 去重
+            "10日": [{"code": "C"}, {"code": "D"}],         # C 重复
+        },
+    }
+    # 保序去重:按 1日→5日→10日 首次出现顺序
+    assert run._picks_from_view(view) == ["A", "B", "C", "D"]
+    # 排行型元素为 code 串也健壮
+    assert run._picks_from_view({"排行": {"1日": ["E", "F"], "5日": ["E"]}}) == ["E", "F"]
+    # 空排行 / 排行非 dict → 空
+    assert run._picks_from_view({"排行": {}}) == []
+    assert run._picks_from_view({"排行": []}) == []
+
+
+def test_picks_extractor_prefers_selected_over_rank():
+    """入选清单/top 存在时优先走原分支,排行分支不生效(原有两种 view 行为不变)。"""
+    view = {"入选清单": [{"code": "Z"}], "排行": {"1日": [{"code": "A"}]}}
+    assert run._picks_from_view(view) == ["Z"]
+    view2 = {"top": [{"code": "T"}], "排行": {"1日": [{"code": "A"}]}}
+    assert run._picks_from_view(view2) == ["T"]
