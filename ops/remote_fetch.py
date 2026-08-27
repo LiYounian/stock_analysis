@@ -60,10 +60,10 @@ def main(argv=None) -> int:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
 
     res = run_fetch(args.date, backfill=args.backfill, force=args.force)
-    if res.get("skipped"):
-        print(f"跳过采集({res['reason']}):{res['date']}")
+    if res.get("skipped") is True:              # 整体跳过(非交易日)的哨兵值;区别于成功路径 skipped=<停牌数>(整数真值)
+        print(f"跳过采集({res.get('reason')}):{res.get('date')}")
         return 0
-    print(f"采集完成 {res['date']}(mode={res.get('mode')}):"
+    print(f"采集完成 {res.get('date', args.date)}(mode={res.get('mode')}):"
           f"{ {k: v for k, v in res.items() if k not in ('ok', 'mode', 'date')} }")
     return 0
 
