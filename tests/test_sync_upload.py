@@ -337,3 +337,59 @@ def test_only_view_key_matches_build_shards():
     shards = upload.build_shards(payload)
     assert set(shards) == {"__view__:最强选股"}
     assert f"{upload.VIEW_SHARD_PREFIX}最强选股" in shards   # CLI 拼键与 build 键一致
+
+
+def test_pool_ack_shard_appended_and_signed(tmp_path):
+    """方案2 回执:pool_ack_ids 非空 → 追加 __pool_ack__ 分片,走既有签名/POST 路径。"""
+    analysis = tmp_path / "analysis"
+    _seed_analysis(analysis, "2026-08-07")
+    posted = []
+
+    def post(url, token, env):
+        posted.append(env)
+        return 200, {"ok": True}
+
+    r = upload.upload_date("2026-08-07", url="http://x", token="t", source="s",
+                           key_id="k1", key="K", analysis_dir=analysis,
+                           post_fn=post, retries=0, base_delay=0, sleep_fn=lambda *_: None,
+                           pool_ack_ids=[3, 7, 11])
+    assert upload.POOL_ACK_KEY in r["shards"]              # 回执分片进了回执单
+    ack_envs = [e for e in posted if upload.POOL_ACK_KEY in (e.get("views") or {})]
+    assert len(ack_envs) == 1
+    env = ack_envs[0]
+    assert env["views"][upload.POOL_ACK_KEY] == {"consumed_ids": [3, 7, 11]}
+    assert env["records"] == {} and env["code_views"] == {}
+    assert env["meta"].get("sig")                         # 走了签名路径
+
+
+def test_no_pool_ack_shard_when_ids_empty(tmp_path):
+    """无回执 id → 不追加 __pool_ack__ 分片(日常上传零影响)。"""
+    analysis = tmp_path / "analysis"
+    _seed_analysis(analysis, "2026-08-07")
+
+    def post(url, token, env):
+        return 200, {"ok": True}
+
+    r = upload.upload_date("2026-08-07", url="http://x", token="t", source="s",
+                           key_id="k1", key="K", analysis_dir=analysis,
+                           post_fn=post, retries=0, base_delay=0, sleep_fn=lambda *_: None)
+    assert upload.POOL_ACK_KEY not in r["shards"]         # 没传 ids → 无回执分片
+
+
+def test_pool_ack_shard_survives_only_shards_filter(tmp_path):
+    """回执分片在 only_shards 过滤之后追加:即便单分片补传,有回执也必发。"""
+    analysis = tmp_path / "analysis"
+    _seed_analysis(analysis, "2026-08-07")
+    posted = []
+
+    def post(url, token, env):
+        posted.append(env)
+        return 200, {"ok": True}
+
+    upload.upload_date("2026-08-07", url="http://x", token="t", source="s",
+                       key_id="k1", key="K", analysis_dir=analysis,
+                       post_fn=post, retries=0, base_delay=0, sleep_fn=lambda *_: None,
+                       only_shards={"__view__:panel"}, pool_ack_ids=[5])
+    keys_posted = [set((e.get("views") or {}).keys()) for e in posted]
+    assert {"panel"} in keys_posted                        # 指定的 view 发了
+    assert {upload.POOL_ACK_KEY} in keys_posted            # 回执也发了(未被 only_shards 滤掉)

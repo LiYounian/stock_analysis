@@ -64,6 +64,7 @@ def _receipt_dir() -> Path:
 # 打包分片
 # ————————————————————————————————————————————————
 VIEW_SHARD_PREFIX = "__view__:"   # 池级视图分片键前缀:__view__:panel / __view__:sentiment_policy …
+POOL_ACK_KEY = "__pool_ack__"     # 保留分片键(方案2 回执):搭 upload 顺带已消化 pending id,ingest 据此标 consumed
 
 
 def build_shards(payload: dict) -> dict[str, dict]:
@@ -188,7 +189,8 @@ def upload_date(date: str, *, url: str, token: str, source: str, key_id: str, ke
                 post_fn=None, retries: int = 5, base_delay: float = 1.0,
                 sleep_fn=time.sleep, force: bool = False,
                 min_interval: float | None = None, rate_window_s: float | None = None,
-                only_shards: set[str] | None = None) -> dict:
+                only_shards: set[str] | None = None,
+                pool_ack_ids: list[int] | None = None) -> dict:
     """打包并上传某日产物;断点续传(跳过已成功分片)。返回回执 dict。
 
     **节流(min_interval)**:每日 ~250 个分片一股脑发会超远端速率限制(默认 120/60s)→
@@ -198,12 +200,20 @@ def upload_date(date: str, *, url: str, token: str, source: str, key_id: str, ke
 
     **only_shards**:只补传指定分片键(如 {"__view__:最强选股"})。用于傍晚 Tushare 筹码
     发布后单独补跑+补传策略9,不重传其它 300+ 分片。为 None 则全量(日常路径)。
+
+    **pool_ack_ids**(方案2 回执):非空时追加一个 __pool_ack__ 保留分片(consumed_ids),
+    走与其它分片**完全相同**的签名/POST/断点续传路径;远端 ingest 据此把 pending 标 consumed
+    (回执方式 ii:不新开写口)。在 only_shards 过滤之后追加,确保有回执时必发。
     """
     analysis_dir = analysis_dir or import_to_db._analysis_dir()
     payload = import_to_db.collect_date(analysis_dir, date)
     shards = build_shards(payload)
     if only_shards is not None:                        # 单分片补传:只保留指定键(其余分片根本不进循环,零外溢)
         shards = {k: v for k, v in shards.items() if k in only_shards}
+    if pool_ack_ids:                                   # 方案2 回执:追加保留分片(在 only_shards 过滤之后,确保请求即发)
+        shards[POOL_ACK_KEY] = {"records": {},
+                                "views": {POOL_ACK_KEY: {"consumed_ids": list(pool_ack_ids)}},
+                                "code_views": {}}
     post_fn = post_fn or _default_post
     receipt = _load_receipt(receipt_path, date) if receipt_path else {"date": date, "shards": {}}
     meta_base = {"date": date, "source": source, "key_id": key_id,
