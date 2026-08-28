@@ -1,10 +1,12 @@
-"""六维聚合:方向型(命中率+收益质量+超额+显著性)/ 排序型(rank-IC/ICIR)。
+"""六维聚合 + 按策略类型分流:广筛型(命中率+收益质量+超额+显著性)/ 可排序型(广筛全量+Top-N精度+rank-IC)/
+参考型(伪排序,仅广筛口径)。
 
 维度对照(任务①–⑥):
   ③ 收益质量:每票期望收益(均值/中位数)+ 盈亏比 + 分布(P10/P90)+ 胜率
   ④ 超额收益(幅度):策略均收益 − 基准均收益(等权全市场 / 随机同数量 bootstrap;指数基准见 report)
   ⑤ 显著性 + 按日聚类:命中率/超额的按交易日聚类 bootstrap CI + p 值(Wilson 仅作 naive 对照)
-  ⑥ 按策略类型匹配:方向型 → 命中/收益/超额;排序型 → rank-IC/ICIR
+  ⑥ 按策略类型匹配:广筛型 → 命中/收益/超额;可排序型 → 追加 Top-N(5/10/20)精度 + rank-IC/ICIR;
+     参考型(策略11伪排序)→ 只走广筛口径,不跑 rank-IC/Top-N(避免"看着有排序其实是噪声"的误导)
   ② 全部基于 T+1 入场重算;隔夜跳空单列。
 滚动窗:近一周=5/近一月=20/近一季=60/近一年=250 交易日 + 全史(所有预测日)。
 """
@@ -16,11 +18,12 @@ import numpy as np
 import pandas as pd
 
 from . import stats as _st
-from .schema import DIRECTIONAL, RANKING
+from .schema import RANKABLE, REFERENCE
 
 WINDOWS: dict[str, int] = {"近一周": 5, "近一月": 20, "近一季": 60, "近一年": 250}
 _THIN_N = 30
 _BOOT_B = 2000
+TOPN_LEVELS = (5, 10, 20)   # 可排序型 Top-N 精度分档
 
 
 # ────────────────────── 收益质量 ──────────────────────
@@ -111,6 +114,21 @@ def directional_cell(sub: pd.DataFrame, uni_ret: dict, h: int, seed: int) -> dic
     return cell
 
 
+# ────────────────────── 参考·非alpha 单元格 ──────────────────────
+def reference_cell(sub: pd.DataFrame, uni_ret: dict, h: int, seed: int) -> dict:
+    """参考·非alpha(如策略11):走广筛口径,但其打分多为中性方向 → 命中率不适用。
+
+    命中相关列由 directional_cell 给(中性方向天然为 —);额外**对全部已到期票**(不问方向)
+    补一份收益分布作参考,避免整行全空。绝不跑 rank-IC / Top-N(伪排序,防误导)。
+    """
+    cell = directional_cell(sub, uni_ret, h, seed)
+    matured = sub.dropna(subset=["r"])
+    cell["参考收益分布_全部已到期"] = return_quality(matured["r"].to_numpy(float))
+    cell["参考已到期样本"] = int(len(matured))
+    cell["参考预测日数"] = int(matured["pred_date"].nunique())
+    return cell
+
+
 # ────────────────────── 排序型单元格 ──────────────────────
 def ranking_cell(sub: pd.DataFrame, h: int) -> dict:
     """⑥ 排序型:截面 rank-IC/ICIR。sub=该切片已到期且有 rank_score 的行。"""
@@ -123,6 +141,69 @@ def ranking_cell(sub: pd.DataFrame, h: int) -> dict:
     return ic
 
 
+# ────────────────────── Top-N 精度(可排序型专用) ──────────────────────
+def topn_precision(sub: pd.DataFrame, uni_ret: dict, h: int,
+                   levels=TOPN_LEVELS, seed: int = 20260828) -> dict:
+    """可排序型 Top-N 分档精度:每预测日按 rank_score **降序**取前 N 只 → 命中率/期望收益/超额。
+
+    检验"分数越高是否越准/越赚"(全部票等权评法会浪费此排序信息)。
+    sub=该 (策略,窗,horizon) 已到期且有 rank_score 的行。某日 picks 不足 N → 取该日全部(min(N,当日数))。
+    跨日聚合:命中/期望收益按选中的 Top-N 行**池化**;超额按"每日 Top-N 组合收益 − 当日全市场均收益"
+    **跨日等权**(与全量单元『组合日均』同口径,可与全量指标直接对比看选择性)。
+
+    返回 {N: {档位N, 命中率%_期末, 命中率%_期内触及, 期望收益%_池化, 期望收益%_组合日均,
+              超额%_vs全市场, 超额_聚类p值, 选中样本, 预测日数, 每日实际档位<N占比%}}。
+    无有效 rank_score(广筛/参考型或该策略未透出打分)→ {}(上层据此标注"无连续打分,Top-N不适用")。
+    """
+    valid = sub.dropna(subset=["rank_score", "r"])
+    if valid.empty:
+        return {}
+    day_groups = list(valid.groupby("pred_date"))
+    out: dict = {}
+    for N in levels:
+        hit_end, hit_intra, r_pool = [], [], []
+        strat_day, mkt_day, undersized = [], [], 0
+        for d, g in day_groups:
+            gd = g.sort_values("rank_score", ascending=False).head(N)
+            k = len(gd)
+            if k < N:
+                undersized += 1
+            he = gd["hit_end"].dropna().to_numpy(float)
+            hi = gd["hit_intra"].dropna().to_numpy(float)
+            rv = gd["r"].dropna().to_numpy(float)
+            hit_end.extend(he.tolist())
+            hit_intra.extend(hi.tolist())
+            r_pool.extend(rv.tolist())
+            strat_day.append(rv)
+            u = uni_ret.get((d, h), np.array([]))
+            mkt_day.append(float(u.mean()) if len(u) else None)
+        n_sel = len(r_pool)
+        if n_sel == 0:
+            continue
+        strat_means = [float(a.mean()) if len(a) else None for a in strat_day]
+        paired = [(s, m) for s, m in zip(strat_means, mkt_day)
+                  if s is not None and m is not None]
+        strat_pf = float(np.mean([s for s, _ in paired])) if paired else None
+        mkt_pf = float(np.mean([m for _, m in paired])) if paired else None
+        ex = _st.cluster_bootstrap_excess(strat_day, mkt_day, B=_BOOT_B, seed=seed)
+        cell = {
+            "档位N": N,
+            "命中率%_期末": _rate(pd.Series(hit_end)) if hit_end else None,
+            "期望收益%_池化": round(float(np.mean(r_pool)), 3),
+            "期望收益%_组合日均": round(strat_pf, 3) if strat_pf is not None else None,
+            "超额%_vs全市场": (round(strat_pf - mkt_pf, 3)
+                              if (strat_pf is not None and mkt_pf is not None) else None),
+            "超额_聚类p值": ex.get("p_value"),
+            "选中样本": n_sel,
+            "预测日数": len(day_groups),
+            "每日不足N占比%": round(undersized / len(day_groups) * 100, 1) if day_groups else None,
+        }
+        if h != 1 and hit_intra:
+            cell["命中率%_期内触及"] = _rate(pd.Series(hit_intra))
+        out[N] = cell
+    return out
+
+
 # ────────────────────── 窗口 + 顶层聚合 ──────────────────────
 def _window_dates(calendar, N):
     return set(calendar[-N:]) if calendar else set()
@@ -133,8 +214,9 @@ def aggregate(scored: pd.DataFrame, uni_ret: dict, calendar: list[str],
               track: str = "live") -> dict:
     """顶层:每策略 × 每窗 × 每 horizon 按 stype 选指标。含"全史"窗(所有预测日)。"""
     windows = dict(windows or WINDOWS)
-    out = {"轨道": track, "口径": "T+1入场;方向型=命中/收益质量/超额/显著性(按日聚类);"
-                            "排序型=rank-IC/ICIR;非投资建议", "窗口": {}}
+    out = {"轨道": track, "口径": "T+1入场;广筛型=命中/收益质量/超额/显著性(按日聚类,全部票等权vs市场);"
+                            "可排序型=广筛全量+Top-N(5/10/20)精度+rank-IC/ICIR;"
+                            "参考型(策略11伪排序)=仅广筛口径、不跑rank-IC/Top-N;非投资建议", "窗口": {}}
     if scored.empty or not calendar:
         return out
 
@@ -162,9 +244,17 @@ def aggregate(scored: pd.DataFrame, uni_ret: dict, calendar: list[str],
                       "预测日数": int(g["pred_date"].nunique())}
             for h in horizons:
                 gh = g[(g["h"] == h) & (g["matured"])]
-                if stype == RANKING:
-                    sentry[f"{h}日"] = ranking_cell(gh, h)
+                if stype == RANKABLE:
+                    # 可排序型:广筛全量指标 + Top-N 分档精度 + rank-IC(三者并存于同一单元)。
+                    cell = directional_cell(gh, uni_ret, h, seed)
+                    cell["Top-N精度"] = topn_precision(gh, uni_ret, h, seed=seed)
+                    cell["rank_ic"] = ranking_cell(gh, h)
+                    sentry[f"{h}日"] = cell
+                elif stype == REFERENCE:
+                    # 参考·非alpha:广筛口径 + 参考收益分布;绝不跑 rank-IC/Top-N。
+                    sentry[f"{h}日"] = reference_cell(gh, uni_ret, h, seed)
                 else:
+                    # 广筛型:全部票等权 vs 市场基准。
                     sentry[f"{h}日"] = directional_cell(gh, uni_ret, h, seed)
             wentry["策略"][sid] = sentry
         out["窗口"][wname] = wentry
