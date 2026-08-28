@@ -79,6 +79,53 @@ def test_neutral_direction_no_hit():
     assert fr[1]["matured"] is True and fr[1]["hit_end"] is None and fr[1]["hit_intra"] is None
 
 
+def test_hit_base_is_close_t_not_entry_end():
+    """双基准语义锁死:命中基准=close[T],收益基准=T+1 入场价,二者不串。
+
+    构造跳空低开:T 收盘 100,T+1 开盘 90 才买得到 → 买得便宜收益为正,但价格从未站回 100
+    → 相对预测日收盘方向错。命中必须判 0(base=close[T]),收益必须为正(base=entry)。
+    """
+    book = _book({"X": [
+        ("d0", 100, 100, 100, 100.0),   # 预测日 T:命中基准 close[T]=100
+        ("d1", 90, 95, 88, 92.0),       # T+1 open=90 入场(收益基准);盘中最高 95<100 未触及
+        ("d2", 92, 98, 90, 95.0),       # T+2 close=95<100 期末不命中;窗口最高 98<100 未触及
+    ]})
+    fr = prices.realized(book.get("X"), 0, +1, (2,))
+    # 收益基准=T+1 入场 90:r = 95/90−1 > 0(低开买入确实赚)
+    assert fr[2]["r"] > 0
+    assert abs(fr[2]["r"] - (95.0 / 90.0 - 1) * 100) < 1e-9
+    # 命中基准=close[T]=100:close[T+2]=95<100 → 期末不命中(即便收益为正,预测方向错)
+    assert fr[2]["hit_end"] == 0
+    # 期内触及基准=close[T]=100:窗口 [T+1,T+2] 最高 98 从未 >100 → 未触及
+    assert fr[2]["hit_intra"] == 0
+    # 隔夜跳空 = entry/close[T]−1 = 90/100−1 = −10%(单列)
+    assert abs(fr[2]["gap"] - (-10.0)) < 1e-9
+
+
+def test_intra_touch_base_is_close_t():
+    """期内触及严格按'T 之后任意一天 high>close[T]':低开后盘中冲破 close[T] 即算触及,即便期末又跌回。"""
+    book = _book({"X": [
+        ("d0", 100, 100, 100, 100.0),
+        ("d1", 90, 101, 88, 92.0),      # 盘中 high=101 > close[T]=100 → 触及
+        ("d2", 92, 99, 90, 95.0),       # 期末 close=95<100 → 期末不命中
+    ]})
+    fr = prices.realized(book.get("X"), 0, +1, (2,))
+    assert fr[2]["hit_intra"] == 1 and fr[2]["hit_end"] == 0
+
+
+def test_short_hit_base_close_t():
+    """看空:期末命中=close[T+h]<close[T];期内触及=窗口最低价<close[T]。基准均为 close[T]。"""
+    book = _book({"X": [
+        ("d0", 100, 100, 100, 100.0),
+        ("d1", 105, 106, 99, 101.0),    # 盘中最低 99<100 → 看空触及;入场 open=105
+        ("d2", 101, 103, 97, 98.0),     # 期末 close=98<100 → 看空期末命中
+    ]})
+    fr = prices.realized(book.get("X"), 0, -1, (2,))
+    assert fr[2]["hit_end"] == 1 and fr[2]["hit_intra"] == 1
+    # 收益基准仍是 T+1 入场 105:高开做空,r = 98/105−1 < 0(方向命中但按多头口径收益为负,只作收益列)
+    assert abs(fr[2]["r"] - (98.0 / 105.0 - 1) * 100) < 1e-9
+
+
 # ─────────────── ③ 收益质量 ───────────────
 def test_return_quality_profit_factor_winrate():
     q = aggregate.return_quality(np.array([2.0, 4.0, -1.0, -3.0]))

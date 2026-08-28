@@ -1,6 +1,8 @@
 """统一打分层:预测记录表(live 或 replay)+ PriceBook → 逐 (记录 × horizon) 打分明细。
 
-对每条预测记录定位 T+1 入场,算各 horizon 的 T+1 基准实现收益 + 双口径命中 + 隔夜跳空,
+对每条预测记录定位 T+1 入场,算各 horizon 的**双基准**明细 + 隔夜跳空:
+  · 命中/触及(hit_end/hit_intra)基准 = 预测日 T 收盘 close[T](衡量"预测对不对")
+  · 收益(r)基准 = T+1 入场价 open[T+1](衡量"可交易收益")
 并回填 rank_score / stype / source 供上层聚合(方向型走命中/收益质量/超额;排序型走 rank-IC)。
 
 产出的 scored 长表列:

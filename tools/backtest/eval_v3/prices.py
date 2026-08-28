@@ -62,15 +62,18 @@ def entry_price(rec, idx: int) -> tuple[float | None, bool]:
 
 
 def realized(rec, idx: int, direction: int, horizons) -> dict:
-    """T+1 入场口径下,各 horizon 的实现收益 + 双口径命中 + 隔夜跳空拆分。
+    """各 horizon 的实现收益 + 双口径命中 + 隔夜跳空拆分。**两个基准并存,答不同问题:**
 
-    口径(见任务②):
-      · 入场 = T+1 入场价 entry(open[idx+1] 默认);信号日 T 的 close 仅用于拆隔夜跳空。
-      · horizon h 实现收益 r_h = close[idx+h]/entry − 1(**分母改为 T+1 入场价**,退出点仍锚信号日 T+h)。
+    ▸ **命中/触及基准 = 预测日 T 收盘 close[T]**(=close[idx]):衡量"预测本身对不对",从预测那一刻算起。
+    ▸ **收益基准 = T+1 入场价 entry**(open[idx+1] 默认,缺→close[idx+1]):衡量"可交易收益",最早次日开盘才买得到。
+
+    口径(见任务②③):
+      · 入场 = T+1 入场价 entry(open[idx+1] 默认);信号日 T 的 close[idx] 同时用于拆隔夜跳空 + 作命中基准。
+      · horizon h 实现收益 r_h = close[idx+h]/entry − 1(**分母=T+1 入场价**,退出点仍锚信号日 T+h)——**仅此项记策略成绩**。
       · 隔夜跳空 gap = entry/close[idx] − 1,**单列、不算策略功劳**;
         总收益 close[idx+h]/close[idx]−1 = (1+gap)(1+r_h)−1。
-      · 期末命中 hit_end = sign(r_h)==sign(direction)。
-      · 期内触及 hit_intra:入场后窗口 [idx+1, idx+h] 内,看多=max(high)>entry;看空=min(low)<entry。
+      · 期末命中 hit_end = sign(close[idx+h]/close[idx] − 1) == sign(direction)——**相对预测日 T 收盘,不是相对 T+1 入场**。
+      · 期内触及 hit_intra:预测日 T 之后窗口 [idx+1, idx+h] 内**任意一天**,看多=max(high)>close[idx];看空=min(low)<close[idx]。
       · 防未来函数:h 仅当 idx+h < len 才 matured;需能 T+1 入场(idx+1<len,h≥1 时由 idx+h<len 保证)。
 
     返回 {h: {matured, r, hit_end, hit_intra, gap, entry, entry_fallback}}。
@@ -87,17 +90,21 @@ def realized(rec, idx: int, direction: int, horizons) -> dict:
     entry, used_fb = entry_price(rec, idx)
     if entry is None:
         return out                       # 无法 T+1 入场(信号日为最后一根)
-    gap = float(entry / close[idx] - 1.0) * 100.0
+    base_t = float(close[idx])           # 命中/触及基准 = 预测日 T 收盘 close[T]
+    gap = float(entry / base_t - 1.0) * 100.0
     for h in horizons:
         if idx + h >= n:
             continue                     # 退出点未到 → pending
-        r = float(close[idx + h] / entry - 1.0) * 100.0
+        r = float(close[idx + h] / entry - 1.0) * 100.0   # 收益:分母=T+1 入场价
         cell = out[h]
         cell.update(matured=True, r=r, gap=gap, entry=entry, entry_fallback=used_fb)
         if direction == 0:
             continue
-        cell["hit_end"] = int(np.sign(r) == np.sign(direction))
+        # 命中口径:方向判定相对预测日 T 收盘 close[T](衡量预测对不对,与收益分母 entry 无关)。
+        r_hit = close[idx + h] / base_t - 1.0
+        cell["hit_end"] = int(np.sign(r_hit) == np.sign(direction))
+        # 期内触及:T 之后 [idx+1, idx+h] 任意一天价格越过 close[T] 即算(看多超越/看空跌破)。
         win_hi = float(np.max(high[idx + 1:idx + h + 1]))
         win_lo = float(np.min(low[idx + 1:idx + h + 1]))
-        cell["hit_intra"] = int(win_hi > entry) if direction > 0 else int(win_lo < entry)
+        cell["hit_intra"] = int(win_hi > base_t) if direction > 0 else int(win_lo < base_t)
     return out
