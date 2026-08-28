@@ -5,7 +5,9 @@
 """
 from __future__ import annotations
 
-from .schema import DIRECTIONAL, RANKING
+from .schema import DIRECTIONAL, RANKABLE, REFERENCE
+
+TOPN_LEVELS = (5, 10, 20)
 
 
 def _fmt(v, dash="—"):
@@ -59,9 +61,22 @@ def legend() -> list[str]:
         "| **超额_聚类CI% / 聚类p值** | ⑤按**交易日聚类**(每日超额为独立单元)bootstrap 的 95% 区间与双边 p(H0:平均超额=0)。CI 跨 0 / p 大 = 不显著 |",
         "| **随机基准均收益% / 优于随机p值** | 同预测日、同持仓数,从全市场**随机重采样**组合的收益分布;p=随机≥策略的占比,**p 小才是显著优于随机** |",
         "| **命中率_聚类CI% / naiveWilson%** | 命中率的按日聚类 bootstrap 区间(诚实)/ 逐票 Wilson 区间(**高估独立性、偏窄,仅对照**) |",
-        "| **rank-IC / ICIR**(排序型专用) | 每日 rank_score 与未来 r_h 的截面 Spearman 相关=当日 IC;均值=mean-IC,ICIR=mean/std,配 t 检验 p。**排序型不套方向命中** |", "",
-        "> **为什么排序型走 rank-IC**:策略11(指标条件化)天然中性、方向命中口径下样本≈0 是**口径错配**;"
-        "排序型看的是\"分数高的票是否未来收益也高\"(截面单调性),用 IC 而非命中率。", "",
+        "| **rank-IC / ICIR**(可排序型专用) | 每日 rank_score 与未来 r_h 的截面 Spearman 相关=当日 IC;均值=mean-IC,ICIR=mean/std,配 t 检验 p。看『分数高的票未来收益是否也高』(截面单调性) |", "",
+        "### 按策略类型分流(三类,评法不同)", "",
+        "| 类型 | 谁 | 用哪套指标 |",
+        "|---|---|---|",
+        "| **广筛型**(布尔达标全上) | S01/S02/箱体3/S03/S04/最强9/形态 | **全部入选票等权** vs 市场基准:命中率+收益质量+超额+按日聚类显著性 |",
+        "| **可排序型**(有连续打分) | 策略0合议(综合分)/4动量(动量分)/5半导体/10反转低换手(综合分)/SEPA趋势模板(RPS250) | 广筛全量指标 **＋ Top-N(5/10/20)精度 ＋ rank-IC/ICIR**——排序信息不浪费 |",
+        "| **参考·非alpha**(伪排序) | 策略11 指标条件化状态排序 | 打分为**离散状态格、个股间无真实区分**(代码自认非alpha);**只列全量指标作参考,不计排序榜、不跑 rank-IC/Top-N** |", "",
+        "> **Top-N 精度列**(可排序型专用,与全量指标同表并列对比):",
+        "> - **Top{5,10,20}**:每预测日按该策略打分**降序**取前 N 只(某日不足 N 取当日全部)。",
+        "> - **命中%(期末)/期望收益%(池化)**:选中 Top-N 票池化的期末命中率 / 逐票平均实现收益(基准仍=T+1 入场)。",
+        "> - **期望收益%(组合日均)/超额%vs全市场/超额聚类p**:每日 Top-N 等权组合收益跨日等权,及其相对当日全市场等权的超额与按日聚类 p(与全量单元同口径,可直接对比)。",
+        "> - **每日不足N%**:入选票不够 N 只的交易日占比(高=该策略每日出票少,Top-N 与全量趋同)。",
+        "> - **怎么用**:若 Top5/10 的命中/超额**显著高于**同策略『全部票等权』,说明分数确有选择性(排序信息有用);若与全量趋同甚至更差,说明打分区分度弱。", "",
+        "> **为什么策略11 归『参考·非alpha』而非跑 rank-IC**:其打分是离散状态分层(相似样本上涨概率%),"
+        "个股间无连续区分、代码本身标注非 alpha;强跑 rank-IC/Top-N 会得『看着有排序其实是噪声』的误导结论,"
+        "故只按广筛口径列全量指标供参考,不计入排序榜。", "",
         "> **样本 <30 仍薄**,但真正判据是 **CI 宽度 / p 值**,不再只靠 <30 硬阈值。历史观测≠未来保证。**非投资建议。**", "",
     ]
 
@@ -78,34 +93,69 @@ def _dir_row(sid, e, h) -> str:
             f"{_fmt(c.get('超额_聚类p值'))} | {_fmt(c.get('优于随机p值'))} | {_ci(c.get('命中率_聚类CI%'))} |")
 
 
-def _dir_table(strat: dict, h: int) -> list[str]:
+def _dir_table(strat: dict, h: int, types) -> list[str]:
+    """全量指标表(命中/收益质量/超额),渲染 types 里的策略(广筛型/可排序型/参考型共用同表结构)。"""
     rows = [f"**{h}日 horizon(命中/触及基准=close[T] · 收益基准=T+1 入场 → T+{h} 退出)**", "",
             "| 策略 | 已到期样本 | 预测日 | 命中%(期末) | 命中%(期内触及·宽松) | 均收益% | 中位% | 盈亏比 | "
             "P10/P90% | 隔夜跳空% | 超额%vs全市场 | 超额聚类CI% | 超额p | 优于随机p | 命中率聚类CI% |",
             "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|"]
     n = 0
     for sid, e in sorted(strat.items()):
-        if e.get("类型") == DIRECTIONAL:
+        if e.get("类型") in types:
             rows.append(_dir_row(sid, e, h))
             n += 1
     return rows + [""] if n else []
 
 
+def _topn_table(strat: dict, h: int) -> list[str]:
+    """可排序型 Top-N(5/10/20)精度表:按打分降序取前 N 只,看'分数越高是否越准/越赚'。"""
+    items = [(sid, e) for sid, e in sorted(strat.items()) if e.get("类型") == RANKABLE]
+    # 仅当至少一个策略该 horizon 有 Top-N 数据才渲染。
+    has = any(e.get(f"{h}日", {}).get("Top-N精度") for _sid, e in items)
+    if not has:
+        return []
+    rows = [f"**{h}日 · Top-N 精度(按策略打分降序取前 N 只;vs 上表『全部票等权』看选择性)**", "",
+            "| 策略 | 档位 | 选中样本 | 预测日 | 命中%(期末) | 期望收益%(池化) | 期望收益%(组合日均) | "
+            "超额%vs全市场 | 超额聚类p | 每日不足N% |",
+            "|---|---|---|---|---|---|---|---|---|---|"]
+    any_row = False
+    for sid, e in items:
+        topn = e.get(f"{h}日", {}).get("Top-N精度") or {}
+        if not topn:
+            rows.append(f"| {sid} {e['策略名']} | — | — | — | — | — | — | — | — | — |"
+                        f"  <!-- 无连续打分,Top-N不适用 -->")
+            continue
+        for N in TOPN_LEVELS:
+            c = topn.get(N)
+            if not c:
+                continue
+            any_row = True
+            rows.append(f"| {sid} {e['策略名']} | Top{N} | {c.get('选中样本',0)} | {c.get('预测日数',0)} | "
+                        f"{_fmt(c.get('命中率%_期末'))} | {_fmt(c.get('期望收益%_池化'))} | "
+                        f"{_fmt(c.get('期望收益%_组合日均'))} | {_fmt(c.get('超额%_vs全市场'))} | "
+                        f"{_fmt(c.get('超额_聚类p值'))} | {_fmt(c.get('每日不足N占比%'))} |")
+    return rows + [""] if any_row else []
+
+
 def _rank_table(strat: dict, horizons) -> list[str]:
-    items = [(sid, e) for sid, e in sorted(strat.items()) if e.get("类型") == RANKING]
+    """可排序型 rank-IC / ICIR(参考型策略11 不入此表)。"""
+    items = [(sid, e) for sid, e in sorted(strat.items()) if e.get("类型") == RANKABLE]
     if not items:
         return []
-    rows = ["**排序型(rank-IC / ICIR;不套方向命中)**", "",
+    rows = ["**可排序型 rank-IC / ICIR(截面单调性;不套方向命中;参考·非alpha型不计入)**", "",
             "| 策略 | " + " | ".join(f"{h}日 mean-IC / ICIR / p / 天数" for h in horizons) + " |",
             "|---|" + "|".join("---" for _ in horizons) + "|"]
+    any_row = False
     for sid, e in items:
         cells = []
         for h in horizons:
-            c = e.get(f"{h}日", {})
-            cells.append(f"{_fmt(c.get('mean_ic'))} / {_fmt(c.get('icir'))} / "
-                         f"{_fmt(c.get('p_value'))} / {_fmt(c.get('n_days'),0)}")
+            ic = e.get(f"{h}日", {}).get("rank_ic", {}) or {}
+            if ic.get("mean_ic") is not None:
+                any_row = True
+            cells.append(f"{_fmt(ic.get('mean_ic'))} / {_fmt(ic.get('icir'))} / "
+                         f"{_fmt(ic.get('p_value'))} / {_fmt(ic.get('n_days'),0)}")
         rows.append(f"| {sid} {e['策略名']} | " + " | ".join(cells) + " |")
-    return rows + [""]
+    return rows + [""] if any_row else []
 
 
 def _window_block(wname: str, w: dict, horizons) -> list[str]:
@@ -115,9 +165,28 @@ def _window_block(wname: str, w: dict, horizons) -> list[str]:
     strat = w.get("策略", {})
     if not strat:
         return lines + ["该窗内暂无已到期样本。", ""]
-    for h in horizons:
-        lines += _dir_table(strat, h)
-    lines += _rank_table(strat, horizons)
+    has_dir = any(e.get("类型") == DIRECTIONAL for e in strat.values())
+    has_rankable = any(e.get("类型") == RANKABLE for e in strat.values())
+    has_ref = any(e.get("类型") == REFERENCE for e in strat.values())
+
+    if has_dir:
+        lines += ["#### 广筛型(布尔达标·全部票等权 vs 市场基准)", ""]
+        for h in horizons:
+            lines += _dir_table(strat, h, {DIRECTIONAL})
+    if has_rankable:
+        lines += ["#### 可排序型(有连续打分:全量指标 + Top-N 精度 + rank-IC)", "",
+                  "> 全量指标同广筛口径(全部入选票等权);Top-N 表按各策略打分降序取前 5/10/20 只,"
+                  "与全量对比即看『排序信息有没有用』——若 Top-N 命中/超额显著高于全量,说明分数确有选择性。", ""]
+        for h in horizons:
+            lines += _dir_table(strat, h, {RANKABLE})
+            lines += _topn_table(strat, h)
+        lines += _rank_table(strat, horizons)
+    if has_ref:
+        lines += ["#### 参考·非alpha(伪排序:离散状态格、个股间无真实区分)", "",
+                  "> 打分为离散状态分层、代码自认非 alpha;**不计入排序榜、不跑 rank-IC/Top-N**"
+                  "(强跑会得『看着有排序其实是噪声』的误导结论)。仅按广筛口径列全量指标作参考。", ""]
+        for h in horizons:
+            lines += _dir_table(strat, h, {REFERENCE})
     return lines
 
 
@@ -146,7 +215,8 @@ def flag_laggards(replay_agg: dict, live_agg: dict, horizons=(1, 5)) -> list[dic
     rwins = replay_agg.get("窗口", {}).get("全史", {}).get("策略", {})
     lwins = live_agg.get("窗口", {}).get("全史", {}).get("策略", {})
     for sid, e in rwins.items():
-        if e.get("类型") != DIRECTIONAL:
+        # 广筛型与可排序型均有全量超额指标可判;参考·非alpha(策略11)不判死。
+        if e.get("类型") not in (DIRECTIONAL, RANKABLE):
             continue
         c5 = e.get("5日", {})
         ex = c5.get("超额收益%_vs全市场")
@@ -190,8 +260,11 @@ def _self_audit(replay_meta: dict, done: str, undone: str, assumptions: list[str
              "- **③ 双轨不混**:live(线上落盘)与 replay(历史复现)分节渲染、source 字段区分,绝不合并统计。",
              "- **④ 显著性按日聚类**:独立单元=**交易日批次**(同日选票高度相关),bootstrap 对天重采样;"
              "Wilson 为逐票 naive 仅作对照(会高估独立性、区间偏窄)。",
-             "- **⑤ 排序型用 rank-IC**:策略0/10/11 走截面 Spearman IC/ICIR,不套方向命中(避免口径错配致样本≈0)。",
-             "- **⑥ 列名口径写死**:期末 vs 期内触及、触及=任意触及即算(宽松)、基准=同预测日 T+1 全市场等权,均在列名说明写明。",
+             "- **⑤ 按类型分流**:广筛型(S01/S02/箱体/S03/S04/最强/形态)全部票等权评;可排序型(策略0/4/5/10/SEPA)"
+             "追加按打分降序的 Top-N(5/10/20)精度 + 截面 rank-IC/ICIR;**策略11 重归『参考·非alpha』**——其打分为离散状态格、"
+             "个股间无真实区分,**移出排序型 rank-IC、不跑 Top-N**,仅按广筛口径列全量指标作参考(纠正 v3 旧版把它当排序型的口径错配)。",
+             "- **⑥ 列名口径写死**:期末 vs 期内触及、触及=任意触及即算(宽松)、基准=同预测日 T+1 全市场等权、"
+             "Top-N=按打分降序取前 N 只(vs 全量等权看选择性),均在列名说明写明。",
              f"- **回放元信息**:{replay_meta}", "",
              "## 五、完成情况与假设", "",
              f"- **已完成维度**:{done}",

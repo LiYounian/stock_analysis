@@ -198,32 +198,121 @@ def test_rank_ic_skips_degenerate_days():
 
 # ─────────────── 双轨 source 区分 + schema ───────────────
 def test_schema_meta_non_replayable_flags():
-    """策略0/9 标不可回放;S01/S02/S03/S04 可回放且方向型。"""
+    """策略0/9 标不可回放;S01/S02/S03/S04 可回放且广筛型。"""
     assert schema.meta_for("策略0合议").replayable is False
     assert schema.meta_for("最强选股").replayable is False
     assert schema.meta_for("放量后缩量回踩").replayable is True
-    assert schema.meta_for("指标条件化状态排序").stype == schema.RANKING
+    assert schema.meta_for("放量后缩量回踩").stype == schema.DIRECTIONAL
 
 
-def test_ranking_strategy_uses_rank_ic_not_hit():
-    """排序型策略在聚合里走 ranking_cell(出 mean_ic),不出方向命中率。"""
+def test_schema_type_streaming_classification():
+    """三分流归类锁死:可排序型=0/4/5/10/SEPA;广筛型=S01/S02/箱体/S03/S04/最强/形态;
+    策略11 重归『参考·非alpha』(伪排序),**绝不再是排序型**。"""
+    # 可排序型(有连续打分)
+    for stem in ("策略0合议", "动量组合", "半导体多因子", "反转低换手组合", "SEPA合格池"):
+        assert schema.meta_for(stem).stype == schema.RANKABLE, stem
+    # 广筛型(布尔达标全上)
+    for stem in ("趋势深跌反包", "放量后缩量回踩", "箱体形态", "最大范围选股", "量价放量",
+                 "最强选股", "形态选股"):
+        assert schema.meta_for(stem).stype == schema.DIRECTIONAL, stem
+    # 策略11:参考·非alpha,既非排序型也不当广筛型 alpha 判据
+    assert schema.meta_for("指标条件化状态排序").stype == schema.REFERENCE
+    assert schema.meta_for("指标条件化状态排序").stype != schema.RANKABLE
+
+
+def _monotonic_price_map():
+    """4 票,d2 收益随字母(A<B<C<D)单调递增;供 rank-IC/Top-N 单调性测试。"""
+    return {"A": [("d0", 1, 1, 1, 1.0), ("d1", 1, 1, 1, 1.0), ("d2", 1, 1.1, 1, 1.1)],
+            "B": [("d0", 1, 1, 1, 1.0), ("d1", 1, 1, 1, 1.0), ("d2", 1, 1.2, 1, 1.2)],
+            "C": [("d0", 1, 1, 1, 1.0), ("d1", 1, 1, 1, 1.0), ("d2", 1, 1.3, 1, 1.3)],
+            "D": [("d0", 1, 1, 1, 1.0), ("d1", 1, 1, 1, 1.0), ("d2", 1, 1.4, 1, 1.4)]}
+
+
+def test_rankable_strategy_has_full_metrics_topn_and_rank_ic():
+    """可排序型(策略10):同一单元同时有 ①全量指标(命中率/收益质量)②Top-N精度 ③rank-IC。
+    且分数与未来收益单调正相关时 rank-IC>0 且 Top-N 收益随档位收窄而更高(选择性)。"""
     preds = schema.make_frame([
-        {"strategy_id": "11", "strategy": "指标", "pred_date": "d0", "code": c,
-         "direction": 0, "rank_score": s, "source": "live",
-         "stype": schema.RANKING, "replayable": True}
+        {"strategy_id": "10", "strategy": "反转低换手", "pred_date": "d0", "code": c,
+         "direction": 1, "rank_score": s, "source": "live",
+         "stype": schema.RANKABLE, "replayable": True}
         for c, s in [("A", 1.0), ("B", 2.0), ("C", 3.0), ("D", 4.0)]
     ])
-    price_map = {"A": [("d0", 1, 1, 1, 1.0), ("d1", 1, 1, 1, 1.0), ("d2", 1, 1, 1, 1.1)],
-                 "B": [("d0", 1, 1, 1, 1.0), ("d1", 1, 1, 1, 1.0), ("d2", 1, 1, 1, 1.2)],
-                 "C": [("d0", 1, 1, 1, 1.0), ("d1", 1, 1, 1, 1.0), ("d2", 1, 1, 1, 1.3)],
-                 "D": [("d0", 1, 1, 1, 1.0), ("d1", 1, 1, 1, 1.0), ("d2", 1, 1, 1, 1.4)]}
+    book = _book(_monotonic_price_map())
+    scored = scoring.score_predictions(preds, book, (2,))
+    agg = aggregate.aggregate(scored, {}, ["d0", "d1", "d2"], horizons=(2,), track="live")
+    cell = agg["窗口"]["全史"]["策略"]["10"]["2日"]
+    # ① 全量指标在(可排序型也评全部票等权)
+    assert "命中率%_期末" in cell and "收益质量" in cell
+    # ③ rank-IC 嵌套且正
+    assert cell["rank_ic"]["mean_ic"] > 0.9
+    # ② Top-N 精度:Top2 期望收益(池化 C,D=1.3,1.4→均值≈35%)> 全4只均值≈25%
+    topn = cell["Top-N精度"]
+    assert 2 not in topn  # 档位固定 5/10/20;当日仅4票→Top5=全部
+    top5 = topn[5]
+    assert top5["选中样本"] == 4 and top5["每日不足N占比%"] == 100.0
+    assert abs(top5["期望收益%_池化"] - 25.0) < 1e-6
+
+
+def test_topn_selectivity_top5_beats_all():
+    """两日、每日 8 票、分数越高未来收益越高:Top5 池化期望收益应高于全 16 票均值(排序有用)。"""
+    rows, price_map = [], {}
+    for day in ("d0", "d1"):
+        for i in range(8):        # 分数 i,未来收益 = i%(d2 相对入场)
+            code = f"{day}_{i}"
+            rows.append({"strategy_id": "0", "strategy": "合议", "pred_date": day,
+                         "code": code, "direction": 1, "rank_score": float(i),
+                         "source": "live", "stype": schema.RANKABLE, "replayable": True})
+            close2 = 1.0 * (1 + i / 100.0)
+            price_map[code] = [(day, 1, 1, 1, 1.0),
+                               ("d_mid", 1, 1, 1, 1.0),
+                               ("d_end", 1, max(1.0, close2), 1, close2)]
+    # 需要 d0/d1 各自 idx 后有 +2 根;用统一日期轴(每票自带三根即可,pred_date=day 在 idx0)
+    preds = schema.make_frame(rows)
     book = _book(price_map)
     scored = scoring.score_predictions(preds, book, (2,))
-    cal = ["d0", "d1", "d2"]
-    agg = aggregate.aggregate(scored, {}, cal, horizons=(2,), track="live")
+    agg = aggregate.aggregate(scored, {}, ["d0", "d1", "d_mid", "d_end"],
+                              horizons=(2,), track="live")
+    cell = agg["窗口"]["全史"]["策略"]["0"]["2日"]
+    topn = cell["Top-N精度"]
+    all_mean = cell["收益质量"]["均值%"]          # 全 16 票池化均值
+    top5_mean = topn[5]["期望收益%_池化"]          # 每日取分数最高 5 只
+    assert top5_mean > all_mean                    # Top5 更赚 → 分数有选择性
+    assert topn[5]["选中样本"] == 10               # 两日各 5 只
+    assert topn[5]["预测日数"] == 2
+
+
+def test_reference_strategy_11_no_rank_ic_no_topn():
+    """策略11 重归『参考·非alpha』:走广筛全量指标(有命中率/收益质量),
+    **绝不出 rank_ic / Top-N精度**(纠正 v3 旧版把它当排序型 rank-IC 的误导)。"""
+    preds = schema.make_frame([
+        {"strategy_id": "11", "strategy": "指标条件化", "pred_date": "d0", "code": c,
+         "direction": 1, "rank_score": s, "source": "live",
+         "stype": schema.REFERENCE, "replayable": True}
+        for c, s in [("A", 1.0), ("B", 2.0), ("C", 3.0), ("D", 4.0)]
+    ])
+    book = _book(_monotonic_price_map())
+    scored = scoring.score_predictions(preds, book, (2,))
+    agg = aggregate.aggregate(scored, {}, ["d0", "d1", "d2"], horizons=(2,), track="live")
     cell = agg["窗口"]["全史"]["策略"]["11"]["2日"]
-    assert "mean_ic" in cell and "命中率%_期末" not in cell
-    assert cell["mean_ic"] > 0.9   # 分数越高未来收益越高
+    assert "命中率%_期末" in cell and "收益质量" in cell   # 广筛口径全量指标在
+    assert "rank_ic" not in cell                          # 不跑 rank-IC
+    assert "Top-N精度" not in cell                         # 不跑 Top-N
+
+
+def test_directional_strategy_no_topn_no_rank_ic():
+    """广筛型(S02)只走全量等权指标,不产 Top-N / rank-IC。"""
+    preds = schema.make_frame([
+        {"strategy_id": "S02", "strategy": "放量回踩", "pred_date": "d0", "code": c,
+         "direction": 1, "rank_score": float("nan"), "source": "replay",
+         "stype": schema.DIRECTIONAL, "replayable": True}
+        for c in ("A", "B", "C", "D")
+    ])
+    book = _book(_monotonic_price_map())
+    scored = scoring.score_predictions(preds, book, (2,))
+    agg = aggregate.aggregate(scored, {}, ["d0", "d1", "d2"], horizons=(2,), track="replay")
+    cell = agg["窗口"]["全史"]["策略"]["S02"]["2日"]
+    assert "命中率%_期末" in cell
+    assert "rank_ic" not in cell and "Top-N精度" not in cell
 
 
 def test_live_source_source_tag_and_direction():
