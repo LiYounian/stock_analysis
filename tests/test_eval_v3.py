@@ -297,6 +297,26 @@ def test_reference_strategy_11_no_rank_ic_no_topn():
     assert "命中率%_期末" in cell and "收益质量" in cell   # 广筛口径全量指标在
     assert "rank_ic" not in cell                          # 不跑 rank-IC
     assert "Top-N精度" not in cell                         # 不跑 Top-N
+    assert "参考收益分布_全部已到期" in cell               # 附纯参考收益分布
+
+
+def test_reference_neutral_direction_still_has_return_dist():
+    """策略11 方向中性时:命中率天然不适用(directional_cell 过滤掉),
+    但『参考收益分布(全部已到期)』仍应有样本 → 参考行不至全空。"""
+    preds = schema.make_frame([
+        {"strategy_id": "11", "strategy": "指标条件化", "pred_date": "d0", "code": c,
+         "direction": 0, "rank_score": s, "source": "live",
+         "stype": schema.REFERENCE, "replayable": True}
+        for c, s in [("A", 1.0), ("B", 2.0), ("C", 3.0), ("D", 4.0)]
+    ])
+    book = _book(_monotonic_price_map())
+    scored = scoring.score_predictions(preds, book, (2,))
+    agg = aggregate.aggregate(scored, {}, ["d0", "d1", "d2"], horizons=(2,), track="live")
+    cell = agg["窗口"]["全史"]["策略"]["11"]["2日"]
+    assert cell["命中率%_期末"] is None            # 中性方向命中不适用
+    assert cell["参考已到期样本"] == 4              # 但收益分布覆盖全部已到期票
+    assert cell["参考收益分布_全部已到期"]["n"] == 4
+    assert "rank_ic" not in cell and "Top-N精度" not in cell
 
 
 def test_directional_strategy_no_topn_no_rank_ic():

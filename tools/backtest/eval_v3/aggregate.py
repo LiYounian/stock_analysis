@@ -114,6 +114,21 @@ def directional_cell(sub: pd.DataFrame, uni_ret: dict, h: int, seed: int) -> dic
     return cell
 
 
+# ────────────────────── 参考·非alpha 单元格 ──────────────────────
+def reference_cell(sub: pd.DataFrame, uni_ret: dict, h: int, seed: int) -> dict:
+    """参考·非alpha(如策略11):走广筛口径,但其打分多为中性方向 → 命中率不适用。
+
+    命中相关列由 directional_cell 给(中性方向天然为 —);额外**对全部已到期票**(不问方向)
+    补一份收益分布作参考,避免整行全空。绝不跑 rank-IC / Top-N(伪排序,防误导)。
+    """
+    cell = directional_cell(sub, uni_ret, h, seed)
+    matured = sub.dropna(subset=["r"])
+    cell["参考收益分布_全部已到期"] = return_quality(matured["r"].to_numpy(float))
+    cell["参考已到期样本"] = int(len(matured))
+    cell["参考预测日数"] = int(matured["pred_date"].nunique())
+    return cell
+
+
 # ────────────────────── 排序型单元格 ──────────────────────
 def ranking_cell(sub: pd.DataFrame, h: int) -> dict:
     """⑥ 排序型:截面 rank-IC/ICIR。sub=该切片已到期且有 rank_score 的行。"""
@@ -235,8 +250,11 @@ def aggregate(scored: pd.DataFrame, uni_ret: dict, calendar: list[str],
                     cell["Top-N精度"] = topn_precision(gh, uni_ret, h, seed=seed)
                     cell["rank_ic"] = ranking_cell(gh, h)
                     sentry[f"{h}日"] = cell
+                elif stype == REFERENCE:
+                    # 参考·非alpha:广筛口径 + 参考收益分布;绝不跑 rank-IC/Top-N。
+                    sentry[f"{h}日"] = reference_cell(gh, uni_ret, h, seed)
                 else:
-                    # 广筛型 / 参考型:均只走广筛全量指标(参考型不跑 rank-IC/Top-N)。
+                    # 广筛型:全部票等权 vs 市场基准。
                     sentry[f"{h}日"] = directional_cell(gh, uni_ret, h, seed)
             wentry["策略"][sid] = sentry
         out["窗口"][wname] = wentry

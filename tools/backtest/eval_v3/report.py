@@ -120,10 +120,13 @@ def _topn_table(strat: dict, h: int) -> list[str]:
             "|---|---|---|---|---|---|---|---|---|---|"]
     any_row = False
     for sid, e in items:
-        topn = e.get(f"{h}日", {}).get("Top-N精度") or {}
+        cell = e.get(f"{h}日", {})
+        topn = cell.get("Top-N精度") or {}
         if not topn:
+            why = ("本档无已到期样本" if cell.get("已到期样本", 0) == 0
+                   else "无连续打分字段,Top-N不适用")
             rows.append(f"| {sid} {e['策略名']} | — | — | — | — | — | — | — | — | — |"
-                        f"  <!-- 无连续打分,Top-N不适用 -->")
+                        f"  <!-- {why} -->")
             continue
         for N in TOPN_LEVELS:
             c = topn.get(N)
@@ -184,10 +187,33 @@ def _window_block(wname: str, w: dict, horizons) -> list[str]:
     if has_ref:
         lines += ["#### 参考·非alpha(伪排序:离散状态格、个股间无真实区分)", "",
                   "> 打分为离散状态分层、代码自认非 alpha;**不计入排序榜、不跑 rank-IC/Top-N**"
-                  "(强跑会得『看着有排序其实是噪声』的误导结论)。仅按广筛口径列全量指标作参考。", ""]
+                  "(强跑会得『看着有排序其实是噪声』的误导结论)。方向多为中性 → 命中率不适用(—);"
+                  "另附『全部已到期票』收益分布作纯参考。", ""]
         for h in horizons:
             lines += _dir_table(strat, h, {REFERENCE})
+        lines += _ref_return_table(strat, horizons)
     return lines
+
+
+def _ref_return_table(strat: dict, horizons) -> list[str]:
+    """参考·非alpha 的收益分布(不问方向,纯参考,非 alpha 判据)。"""
+    items = [(sid, e) for sid, e in sorted(strat.items()) if e.get("类型") == REFERENCE]
+    if not items:
+        return []
+    rows = ["**参考收益分布(全部已到期票 · 不问方向 · 纯参考非alpha)**", "",
+            "| 策略 | " + " | ".join(
+                f"{h}日 样本/均值%/中位%/胜率%/P10P90" for h in horizons) + " |",
+            "|---|" + "|".join("---" for _ in horizons) + "|"]
+    for sid, e in items:
+        cells = []
+        for h in horizons:
+            c = e.get(f"{h}日", {})
+            rq = c.get("参考收益分布_全部已到期", {}) or {}
+            cells.append(f"{c.get('参考已到期样本',0)} / {_fmt(rq.get('均值%'))} / "
+                         f"{_fmt(rq.get('中位数%'))} / {_fmt(rq.get('胜率%'))} / "
+                         f"{_fmt(rq.get('P10%'))}~{_fmt(rq.get('P90%'))}")
+        rows.append(f"| {sid} {e['策略名']} | " + " | ".join(cells) + " |")
+    return rows + [""]
 
 
 def _track(agg: dict, title: str, horizons, note: str = "") -> list[str]:
