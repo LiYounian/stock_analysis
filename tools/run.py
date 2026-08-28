@@ -33,11 +33,15 @@ import pandas as pd
 
 from tools.analysis import technical as ta
 from tools.collectors import announcement as an
+from tools.collectors import chip, consensus
 from tools.collectors import fundamental as fd
 from tools.collectors import fundflow as ff
+from tools.collectors import industry_history as ih
 from tools.collectors import market
 from tools.collectors import master_sync
-from tools.collectors import news, policy, ugc
+from tools.collectors import news, policy
+from tools.collectors import smart_money as sm
+from tools.collectors import ugc
 from tools.config import stock_pool
 from tools.store import repo as store
 
@@ -94,6 +98,14 @@ def collect_values(codes: list[str]) -> None:
         logger.info("基本面:成功 %d", len(_safe("基本面", lambda: fd.fetch_fundamental(codes)) or {}))
         logger.info("公告:成功 %d", len(_safe("公告", lambda: an.fetch_announcements(codes)) or {}))
         logger.info("资金流:成功 %d", len(_safe("资金流", lambda: ff.fetch_fundflow(codes)) or {}))
+        # 筹码本地推演(读上一步落好的主档 K线,无网络);主力行为/一致预期走东财
+        logger.info("筹码:成功 %d", len(_safe("筹码", lambda: chip.fetch_chip(codes)) or {}))
+        logger.info("主力行为:成功 %d", len(_safe("主力行为", lambda: sm.fetch_smart_money(codes)) or {}))
+        logger.info("一致预期:成功 %d", len(_safe("一致预期", lambda: consensus.fetch_consensus(codes)) or {}))
+        # 行业变迁史近乎静态(多年一变),只补尚无缓存的票,避免每日重复拉巨潮
+        need_ih = [c for c in codes if not _load_ok(ih.load_industry_history, c)]
+        if need_ih:
+            logger.info("行业变迁:补缺 %d", len(_safe("行业变迁", lambda: ih.fetch_industry_history(need_ih)) or {}))
     finally:
         socket.setdefaulttimeout(_old)
 
@@ -119,8 +131,14 @@ def collect_values_missing(codes: list[str]) -> None:
     need_f = [c for c in codes if not _load_ok(fd.load_fundamental, c)]
     need_a = [c for c in codes if not _load_ok(an.load_announcements, c)]
     need_ff = [c for c in codes if not _load_ok(ff.load_fundflow, c)]
-    logger.info("数值面补缺(%d 候选,已缓存跳过):K线 %d / 基本面 %d / 公告 %d / 资金流 %d",
-                len(codes), len(need_k), len(need_f), len(need_a), len(need_ff))
+    need_chip = [c for c in codes if not _load_ok(chip.load_chip, c)]
+    need_sm = [c for c in codes if not _load_ok(sm.load_lhb, c)]
+    need_cs = [c for c in codes if not _load_ok(consensus.load_consensus, c)]
+    need_ih = [c for c in codes if not _load_ok(ih.load_industry_history, c)]
+    logger.info("数值面补缺(%d 候选,已缓存跳过):K线 %d / 基本面 %d / 公告 %d / 资金流 %d / "
+                "筹码 %d / 主力行为 %d / 一致预期 %d / 行业变迁 %d",
+                len(codes), len(need_k), len(need_f), len(need_a), len(need_ff),
+                len(need_chip), len(need_sm), len(need_cs), len(need_ih))
     _old = socket.getdefaulttimeout()
     socket.setdefaulttimeout(FETCH_TIMEOUT)
     try:
@@ -132,6 +150,14 @@ def collect_values_missing(codes: list[str]) -> None:
             _safe("公告", lambda: an.fetch_announcements(need_a))
         if need_ff:
             _safe("资金流", lambda: ff.fetch_fundflow(need_ff))
+        if need_chip:
+            _safe("筹码", lambda: chip.fetch_chip(need_chip))
+        if need_sm:
+            _safe("主力行为", lambda: sm.fetch_smart_money(need_sm))
+        if need_cs:
+            _safe("一致预期", lambda: consensus.fetch_consensus(need_cs))
+        if need_ih:
+            _safe("行业变迁", lambda: ih.fetch_industry_history(need_ih))
     finally:
         socket.setdefaulttimeout(_old)
 

@@ -69,6 +69,40 @@ def test_raw_factors_dividend_availability():
     assert avail["股息率"] == pytest.approx(1.0)
 
 
+# ---------- 新增因子:筹码 / 预期 / 主力(借鉴 a-stock-data)----------
+def test_raw_factors_new_blocks_extract():
+    rec = {"meta": {"code": "A"}, "fundamental": {}, "valuation": {},
+           "chip": {"获利比例": 0.3, "集中度90": 0.12},
+           "consensus": {"预期增速": 0.25},
+           "holder": {"户数环比": -3.5, "连续减少期数": 4}}
+    r = fac.raw_factors(rec)
+    assert r["获利比例"] == 0.3 and r["筹码集中度"] == 0.12
+    assert r["预期增速"] == 0.25
+    assert r["股东户数环比"] == -3.5 and r["户数连续减少期数"] == 4
+
+
+def test_raw_factors_new_blocks_missing_degrade():
+    r = fac.raw_factors(_rec("A"))          # 无 chip/consensus/holder 块
+    for k in ("获利比例", "筹码集中度", "预期增速", "股东户数环比", "户数连续减少期数"):
+        assert r[k] is None                 # 缺块 → None 降级(不崩)
+
+
+def test_cross_section_new_factor_direction():
+    """低获利比例/高集中(小)/高预期增速/户数减少 → 综合分更高(方向定向生效)。"""
+    def _mk(code, win, conc, growth, hchg, streak):
+        return {"meta": {"code": code}, "fundamental": {}, "valuation": {},
+                "chip": {"获利比例": win, "集中度90": conc},
+                "consensus": {"预期增速": growth},
+                "holder": {"户数环比": hchg, "连续减少期数": streak}}
+    raw = {
+        "优": fac.raw_factors(_mk("优", 0.2, 0.08, 0.40, -5.0, 5)),   # 深套/锁仓/高预期/吸筹
+        "劣": fac.raw_factors(_mk("劣", 0.9, 0.30, 0.02, 4.0, 0)),    # 高获利盘/分散/低预期/散户化
+    }
+    out = sc.cross_section(raw)
+    assert out["优"]["综合分"] > out["劣"]["综合分"]
+    assert out["优"]["方向"] == "看多" and out["劣"]["方向"] == "看空"
+
+
 # ---------- score.cross_section:定向 / 合成 / 降级 ----------
 def test_cross_section_orientation_and_direction():
     raw = {
@@ -80,8 +114,8 @@ def test_cross_section_orientation_and_direction():
     assert out["好"]["综合分"] > out["中"]["综合分"] > out["差"]["综合分"]  # 好>中>差
     assert out["好"]["方向"] == "看多" and out["好"]["强度"] > 0
     assert out["差"]["方向"] == "看空" and out["差"]["强度"] < 0
-    # 只有质量+价值 2/6 因子有数据 → 部分降级
-    assert out["好"]["因子齐全度"] == pytest.approx(2 / 6, abs=1e-3)
+    # 只有质量+价值 2/9 因子有数据(新增 筹码/预期/主力 后总因子=9)→ 部分降级
+    assert out["好"]["因子齐全度"] == pytest.approx(2 / 9, abs=1e-3)
     assert out["好"]["数据充分度"] == "部分降级"
     # 低 PE 的"好"在价值因子上分位应高(方向-1 翻转生效)
     assert out["好"]["各因子分位"]["价值"] > out["差"]["各因子分位"]["价值"]

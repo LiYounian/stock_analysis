@@ -47,6 +47,19 @@ def _safe(fn, default=None):
         return default
 
 
+def _industry_asof(code: str, as_of: str) -> str | None:
+    """as_of「当时」所属行业(证监会口径,collectors.industry_history)。
+
+    去回测前视偏差:历史归因/回测按「当时」而非「现在」的行业取数。
+    无历史记录/该时点前无生效记录 → None(调用方回退现状,不静默失真)。
+    """
+    try:
+        from tools.collectors import industry_history as ih
+        return _safe(lambda: ih.industry_at(code, as_of))
+    except Exception:
+        return None
+
+
 def build_record(code: str, as_of: str) -> dict:
     """组装单票结构化记录。缺失的数据块降级为 None / 空,不抛错。"""
     s = stock_pool.get(code)
@@ -62,6 +75,29 @@ def build_record(code: str, as_of: str) -> dict:
         flow = _safe(lambda: ff.summarize(ff.load_fundflow(code)))
     except Exception:
         flow = None
+
+    # —— 借鉴 a-stock-data 新增采集的摘要块(缺采集→None,多因子该维降级)——
+    # 筹码分布(本地推演):获利比例/平均成本/成本区间/集中度90
+    chip_block = None
+    try:
+        from tools.collectors import chip
+        chip_block = _safe(lambda: chip.load_chip(code))
+    except Exception:
+        chip_block = None
+    # 一致预期(前瞻):预期EPS当年/次年、预期增速、覆盖机构数
+    consensus_block = None
+    try:
+        from tools.collectors import consensus
+        consensus_block = _safe(lambda: consensus.load_consensus(code))
+    except Exception:
+        consensus_block = None
+    # 股东户数趋势(主力吸筹):最新户数/户数环比/连续减少期数
+    holder_block = None
+    try:
+        from tools.collectors import smart_money as sm
+        holder_block = _safe(lambda: sm.summarize_holder(sm.load_holder_num(code)))
+    except Exception:
+        holder_block = None
 
     has_tech = "signal" in tech
     snapshot = None
@@ -116,6 +152,9 @@ def build_record(code: str, as_of: str) -> dict:
         "schema_version": SCHEMA_VERSION,
         "meta": {"code": code, "name": s.name if s else (_code_name(code) or code),
                  "sector": s.sector if s else None, "industry": s.industry if s else None,
+                 # industry_asof:as_of「当时」所属行业(collectors.industry_history);供回测/历史归因
+                 # 去前视偏差用。与 industry(人工细分文本)独立,缺历史→None(回退现状,不静默失真)。
+                 "industry_asof": _industry_asof(code, as_of),
                  "as_of": as_of},
         "snapshot": snapshot,
         "valuation": valuation_block,
@@ -125,6 +164,9 @@ def build_record(code: str, as_of: str) -> dict:
         "prediction": prediction,
         "sentiment": sentiment,
         "fundflow": flow,
+        "chip": chip_block,             # 筹码分布摘要(多因子「筹码」)
+        "consensus": consensus_block,   # 一致预期摘要(多因子「预期」)
+        "holder": holder_block,         # 股东户数趋势摘要(多因子「主力」)
         "events": events,
         "timeseries_refs": {
             "kline": f"data/raw/kline/{code}.parquet",
@@ -132,7 +174,9 @@ def build_record(code: str, as_of: str) -> dict:
             "announcements": f"data/raw/announcement/{code}.json",
         },
         "provenance": {"tech": bool(has_tech), "fundamental": bool(fund),
-                       "announcements": len(anns), "fundflow": bool(flow)},
+                       "announcements": len(anns), "fundflow": bool(flow),
+                       "chip": bool(chip_block), "consensus": bool(consensus_block),
+                       "holder": bool(holder_block)},
     }
 
     # 多策略合议(F5·D7):后端预算各专家信封 + 默认组合议结果 + config(tau/权重),随记录落库。

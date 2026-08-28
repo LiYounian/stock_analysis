@@ -6,7 +6,8 @@
 
 <div class="stock-head">
   <h1>{{ r.meta.name }} <span class="code">{{ r.meta.code }}</span>
-    <small>{{ r.meta.sector }} · {{ r.meta.industry }}</small></h1>
+    <small>{{ r.meta.sector }} · {{ r.meta.industry }}{% if r.meta.industry_asof and r.meta.industry_asof != r.meta.industry %}
+      · <span class="muted" title="该日当时所属行业(去回测前视偏差)">当时:{{ r.meta.industry_asof }}</span>{% endif %}</small></h1>
   {% if snap %}
   <div class="price">{{ snap.close }}
     <span class="{{ 'pos' if snap.pct_chg is not none and snap.pct_chg>0 else 'neg' }}">{{ snap.pct_chg if snap.pct_chg is not none else '-' }}%</span></div>
@@ -44,6 +45,28 @@
     <p class="muted tiny" id="councilCaption"></p>
     <script id="councilData" type="application/json">{{ cc|tojson }}</script>
   </section>
+  {% endif %}
+
+  {% if r.council and r.council.experts %}
+  {% for e in r.council.experts if e.专家 == '多因子' and e.原始 and e.原始.各因子分位 %}
+  <section class="card wide" id="factorCard">
+    <h2>多因子分位明细
+      <small>横截面分位 0~1(已按方向定向,越高越好) · 综合方向
+        <b class="{{ 'pos' if e.方向=='看多' else ('neg' if e.方向=='看空' else '') }}">{{ e.方向 }}</b>
+        {% if e.置信度 is not none %} · 因子齐全度 {{ (e.置信度*100)|round|int }}%{% endif %}</small>
+    </h2>
+    <table>
+      <tr><th>因子</th>{% for f in e.原始.各因子分位.keys() %}<th>{{ f }}</th>{% endfor %}</tr>
+      <tr><td>分位</td>
+        {% for f, v in e.原始.各因子分位.items() %}
+        <td class="{{ 'pos' if v is not none and v>=0.6 else ('neg' if v is not none and v<0.4 else '') }}">
+          {{ '%.2f'|format(v) if v is not none else '—' }}</td>
+        {% endfor %}
+      </tr>
+    </table>
+    <p class="muted tiny">新增:筹码(获利比例/集中度)、预期(一致预期EPS增速)、主力(股东户数集中)。缺数据的因子不参与,不显示。</p>
+  </section>
+  {% endfor %}
   {% endif %}
 
   {% if p and not p.error and p.结构位 %}
@@ -222,6 +245,55 @@
       <tr><td>主力净占比</td><td>{{ flow.今日主力净占比 }}%</td></tr>
       <tr><td>近5日主力合计</td><td>{% if flow.近5日主力合计 is not none %}{{ '%.2f'|format(flow.近5日主力合计/1e8) }}亿{% endif %}</td></tr>
       <tr><td>主力连续净流入</td><td>{{ flow.主力连续净流入天数 }} 天</td></tr>
+    </table>
+  </section>
+  {% endif %}
+
+  {% if r.chip and r.chip.获利比例 is not none %}
+  {% set ch = r.chip %}
+  <section class="card">
+    <h2>筹码分布 <small>本地推演(换手率衰减);低获利盘/高集中偏底部</small></h2>
+    <table>
+      <tr><td>获利比例</td>
+          <td class="{{ 'neg' if ch.获利比例>0.8 else ('pos' if ch.获利比例<0.3 else '') }}">{{ '%.1f'|format(ch.获利比例*100) }}%</td>
+          <td>集中度(90%)</td><td>{{ ch.集中度90 if ch.集中度90 is not none else '—' }}</td></tr>
+      <tr><td>平均成本</td><td>{{ ch.平均成本 }}</td>
+          <td>成本区间(90%)</td><td>{{ ch.成本区间下沿 }} ~ {{ ch.成本区间上沿 }}</td></tr>
+      <tr><td>现价</td><td>{{ ch.现价 }}</td>
+          <td>现价 vs 平均成本</td>
+          <td class="{{ 'pos' if ch.现价 and ch.平均成本 and ch.现价>ch.平均成本 else 'neg' }}">
+          {% if ch.现价 and ch.平均成本 %}{{ '%+.1f'|format((ch.现价/ch.平均成本-1)*100) }}%{% else %}—{% endif %}</td></tr>
+    </table>
+  </section>
+  {% endif %}
+
+  {% if r.consensus and r.consensus.预期EPS当年 is not none %}
+  {% set cs = r.consensus %}
+  <section class="card">
+    <h2>机构一致预期 <small>前瞻(机构预测均值);覆盖&lt;3家慎用</small></h2>
+    <table>
+      <tr><td>预期EPS(当年)</td><td>{{ cs.预期EPS当年 }}</td>
+          <td>预期EPS(次年)</td><td>{{ cs.预期EPS次年 if cs.预期EPS次年 is not none else '—' }}</td></tr>
+      <tr><td>预期增速</td>
+          <td class="{{ 'pos' if cs.预期增速 is not none and cs.预期增速>0 else ('neg' if cs.预期增速 is not none and cs.预期增速<0 else '') }}">
+          {% if cs.预期增速 is not none %}{{ '%.1f'|format(cs.预期增速*100) }}%{% else %}—{% endif %}</td>
+          <td>覆盖机构数</td><td>{{ cs.覆盖机构数 if cs.覆盖机构数 is not none else '—' }}</td></tr>
+    </table>
+  </section>
+  {% endif %}
+
+  {% if r.holder and r.holder.最新股东户数 is not none %}
+  {% set hd = r.holder %}
+  <section class="card">
+    <h2>股东户数 <small>持续减少=筹码集中(主力吸筹)</small></h2>
+    <table>
+      <tr><td>最新股东户数</td><td>{{ hd.最新股东户数 }}</td>
+          <td>户数环比</td>
+          <td class="{{ 'pos' if hd.户数环比 is not none and hd.户数环比<0 else ('neg' if hd.户数环比 is not none and hd.户数环比>0 else '') }}">
+          {% if hd.户数环比 is not none %}{{ '%.2f'|format(hd.户数环比) }}%{% else %}—{% endif %}</td></tr>
+      <tr><td>连续减少期数</td>
+          <td class="{{ 'pos' if hd.连续减少期数 and hd.连续减少期数>0 else '' }}">{{ hd.连续减少期数 }}</td>
+          <td></td><td></td></tr>
     </table>
   </section>
   {% endif %}

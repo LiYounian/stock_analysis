@@ -41,7 +41,12 @@ _PARQUET_KINDS = ("kline", "fundflow", "index_kline", "board_kline",
                   "event_yjyg", "event_yjkb", "event_ggcg")   # 事件驱动采集缓存(业绩预告/快报/增减持)
 _JSON_KINDS = ("fundamental", "announcement", "news", "ugc", "policy", "llm_cache",
                "board_membership", "financial_report",   # financial_report:按报告期的三大表(内层 period 字典)
-               "annual_report_text")   # annual_report_text:年报 PDF 抽出的目标章节文本(审计报告/MD&A/风险),键=code
+               "annual_report_text",   # annual_report_text:年报 PDF 抽出的目标章节文本(审计报告/MD&A/风险),键=code
+               # 借鉴 a-stock-data 新增采集(见 docs/参考/数据源_*.md):
+               "chip",                 # 筹码分布摘要(collectors.chip 本地推演)
+               "lhb", "block_trade", "holder_num",   # 主力行为:龙虎榜/大宗交易/股东户数(collectors.smart_money)
+               "consensus",            # 机构一致预期(collectors.consensus)
+               "industry_history")     # 行业变迁史(collectors.industry_history)
 _RAW_KINDS = _PARQUET_KINDS + _JSON_KINDS
 _FLAT_KINDS = ("llm_cache",)   # 不按日期分区的 raw kind
 

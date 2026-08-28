@@ -28,6 +28,20 @@
     "market": "A"
   },
   {
+    "code": "601975",
+    "name": "招商南油",
+    "industry": "航运/油运",
+    "sector": "航运",
+    "market": "A"
+  },
+  {
+    "code": "002222",
+    "name": "福晶科技",
+    "industry": "光学元件/激光",
+    "sector": "光学元件",
+    "market": "A"
+  },
+  {
     "code": "000625",
     "name": "长安汽车",
     "industry": "汽车整车",
@@ -75,6 +89,13 @@
     "industry": "城商行/银行",
     "sector": "银行",
     "market": "A"
+  },
+  {
+    "code": "02513",
+    "name": "智谱",
+    "industry": "人工智能",
+    "sector": "大模型",
+    "market": "HK"
   },
   {
     "code": "300017",

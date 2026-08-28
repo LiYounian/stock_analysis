@@ -11,6 +11,9 @@
   股息: 股息率 = 每股股利(TTM现金分红,采集层baostock) / 最新收盘价 × 100
                                   —— 无分红票每股股利=0 → 股息率0(真 0);每股股利缺失→None(降级)
   资金流: 北向净流入趋势           —— 北向 5–10 日趋势(拿不到→None,I4 降级)
+  筹码: 获利比例 / 筹码集中度       —— record["chip"](collectors.chip 本地推演;缺换手率→None)
+  预期: 预期增速                   —— record["consensus"](机构一致预期隐含 EPS 增速;无覆盖→None)
+  主力: 股东户数环比 / 连续减少期数 —— record["holder"](collectors.smart_money 户数摘要;缺→None)
 
 缺任一 → 该子指标 None(score.py 截面时跳过 None,并据齐全度降置信度)。
 依赖方向:分析层,只读记录字段 + 算数;不 import store/web/采集。
@@ -82,6 +85,9 @@ def raw_factors(record: dict, kline_df=None, 北向净流入趋势=None) -> dict
     """单票各子指标原始值 {子指标: float|None}。缺块降级 None,不抛。"""
     fund = (record or {}).get("fundamental") or {}
     val = (record or {}).get("valuation") or {}
+    chip = (record or {}).get("chip") or {}           # 筹码分布摘要(collectors.chip)
+    cons = (record or {}).get("consensus") or {}      # 一致预期摘要(collectors.consensus)
+    holder = (record or {}).get("holder") or {}       # 股东户数摘要(collectors.smart_money)
     return {
         # 质量
         "ROE": _num(fund.get("ROE")),
@@ -98,4 +104,12 @@ def raw_factors(record: dict, kline_df=None, 北向净流入趋势=None) -> dict
         "股息率": dividend_yield(fund.get("每股股利") if isinstance(fund, dict) else None, kline_df),
         # 资金流(北向趋势;拿不到 → None,I4 降级)
         "北向净流入趋势": _num(北向净流入趋势),
+        # 筹码(本地推演;缺 chip 采集/换手率 → None 降级)
+        "获利比例": _num(chip.get("获利比例")),
+        "筹码集中度": _num(chip.get("集中度90")),
+        # 预期(机构一致预期隐含 EPS 增速;缺覆盖 → None 降级)
+        "预期增速": _num(cons.get("预期增速")),
+        # 主力(股东户数最新环比 + 连续减少期数;缺 → None 降级)
+        "股东户数环比": _num(holder.get("户数环比")),
+        "户数连续减少期数": _num(holder.get("连续减少期数")),
     }
