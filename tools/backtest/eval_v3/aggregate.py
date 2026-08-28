@@ -87,17 +87,19 @@ def directional_cell(sub: pd.DataFrame, uni_ret: dict, h: int, seed: int) -> dic
         mkt_day.append(float(u.mean()) if len(u) else None)
         day_uni.append(u)
         sizes.append(len(gd))
-    mkt_vals = [m for m in mkt_day if m is not None]
-    strat_mean = round(float(r.mean()), 3)
-    mkt_mean = round(float(np.mean(mkt_vals)), 3) if mkt_vals else None
-    cell["策略均收益%"] = strat_mean
-    cell["基准_全市场均收益%"] = mkt_mean
-    cell["超额收益%_vs全市场"] = (round(strat_mean - mkt_mean, 3)
-                                 if mkt_mean is not None else None)
+    # 组合口径(与聚类显著性一致):每日等权组合收益,再跨日等权。策略/基准/超额三者同口径。
+    strat_day_means = [float(a.mean()) if len(a) else None for a in strat_day]
+    paired = [(s, m) for s, m in zip(strat_day_means, mkt_day)
+              if s is not None and m is not None]
+    strat_pf = round(float(np.mean([s for s, _ in paired])), 3) if paired else None
+    mkt_pf = round(float(np.mean([m for _, m in paired])), 3) if paired else None
+    cell["策略均收益%_组合日均"] = strat_pf
+    cell["基准_全市场均收益%"] = mkt_pf
+    cell["超额收益%_vs全市场"] = (round(strat_pf - mkt_pf, 3)
+                                 if (strat_pf is not None and mkt_pf is not None) else None)
     ex = _st.cluster_bootstrap_excess(strat_day, mkt_day, B=_BOOT_B, seed=seed)
     cell["超额_聚类CI%"] = ([ex["lo"], ex["hi"]] if ex.get("lo") is not None else None)
     cell["超额_聚类p值"] = ex.get("p_value")
-    strat_day_means = [float(a.mean()) if len(a) else None for a in strat_day]
     rp = _st.bootstrap_random_pick(strat_day_means, day_uni, sizes, B=_BOOT_B, seed=seed)
     cell["随机基准均收益%"] = rp.get("rand_mean")
     cell["优于随机p值"] = rp.get("p_value")
