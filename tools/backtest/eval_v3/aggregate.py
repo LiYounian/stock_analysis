@@ -18,7 +18,7 @@ import numpy as np
 import pandas as pd
 
 from . import stats as _st
-from .schema import DIRECTIONAL, RANKABLE, REFERENCE
+from .schema import RANKABLE, REFERENCE
 
 WINDOWS: dict[str, int] = {"近一周": 5, "近一月": 20, "近一季": 60, "近一年": 250}
 _THIN_N = 30
