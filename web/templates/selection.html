@@ -324,6 +324,191 @@
   {% endif %}
 </section>
 
+<!-- 策略7:最大范围选股(PR#15,纯 OHLC) -->
+<section class="card wide">
+  <h2>策略7 · 最大范围选股 <span class="badge pos">看多</span>
+    {% if s.strategy_mr.present %}
+    <small>扫描 <b>{{ s.strategy_mr.扫描数 if s.strategy_mr.扫描数 is not none else '—' }}</b> ·
+      有效 <b>{{ s.strategy_mr.有效 if s.strategy_mr.有效 is not none else '—' }}</b> ·
+      入选 <b class="pos">{{ s.strategy_mr.入选数 if s.strategy_mr.入选数 is not none else (s.strategy_mr.rows|length) }}</b> ·
+      数据日期 <b>{{ s.strategy_mr.as_of }}</b></small>
+    {% endif %}</h2>
+  <p class="muted tiny">PR#15 提取。高位强势(距 250 日高 ≥82%)+ 均线多头(&gt;MA10/20/50)+
+    近 32 日有过单日大阳(&gt;6%)+ 当日未大跌(回撤 ≤4%)+ 非北交所。纯 OHLC 全 A 筛选,读预落盘 view。</p>
+  {% if not s.strategy_mr.present %}
+  <p class="muted">策略7 待运行(<code>python -m tools.pipeline.screen_max_range</code>)。</p>
+  {% elif not s.strategy_mr.rows %}
+  <p class="muted">本日 策略7 无入选标的。</p>
+  {% else %}
+  <table>
+    <thead><tr><th>代码</th><th>名称</th><th>行业</th></tr></thead>
+    <tbody>
+    {% for x in s.strategy_mr.rows %}
+      <tr data-code="{{ x.code }}">
+        <td>{{ x.code }}</td>
+        <td><a href="/stock/{{ x.code }}?date={{ s.as_of }}">{{ x.name }}</a></td>
+        <td class="muted">{{ x.industry or '-' }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+</section>
+
+<!-- 策略8:量价放量(PR#15,3 可勾选子信号,勾选并集过滤) -->
+<section class="card wide">
+  <h2>策略8 · 量价放量 <span class="badge pos">看多</span>
+    {% if s.strategy_vol.present %}
+    <small>扫描 <b>{{ s.strategy_vol.扫描数 if s.strategy_vol.扫描数 is not none else '—' }}</b> ·
+      有效 <b>{{ s.strategy_vol.有效 if s.strategy_vol.有效 is not none else '—' }}</b> ·
+      入选 <b class="pos">{{ s.strategy_vol.入选数 if s.strategy_vol.入选数 is not none else (s.strategy_vol.rows|length) }}</b> ·
+      数据日期 <b>{{ s.strategy_vol.as_of }}</b></small>
+    {% endif %}</h2>
+  <p class="muted tiny">PR#15 提取。放量突破/上涨型(与策略2 放量后缩量回踩互补,不去重)。
+    勾选下方子信号 → 命中票单按<b>命中形态并集</b>实时过滤(勾选式,非投票)。</p>
+  {% if s.strategy_vol.present and s.strategy_vol.rows %}
+  <div class="council-experts">
+    {% for sub in s.strategy_vol.子信号 %}
+    <label class="council-chk"><input type="checkbox" class="subsig-cb" value="{{ sub }}" checked>
+      <span class="strat-label">{{ sub }}</span></label>
+    {% endfor %}
+  </div>
+  {% endif %}
+  {% if not s.strategy_vol.present %}
+  <p class="muted">策略8 待运行(<code>python -m tools.pipeline.screen_volume</code>)。</p>
+  {% elif not s.strategy_vol.rows %}
+  <p class="muted">本日 策略8 无入选标的。</p>
+  {% else %}
+  <table>
+    <thead><tr><th>代码</th><th>名称</th><th>行业</th><th>命中形态</th></tr></thead>
+    <tbody id="volBody">
+    {% for x in s.strategy_vol.rows %}
+      <tr data-code="{{ x.code }}" data-combos="{{ x.combos|join(',') }}">
+        <td>{{ x.code }}</td>
+        <td><a href="/stock/{{ x.code }}?date={{ s.as_of }}">{{ x.name }}</a></td>
+        <td class="muted">{{ x.industry or '-' }}</td>
+        <td class="muted tiny">{{ x.combos|join('+') if x.combos else '-' }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  <p id="volEmpty" class="muted" style="display:none">当前勾选的子信号无命中票。</p>
+  {% endif %}
+</section>
+
+<!-- 策略9:最强选股(PR#15,Tushare-only) -->
+<section class="card wide">
+  <h2>策略9 · 最强选股 <span class="badge pos">看多</span> <span class="badge wait">需 Tushare</span>
+    {% if s.strategy_strong.present %}
+    <small>扫描 <b>{{ s.strategy_strong.扫描数 if s.strategy_strong.扫描数 is not none else '—' }}</b> ·
+      有效 <b>{{ s.strategy_strong.有效 if s.strategy_strong.有效 is not none else '—' }}</b> ·
+      入选 <b class="pos">{{ s.strategy_strong.入选数 if s.strategy_strong.入选数 is not none else (s.strategy_strong.rows|length) }}</b> ·
+      数据日期 <b>{{ s.strategy_strong.as_of }}</b></small>
+    {% endif %}</h2>
+  <p class="muted tiny">PR#15 提取。六均线多头 + 11 日内≥2 日涨≥5% + 52 周高 90%~120% +
+    <b>筹码高度获利</b>(winner_rate&gt;95% 或 HIGH≥cost_95pct)。<b>硬依赖 Tushare 筹码获利比例(cyq_perf),免费源拿不到</b>——未配 <code>TUSHARE_TOKEN</code> 时不出(非报错)。</p>
+  {% if not s.strategy_strong.present %}
+  <p class="muted">{{ s.strategy_strong.提示 or '策略9 待运行 / 需 Tushare。' }}</p>
+  {% elif not s.strategy_strong.rows %}
+  <p class="muted">本日 策略9 无入选标的(筹码 + 形态未共振)。</p>
+  {% else %}
+  <table>
+    <thead><tr><th>代码</th><th>名称</th><th>行业</th></tr></thead>
+    <tbody>
+    {% for x in s.strategy_strong.rows %}
+      <tr data-code="{{ x.code }}">
+        <td>{{ x.code }}</td>
+        <td><a href="/stock/{{ x.code }}?date={{ s.as_of }}">{{ x.name }}</a></td>
+        <td class="muted">{{ x.industry or '-' }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+</section>
+
+<!-- 策略10:反转低换手组合(候选·前向观测中,纯量价横截面复合) -->
+<section class="card wide">
+  <h2>策略10 · 反转低换手组合 <span class="badge wait">前向观测中</span>
+    {% if s.strategy_rt.present %}
+    <small>扫描 <b>{{ s.strategy_rt.扫描数 if s.strategy_rt.扫描数 is not none else '—' }}</b> ·
+      有效 <b>{{ s.strategy_rt.有效 if s.strategy_rt.有效 is not none else '—' }}</b> ·
+      入选 <b class="pos">{{ s.strategy_rt.入选数 if s.strategy_rt.入选数 is not none else (s.strategy_rt.rows|length) }}</b> ·
+      数据日期 <b>{{ s.strategy_rt.as_of }}</b></small>
+    {% endif %}</h2>
+  <p class="muted tiny"><b>候选策略,非已验证</b>——纯量价横截面复合:近 5 日跌得多(反转)+ 近 20 日换手冷清(低换手),
+    各自 winsor+zscore 后<b>等权</b>取 TopK。全 A 筛选,读预落盘 view。</p>
+  <p class="muted tiny" style="color:#a60">⚠️ 诚实口径:回测仅在「可交易池(成交额前 50%)+ 5–10 日持有 + TopK≤20」内 net(扣真实成本)转正、
+    相对纯 rev5 有稳健增量;<b>net 绝对水平存幸存者偏差水分</b>(样本仅当前在市票、漏退市输家),
+    <b>以前向观测为准,当前不作「已验证可用」推荐</b>。详见 docs/策略/策略总览 策略10 行。</p>
+  {% if not s.strategy_rt.present %}
+  <p class="muted">策略10 待运行(<code>python -m tools.pipeline.screen_reversal_turnover --no-fetch</code>)。</p>
+  {% elif not s.strategy_rt.rows %}
+  <p class="muted">本日 策略10 无入选标的。</p>
+  {% else %}
+  <table>
+    <thead><tr><th>代码</th><th>名称</th><th>行业</th><th>复合分</th><th>近5日跌幅</th><th>均换手</th><th>成交额(万)</th></tr></thead>
+    <tbody>
+    {% for x in s.strategy_rt.rows %}
+      <tr data-code="{{ x.code }}">
+        <td>{{ x.code }}</td>
+        <td><a href="/stock/{{ x.code }}?date={{ s.as_of }}">{{ x.name }}</a></td>
+        <td class="muted">{{ x.industry or '-' }}</td>
+        <td class="pos">{{ x.综合分 if x.综合分 is not none else '—' }}</td>
+        <td class="{{ 'pos' if (x['近5日跌幅%'] or 0) > 0 else '' }}">
+          {% if x['近5日跌幅%'] is not none %}{{ '%+.2f'|format(x['近5日跌幅%']) }}%{% else %}—{% endif %}</td>
+        <td class="muted">{% if x['均换手%'] is not none %}{{ '%.2f'|format(x['均换手%']) }}%{% else %}—{% endif %}</td>
+        <td class="muted tiny">{% if x.成交额万元 is not none %}{{ '%.0f'|format(x.成交额万元) }}{% else %}—{% endif %}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+</section>
+
+<!-- 策略11:指标条件化状态排序(状态参考·非alpha,1/5/10日三维度) -->
+<section class="card wide">
+  <h2>策略11 · 指标条件化状态排序 <span class="badge wait">状态参考</span>
+    {% if s.strategy_cr.present %}
+    <small>扫描 <b>{{ s.strategy_cr.扫描数 if s.strategy_cr.扫描数 is not none else '—' }}</b> ·
+      数据日期 <b>{{ s.strategy_cr.as_of }}</b></small>
+    {% endif %}</h2>
+  <p class="muted tiny" style="color:#c0392b">⚠️ 回测诚实结论:本预测<b>聚合层面无显著超额</b>(Brier≈无条件基线、聚类t不显著),
+    方向多为中性、区分力弱;<b>仅作状态参考,不作胜率/涨跌承诺</b>。</p>
+  <p class="muted tiny" style="color:#a60">口径:按当日指标状态相似的历史上涨概率排序。<b>上涨概率%/置信度是「指标状态格」级</b>
+    (同一状态的票取值相同),Top 由<b>近20日成交额均值(流动性)破并列</b>——即「最强历史状态格里挑流动性好的票」,<b>非个股涨跌排名</b>;
+    <b>1 日略有区分力、5/10 日基本是噪声</b>。全A筛选,读预落盘 view。</p>
+  {% if not s.strategy_cr.present %}
+  <p class="muted">策略11 待运行(<code>python -m tools.pipeline.screen_conditional_rank --no-fetch</code>;需先建 state_pool)。</p>
+  {% else %}
+  {% for h in ['1日','5日','10日'] %}
+  <h3 class="sub">{{ h }}榜{% if h != '1日' %} <span class="muted tiny">(区分力弱/近噪声,仅参考)</span>{% endif %}
+    <small class="muted">有效样本 {{ s.strategy_cr.有效样本[h] if (s.strategy_cr.有效样本 and h in s.strategy_cr.有效样本) else '—' }}</small></h3>
+  {% if not s.strategy_cr.排行[h] %}
+  <p class="muted tiny">本日 {{ h }} 无入选。</p>
+  {% else %}
+  <table>
+    <thead><tr><th>代码</th><th>名称</th><th>行业</th><th>上涨概率</th><th>方向</th><th>置信</th><th>相似样本</th><th>近20日均额(万)</th></tr></thead>
+    <tbody>
+    {% for x in s.strategy_cr.排行[h] %}
+      <tr data-code="{{ x.code }}">
+        <td>{{ x.code }}</td>
+        <td><a href="/stock/{{ x.code }}?date={{ s.as_of }}">{{ x.name }}</a></td>
+        <td class="muted">{{ x.industry or '-' }}</td>
+        <td class="{{ 'pos' if x.过下限 else '' }}">{% if x['上涨概率%'] is not none %}{{ x['上涨概率%'] }}%{% else %}—{% endif %}</td>
+        <td class="muted">{{ x.方向 or '-' }}</td>
+        <td class="muted">{{ x.置信度 or '-' }}</td>
+        <td class="muted tiny">{{ x.相似样本数 if x.相似样本数 is not none else '—' }}</td>
+        <td class="muted tiny">{% if x.成交额万元 is not none %}{{ '%.0f'|format(x.成交额万元) }}{% else %}—{% endif %}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+  {% endfor %}
+  {% endif %}
+</section>
+
 <p class="muted tiny">点名称进个股页看完整归因/K线。合议综合分同口径(前端同 councilSynth 公式,勾选专家实时重排)。</p>
 
 <script id="selectionExperts" type="application/json">{{ (s.rows|list)|tojson }}</script>
@@ -373,6 +558,31 @@
 
   document.querySelectorAll(".strat-cb").forEach(function (cb) { cb.addEventListener("change", renderCombined); });
   renderCombined();   // 默认全勾 → 全并集
+})();
+
+(function () {
+  // —— 策略8 量价放量:勾选子信号 → 按命中形态(combos)并集过滤(与综合选股同一勾选式,非投票)——
+  var body = document.getElementById("volBody");
+  if (!body) return;
+  var empty = document.getElementById("volEmpty");
+  function checkedSubs() {
+    var set = {};
+    document.querySelectorAll(".subsig-cb").forEach(function (cb) { if (cb.checked) set[cb.value] = true; });
+    return set;
+  }
+  function renderVol() {
+    var checked = checkedSubs();
+    var any = false;
+    [].slice.call(body.querySelectorAll("tr[data-code]")).forEach(function (tr) {
+      var combos = (tr.getAttribute("data-combos") || "").split(",").filter(Boolean);
+      var show = combos.some(function (c) { return checked[c]; });
+      tr.style.display = show ? "" : "none";
+      if (show) any = true;
+    });
+    if (empty) empty.style.display = any ? "none" : "";
+  }
+  document.querySelectorAll(".subsig-cb").forEach(function (cb) { cb.addEventListener("change", renderVol); });
+  renderVol();   // 默认全勾 → 全部命中票
 })();
 
 (function () {

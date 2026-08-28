@@ -57,6 +57,41 @@ def test_missing_required_top():
     assert any("timeseries_refs" in e for e in rc.validate_record(r))
 
 
+def test_persistence_fields_valid():
+    """持续性研判(顶层 rollup + 事件级字段)合法值通过校验。"""
+    r = _good_record()
+    r["sentiment"]["持续性研判"] = {"结构性利好数": 1, "结构性利空数": 0, "短暂事件数": 0,
+                                    "已分类数": 1, "最强结构印证": "强"}
+    r["sentiment"]["events"][0].update({"持续性": "结构性持续", "印证强度": "强",
+                                        "持续性方向": "利好", "持续性依据": "在手订单饱满"})
+    assert rc.validate_record(r) == []
+
+
+def test_persistence_fields_absent_still_valid():
+    """旧记录无持续性字段(未分类)仍合规(向后兼容)。"""
+    r = _good_record()
+    assert "持续性" not in r["sentiment"]["events"][0]
+    assert "持续性研判" not in r["sentiment"]
+    assert rc.validate_record(r) == []
+
+
+def test_bad_persistence_enum_caught():
+    r = _good_record()
+    r["sentiment"]["events"][0]["持续性"] = "永久性"
+    assert any("持续性" in e for e in rc.validate_record(r))
+    r2 = _good_record()
+    r2["sentiment"]["events"][0]["印证强度"] = "超强"
+    assert any("印证强度" in e for e in rc.validate_record(r2))
+    r3 = _good_record()
+    r3["sentiment"]["持续性研判"] = {"最强结构印证": "巨强"}
+    assert any("最强结构印证" in e for e in rc.validate_record(r3))
+
+
+def test_persistence_enums_registered():
+    assert rc.ENUMS["持续性"] == ("结构性持续", "短暂事件", "中性")
+    assert rc.ENUMS["印证强度"] == ("强", "中", "弱")
+
+
 def test_dump_schema(tmp_path, monkeypatch):
     monkeypatch.setattr(rc, "SCHEMA_JSON", tmp_path / "record.schema.json")
     p = rc.dump_schema()

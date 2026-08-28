@@ -31,8 +31,11 @@ APScheduler>=3.10
 # 测试
 pytest>=8.0
 
+# 行情增强源(面板「策略9 最强选股」依赖:筹码获利比例 cyq_perf 免费源拿不到)
+# 需运行时配 TUSHARE_TOKEN(放 ~/.config/stock/sync.env,不入库)。未配 token → 策略9 静默出占位、不影响其它策略。
+tushare>=1.4.0
+
 # 缺口备选(可选,按需装)
-# tushare>=1.4.0        # 需 token;将来上真·申万 index_member 成分 + 申万板块指数
 # scikit-learn / scipy  # P3-E ML 预测阶段再装
 
 # 精确版本见 requirements-lock.txt(conda 环境 stock_analysis 冻结)

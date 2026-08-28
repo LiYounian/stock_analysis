@@ -29,8 +29,9 @@ templates = Jinja2Templates(env=_env)
 
 
 def _nav(date: str) -> dict:
-    """全局导航上下文:可选日期列表 + 当前展示日期(供 base.html 日期下拉)。"""
-    return {"dates": da.available_dates(), "cur_date": da.as_of(date)}
+    """全局导航上下文:可选日期列表 + 当前展示日期(供 base.html 日期下拉)+ 行情来源徽标。"""
+    return {"dates": da.available_dates(), "cur_date": da.as_of(date),
+            "data_source": da.current_data_source()}
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -80,6 +81,22 @@ def sepa(request: Request, date: str = "latest"):
     return templates.TemplateResponse(
         request=request, name="sepa.html",
         context={"s": da.sepa_page(date), **_nav(date)})
+
+
+@app.get("/watch", response_class=HTMLResponse)
+def watch(request: Request, date: str = "latest"):
+    """自选池实时盯盘(方案1):自选票实时价/涨跌幅 + 当日SEPA收盘态形态。前端轮询 /api/watch。"""
+    from web import realtime
+    return templates.TemplateResponse(
+        request=request, name="watch.html",
+        context={"w": realtime.watch_quotes(date), **_nav(date)})
+
+
+@app.get("/api/watch", response_class=JSONResponse)
+def api_watch(date: str = "latest"):
+    """自选池实时盯盘 JSON(前端 15s 轮询):行情=盘中快照,形态=每日收盘态。"""
+    from web import realtime
+    return JSONResponse(realtime.watch_quotes(date))
 
 
 @app.get("/sepa/{code}", response_class=HTMLResponse)
@@ -190,22 +207,32 @@ class PoolAdd(BaseModel):
 
 @app.post("/api/pool")
 def api_pool_add(body: PoolAdd):
-    """新增一只票:入池 → 联网采集 → 重建产物。校验失败返回 400。"""
+    """新增一只票。POOL_WRITE_MODE=direct(本地默认):入池 → 采集 → 重建(逐字节不变);
+    =enqueue(远端):只写 pool_pending 提案表,本地闭环采集后生效。校验失败返回 400。"""
     from tools import pool_service
+    from tools.config import settings
     try:
+        if settings.POOL_WRITE_MODE == "enqueue":
+            return {"mode": "enqueue",
+                    **pool_service.enqueue_pending("add", body.code, name=body.name,
+                        industry=body.industry, sector=body.sector, market=body.market)}
         res = pool_service.add_and_collect(
             body.code, body.name, body.industry, body.sector, market=body.market)
-        return {"ok": True, **res}
+        return {"ok": True, "mode": "direct", **res}
     except ValueError as e:
         return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
 
 
 @app.post("/api/pool/{code}/delete")
 def api_pool_delete(code: str):
-    """删除一只票:出池 → 清缓存 → 重建产物。不存在返回 404。"""
+    """删除一只票。direct(本地):出池 → 清缓存 → 重建(逐字节不变);
+    enqueue(远端):只写 remove 提案。不存在返回 404。"""
     from tools import pool_service
+    from tools.config import settings
     try:
+        if settings.POOL_WRITE_MODE == "enqueue":
+            return {"mode": "enqueue", **pool_service.enqueue_pending("remove", code)}
         res = pool_service.remove_and_cleanup(code)
-        return {"ok": True, **res}
+        return {"ok": True, "mode": "direct", **res}
     except ValueError as e:
         return JSONResponse({"ok": False, "error": str(e)}, status_code=404)

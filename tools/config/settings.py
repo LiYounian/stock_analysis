@@ -19,6 +19,13 @@ KLINE_DAYS = 250            # 默认拉取天数(约一年交易日)
 # (MA200+52周高)。取 500(约2年)= 冗余 ~2x,不降级任何日筛信号。回测仍走 load_kline 全历史。
 DAILY_KLINE_ROWS = 500
 
+# —— Tushare 可选数据源(全 A 盘后批量日线 + 筹码;免费源之上的可选增强)——
+# token 仅从环境变量读,不入库、不打印。未配 → TUSHARE_ENABLED=False,链路与现状完全一致。
+# 配了且实际读得通 → 全 A 日增量优先走 Tushare(daily + daily_basic 换手),取不到静默回退免费源;
+# 「最强」策略的筹码获利比例(cyq_perf)为 Tushare 独有,免费源拿不到。
+TUSHARE_TOKEN = os.getenv("TUSHARE_TOKEN", "")
+TUSHARE_ENABLED = bool(TUSHARE_TOKEN)
+
 # —— 舆情/新闻采集参数 ——
 NEWS_LOOKBACK_DAYS = 7      # 新闻/公告回看窗口
 UGC_LIMIT = 50             # 每票 UGC 抓取条数上限
@@ -61,6 +68,17 @@ FETCH_JITTER_SEC = 0.2      # 并发路径每请求前随机抖动上限(秒)
 # —— 数据新鲜度(store 层用)——
 RAW_STALE_DAYS = 3          # raw 缓存超过此天数(或无采集元数据)视为陈旧,促使重采
 
+# —— 情绪数据新鲜度(event 情绪引擎用,date-pin + 新鲜度标注)——
+# 回退策略:A2=可识别回退(默认,窗口内回退旧 raw 但标「陈旧」,超窗标「无数据」);
+#          A1=严格锁定(锁定日无 raw 即「无数据」,绝不回退旧数据)。
+SENTIMENT_FRESHNESS_MODE = os.getenv("SENTIMENT_FRESHNESS_MODE", "A2")
+# A2 允许回退的窗口(以 raw 分区/采集周期为「交易日」代理计数);超此距离标「无数据」。
+SENTIMENT_MAX_STALE_DAYS = int(os.getenv("SENTIMENT_MAX_STALE_DAYS", "3"))
+# —— 消息持续性研判(结构性 vs 短暂 + 印证强度)——
+# 只对根源消息(公司行为层新闻)逐条 LLM 研判并附加到情绪 event;附加、可选,不动净情绪口径。
+# 回测/批量若不需要该分量可置 false 省 LLM 调用(下游读不到字段=优雅退化)。
+SENTIMENT_PERSISTENCE_ON = os.getenv("SENTIMENT_PERSISTENCE_ON", "true").lower() in ("1", "true", "yes")
+
 # —— 存储后端(store 层分析侧读写走哪个后端)——
 # file(默认):现文件后端,产物落 data/analysis/<日期>/。
 # db:SQLAlchemy 后端,记录/视图入库(SQLite 起步,可换 Postgres/MySQL,由 DB_URL 决定)。
@@ -98,6 +116,12 @@ SYNC_RATE_MAX = int(os.getenv("SYNC_RATE_MAX", "120"))          # 速率限制:�
 SYNC_RATE_WINDOW_S = int(os.getenv("SYNC_RATE_WINDOW_S", "60")) # 速率限制:滑动窗口(秒);超限 429
 SYNC_MAX_BODY_BYTES = int(os.getenv("SYNC_MAX_BODY_BYTES", str(32 * 1024 * 1024)))  # 请求体上限(默认 32MiB);超限 413
 SYNC_NONCE_KEEP_S = int(os.getenv("SYNC_NONCE_KEEP_S", "86400"))  # nonce 保留秒数(定时清理早于此的,>防重放窗口即安全)
+
+# —— 票池写模式(方案2:本地=直采重建,远端=入队提案)——
+# 本地默认 direct = 现状零行为变化;远端 stock-web unit 设 POOL_WRITE_MODE=enqueue → 网页加/删
+# 只写 pool_pending 提案表(不碰会被 reset --hard 抹掉的 config/stock_pool.json),本地闭环消化。
+POOL_WRITE_MODE = os.getenv("POOL_WRITE_MODE", "direct")           # direct / enqueue
+POOL_PENDING_SOURCE = os.getenv("POOL_PENDING_SOURCE", "remote")   # 入队提案的 source 标识
 
 
 def ensure_dirs() -> None:

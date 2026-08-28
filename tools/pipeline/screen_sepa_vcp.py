@@ -94,12 +94,17 @@ def _prev_pool_index(as_of: str) -> dict[str, dict]:
     return {r["code"]: r for r in (v.get("rows") or []) if r.get("code")}
 
 
+# 展示标签字符串:措辞明确为"收盘态快照",避免"进行中"被误读成实时监控。
+# 注意:与内部布尔字段键 vcp["VCP进行中"] 区分——后者是判定位、不改;这里只是给用户看的标签文案。
+_TAG_VCP = "VCP收缩中(收盘)"
+
+
 def _tags(vcp: dict, first_day: bool, n_stars: int) -> list[str]:
     tags = []
     if first_day and n_stars >= 1:
         tags.append("新候选")
     if vcp.get("VCP进行中"):
-        tags.append("VCP进行中")
+        tags.append(_TAG_VCP)
     if vcp.get("接近枢纽"):
         tags.append("接近枢纽")
     if vcp.get("结构破坏"):
@@ -120,7 +125,7 @@ def _chain_short(chain, n: int = 3) -> str:
 def _radar(session: str, watch: list[dict]) -> str:
     focus = [r for r in watch if "结构破坏" not in (r.get("标签") or [])]
     broken = [r for r in watch if "结构破坏" in (r.get("标签") or [])]
-    vcp_on = [r for r in watch if "VCP进行中" in (r.get("标签") or [])]
+    vcp_on = [r for r in watch if _TAG_VCP in (r.get("标签") or [])]
     fresh = [r for r in watch if "新候选" in (r.get("标签") or [])]
     lines = [f"【{session}雷达】", f"重点：{len(focus)}只"]
     if vcp_on:
@@ -129,9 +134,9 @@ def _radar(session: str, watch: list[dict]) -> str:
             chain = _chain_short(r.get("回撤链"))
             n = r.get("轮数") or 0
             bits.append(f"{r['code']}（{chain}，第{n}轮）" if chain else r["code"])
-        lines.append("VCP进行中：" + "、".join(bits))
+        lines.append(_TAG_VCP + "：" + "、".join(bits))
     else:
-        lines.append("VCP进行中：无")
+        lines.append(_TAG_VCP + "：无")
     if fresh:
         bits = []
         for r in fresh[:8]:
@@ -199,11 +204,17 @@ def run_sepa_vcp(codes: list[str], as_of: str | None = None,
         n_stars = int(fstar) + int(sstar)
         vcp = vcp_mod.analyze_vcp(kdf)
         tags = _tags(vcp, row["今日首入"], n_stars)
+        # 趋势分:60日涨幅(Minervini 动量语义),供展示层按强度取 Top10 排序。
+        # SEPA 已保证 ≥220 根历史,close[-61] 恒安全;不足则退化用最早一根。
+        _close = kdf["close"]
+        趋势分 = round(float(_close.iloc[-1] / _close.iloc[-61] - 1.0), 4) \
+            if len(_close) >= 61 else round(float(_close.iloc[-1] / _close.iloc[0] - 1.0), 4)
         rec = {
             "code": code, "name": row["name"], "industry": row["industry"],
             "入池日": row["入池日"], "入池天数": row["入池天数"],
             "今日首入": row["今日首入"],
             "基本面星": fstar, "板块星": sstar, "星标数": n_stars,
+            "趋势分": 趋势分,
             "轮数": vcp.get("轮数") or 0,
             "回撤链": vcp.get("回撤链") or [],
             "VCP进行中": vcp.get("VCP进行中"),

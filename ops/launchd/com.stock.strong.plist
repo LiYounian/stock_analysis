@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.stock.strong</string>
+  <!-- 傍晚 20:00 补跑:Tushare 筹码 cyq_perf 傍晚才发布,daily(15:40)取不到→策略9当天不出;
+       此任务在筹码发布后重跑 S05最强选股 + 只补传「最强选股」单 view 分片。TUSHARE/SYNC_* 走脚本内 source sync.env,无需 EnvironmentVariables。 -->
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>/Users/yqg/Documents/projects/stock_analysis/ops/launchd/strong_refresh.sh</string>
+  </array>
+  <key>StartCalendarInterval</key>
+  <array>
+    <dict><key>Weekday</key><integer>1</integer><key>Hour</key><integer>20</integer><key>Minute</key><integer>0</integer></dict>
+    <dict><key>Weekday</key><integer>2</integer><key>Hour</key><integer>20</integer><key>Minute</key><integer>0</integer></dict>
+    <dict><key>Weekday</key><integer>3</integer><key>Hour</key><integer>20</integer><key>Minute</key><integer>0</integer></dict>
+    <dict><key>Weekday</key><integer>4</integer><key>Hour</key><integer>20</integer><key>Minute</key><integer>0</integer></dict>
+    <dict><key>Weekday</key><integer>5</integer><key>Hour</key><integer>20</integer><key>Minute</key><integer>0</integer></dict>
+  </array>
+  <key>RunAtLoad</key>
+  <false/>
+  <key>StandardOutPath</key>
+  <string>/Users/yqg/.local/state/stock/strong.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/yqg/.local/state/stock/strong.err.log</string>
+</dict>
+</plist>

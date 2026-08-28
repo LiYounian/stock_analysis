@@ -64,7 +64,12 @@ document.getElementById("add-form").addEventListener("submit", async (e) => {
   };
   btn.disabled = true; msg.textContent = "采集中,请稍候…"; msg.className = "muted";
   const {ok, data} = await postJSON("/api/pool", body);
-  if (ok && data.ok) {
+  if (ok && data.ok && data.mode === "enqueue") {
+    // 远端入队模式:提案已提交,本地闭环采集后才生效(非实时),不 reload(此刻池未变)
+    msg.textContent = data.note || "已提交,将于下次本地闭环采集后生效(非实时)。";
+    msg.className = "muted";
+    btn.disabled = false; f.reset();
+  } else if (ok && data.ok) {
     location.reload();
   } else {
     msg.textContent = "新增失败:" + (data.error || "未知错误"); msg.className = "neg";
@@ -78,7 +83,11 @@ document.querySelectorAll(".del-btn").forEach((b) => {
     if (!confirm(`确认删除 ${name}(${code})?将一并清除其缓存数据。`)) return;
     b.disabled = true; b.textContent = "删除中…";
     const {ok, data} = await postJSON(`/api/pool/${code}/delete`, null);
-    if (ok && data.ok) {
+    if (ok && data.ok && data.mode === "enqueue") {
+      // 远端入队模式:删除提案已提交,本地闭环消化后才生效(非实时),不 reload
+      alert(data.note || "已提交,将于下次本地闭环采集后生效(非实时)。");
+      b.disabled = false; b.textContent = "删除";
+    } else if (ok && data.ok) {
       location.reload();
     } else {
       alert("删除失败:" + (data.error || "未知错误"));

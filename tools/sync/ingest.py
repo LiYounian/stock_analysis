@@ -178,6 +178,23 @@ def _check_contracts(records: dict) -> None:
         raise _Reject(422, "invalid", "契约校验失败: " + " | ".join(bad[:5]))
 
 
+def _consume_pool_ack(views: dict) -> int:
+    """从 views 摘除保留键 __pool_ack__(避免被当普通 view 落库),据其 consumed_ids 标 pending 为 consumed。
+
+    回执方式(ii):本地消化远端提案后,把已消化的 pending id 搭 upload 顺带回执,复用 /ingest
+    完整签名门禁(token/HMAC/防重放/时效),不新开写口。**就地修改 views**(pop 掉 ack 键)。
+    返回标记条数(无 ack / 空清单 → 0,天然幂等:mark_consumed 重复标无副作用)。
+    """
+    ack = views.pop(POOL_ACK_KEY, None)
+    if not (isinstance(ack, dict) and isinstance(ack.get("consumed_ids"), list)):
+        return 0
+    from tools.sync import pool_pending_store
+    ids = [int(i) for i in ack["consumed_ids"]]
+    n = pool_pending_store.mark_consumed(ids)
+    logger.info("回执:标记 %d 条 pending 为 consumed", n)
+    return n
+
+
 def _persist(date: str, records: dict, views: dict, code_views: dict) -> int:
     """经 store 公开 API 幂等 upsert 落库(backend_db 的 _upsert 天然幂等)。返回记录数。"""
     for rec in records.values():
@@ -190,8 +207,11 @@ def _persist(date: str, records: dict, views: dict, code_views: dict) -> int:
     return len(records)
 
 
-# —— /pull 支持的增量 kind(先只 kline;fundamental/fundflow/announcement 待扩展)——
-PULL_KINDS = ("kline",)
+# —— /pull 支持的增量 kind(kline 原始行情;pool_pending 远端自选提案队列)——
+PULL_KINDS = ("kline", "pool_pending")
+
+# 保留视图键:本地消化远端提案后,搭 upload 顺带回执(不新开写口),ingest 据此标 consumed。
+POOL_ACK_KEY = "__pool_ack__"
 
 
 def _check_pull_sig(headers, kind: str, since: str, codes: str) -> None:
@@ -261,6 +281,18 @@ def _pull_kline(since: str, codes: str) -> tuple[dict, int]:
     return data, total
 
 
+def _pull_pool_pending(since: str, codes: str) -> tuple[list, int]:
+    """返回 pool_pending 表中 status=pending 的行(list[dict])及行数(方案2 远端提案队列)。
+
+    since/codes 对提案队列无意义(靠 consumed 回执去重,不用日期水位),忽略——每次全量返 pending,
+    本地消化后经回执标 consumed → 下次自然变少。**安全红线**:只返名单元数据
+    (id/code/name/industry/sector/market/op/source/requested_at/status),绝不返密钥/配置。
+    """
+    from tools.sync import pool_pending_store
+    rows = pool_pending_store.list_pending(status="pending")
+    return rows, len(rows)
+
+
 @app.get("/health")
 def health():
     return {"ok": True, "service": "ingest"}
@@ -286,7 +318,9 @@ async def ingest(request: Request):
         _check_replay(meta)                # ④ 防重放(409)
         _check_freshness(meta)             # ⑤ 时效(422/409)
         _check_contracts(records)          # ⑥ 契约(422)
-        rows = _persist(date, records, (body.get("views") or {}), (body.get("code_views") or {}))
+        views = dict(body.get("views") or {})
+        _consume_pool_ack(views)           # 回执:摘除 __pool_ack__ 分片并标 consumed(在完整门禁之后)
+        rows = _persist(date, records, views, (body.get("code_views") or {}))
         audit.remember_nonce(meta["nonce"])
         audit.upsert_snapshot(str(date), str(meta.get("generated_at") or ""), src)
         audit.record_audit(source=src, key_id=kid, date=date, rows=rows,
@@ -316,7 +350,10 @@ def pull(request: Request, kind: str = "kline", since: str = "", codes: str = ""
         _check_pull_sig(request.headers, kind, since, codes)   # ③ 验签(403)④ 时效(409)
         if kind not in PULL_KINDS:                 # kind 未支持 → 422
             raise _Reject(422, "invalid", f"不支持的 kind: {kind!r}(支持 {PULL_KINDS})")
-        data, total = _pull_kline(since, codes)
+        if kind == "pool_pending":
+            data, total = _pull_pool_pending(since, codes)
+        else:
+            data, total = _pull_kline(since, codes)
         audit.record_audit(source="pull", key_id=request.headers.get("x-sync-key-id"),
                            date=since or None, rows=total, verify_ok=True,
                            result="ok", msg=f"pull {kind} codes={len(data)}")

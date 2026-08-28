@@ -216,6 +216,8 @@ def run_sentiment(codes: list[str]) -> int:
         logger.warning("政策打分为空(缺政策缓存?),政策层降级")
     ok = 0
     n = len(codes)
+    fresh_stat = {"新鲜": 0, "陈旧": 0, "无数据": 0}          # 顶层新鲜度三态占比(验收观测点)
+    layer_stat = {"新闻": dict(fresh_stat), "舆情": dict(fresh_stat), "政策": dict(fresh_stat)}
     for i, code in enumerate(codes, 1):
         logger.info("[%d/%d] %s — 新闻情绪(LLM)...", i, n, code)
         try:
@@ -224,10 +226,22 @@ def run_sentiment(codes: list[str]) -> int:
             continue
         ok += 1
         s = rec["sentiment"]
-        logger.info("  %s 净情绪 %s(新闻%d/舆情%d/政策%d)", code, s["净情绪分"],
+        if s.get("新鲜度") in fresh_stat:
+            fresh_stat[s["新鲜度"]] += 1
+        for lname, lstat in layer_stat.items():
+            f = s.get("三层", {}).get(lname, {}).get("新鲜度")
+            if f in lstat:
+                lstat[f] += 1
+        logger.info("  %s 净情绪 %s 新鲜度=%s(新闻%d/舆情%d/政策%d)", code, s["净情绪分"],
+                    s.get("新鲜度"),
                     s["三层"]["新闻"]["样本数"], s["三层"]["舆情"].get("样本数", 0),
                     s["三层"]["政策"]["样本数"])
     logger.info("情绪打分完成:%d 只", ok)
+    logger.info("  顶层新鲜度:新鲜%d/陈旧%d/无数据%d",
+                fresh_stat["新鲜"], fresh_stat["陈旧"], fresh_stat["无数据"])
+    for lname, lstat in layer_stat.items():
+        logger.info("  %s层新鲜度:新鲜%d/陈旧%d/无数据%d",
+                    lname, lstat["新鲜"], lstat["陈旧"], lstat["无数据"])
     # 同阶段生产「新闻+AI」统一视图(复用本阶段已建的 LLM 抽取缓存,不额外烧钱)
     from tools.analysis import news_ai
     logger.info("新闻 AI 视图:%d 只", news_ai.write_news_ai(codes))
@@ -411,6 +425,17 @@ def cmd_sepa(argv):
     sepa._main(rest)
 
 
+def cmd_strong(argv):
+    """策略9 最强选股(Tushare 筹码 cyq_perf,傍晚才发布)。单独跑,供 20:00 补跑任务用。
+
+    --no-fetch 只读本地主档(K线);--universe N 截前 N;--date 指定日。
+    筹码当日未发布→写"需 Tushare"占位 view、不出;发布后补跑即出真结果。
+    """
+    from tools.pipeline import screen_strong
+    rest = argv[2:] if argv else []
+    screen_strong._main(rest)
+
+
 def cmd_analyze(argv):
     """读缓存算技术指标,打印评级排行(不落盘)。"""
     codes, _ = _prep(argv)
@@ -568,14 +593,33 @@ def cmd_pipeline(argv):
 def _picks_from_view(view: dict | None) -> list[str]:
     """从单个 screener view 抽出选出票 code。
 
-    兼容两种落法:规则型 screener 落 `入选清单`([{code,...}]),打分型(策略0)落 `top`。
+    兼容三种落法:
+      - 规则型 screener 落 `入选清单`([{code,...}]);
+      - 打分型(策略0)落 `top`([{code,...}]);
+      - 排行型(策略11·指标条件化状态排序)落 `排行`({维度→[{code,...}]}),
+        无 `入选清单`/`top`——从各维度榜取 code,并集去重保序。
+    只在前两者都缺时才走 `排行` 分支,保证原有两种 view 行为完全不变。
     view 为 None(screener 被 _safe 隔离失败)/字段缺失 → 返回空(不中止汇总)。
     """
     if not isinstance(view, dict):
         return []
-    items = view.get("入选清单") or view.get("top") or []
-    return [x["code"] for x in items
-            if isinstance(x, dict) and x.get("code")]
+    items = view.get("入选清单") or view.get("top")
+    if items:
+        return [x["code"] for x in items
+                if isinstance(x, dict) and x.get("code")]
+    # 排行型:各维度榜(dict of 维度→list)取 code,并集去重保序;元素可为 dict 或 code 串
+    rank = view.get("排行")
+    if isinstance(rank, dict):
+        codes: list[str] = []
+        for lst in rank.values():
+            if not isinstance(lst, list):
+                continue
+            for x in lst:
+                code = x.get("code") if isinstance(x, dict) else x
+                if isinstance(code, str) and code:
+                    codes.append(code)
+        return _dedup(codes)
+    return []
 
 
 def run_screen_all(codes_all: list[str], as_of: str, no_llm: bool = False,
@@ -597,8 +641,9 @@ def run_screen_all(codes_all: list[str], as_of: str, no_llm: bool = False,
       ⑤  补缺数值面(skip-if-cached)→ 新闻(no_llm 跳过)→ 板块指数 → LLM 情绪(no_llm 跳过)→
           组装/事件/多因子/合议 → 横表/选股视图,全对 llm_subset。
     """
-    from tools.pipeline import (screen_box, screen_council, screen_momentum,
-                                 screen_s01, screen_s02)
+    from tools.pipeline import (screen_box, screen_conditional_rank, screen_council,
+                                 screen_max_range, screen_momentum, screen_reversal_turnover,
+                                 screen_s01, screen_s02, screen_semi_factor, screen_strong, screen_volume)
     store.set_active_date(as_of)
     logger.info("===== 全A多策略选股开始(日期 %s,全A %d 只)%s=====",
                 as_of, len(codes_all), "(数据-only)" if no_llm else "")
@@ -618,6 +663,25 @@ def run_screen_all(codes_all: list[str], as_of: str, no_llm: bool = False,
         ("策略2·放量后缩量回踩", lambda: screen_s02.run_s02_screen(codes_all, as_of=as_of, fetch=False)),
         ("策略3·箱体形态", lambda: screen_box.run_box_screen(codes_all, as_of=as_of, fetch=False)),
         ("策略4·动量组合", lambda: screen_momentum.run_momentum_screen(codes_all, as_of=as_of, fetch=False)),
+        # 策略5·半导体多因子:限半导体池 178 只,财报三大表/fundamental 需**触网补采**
+        # (fetch=True),因为主闭环采数值面 collect_values 只对 llm_subset,半导体池票
+        # 大概率不在里面,需 pipeline 自采后才能算 3 因子。
+        ("策略5·半导体多因子", lambda: screen_semi_factor.run_semi_factor_screen(
+            codes_all, as_of=as_of, fetch=True)),
+        # PR#15 提取:S03 最大范围 / S04 量价放量(纯 OHLCV,fetch=False 只读主档)
+        ("S03·最大范围选股", lambda: screen_max_range.run_max_range_screen(codes_all, as_of=as_of, fetch=False)),
+        ("S04·量价放量", lambda: screen_volume.run_volume_screen(codes_all, as_of=as_of, fetch=False)),
+        # S05 最强:硬依赖 Tushare 筹码(cyq_perf),run_strong_screen 自门控——未配 token / 取不到 → 写"需 Tushare"占位 view、不出选股
+        ("S05·最强选股", lambda: screen_strong.run_strong_screen(codes_all, as_of=as_of, fetch=False)),
+        # 策略10·反转低换手组合(候选·前向观测中):纯量价横截面复合(rev5+turn20),fetch=False 只读主档。
+        # 诚实边界见 docs/策略/策略总览:限可交易池+5-10日+TopK≤20;net 绝对水平存幸存者水分,以前向观测为准。
+        ("策略10·反转低换手组合", lambda: screen_reversal_turnover.run_reversal_turnover_screen(
+            codes_all, as_of=as_of, fetch=False)),
+        # 策略11·指标条件化状态排序(状态参考·非alpha):按当日指标状态相似的历史上涨概率排 Top10(1/5/10日),
+        # 成交额破同状态格并列。⚠️需先建 state_pool(数据线在 remote_fetch/主档同步 后 build_state_pool);
+        # 缺池则优雅出空。fetch=False 只读主档。回测聚合无超额、1日弱区分/5-10日近噪声,页面已诚实标注。
+        ("策略11·指标条件化状态排序", lambda: screen_conditional_rank.run_conditional_rank_screen(
+            codes_all, as_of=as_of, fetch=False)),
     ]
     news_topk = int(os.getenv("SCREENALL_NEWS_TOPK", "5"))  # 新闻/情绪 LLM 每策略只取前 N(省 token、去边缘票噪声)
     union: list[str] = []
@@ -693,7 +757,8 @@ _CMDS = {"collect": cmd_collect, "message": cmd_message, "sentiment": cmd_sentim
          "serialize": cmd_serialize, "panel": cmd_panel, "screen": cmd_screen,
          "events": cmd_events, "factor": cmd_factor, "council": cmd_council,
          "context": cmd_context, "pipeline": cmd_pipeline, "screenall": cmd_screenall,
-         "pattern": cmd_pattern, "sepa": cmd_sepa, "analyze": cmd_analyze, "all": cmd_all}
+         "pattern": cmd_pattern, "sepa": cmd_sepa, "strong": cmd_strong,
+         "analyze": cmd_analyze, "all": cmd_all}
 
 
 def main(argv: list[str]) -> int:

@@ -9,11 +9,14 @@ collectors/report/web)无需改动。界面「票池管理」经 tools.pool_serv
 2026-08-06 增补光模块板块(中际旭创/光迅科技,天孚通信由光通信改归光模块)→ 34 只。
 已剔除板块指数「机器人 BK1408」(非个股)。详见 docs/股票清单.md。
 """
+from __future__ import annotations           # PEP 563 延迟注解:X | None / list[X] 在 3.9 也能跑
+
 import json
 import random
 import re
 import threading
 from dataclasses import asdict, dataclass
+from datetime import datetime
 
 from tools.config import settings
 
@@ -31,6 +34,9 @@ class Stock:
     industry: str      # 细分行业
     sector: str        # 大类板块
     market: str = "A"  # 市场:"A"(沪深京) / "HK"(港股)
+    added_at: str = ""  # 入池时刻 ISO 时间戳。缺省"" → 视为"很早"(方案2 远端 remove 时间戳裁决用)
+    # ↑ 向后兼容:旧 stock_pool.json 无此字段的条目 Stock(**d) 用默认""(dataclass 默认值,不报错);
+    #   _SEED 条目同理默认""。读接口(get_pool/get_codes/by_sector/get)签名不变,上层零影响。
 
 
 # 种子池(仅在 JSON 不存在时用于初始化;之后真源是 config/stock_pool.json)。
@@ -200,7 +206,8 @@ def add_stock(code: str, name: str, industry: str, sector: str,
     with _LOCK:
         if any(s.code == code and s.market == market for s in _pool):
             raise ValueError(f"代码已在票池中:{code}({market})")
-        s = Stock(code, name, industry, sector, market)
+        added_at = datetime.now().astimezone().isoformat(timespec="seconds")
+        s = Stock(code, name, industry, sector, market, added_at=added_at)
         _pool.append(s)
         _persist()
     return s

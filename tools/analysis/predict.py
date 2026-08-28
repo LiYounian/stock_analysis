@@ -176,6 +176,51 @@ def bias_recommendation_council(tech: dict, fundflow: dict | None = None,
     return council.bias_council(tech, fundflow, sentiment)
 
 
+# ---------- 消息面提示(第二步·保守版:只加一句话,绝不改任何预测数字)----------
+def _sentiment_note(sentiment: dict | None, tech: dict | None = None) -> str | None:
+    """保守版消息面提示:从 record 的 sentiment 块生成一句人话(看涨/看跌/中性 + 与技术面一致/背离 + 新鲜度)。
+
+    红线:纯文本、仅供留意,**不改任何预测方向/数字**(情景预测/指标条件化/持有期/买卖倾向一律不动)。
+    向后兼容:sentiment 缺失 / 样本数为 0 / 新鲜度=无数据 → 返回 None(不出提示)。
+    方向阈值复用买卖倾向的 ±情绪阈值(_P['情绪偏多/偏空阈值']),不新造参数。
+    与技术面比对用的是**纯技术趋势评级**(tech.signal.评级),避免与已并入情绪的买卖倾向循环。
+    """
+    if not sentiment:
+        return None
+    net = sentiment.get("净情绪分")
+    n = sentiment.get("样本数") or 0
+    if not isinstance(net, (int, float)) or n <= 0:
+        return None
+    fresh = sentiment.get("新鲜度")            # 新鲜/陈旧/无数据/None(旧记录无此字段)
+    if fresh == "无数据":
+        return None
+
+    if net >= _P["情绪偏多阈值"]:
+        mood, mdir = "看涨", "多"
+    elif net <= _P["情绪偏空阈值"]:
+        mood, mdir = "看跌", "空"
+    else:
+        mood, mdir = "中性", "中"
+
+    cnt = f"共 {int(n)} 条"
+    好, 坏 = sentiment.get("利好数"), sentiment.get("利空数")
+    if isinstance(好, (int, float)) and isinstance(坏, (int, float)):
+        cnt += f",利好 {int(好)}/利空 {int(坏)}"
+    parts = [f"消息面{mood}(净情绪 {net:+.2f},{cnt})"]
+
+    # 与纯技术趋势评级 一致/背离(仅在双方都有明确方向时说)
+    rating = (tech.get("signal") or {}).get("评级") if tech else None
+    tdir = {"偏多": "多", "偏空": "空"}.get(rating)   # 中性→None
+    if tdir and mdir in ("多", "空"):
+        parts.append("与技术面一致" if tdir == mdir
+                     else f"与技术面({rating})背离,留意分歧")
+
+    note = "、".join(parts) + "。仅供留意,不改预测。"
+    if fresh == "陈旧":
+        note += "(消息偏旧,仅参考)"
+    return note
+
+
 # ---------- L3:结构位 + 突破 + 情景锚定(纯数据,无 LLM)----------
 def _anchor(price, atr_pct, S, R, rating, 突破, dist_sup, buf, near):
     """按 情景 锚定止损/止盈(数据验证结论:支撑压力作锚点、放量作突破确认)。返回(情景,止损,止盈,依据)。
@@ -242,21 +287,57 @@ def structure_anchor(kline: pd.DataFrame, price: float, atr_pct: float, sr: dict
     buf = max(_P["止损缓冲最小%"], _P["止损缓冲ATR倍数"] * atr_pct) / 100 if atr_pct == atr_pct else 0.01
     情景, sl, tp, why = _anchor(price, atr_pct, S, R, rating, 突破, dist_sup, buf, _P["贴近带%"])
     rr = round((tp - price) / (price - sl), 2) if (sl and tp and price > sl) else None
+    # F2b:MA10/20/60 中位于现价下方者 = 候选止跌锚(动态支撑),按就近排序。
+    # 仅作附加信息,不改上面已被 L3 调参的 swing 锚定 sl/tp;是否升级为主 sl 由回测(F6)定。
+    ma_anchors = []
+    _ma = tech.get("ma") or {}
+    for _name in ("ma10", "ma20", "ma60"):
+        _v = _ma.get(_name)
+        if _v and _v < price:
+            ma_anchors.append({"名称": _name.upper(), "价": round(float(_v), 2),
+                               "距今%": round((price - _v) / price * 100, 2)})
+    ma_anchors.sort(key=lambda x: x["距今%"])
     return {
         "支撑": [round(float(x), 2) for x in S[:2]], "压力": [round(float(x), 2) for x in R[:2]],
         "距支撑%": dist_sup, "距压力%": dist_res, "区间位置%": pos,
         "当日量比": round(vr, 2) if not pd.isna(vr) else None, "放量": 放量,
         "突破": 突破, "趋势": rating, "bias20": tech.get("bias20"),
+        "均线支撑": ma_anchors,   # F2b:候选止跌锚(MA10/20/60 在现价下方者)
         "锚定": {"情景": 情景, "止损位": sl, "止盈位": tp, "盈亏比": rr, "依据": why},
     }
 
 
+# ---------- 指标条件化预测(F3+F4)----------
+def _conditional_block(kline: pd.DataFrame, tech: dict, sentiment: dict | None = None) -> dict:
+    """指标条件化预测合并块:每 horizon = 方向/置信度(F4) + 条件化上涨概率/区间/期望/相似样本数/放宽层级(F3)。
+
+    与无条件「情景预测」并列、供对照。池缺失/异常时 conditional_scenarios 内部优雅退回,绝不让 predict 崩。
+    激进版(第二步):若有根源结构性消息信号,对 1/5日方向做后验倾斜(方向_修正/上涨概率%_修正/是否倾斜);
+    k=0 或无信号时逐字段等价纯技术(kill-switch)。
+    """
+    try:
+        from tools.analysis import conditional_predict as cpred
+        idx = cpred.get_pool_index()               # 进程内缓存的索引(O(log n) 查询)
+        as_of = kline["date"].iloc[-1]
+        cond = cpred.conditional_scenarios(kline, tech, idx, as_of)
+        P = THRESHOLDS["指标条件化"]
+        signal = cpred.root_structural_signal(sentiment)   # 根源(政策+公司公告)+结构性净信号[-1,1]或None
+        dv = cpred.direction_view(
+            cond, signal=signal, k=P.get("倾斜增益k", 0.0),
+            tilt_horizons=tuple(f"{n}日" for n in P.get("倾斜持有期", [1, 5])))
+        return {k: {**dv.get(k, {}), **cond[k]} for k in cond}
+    except Exception:
+        return {"error": "指标条件化预测暂不可用"}
+
+
 # ---------- 汇总 ----------
 def predict(kline: pd.DataFrame, tech: dict, fundflow: dict | None = None,
-            sentiment: dict | None = None) -> dict:
+            sentiment: dict | None = None, with_conditional: bool = True) -> dict:
     """汇总预测/推荐。kline 需含 date/high/low/close/volume;tech=technical.compute 输出。
 
     sentiment 为 record 的 sentiment 块(可选),透传给买卖倾向作一维并入;None 时行为不变。
+    with_conditional:是否附「指标条件化预测」块(F3+F4)。live/serialize 默认 True;
+      旧两条线回测(backtest_predict)传 False 省去逐调用查池(F6 条件化 A/B 走独立高效路径)。
     """
     if kline is None or len(kline) < 30:
         return {"error": "数据不足", "n": 0 if kline is None else len(kline)}
@@ -265,7 +346,7 @@ def predict(kline: pd.DataFrame, tech: dict, fundflow: dict | None = None,
     atr_pct = atr_val / price * 100 if price else float("nan")
     sr = support_resistance(kline)
 
-    return {
+    out = {
         "现价": round(price, 2),
         "atr": round(atr_val, 3),
         "atr_pct": round(atr_pct, 2),
@@ -273,7 +354,11 @@ def predict(kline: pd.DataFrame, tech: dict, fundflow: dict | None = None,
         **sr,
         "持有期建议": stop_targets(price, atr_pct),
         "结构位": structure_anchor(kline, price, atr_pct, sr, tech),  # L3:支撑压力/突破/情景锚定
-        "情景预测": scenarios(kline),
+        "情景预测": scenarios(kline),                       # 无条件历史频率(保留作对照)
         "买卖倾向": bias_recommendation(tech, fundflow, sentiment),
+        "消息面提示": _sentiment_note(sentiment, tech),   # 保守版:纯文本提示,不改上面任何数字
         "免责": DISCLAIMER,
     }
+    if with_conditional:
+        out["指标条件化预测"] = _conditional_block(kline, tech, sentiment)   # F3+F4(+激进版倾斜)
+    return out

@@ -160,6 +160,102 @@ def test_workers_one_is_serial(monkeypatch, tmp_path):
     assert [e["echo"] for e in events] == list(range(5))
 
 
+# ---------- 消息持续性研判接入(attach_persistence,hermetic)----------
+def _persist_events():
+    """构造已抽取+归类的新闻事件:2 公司行为 + 1 舆情 + 1 error 公司行为。"""
+    return [
+        {"事件类型": "业绩", "层": "公司行为", "影响方向": "利好", "标题": "n0"},
+        {"事件类型": "市场传闻", "层": "舆情", "影响方向": "中性", "标题": "n1"},
+        {"事件类型": "合作", "层": "公司行为", "影响方向": "利空", "标题": "n2"},
+        {"error": "boom", "层": "公司行为", "标题": "n3"},
+    ]
+
+
+def _persist_items():
+    return [{"title": f"n{i}", "content": f"c{i}"} for i in range(4)]
+
+
+class _FakePersist:
+    """假 classify_batch:按索引回不同持续性,记录收到的文本(验证只喂公司行为&≤t)。"""
+    def __init__(self):
+        self.seen_texts = []
+
+    def classify_batch(self, texts, client=None, workers=None):
+        self.seen_texts = list(texts)
+        out = []
+        for t in texts:                      # n0=结构性利好, n2=短暂
+            if "n0" in t:
+                out.append({"持续性": "结构性持续", "方向": "利好", "印证强度": "强", "依据": "在手订单饱满"})
+            else:
+                out.append({"持续性": "短暂事件", "方向": "利空", "印证强度": "弱", "依据": "一次性"})
+        return out
+
+
+def _patch_persist(monkeypatch, fake):
+    import tools.analysis.news_persistence as npst
+    monkeypatch.setattr(npst, "classify_batch", fake.classify_batch)
+    monkeypatch.setattr(ev.settings, "SENTIMENT_PERSISTENCE_ON", True)
+
+
+def test_attach_persistence_writes_fields_on_company_events_only(monkeypatch):
+    events, items, fake = _persist_events(), _persist_items(), _FakePersist()
+    _patch_persist(monkeypatch, fake)
+    roll = ev.attach_persistence(events, items)
+    # 只对无 error 的公司行为事件(index 0,2)分类,喂给分类器的正好这两条文本
+    assert fake.seen_texts == ["标题:n0\n正文:c0", "标题:n2\n正文:c2"]
+    assert events[0]["持续性"] == "结构性持续" and events[0]["印证强度"] == "强"
+    assert events[0]["持续性方向"] == "利好" and events[0]["持续性依据"] == "在手订单饱满"
+    assert events[2]["持续性"] == "短暂事件"
+    # 舆情(1)与 error 公司行为(3)不写任何持续性字段
+    assert "持续性" not in events[1] and "持续性" not in events[3]
+    # rollup 计数正确
+    assert roll == {"结构性利好数": 1, "结构性利空数": 0, "短暂事件数": 1,
+                    "已分类数": 2, "最强结构印证": "强"}
+
+
+def test_attach_persistence_does_not_touch_frozen_aggregate(monkeypatch):
+    events, items, fake = _persist_events(), _persist_items(), _FakePersist()
+    before = ev.aggregate_sentiment(events)         # 附加前的净情绪/样本数
+    _patch_persist(monkeypatch, fake)
+    ev.attach_persistence(events, items)
+    after = ev.aggregate_sentiment(events)          # 附加后应完全一致(冻结)
+    assert before == after
+
+
+def test_attach_persistence_no_future_function_only_pinned_texts(monkeypatch):
+    """无未来函数:分类器只收到传入(≤t)items 的文本,条数=公司行为条数,不多喂。"""
+    events, items, fake = _persist_events(), _persist_items(), _FakePersist()
+    _patch_persist(monkeypatch, fake)
+    ev.attach_persistence(events, items)
+    assert len(fake.seen_texts) == 2                # 恰好 2 条公司行为,无越界/无外部拉取
+    # index 对齐:喂进去的文本正是 items[0]/items[2] 的 title+content
+    assert all(x in ("标题:n0\n正文:c0", "标题:n2\n正文:c2") for x in fake.seen_texts)
+
+
+def test_attach_persistence_off_switch_writes_nothing(monkeypatch):
+    events, items, fake = _persist_events(), _persist_items(), _FakePersist()
+    import tools.analysis.news_persistence as npst
+    monkeypatch.setattr(npst, "classify_batch", fake.classify_batch)
+    monkeypatch.setattr(ev.settings, "SENTIMENT_PERSISTENCE_ON", False)
+    roll = ev.attach_persistence(events, items)
+    assert roll == {} and fake.seen_texts == []     # 关闭:不调分类器
+    assert all("持续性" not in e for e in events)
+
+
+def test_attach_persistence_all_degraded_returns_empty(monkeypatch):
+    """分类器全降级(持续性=None)→ 不写字段、rollup 空(优雅退化)。"""
+    events, items = _persist_events(), _persist_items()
+
+    class _Deg:
+        def classify_batch(self, texts, client=None, workers=None):
+            return [{"持续性": None, "error": "x"} for _ in texts]
+    import tools.analysis.news_persistence as npst
+    monkeypatch.setattr(npst, "classify_batch", _Deg().classify_batch)
+    monkeypatch.setattr(ev.settings, "SENTIMENT_PERSISTENCE_ON", True)
+    assert ev.attach_persistence(events, items) == {}
+    assert all("持续性" not in e for e in events)
+
+
 @pytest.mark.skipif(not lc.is_configured(), reason="LLM env 未配置")
 def test_live_extract_news():
     c = lc.get_client()

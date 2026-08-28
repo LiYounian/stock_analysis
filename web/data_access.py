@@ -28,6 +28,55 @@ def json_safe(obj):
     return obj
 
 
+_SOURCE_LABELS = {
+    "tushare_daily": "Tushare",
+    "tushare_daily+adj_factor": "Tushare",
+    "baostock": "baostock(免费)",
+    "akshare_spot": "akshare/东财(免费)",
+    "tencent_hk": "腾讯港股(免费)",
+    "fallback_advance": "腾讯/新浪(免费回退)",
+}
+
+
+def current_data_source(sample: int = 20) -> dict:
+    """当前行情来源徽标(**中性提示,非报错**):抽样主档 meta,取最新交易日对应的来源。
+
+    读**已落盘的** meta.source(实际用了哪个源的地面真相)+ 是否配置了 Tushare,拼出一个
+    供 base.html 页脚展示的中性徽标:标明当前行情来源、最新交易日,以及"配了 Tushare 但当前
+    取数回退到免费源"这一情形。无主档 / 读失败一律给中性占位,**绝不抛异常**(展示层不炸)。
+
+    返回 {tushare_configured, source, label, last_date, fell_back}。
+    """
+    try:
+        from tools.config import settings
+        configured = bool(getattr(settings, "TUSHARE_ENABLED", False))
+    except Exception:
+        configured = False
+    info = {"tushare_configured": configured, "source": None,
+            "label": "免费源", "last_date": None, "fell_back": False}
+    try:
+        codes = store.list_master_codes()
+    except Exception:
+        codes = []
+    best = None  # (last_date_str, source)
+    for c in (codes or [])[:sample]:
+        try:
+            meta = store.get_master_kline_meta(c) or {}
+        except Exception:
+            continue
+        ld, src = meta.get("last_date"), meta.get("source")
+        if not ld:
+            continue
+        if best is None or str(ld) > str(best[0]):
+            best = (str(ld), src)
+    if best:
+        info["last_date"], info["source"] = best[0], best[1]
+        info["label"] = _SOURCE_LABELS.get(best[1], best[1] or "免费源")
+    is_tushare = str(info["source"] or "").startswith("tushare")
+    info["fell_back"] = bool(configured and not is_tushare)
+    return info
+
+
 def _num(v, default: float = 0.0) -> float:
     """排序键净化:None / 非数 / NaN / Inf → default。
 
@@ -358,19 +407,30 @@ def selection_page(date: str = "latest") -> dict:
     strategy3 = _strategy3_section(recs, date)     # 箱体形态(全A view,待验证)
     strategy4 = _strategy4_section(recs, date)     # 动量组合(全A view,原策略2 改号 2→4)
     strategy5 = _strategy5_section(recs, date)     # 自选池小市值(web 层实时跑策略D,不读 view)
-    strategy6 = _strategy6_section(recs, date)     # 自选池半导体多因子(web 层实时跑策略E,不读 view)
+    strategy6 = _strategy6_section(recs, date)     # 半导体多因子(优先读 view「半导体多因子」,缺则实时兜底)
     # config 兜底:自选池无记录时,退用策略0 view 里带的 council config(前端合成口径真源)
     if not config and strategy0.get("config"):
         config = strategy0["config"]
 
-    # 综合选股:7 策略入选代码并集(前端按勾选实时重算;后端给全并集 + 每票命中来源)
+    # 综合选股:11 策略(策略0-10)入选代码并集(前端按勾选实时重算;后端给全并集 + 每票命中来源)
+    strategy_mr = _strategy_max_range_section(recs, date)   # S03 最大范围(PR#15)
+    strategy_vol = _strategy_volume_section(recs, date)     # S04 量价放量(PR#15,3 子信号)
+    strategy_strong = _strategy_strong_section(recs, date)  # S05 最强(PR#15,Tushare-only)
+    strategy_rt = _strategy_reversal_turnover_section(recs, date)  # 策略10 反转低换手(候选·前向观测中)
+    strategy_cr = _strategy_conditional_rank_section(recs, date)   # 策略11 指标条件化状态排序(状态参考·非alpha)
     combined = _combined_section(strategy0, strategy1, strategy2, strategy3,
-                                 strategy4, strategy5, strategy6, recs)
+                                 strategy4, strategy5, strategy6, recs,
+                                 strategy_mr=strategy_mr, strategy_vol=strategy_vol,
+                                 strategy_strong=strategy_strong, strategy_rt=strategy_rt,
+                                 strategy_cr=strategy_cr)
 
     return {"rows": pool_rows, "total": len(recs),
             "combined": combined, "strategy0": strategy0, "strategy1": strategy1,
             "strategy2": strategy2, "strategy3": strategy3, "strategy4": strategy4,
             "strategy5": strategy5, "strategy6": strategy6,
+            "strategy_mr": strategy_mr, "strategy_vol": strategy_vol,
+            "strategy_strong": strategy_strong, "strategy_rt": strategy_rt,
+            "strategy_cr": strategy_cr,
             "config": config or {}, "as_of": as_of(date)}
 
 
@@ -500,25 +560,209 @@ def _strategy4_section(recs: dict, date: str = "latest") -> dict:
     return _view_picks_section("动量组合", recs, date)
 
 
-def _strategy6_section(recs: dict, date: str = "latest", top_k: int = 8) -> dict:
-    """策略6「半导体多因子」区块:web 层实时跑 tools.strategy.semi_factor 策略E。
+def _strategy_max_range_section(recs: dict, date: str = "latest") -> dict:
+    """S03「最大范围选股」区块(PR#15):读全A screener view「最大范围选股」(screen_max_range 产出)。
 
-    与策略5 同套路(不读预落盘 view,records 现算);**限池由 strategy 自身完成**——
-    读 config/semi_universe.json(申万二级 801081 半导体 178 只),records ∩ 池 才进因子。
-    3 因子:研发/营收(权 0.6)+ 研发/市值(权 0.2)+ 营收增速(权 0.2)按 winsor+zscore 加权。
-    数据依赖 financial.derived(研发费用率/营收增速,M2 财报块产出)+ valuation.mktcap_yi。
-
-    **本机 records 通常只覆盖自选池 → records ∩ 半导体池 常为空**;远端全A 闭环采集后
-    该策略才会真正出结果。空样本时 present=True/rows=[](明确降级,不假装没跑)。
+    schema:{as_of, 扫描数, 有效样本, 入选数, 入选清单:[{code, 明细}]};看多型。
+    与策略2/3/4 同构,复用 _view_picks_section;view 缺失 → present=False(前端「待运行」)。
     """
+    return _view_picks_section("最大范围选股", recs, date)
+
+
+def _strategy_reversal_turnover_section(recs: dict, date: str = "latest", cap: int = 30) -> dict:
+    """策略10「反转低换手组合」区块(候选·前向观测中):读全A screener view「反转低换手组合」
+    (screen_reversal_turnover 产出),入选清单带因子明细(rev5/turn20/复合分/成交额)。
+
+    schema:{as_of, 扫描数, 有效样本, 跳过, 入选数, 入选清单:[{code, 综合分, rev, turn,
+    amount_wan, rev_z, turn_z}], 权重, 参数}。view 缺失 → present=False(前端「策略10 待运行」)。
+
+    ⚠️ 诚实口径(不夸大):回测仅在「可交易池(成交额前50%)+ 5-10日持有 + TopK≤20」内 net 转正、
+    相对纯 rev5 有稳健增量;net 绝对水平存幸存者偏差水分(样本仅当前在市票),**以前向观测为准,
+    当前不作『已验证可用』推荐,状态=前向观测中**。见 docs/策略/策略总览_定义计算与回测.md 策略10 行。
+    """
+    empty = {"present": False, "as_of": as_of(date), "扫描数": None, "有效": None,
+             "入选数": None, "rows": [], "picks": []}
+    try:
+        v = store.get_view("反转低换手组合", date=date)
+    except FileNotFoundError:
+        return empty
+    if not isinstance(v, dict):
+        return empty
+    rows, picks = [], []
+    for item in v.get("入选清单", []) or []:
+        if not isinstance(item, dict):
+            continue
+        code = item.get("code")
+        if not code or len(rows) >= cap:
+            continue
+        meta = (recs.get(code) or {}).get("meta") or {}
+        rev = item.get("rev")            # rev = -(近5日涨幅);>0=近5日下跌
+        turn = item.get("turn")          # turn = -(近20日均换手);均换手% = -turn
+        picks.append(code)
+        rows.append({
+            "code": code, "name": _name(recs, code),
+            "industry": meta.get("industry") or meta.get("sector"),
+            "综合分": item.get("综合分"),
+            "近5日跌幅%": round(rev * 100, 2) if isinstance(rev, (int, float)) else None,
+            "均换手%": round(-turn, 3) if isinstance(turn, (int, float)) else None,
+            "成交额万元": item.get("amount_wan"),
+        })
+    return {
+        "present": True, "as_of": v.get("as_of") or as_of(date),
+        "扫描数": v.get("扫描数"), "有效": v.get("有效样本", v.get("有效")),
+        "入选数": v.get("入选数", len(v.get("入选清单", []) or [])),
+        "rows": rows, "picks": picks,
+        "权重": v.get("权重"), "参数": v.get("参数"),
+    }
+
+
+def _strategy_conditional_rank_section(recs: dict, date: str = "latest", cap: int = 10) -> dict:
+    """策略11「指标条件化状态排序」区块(状态参考·非alpha):读全A screener view「指标条件化状态排序」
+    (screen_conditional_rank 产出),1/5/10 日三维度各 Top10。
+
+    ⚠️ 诚实口径:上涨概率%/置信度为**指标状态格级**(同状态的票取值相同),Top 由 成交额(流动性)破并列——
+    即"最强历史状态格里挑流动性好的票",**非个股 alpha 排名**;回测聚合无超额、1日弱区分、5/10日近噪声。
+    view 缺失 → present=False(前端「策略11 待运行」)。综合选股并集取 1日 榜。
+    """
+    horizons = ["1日", "5日", "10日"]
+    empty = {"present": False, "as_of": as_of(date), "扫描数": None, "有效样本": {},
+             "排行": {h: [] for h in horizons}, "picks": []}
+    try:
+        v = store.get_view("指标条件化状态排序", date=date)
+    except FileNotFoundError:
+        return empty
+    if not isinstance(v, dict):
+        return empty
+    src = v.get("排行") or {}
+    out_rank: dict[str, list] = {}
+    picks: list[str] = []
+    for h in horizons:
+        rows = []
+        for item in (src.get(h) or [])[:cap]:
+            if not isinstance(item, dict) or not item.get("code"):
+                continue
+            code = item["code"]
+            meta = (recs.get(code) or {}).get("meta") or {}
+            rows.append({
+                "code": code, "name": _name(recs, code),
+                "industry": meta.get("industry") or meta.get("sector"),
+                "上涨概率%": item.get("上涨概率%"), "方向": item.get("方向"),
+                "置信度": item.get("置信度"), "相似样本数": item.get("相似样本数"),
+                "成交额万元": item.get("成交额万元"), "过下限": item.get("过下限"),
+            })
+        out_rank[h] = rows
+        if h == "1日":
+            picks = [r["code"] for r in rows]
+    return {
+        "present": True, "as_of": v.get("as_of") or as_of(date),
+        "扫描数": v.get("扫描数"), "有效样本": v.get("有效样本") or {},
+        "排行": out_rank, "picks": picks, "命名": v.get("命名"),
+    }
+
+
+def _strategy_volume_section(recs: dict, date: str = "latest") -> dict:
+    """S04「量价放量」区块(PR#15):读全A screener view「量价放量」(screen_volume 产出)。
+
+    schema:{as_of, 扫描数, 有效样本, 入选数, 子信号:[...], 入选清单:[{code, 组合:[子信号], 明细}]}。
+    `组合` = 命中的子信号(单日/低位/连续放量),供页面 3 个子信号勾选框做并集过滤
+    (复用 combined-section 勾选并集,非 council 投票)。view 缺失 → present=False。
+    """
+    sec = _view_picks_section("量价放量", recs, date)
+    # 透出子信号清单(供前端渲染勾选框);缺 view 时给默认三项
+    try:
+        v = store.get_view("量价放量", date=date)
+        sec["子信号"] = list((v or {}).get("子信号") or ["单日放量", "低位放量", "连续放量"])
+    except FileNotFoundError:
+        sec["子信号"] = ["单日放量", "低位放量", "连续放量"]
+    return sec
+
+
+def _strategy_strong_section(recs: dict, date: str = "latest") -> dict:
+    """S05「最强选股」区块(PR#15,**Tushare-only**):读 view「最强选股」。
+
+    该策略硬依赖 Tushare 筹码获利比例(cyq_perf),免费源拿不到。screen_strong 在未配 token /
+    筹码取不到时写 present=False + 提示的占位 view;此处透出该提示(面板显示"需 Tushare",非报错)。
+    正常出结果时按标准 入选清单 shape 解析。缺 view / 未配 → present=False + 提示。
+    """
+    try:
+        from tools.config import settings
+        configured = bool(getattr(settings, "TUSHARE_ENABLED", False))
+    except Exception:
+        configured = False
+    notice = {"present": False, "需要Tushare": not configured, "rows": [], "picks": [],
+              "提示": ("「最强选股」依赖 Tushare 筹码获利比例(cyq_perf),需配置 TUSHARE_TOKEN 才出;"
+                       "当前未配置。" if not configured else "S05 待运行或本日无筹码数据。"),
+              "as_of": as_of(date)}
+    try:
+        v = store.get_view("最强选股", date=date)
+    except FileNotFoundError:
+        return notice
+    if not isinstance(v, dict):
+        return notice
+    if not v.get("present", True):     # 占位提示 view(未配 token / 筹码取不到)
+        return {"present": False, "需要Tushare": v.get("需要Tushare", not configured),
+                "提示": v.get("提示"), "rows": [], "picks": [], "as_of": v.get("as_of") or as_of(date)}
+    sec = _view_picks_section("最强选股", recs, date)
+    sec["需要Tushare"] = False
+    return sec
+
+
+def _strategy6_section(recs: dict, date: str = "latest", top_k: int = 8) -> dict:
+    """策略6「半导体多因子」区块:优先读全A screener view「半导体多因子」(screen_semi_factor
+    产出),缺 view 才回退 web 层实时跑(限半导体池,records ∩ 池)。
+
+    数据链闭环后(cmd_all/screenall):view 覆盖全A 半导体池 178 只真实结果;
+    仅当 view 不存在时(如从未跑过 pipeline)才走实时算兜底,规避页面空。
+    3 因子:研发/营收(权 0.6)+ 研发/市值(权 0.2)+ 营收增速(权 0.2);限池由策略自身完成
+    (读 config/semi_universe.json 178 只)。
+    """
+    # 优先读预落盘 view(schema 与 screen_semi_factor 产出一致)
+    try:
+        v = store.get_view("半导体多因子", date=date)
+    except FileNotFoundError:
+        v = None
+    if isinstance(v, dict) and v.get("入选清单"):
+        rows = []
+        picks = []
+        for item in v.get("入选清单", []) or []:
+            if not isinstance(item, dict):
+                continue
+            code = item.get("code")
+            if not code:
+                continue
+            d = item.get("明细") or {}
+            meta = (recs.get(code) or {}).get("meta") or {}
+            picks.append(code)
+            rows.append({
+                "code": code, "name": _name(recs, code),
+                "industry": meta.get("industry") or meta.get("sector") or item.get("行业"),
+                "综合分": d.get("综合分"),
+                "rd_rev": d.get("rd_rev"),
+                "rd_mcap": d.get("rd_mcap"),
+                "rev_yoy": d.get("rev_yoy"),
+            })
+        return {
+            "present": True, "as_of": v.get("as_of") or as_of(date),
+            "扫描数": v.get("扫描数"),
+            "universe_size": v.get("universe_size"),
+            "样本数": v.get("有效样本"),
+            "入选数": v.get("入选数", len(rows)),
+            "top_k": v.get("top_k", top_k),
+            "权重": v.get("权重"),
+            "note": None,
+            "rows": rows,
+            "picks": picks,
+            "source": "view",
+        }
+
+    # 回退:实时跑(records ∩ 半导体池;数据链未跑通时兜底)
     from tools.strategy import registry as _reg
     from tools.strategy import semi_factor as _sf  # noqa: F401 触发注册
 
     empty = {"present": False, "as_of": as_of(date), "扫描数": 0, "入选数": 0,
-             "rows": [], "picks": [], "universe_size": None, "note": None}
+             "rows": [], "picks": [], "universe_size": None, "note": None, "source": "live"}
     if not recs:
         return empty
-
     try:
         out = _reg.run("策略E_半导体多因子", recs, top_k=top_k)
     except Exception:                                    # noqa: BLE001
@@ -549,6 +793,7 @@ def _strategy6_section(recs: dict, date: str = "latest", top_k: int = 8) -> dict
         "note": out.get("note"),
         "rows": rows,
         "picks": list(out.get("codes") or []),
+        "source": "live",
     }
 
 
@@ -603,15 +848,20 @@ def _strategy5_section(recs: dict, date: str = "latest", top_k: int = 3) -> dict
 
 def _combined_section(strategy0: dict, strategy1: dict, strategy2: dict,
                       strategy3: dict, strategy4: dict, strategy5: dict,
-                      strategy6: dict, recs: dict) -> dict:
-    """【综合选股】:7 策略入选代码的并集(去重),每票标注命中来源(被哪几个策略选中)。
+                      strategy6: dict, recs: dict, *,
+                      strategy_mr: dict | None = None,
+                      strategy_vol: dict | None = None,
+                      strategy_strong: dict | None = None,
+                      strategy_rt: dict | None = None,
+                      strategy_cr: dict | None = None) -> dict:
+    """【综合选股】:11 策略(策略0-10)入选代码的并集(去重),每票标注命中来源(被哪几个策略选中)。
 
     后端产出**全并集**(所有可用策略入选代码);前端按勾选的策略实时过滤 + 重算命中来源
     (一个都没勾 → 前端显示"无")。默认全勾(展示全并集)。
     name 走 code_name 回退;行业优先中心记录 meta,再回退策略0 view 自带行业。
 
     策略0~4 入选代码均来自各自全A screener 预落盘 view(与页面各区块展示口径一致,已截到 cap);
-    策略5 = 自选池小市值 · 策略6 = 自选池半导体多因子(均 web 层实时跑,不读 view)。
+    策略5 = 自选池小市值(web 实时跑) · 策略6 = 半导体多因子(优先读 view「半导体多因子」,缺则实时兜底)。
     """
     s0_codes = [r["code"] for r in strategy0.get("rows", []) if r.get("code")]
     s1_codes = [r["code"] for r in strategy1.get("rows", []) if r.get("code")]
@@ -620,6 +870,11 @@ def _combined_section(strategy0: dict, strategy1: dict, strategy2: dict,
     s4_codes = list((strategy4 or {}).get("picks") or [])
     s5_codes = list((strategy5 or {}).get("picks") or [])
     s6_codes = list((strategy6 or {}).get("picks") or [])
+    s7_codes = list((strategy_mr or {}).get("picks") or [])     # S03 最大范围
+    s8_codes = list((strategy_vol or {}).get("picks") or [])    # S04 量价放量
+    s9_codes = list((strategy_strong or {}).get("picks") or [])  # S05 最强(Tushare-only)
+    s10_codes = list((strategy_rt or {}).get("picks") or [])     # 策略10 反转低换手(候选·前向观测中)
+    s11_codes = list((strategy_cr or {}).get("picks") or [])     # 策略11 指标条件化状态排序(1日榜;状态参考·非alpha)
     # 行业 hint:策略0 view 自带行业(全A票多无中心记录)
     s0_industry = {r["code"]: r.get("industry") for r in strategy0.get("rows", [])}
 
@@ -627,7 +882,8 @@ def _combined_section(strategy0: dict, strategy1: dict, strategy2: dict,
     order: list[str] = []
     for key, codes in (("策略0", s0_codes), ("策略1", s1_codes), ("策略2", s2_codes),
                        ("策略3", s3_codes), ("策略4", s4_codes), ("策略5", s5_codes),
-                       ("策略6", s6_codes)):
+                       ("策略6", s6_codes), ("策略7", s7_codes), ("策略8", s8_codes),
+                       ("策略9", s9_codes), ("策略10", s10_codes), ("策略11", s11_codes)):
         for c in codes:
             if c not in sources:
                 sources[c] = []
@@ -679,6 +935,31 @@ def _combined_section(strategy0: dict, strategy1: dict, strategy2: dict,
                   "3 因子 winsor+zscore 加权——研发/营收(权 0.6)+ 研发/市值(权 0.2)+ 营收增速(权 0.2);"
                   "重研发投入 + 高增长。web 层实时跑,不读预落盘 view;"
                   "本机 records 常只覆盖自选池,需远端全A 闭环采到半导体票后才出结果。"},
+        {"key": "策略7", "label": "最大范围选股", "codes": s7_codes,
+         "available": bool((strategy_mr or {}).get("present")),
+         "title": "PR#15 提取(看多):高位强势(距250日高≥82%)+ 均线多头(>MA10/20/50)+ "
+                  "近32日有过单日大阳(>6%)+ 当日未大跌(回撤≤4%)+ 非北交所。纯 OHLC 全A筛选,读预落盘 view。"},
+        {"key": "策略8", "label": "量价放量", "codes": s8_codes,
+         "available": bool((strategy_vol or {}).get("present")),
+         "title": "PR#15 提取(看多):3 个可勾选子信号——单日放量 / 低位放量 / 连续放量,"
+                  "命中任一即入选,与策略2 放量后缩量回踩互补。全A筛选,读预落盘 view。"},
+        {"key": "策略9", "label": "最强选股", "codes": s9_codes,
+         "available": bool((strategy_strong or {}).get("present")),
+         "title": "PR#15 提取(看多,Tushare-only):六均线多头 + 11日内≥2日涨≥5% + 52周高90%~120% + "
+                  "筹码高度获利(winner_rate>95% 或 HIGH≥cost_95pct)。依赖 Tushare cyq_perf 筹码,"
+                  "未配 TUSHARE_TOKEN 时不出(面板提示需 Tushare)。"},
+        {"key": "策略10", "label": "反转低换手(前向观测中)", "codes": s10_codes,
+         "available": bool((strategy_rt or {}).get("present")),
+         "title": "候选策略(前向观测中,非已验证):纯量价横截面复合——近5日跌得多(反转)+ 近20日换手冷清"
+                  "(低换手),各自 winsor+zscore 后等权取 TopK。回测仅在「可交易池(成交额前50%)+ 5-10日持有"
+                  "+ TopK≤20」内 net 转正、相对纯 rev5 有稳健增量;net 绝对水平存幸存者偏差水分(样本仅当前"
+                  "在市票),**以前向观测为准,当前不作『已验证可用』推荐**。全A筛选,读预落盘 view。"},
+        {"key": "策略11", "label": "指标条件化状态排序(状态参考)", "codes": s11_codes,
+         "available": bool((strategy_cr or {}).get("present")),
+         "title": "⚠️ 状态排序参考,非已验证 alpha:按当日指标状态相似的历史上涨概率排序(1日榜)。"
+                  "上涨概率%/置信度为**指标状态格级**(同状态票取值相同),Top 由近20日成交额均值(流动性)破并列——"
+                  "即『最强历史状态格里挑流动性好的票』,非个股涨跌排名。回测聚合无显著超额、方向多中性、"
+                  "1日弱区分/5-10日近噪声;不作胜率/涨跌承诺。全A筛选,读预落盘 view。"},
     ]
     return {"strategies": strategies, "rows": rows}
 
@@ -960,13 +1241,17 @@ def sepa_page(date: str = "latest") -> dict:
     pool = _v("SEPA合格池")
     watch = _v("SEPA观察池")
     radar = _v("SEPA雷达")
+    # 合格池:view 存全量(保入池天数续期+全量上传),展示层按趋势分(60日涨幅)降序取 Top10。
+    _pool_rows = pool.get("rows") or []
+    _pool_top = sorted(_pool_rows, key=lambda r: r.get("趋势分") or 0.0, reverse=True)[:10]
     return {
         "as_of": pool.get("as_of") or as_of(date),
         "session": pool.get("session") or watch.get("session") or "",
-        "合格": pool.get("rows") or [],
+        "合格": _pool_top,
         "观察": watch.get("rows") or [],
         "雷达": radar.get("文本") or watch.get("雷达") or "",
-        "合格数": pool.get("合格数") or len(pool.get("rows") or []),
+        "合格数": pool.get("合格数") or len(_pool_rows),
+        "展示数": len(_pool_top),
         "观察数": watch.get("观察数") or len(watch.get("rows") or []),
         "规则": pool.get("规则") or "",
     }

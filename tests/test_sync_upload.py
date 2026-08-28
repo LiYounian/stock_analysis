@@ -110,6 +110,45 @@ def test_sign_and_post_no_retry_on_4xx():
     assert len(calls) == 1 and sleeps == []              # 4xx 永久失败,不重试
 
 
+def test_sign_and_post_retries_on_429():
+    """回归(2026-08-24事故):429 限流须**可重试**(退避≥限流窗口),不能当永久 4xx 直接丢。
+    历史:每日尾部全A view 分片撞远端 120/60s 限流被 429,旧码 status<500 当永久失败 → 面板天天"待运行"。"""
+    seq = [(429, {"error": "rate"}), (429, {"error": "rate"}), (200, {"ok": True})]
+    calls, sleeps = [], []
+
+    def post(url, token, env):
+        calls.append(env["meta"]["nonce"])
+        return seq[len(calls) - 1]
+
+    ok, status, _ = upload.sign_and_post(
+        {"records": {}, "views": {}, "code_views": {}},
+        {"date": "2026-08-24", "source": "s", "key_id": "k1", "sig_alg": "HMAC-SHA256"},
+        "K", "http://x", "t", post, retries=5, base_delay=1.0, sleep_fn=sleeps.append,
+        rate_window_s=60.0)
+    assert ok is True and status == 200                  # 429→429→200,重试到成功
+    assert len(calls) == 3
+    assert sleeps and all(s >= 60.0 for s in sleeps)     # 429 退避≥限流窗口(非短指数)
+    assert len(set(calls)) == 3                          # 每次新 nonce(防重放)
+
+
+def test_upload_date_throttles_sent_shards(tmp_path):
+    """节流:实际发送的分片之间按 min_interval 间隔发(压到远端限流以内、防尾部 429);跳过的不计间隔。"""
+    analysis = tmp_path / "analysis"
+    _seed_analysis(analysis, "2026-08-07")
+    sleeps = []
+
+    def post(url, token, env):
+        return 200, {"ok": True}
+
+    r = upload.upload_date("2026-08-07", url="http://x", token="t", source="s",
+                           key_id="k1", key="K", analysis_dir=analysis,
+                           post_fn=post, retries=0, base_delay=0,
+                           sleep_fn=sleeps.append, min_interval=0.5)
+    n = r["summary"]["total"]
+    assert n >= 2                                        # 至少两个分片才有间隔
+    assert len([s for s in sleeps if s == 0.5]) == n - 1  # 发 n 片 → 节流 n-1 次
+
+
 def test_sign_and_post_sanitizes_nan_to_valid_json():
     """回归:分片含 NaN/Inf(如 panel 视图 89 个 NaN)时,签名前须清成 null。
 
@@ -260,3 +299,158 @@ def test_upload_timeout_configurable(monkeypatch):
     monkeypatch.setenv("SYNC_UPLOAD_TIMEOUT_S", "not-a-number")
     upload._default_post("https://h/ingest", "tok", {"a": 1})
     assert captured["timeout"] == 120.0                  # 非法值回落默认
+
+
+def test_upload_date_only_view_single_shard(tmp_path):
+    """只补传(策略9傍晚补跑用):only_shards 只发指定 view 分片,record 与其它 view 一概不发。
+
+    锁死"零外溢":傍晚只补「最强选股」时,绝不能把 record/panel 等分片也重传出去。
+    """
+    analysis = tmp_path / "analysis"
+    d = analysis / "2026-08-25"
+    d.mkdir(parents=True)
+    (d / "000021.json").write_text(json.dumps({"meta": {"code": "000021"}}), encoding="utf-8")
+    (d / "600519.json").write_text(json.dumps({"meta": {"code": "600519"}}), encoding="utf-8")
+    (d / "panel.json").write_text(json.dumps({"rows": []}), encoding="utf-8")
+    (d / "最强选股.json").write_text(json.dumps({"入选数": 5, "入选清单": []}), encoding="utf-8")
+    posted = []
+
+    def post(url, token, env):
+        posted.append(env)
+        return 200, {"ok": True}
+
+    upload.upload_date("2026-08-25", url="http://x", token="t", source="s",
+                       key_id="k1", key="K", analysis_dir=analysis,
+                       post_fn=post, retries=0, base_delay=0, sleep_fn=lambda *_: None,
+                       only_shards={"__view__:最强选股"})
+    assert len(posted) == 1                               # 只 POST 1 次
+    env = posted[0]
+    assert set(env["views"]) == {"最强选股"}               # 片内只含这一个 view
+    assert env["records"] == {} and env["code_views"] == {}   # record/按票视图一律不发
+    assert env["views"]["最强选股"] == {"入选数": 5, "入选清单": []}
+    assert env["meta"].get("sig")                         # 已签名
+
+
+def test_only_view_key_matches_build_shards():
+    """--only-view <name> 拼出的过滤键 == build_shards 对该 view 生成的分片键(防前缀漂移)。"""
+    payload = {"records": {}, "views": {"最强选股": {"入选数": 5}}, "code_views": {}}
+    shards = upload.build_shards(payload)
+    assert set(shards) == {"__view__:最强选股"}
+    assert f"{upload.VIEW_SHARD_PREFIX}最强选股" in shards   # CLI 拼键与 build 键一致
+
+
+def test_pool_ack_shard_appended_and_signed(tmp_path):
+    """方案2 回执:pool_ack_ids 非空 → 追加 __pool_ack__ 分片,走既有签名/POST 路径。"""
+    analysis = tmp_path / "analysis"
+    _seed_analysis(analysis, "2026-08-07")
+    posted = []
+
+    def post(url, token, env):
+        posted.append(env)
+        return 200, {"ok": True}
+
+    r = upload.upload_date("2026-08-07", url="http://x", token="t", source="s",
+                           key_id="k1", key="K", analysis_dir=analysis,
+                           post_fn=post, retries=0, base_delay=0, sleep_fn=lambda *_: None,
+                           pool_ack_ids=[3, 7, 11])
+    assert upload.POOL_ACK_KEY in r["shards"]              # 回执分片进了回执单
+    ack_envs = [e for e in posted if upload.POOL_ACK_KEY in (e.get("views") or {})]
+    assert len(ack_envs) == 1
+    env = ack_envs[0]
+    assert env["views"][upload.POOL_ACK_KEY] == {"consumed_ids": [3, 7, 11]}
+    assert env["records"] == {} and env["code_views"] == {}
+    assert env["meta"].get("sig")                         # 走了签名路径
+
+
+def test_no_pool_ack_shard_when_ids_empty(tmp_path):
+    """无回执 id → 不追加 __pool_ack__ 分片(日常上传零影响)。"""
+    analysis = tmp_path / "analysis"
+    _seed_analysis(analysis, "2026-08-07")
+
+    def post(url, token, env):
+        return 200, {"ok": True}
+
+    r = upload.upload_date("2026-08-07", url="http://x", token="t", source="s",
+                           key_id="k1", key="K", analysis_dir=analysis,
+                           post_fn=post, retries=0, base_delay=0, sleep_fn=lambda *_: None)
+    assert upload.POOL_ACK_KEY not in r["shards"]         # 没传 ids → 无回执分片
+
+
+def test_pool_ack_shard_survives_only_shards_filter(tmp_path):
+    """回执分片在 only_shards 过滤之后追加:即便单分片补传,有回执也必发。"""
+    analysis = tmp_path / "analysis"
+    _seed_analysis(analysis, "2026-08-07")
+    posted = []
+
+    def post(url, token, env):
+        posted.append(env)
+        return 200, {"ok": True}
+
+    upload.upload_date("2026-08-07", url="http://x", token="t", source="s",
+                       key_id="k1", key="K", analysis_dir=analysis,
+                       post_fn=post, retries=0, base_delay=0, sleep_fn=lambda *_: None,
+                       only_shards={"__view__:panel"}, pool_ack_ids=[5])
+    keys_posted = [set((e.get("views") or {}).keys()) for e in posted]
+    assert {"panel"} in keys_posted                        # 指定的 view 发了
+    assert {upload.POOL_ACK_KEY} in keys_posted            # 回执也发了(未被 only_shards 滤掉)
+
+
+# ———————————— CLI --pool-ack 接线(main 读 pool_ack.json → pool_ack_ids;全成功清待发)————————————
+def _stub_settings(monkeypatch):
+    for n, v in [("SYNC_INGEST_URL", "http://x"), ("SYNC_INGEST_TOKEN", "t"),
+                 ("SYNC_SIGNING_KEY", "K"), ("SYNC_SOURCE_ID", "s"), ("SYNC_KEY_ID", "k1")]:
+        monkeypatch.setattr(upload.settings, n, v, raising=False)
+
+
+def test_cli_pool_ack_passes_ids(monkeypatch, tmp_path):
+    """--pool-ack:CLI 读 read_ack() 的 id 透传给 upload_date 的 pool_ack_ids。"""
+    _stub_settings(monkeypatch)
+    from ops import consume_pool_pending as cpp
+    monkeypatch.setattr(cpp, "read_ack", lambda *a, **k: [1, 2])
+    monkeypatch.setattr(cpp, "clear_ack", lambda *a, **k: None)
+    monkeypatch.setattr(upload, "_receipt_dir", lambda: tmp_path)
+    captured = {}
+
+    def fake_upload_date(date, **kw):
+        captured.update(kw)
+        return {"summary": {"total": 1, "ok": 1, "failed": 0}}
+
+    monkeypatch.setattr(upload, "upload_date", fake_upload_date)
+    assert upload.main(["--date", "2026-08-07", "--pool-ack"]) == 0
+    assert captured.get("pool_ack_ids") == [1, 2]           # 透传
+
+
+def test_cli_no_pool_ack_flag(monkeypatch, tmp_path):
+    """不带 --pool-ack:pool_ack_ids=None(日常上传零回归)。"""
+    _stub_settings(monkeypatch)
+    monkeypatch.setattr(upload, "_receipt_dir", lambda: tmp_path)
+    captured = {}
+
+    def fake_upload_date(date, **kw):
+        captured.update(kw)
+        return {"summary": {"total": 1, "ok": 1, "failed": 0}}
+
+    monkeypatch.setattr(upload, "upload_date", fake_upload_date)
+    assert upload.main(["--date", "2026-08-07"]) == 0
+    assert captured.get("pool_ack_ids") is None
+
+
+def test_cli_pool_ack_clears_only_on_success(monkeypatch, tmp_path):
+    """回执全成功(failed==0)→ clear_ack 被调;有失败 → 不清(保留待发下轮重试),退出码1。"""
+    _stub_settings(monkeypatch)
+    from ops import consume_pool_pending as cpp
+    monkeypatch.setattr(cpp, "read_ack", lambda *a, **k: [9])
+    calls = {"cleared": 0}
+    monkeypatch.setattr(cpp, "clear_ack",
+                        lambda *a, **k: calls.__setitem__("cleared", calls["cleared"] + 1))
+    monkeypatch.setattr(upload, "_receipt_dir", lambda: tmp_path)
+
+    monkeypatch.setattr(upload, "upload_date",
+                        lambda date, **kw: {"summary": {"total": 2, "ok": 2, "failed": 0}})
+    assert upload.main(["--date", "2026-08-07", "--pool-ack"]) == 0
+    assert calls["cleared"] == 1                            # 全成功 → 清
+
+    monkeypatch.setattr(upload, "upload_date",
+                        lambda date, **kw: {"summary": {"total": 2, "ok": 1, "failed": 1}})
+    assert upload.main(["--date", "2026-08-07", "--pool-ack"]) == 1  # 有失败 → 退出码1
+    assert calls["cleared"] == 1                            # 不再清(计数不变)

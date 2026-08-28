@@ -95,6 +95,29 @@ def add_and_collect(code: str, name: str, industry: str, sector: str,
     }
 
 
+def enqueue_pending(op: str, code: str, *, name: str = "", industry: str = "",
+                    sector: str = "", market: str = "A", source: str | None = None) -> dict:
+    """远端模式(方案2):把加/删提案写入 pool_pending 表,**不采集不重建**。返回 {ok, queued, note}。
+
+    远端网页写 config/stock_pool.json 会被 autoupdate 的 5min `git reset --hard` 抹掉,故改
+    入队提案;本地闭环经 /pull 拉走 → 合并裁决 → add_and_collect/remove_and_cleanup(本地有 raw,
+    panel 不塌)→ upload 带回执标 consumed。名单真源恒为本地 stock_pool.json。
+
+    轻校验:op∈{add,remove}、code 非空(pool_pending_store.enqueue 兜底)。格式/重复的**深校验
+    不在此做**——留给本地消化时的 stock_pool.add_stock(它才是名单真源的裁决者),避免两处校验漂移。
+    """
+    from tools.config import settings
+    from tools.sync import pool_pending_store
+
+    src = source or settings.POOL_PENDING_SOURCE
+    rid = pool_pending_store.enqueue(code=code, name=name, industry=industry,
+                                     sector=sector, market=market, op=op, source=src)
+    logger.info("入队提案 #%d:%s %s(%s)", rid, op, code, market)
+    return {"ok": True,
+            "queued": {"id": rid, "op": op, "code": code, "market": market},
+            "note": "已提交,将于下次本地闭环采集后生效(非实时)"}
+
+
 def remove_and_cleanup(code: str) -> dict:
     """移除一只票 → 删除其 raw/analysis 缓存(全部日期分区)→ 重建产物。不存在抛 ValueError。"""
     s = stock_pool.remove_stock(code)

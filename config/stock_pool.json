@@ -3,78 +3,84 @@
     "code": "300308",
     "name": "中际旭创",
     "industry": "光模块",
-    "sector": "光模块"
+    "sector": "光模块",
+    "market": "A"
   },
   {
     "code": "300502",
     "name": "新易盛",
     "industry": "光模块",
-    "sector": "光模块"
+    "sector": "光模块",
+    "market": "A"
   },
   {
     "code": "000938",
     "name": "紫光股份",
     "industry": "ICT/网络设备(新华三)",
-    "sector": "AI算力"
+    "sector": "AI算力",
+    "market": "A"
   },
   {
     "code": "300418",
     "name": "昆仑万维",
     "industry": "AI应用/游戏",
-    "sector": "传媒/AI应用"
-  },
-  {
-    "code": "601975",
-    "name": "招商南油",
-    "industry": "航运/油运",
-    "sector": "航运"
-  },
-  {
-    "code": "002222",
-    "name": "福晶科技",
-    "industry": "光学元件/激光",
-    "sector": "光学元件"
+    "sector": "传媒/AI应用",
+    "market": "A"
   },
   {
     "code": "000625",
     "name": "长安汽车",
     "industry": "汽车整车",
-    "sector": "汽车"
+    "sector": "汽车",
+    "market": "A"
   },
   {
     "code": "002129",
     "name": "TCL中环",
     "industry": "光伏硅片/半导体材料",
-    "sector": "光伏"
+    "sector": "光伏",
+    "market": "A"
   },
   {
     "code": "300209",
     "name": "行云科技",
     "industry": "云计算/算力服务",
-    "sector": "AI算力"
+    "sector": "AI算力",
+    "market": "A"
   },
   {
     "code": "300285",
     "name": "国瓷材料",
     "industry": "电子陶瓷/新材料",
-    "sector": "新材料"
+    "sector": "新材料",
+    "market": "A"
   },
   {
     "code": "300476",
     "name": "胜宏科技",
     "industry": "PCB/印制电路板",
-    "sector": "AI算力"
+    "sector": "AI算力",
+    "market": "A"
   },
   {
     "code": "601838",
     "name": "成都银行",
     "industry": "城商行/银行",
-    "sector": "银行"
+    "sector": "银行",
+    "market": "A"
   },
   {
     "code": "002142",
     "name": "宁波银行",
     "industry": "城商行/银行",
-    "sector": "银行"
+    "sector": "银行",
+    "market": "A"
+  },
+  {
+    "code": "300017",
+    "name": "网宿科技",
+    "industry": "CDN/边缘计算",
+    "sector": "计算机",
+    "market": "A"
   }
 ]

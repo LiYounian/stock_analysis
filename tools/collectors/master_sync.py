@@ -22,6 +22,7 @@ import socket
 import pandas as pd
 
 from tools.collectors import market
+from tools.config import settings
 from tools.store import repo as store
 
 logger = logging.getLogger("collectors.master_sync")
@@ -155,14 +156,27 @@ def sync_master(codes: list[str], as_of: str | None = None, *,
                 raise
             return _fallback(codes, workers, f"backfill_master 异常: {e}")
 
-    logger.info("K线主档:当日增量(%s)→ fetch_spot_all + update_master_from_spot", reason)
+    logger.info("K线主档:当日增量(%s)→ 全市场 spot + update_master_from_spot", reason)
     try:
         from tools.config import stock_pool
         a_codes = [c for c in codes if not stock_pool.is_hk(c)]
         hk_codes = [c for c in codes if stock_pool.is_hk(c)]
 
-        spot = market.fetch_spot_all()
-        r = market.update_master_from_spot(codes=a_codes, date=as_of, spot=spot)
+        # 数据源口子:配了 Tushare 且**读得通** → 优先 Tushare 全市场 daily;
+        # 未配 / 未装 / 取空 / 任何异常 → 静默回退免费源 akshare spot(不报错)。
+        spot, mode, src_tag = None, "spot", "akshare_spot"
+        if settings.TUSHARE_ENABLED:
+            try:
+                from tools.collectors import tushare_daily
+                spot = tushare_daily.fetch_daily_all(as_of)
+                mode, src_tag = "tushare_spot", "tushare_daily"
+                logger.info("当日增量:Tushare 全市场 daily(%s)命中 %d 行", as_of, len(spot))
+            except Exception as te:
+                logger.warning("Tushare 全市场取数失败,回退免费源 spot(不报错):%s", te)
+                spot = None
+        if spot is None:
+            spot = market.fetch_spot_all()
+        r = market.update_master_from_spot(codes=a_codes, date=as_of, spot=spot, source=src_tag)
 
         if hk_codes:
             hk_r = market.update_hk_master(hk_codes, date=as_of)
@@ -171,9 +185,9 @@ def sync_master(codes: list[str], as_of: str | None = None, *,
 
         if r.get("ok", 0) == 0:
             raise RuntimeError(f"spot 增量 0 只更新({r})")
-        logger.info("spot 当日增量完成:更新 %d / 跳过(停牌/无bar)%d @ %s",
-                    r.get("ok"), r.get("skipped"), as_of)
-        return {"mode": "spot", **r}
+        logger.info("当日增量完成(源 %s):更新 %d / 跳过(停牌/无bar)%d @ %s",
+                    src_tag, r.get("ok"), r.get("skipped"), as_of)
+        return {"mode": mode, "source": src_tag, **r}
     except Exception as e:
         if not fallback:
             raise

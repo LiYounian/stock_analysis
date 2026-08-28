@@ -1,0 +1,86 @@
+{% extends "base.html" %}
+{% block title %}实时盯盘 · A股策略辅助工具{% endblock %}
+{% block content %}
+<h1>自选池实时盯盘
+  <small>行情=盘中快照(15秒自动刷新) · 形态=每日收盘态(非实时监控) · 非投资建议,不自动下单</small></h1>
+<p class="muted tiny">
+  数据源:全A spot 快照(后端拉、10秒缓存);形态标签取当日 SEPA/VCP 观察池(收盘态)。
+  盯十几只自选票流量极小。<span id="upd" class="muted"></span>
+  <span id="quote-warn" class="badge sell" style="display:none">行情源异常,仅显示名单+形态</span>
+</p>
+
+<section class="card wide">
+  <table id="watch-tbl">
+    <thead>
+      <tr>
+        <th>代码</th><th>名称</th><th>行业</th>
+        <th>现价</th><th>涨跌幅</th><th>成交额(万)</th><th>形态(收盘态)</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for x in w.rows %}
+      <tr data-code="{{ x.code }}">
+        <td><a href="/stock/{{ x.code }}?date={{ _d }}">{{ x.code }}</a></td>
+        <td><a href="/stock/{{ x.code }}?date={{ _d }}">{{ x.name }}</a></td>
+        <td class="muted">{{ x.industry }}</td>
+        <td class="px">{{ '%.2f' | format(x.price) if x.price is not none else '—' }}</td>
+        <td class="chg {{ 'up' if (x.pct_chg or 0) > 0 else ('down' if (x.pct_chg or 0) < 0 else '') }}">
+          {{ '%+.2f%%' | format(x.pct_chg) if x.pct_chg is not none else '—' }}</td>
+        <td class="amt muted">{{ '%.1f' | format(x.amount_wan) if x.amount_wan is not none else '—' }}</td>
+        <td class="tags">
+          {% for t in x.sepa_tags %}<span class="badge {{ 'sell' if t=='结构破坏' else ('buy' if t=='VCP收缩中(收盘)' else 'wait') }}">{{ t }}</span>{% endfor %}
+          {% if not x.sepa_tags %}<span class="muted">—</span>{% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% if not w.rows %}<p class="muted">自选池为空(见 <a href="/pool">票池管理</a>)。</p>{% endif %}
+</section>
+
+<style>
+  .chg.up{color:#c0392b;font-weight:600}.chg.down{color:#178a4c;font-weight:600}
+</style>
+<script>
+(function(){
+  var DATE = {{ _d | tojson }};
+  var tbody = document.querySelector('#watch-tbl tbody');
+  function fmtPct(v){ return v==null ? '—' : (v>0?'+':'') + v.toFixed(2) + '%'; }
+  function chgClass(v){ return v==null?'':(v>0?'up':(v<0?'down':'')); }
+  function render(rows){
+    var frag = '';
+    rows.forEach(function(x){
+      var tagHtml = (x.sepa_tags && x.sepa_tags.length)
+        ? x.sepa_tags.map(function(t){
+            var cls = t==='结构破坏'?'sell':(t==='VCP收缩中(收盘)'?'buy':'wait');
+            return '<span class="badge '+cls+'">'+t+'</span>';
+          }).join('')
+        : '<span class="muted">—</span>';
+      frag += '<tr data-code="'+x.code+'">'
+        + '<td><a href="/stock/'+x.code+'?date='+DATE+'">'+x.code+'</a></td>'
+        + '<td><a href="/stock/'+x.code+'?date='+DATE+'">'+(x.name||'')+'</a></td>'
+        + '<td class="muted">'+(x.industry||'—')+'</td>'
+        + '<td class="px">'+(x.price==null?'—':x.price.toFixed(2))+'</td>'
+        + '<td class="chg '+chgClass(x.pct_chg)+'">'+fmtPct(x.pct_chg)+'</td>'
+        + '<td class="amt muted">'+(x.amount_wan==null?'—':x.amount_wan.toFixed(1))+'</td>'
+        + '<td class="tags">'+tagHtml+'</td>'
+        + '</tr>';
+    });
+    tbody.innerHTML = frag;
+  }
+  function tick(){
+    fetch('/api/watch?date='+encodeURIComponent(DATE), {cache:'no-store'})
+      .then(function(r){ return r.json(); })
+      .then(function(d){
+        if(d.rows) render(d.rows);
+        document.getElementById('quote-warn').style.display = d.quote_ok ? 'none' : '';
+        var now = new Date();
+        document.getElementById('upd').textContent = '更新于 ' + now.toLocaleTimeString();
+      })
+      .catch(function(){ /* 单次失败忽略,下轮再试 */ });
+  }
+  setInterval(tick, 15000);
+  tick();
+})();
+</script>
+{% endblock %}

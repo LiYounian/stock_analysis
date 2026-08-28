@@ -10,6 +10,7 @@
 import pandas as pd
 
 from tools.collectors import market, master_sync
+from tools.config import settings
 from tools.store import repo as store
 
 _TODAY = "2026-08-07"    # 周五,交易日
@@ -64,11 +65,13 @@ def test_spot_when_master_fresh(monkeypatch):
     def fake_spot():
         return pd.DataFrame({"code": codes})
 
-    def fake_update(codes=None, date=None, spot=None):
+    def fake_update(codes=None, date=None, spot=None, source=None):
         seen["date"] = date
         seen["codes"] = codes
+        seen["source"] = source
         return {"ok": len(codes), "skipped": 0}
 
+    monkeypatch.setattr(settings, "TUSHARE_ENABLED", False)   # 未配 Tushare → 免费源
     monkeypatch.setattr(market, "fetch_spot_all", fake_spot)
     monkeypatch.setattr(market, "update_master_from_spot", fake_update)
     # backfill 不应被调用
@@ -77,6 +80,60 @@ def test_spot_when_master_fresh(monkeypatch):
     r = master_sync.sync_master(codes, as_of=_TODAY)
     assert r["mode"] == "spot" and r["ok"] == 2
     assert seen["date"] == _TODAY and seen["codes"] == codes
+    assert seen["source"] == "akshare_spot"   # 未配 Tushare → 免费源标记
+
+
+# ———————————— Tushare 可选源口子 + 回退(免费优先/读得通才用/失败静默回退)————————————
+def test_spot_prefers_tushare_when_enabled(monkeypatch):
+    """配了 Tushare 且读得通 → 增量走 Tushare 全市场 daily,source=tushare_daily,
+    且**不调用**免费源 fetch_spot_all。"""
+    codes = ["000001", "000002"]
+    _patch_master(monkeypatch, codes, _TODAY)             # 新鲜 → spot 增量分支
+    seen = {}
+    from tools.collectors import tushare_daily
+
+    monkeypatch.setattr(settings, "TUSHARE_ENABLED", True)
+    monkeypatch.setattr(tushare_daily, "fetch_daily_all",
+                        lambda day: pd.DataFrame({"code": codes}))
+    monkeypatch.setattr(market, "fetch_spot_all",
+                        lambda: (_ for _ in ()).throw(AssertionError("配了 Tushare 不应调免费源 spot")))
+
+    def fake_update(codes=None, date=None, spot=None, source=None):
+        seen["source"] = source
+        return {"ok": len(codes), "skipped": 0}
+
+    monkeypatch.setattr(market, "update_master_from_spot", fake_update)
+    r = master_sync.sync_master(codes, as_of=_TODAY)
+    assert r["mode"] == "tushare_spot" and r["source"] == "tushare_daily"
+    assert seen["source"] == "tushare_daily"
+
+
+def test_spot_falls_back_to_free_when_tushare_fails(monkeypatch):
+    """配了 Tushare 但**读不通**(抛异常)→ 静默回退免费源 akshare spot,不报错、不进逐只 fallback,
+    source 回落 akshare_spot。"""
+    codes = ["000001", "000002"]
+    _patch_master(monkeypatch, codes, _TODAY)
+    seen = {}
+    from tools.collectors import tushare_daily
+
+    monkeypatch.setattr(settings, "TUSHARE_ENABLED", True)
+    monkeypatch.setattr(tushare_daily, "fetch_daily_all",
+                        lambda day: (_ for _ in ()).throw(ConnectionError("tushare 未收盘/网络断")))
+    called = {"free_spot": False}
+
+    def fake_free_spot():
+        called["free_spot"] = True
+        return pd.DataFrame({"code": codes})
+
+    def fake_update(codes=None, date=None, spot=None, source=None):
+        seen["source"] = source
+        return {"ok": len(codes), "skipped": 0}
+
+    monkeypatch.setattr(market, "fetch_spot_all", fake_free_spot)
+    monkeypatch.setattr(market, "update_master_from_spot", fake_update)
+    r = master_sync.sync_master(codes, as_of=_TODAY)
+    assert called["free_spot"] is True             # 确实回退到免费源
+    assert r["mode"] == "spot" and seen["source"] == "akshare_spot"
 
 
 # ———————————— fallback 路径 ————————————
