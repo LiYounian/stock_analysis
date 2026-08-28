@@ -144,6 +144,16 @@ def backtest_historical(sample: int = 400, step: int = 20, start_idx: int = 250,
         cell = up.get((date_str, h))
         return (cell[0] / cell[1]) if cell and cell[1] else None
 
+    # 合议综合方向 A/B 权重方案(tau=0.2,置信度加权分母,与 council.convene 同口径)。
+    # 每方案只对三在场专家配权;其余弃权(置信度0)本就不入分子分母。
+    TAU = 0.2
+    WEIGHT_SCHEMES = {
+        "等权(现状1.0/1.0/1.0)": {"技术趋势": 1.0, "超买超卖": 1.0, "拐点": 1.0},
+        "建议(趋势0.5/超卖1.5/拐点1.0)": {"技术趋势": 0.5, "超买超卖": 1.5, "拐点": 1.0},
+        "反转倾斜(趋势0.3/超卖2.0/拐点1.2)": {"技术趋势": 0.3, "超买超卖": 2.0, "拐点": 1.2},
+    }
+    comp = {name: ExpertAgg() for name in WEIGHT_SCHEMES}   # 复用 ExpertAgg:专家名槽存"综合"
+
     # 第二遍:逐票逐信号日算三专家方向 + 命中
     agg = ExpertAgg()
     strength_buckets: dict = {}   # 技术趋势 强度分档命中(看趋势强度是否单调)
@@ -158,8 +168,10 @@ def backtest_historical(sample: int = 400, step: int = 20, start_idx: int = 250,
             if rec is None:
                 continue
             n_points += 1
+            verdicts = []   # (name, direction, strength, conf) 供合议 A/B
             for name in ACTIVE_EXPERTS:
                 v = experts.build(name, rec, sub)
+                verdicts.append((name, _DIR.get(v.方向, 0), float(v.强度), float(v.置信度)))
                 if v.置信度 <= 0 or v.方向 == "中性":
                     continue
                 direction = _DIR.get(v.方向, 0)
@@ -177,13 +189,32 @@ def backtest_historical(sample: int = 400, step: int = 20, start_idx: int = 250,
                         sb = strength_buckets.setdefault(b, {"n": 0, "hit": 0})
                         sb["n"] += 1
                         sb["hit"] += int(np.sign(fd) == np.sign(direction))
+            # 合议综合方向 A/B:每方案算 S=Σ(强度×置信度×权重)/Σ(权重×置信度)→ 综合方向
+            for sname, wmap in WEIGHT_SCHEMES.items():
+                num = den = 0.0
+                for (name, d, s, conf) in verdicts:
+                    w = wmap.get(name, 1.0)
+                    num += s * conf * w
+                    den += w * conf
+                S = (num / den) if den > 0 else 0.0
+                cdir = 1 if S >= TAU else (-1 if S <= -TAU else 0)
+                if cdir == 0:
+                    continue
+                for h in horizons:
+                    fd = _fwd_dir(close, idx, h)
+                    fr = _fwd_ret(close, idx, h)
+                    if fd is None or fr is None:
+                        continue
+                    comp[sname].add("综合", h, cdir, fd, fr, p_up(dates[idx], h))
     rep = agg.report()
     sb_out = {str(k): {"样本": v["n"], "命中率%": round(v["hit"] / v["n"] * 100, 1)}
               for k, v in sorted(strength_buckets.items()) if v["n"]}
+    comp_out = {sname: a.report().get("综合", {}) for sname, a in comp.items()}
     return {"口径": "历史全A回测(master 随机抽样,信号日前算方向/之后取收益,防未来函数)",
             "参数": {"抽样票数": len(loaded), "step": step, "start_idx": start_idx,
                      "seed": seed, "信号点数": n_points},
-            "逐专家": rep, "技术趋势强度分档(5日期末命中)": sb_out}
+            "逐专家": rep, "技术趋势强度分档(5日期末命中)": sb_out,
+            "合议综合方向_权重AB": comp_out}
 
 
 # ───────────────────────── A) 观测口径 ─────────────────────────
@@ -289,6 +320,12 @@ def run(sample=400, step=20, start_idx=250, seed=7, analysis_dir=None,
             print(f"  {exp} {hk}: n={c['样本']} 命中={c['命中率%']}% 基线={c['基线正确率%']}% "
                   f"超额={c['超额%']}% 均收益={c['平均收益%']}% (多{c['看多样本']}/空{c['看空样本']})")
     print("  技术趋势强度分档(5日):", hist["技术趋势强度分档(5日期末命中)"])
+    print("  [合议综合方向 权重A/B]")
+    for sname, cells in hist.get("合议综合方向_权重AB", {}).items():
+        parts = []
+        for hk, c in cells.items():
+            parts.append(f"{hk} n={c['样本']} 命中={c['命中率%']}% 超额={c['超额%']}%")
+        print(f"    {sname}: " + " | ".join(parts))
     if "逐专家" in obs:
         print("[A 观测口径] 预测日数", obs.get("预测日数"))
         for exp, cells in obs["逐专家"].items():
