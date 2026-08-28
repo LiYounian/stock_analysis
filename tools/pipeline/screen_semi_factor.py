@@ -25,6 +25,7 @@ import pandas as pd
 
 from tools.analysis import technical as ta
 from tools.analysis.financial import analyzer as fr_analyzer
+from tools.collectors import financial as fin
 from tools.collectors import fundamental as fd
 from tools.collectors import market
 from tools.config import settings
@@ -123,6 +124,27 @@ def run_semi_factor_screen(codes: list[str], as_of: str | None = None,
         scoped = list(codes)
 
     logger.info("半导体多因子:扫描 %d 只(全A ∩ 半导体池 %d)", len(scoped), len(universe))
+
+    # —— 先自采财报三大表(skip-if-cached,幂等)——
+    # 现有 screenall 编排:screen_semi_factor 跑在 run_financial_collect 之前,故本 pipeline
+    # 若不自采,build_financial_block 会因 raw 缺失全空。skip-if-cached 保证日常闭环几乎秒过
+    # (只在新披露季度实际触网),不重复采。fetch=False 时纯离线复算,不采。
+    if fetch and scoped:
+        need_fin = []
+        for code in scoped:
+            try:
+                fin.load_financial(code)                        # 命中缓存则 skip
+            except FileNotFoundError:
+                need_fin.append(code)
+        if need_fin:
+            logger.info("半导体多因子:补采财报三大表 %d 只(缓存命中 %d 只跳过)",
+                        len(need_fin), len(scoped) - len(need_fin))
+            try:
+                fin.fetch_financial(need_fin)
+            except Exception as e:                              # noqa: BLE001
+                logger.warning("财报三大表补采失败(降级 build_record 逐票判): %s", e)
+        else:
+            logger.info("半导体多因子:财报三大表全命中缓存,跳过采集")
 
     records: dict[str, dict] = {}
     skipped = 0

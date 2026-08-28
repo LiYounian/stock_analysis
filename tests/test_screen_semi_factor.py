@@ -155,18 +155,55 @@ def test_universe_missing_falls_back_no_restrict(tmp_path, monkeypatch, loose_st
 
 
 def test_no_fetch_does_not_touch_network(patch_universe, tmp_path, monkeypatch):
-    """fetch=False 时,load 失败即跳过,不调 fetch_fundamental(不触网)。"""
-    called = {"fetch": 0}
+    """fetch=False 时,load 失败即跳过,不调 fetch_fundamental / fin.fetch_financial(不触网)。"""
+    called = {"fund": 0, "fin": 0}
     monkeypatch.setattr(sf.fd, "load_fundamental",
                         lambda c: (_ for _ in ()).throw(FileNotFoundError()))
-    def _guard(codes, as_of=None):
-        called["fetch"] += 1
-        return {}
-    monkeypatch.setattr(sf.fd, "fetch_fundamental", _guard)
+    monkeypatch.setattr(sf.fd, "fetch_fundamental",
+                        lambda codes, as_of=None: called.__setitem__("fund", called["fund"] + 1) or {})
+    monkeypatch.setattr(sf.fin, "load_financial",
+                        lambda c: (_ for _ in ()).throw(FileNotFoundError()))
+    monkeypatch.setattr(sf.fin, "fetch_financial",
+                        lambda codes, **_: called.__setitem__("fin", called["fin"] + 1) or {})
     monkeypatch.setattr(sf.fr_analyzer, "build_financial_block",
                         lambda c, as_of=None: None)
     monkeypatch.setattr(sf.market, "load_kline_recent", lambda c: _kline())
     monkeypatch.setattr("tools.store.repo.put_view", lambda name, view, **_: str(tmp_path / f"{name}.json"))
     v = sf.run_semi_factor_screen(["A", "B", "C"], as_of="2026-08-19", fetch=False, top_k=3)
-    assert called["fetch"] == 0                                # 一次都不能调
+    assert called["fund"] == 0 and called["fin"] == 0          # 两条都不能触网
     assert v["入选数"] == 0
+
+
+def test_fetch_true_auto_collects_missing_financials(patch_universe, tmp_path, monkeypatch):
+    """fetch=True 时,缺缓存的票被自动送去 fin.fetch_financial(修远端"策略先跑、财报后采"顺序坑)。"""
+    fetched: list[list[str]] = []
+    def _fake_fetch_fin(codes, **_):
+        fetched.append(list(codes))
+        return {c: {} for c in codes}
+    # A 有缓存(load 成功)、B/C 缺(load 抛)
+    monkeypatch.setattr(sf.fin, "load_financial",
+                        lambda c: {} if c == "A" else (_ for _ in ()).throw(FileNotFoundError()))
+    monkeypatch.setattr(sf.fin, "fetch_financial", _fake_fetch_fin)
+    monkeypatch.setattr(sf.fd, "load_fundamental", lambda c: _fund(500.0))
+    monkeypatch.setattr(sf.fr_analyzer, "build_financial_block",
+                        lambda c, as_of=None: _fin(5.0, 30.0, 1e10))
+    monkeypatch.setattr(sf.market, "load_kline_recent", lambda c: _kline())
+    monkeypatch.setattr("tools.store.repo.put_view", lambda name, view, **_: str(tmp_path / f"{name}.json"))
+    v = sf.run_semi_factor_screen(["A", "B", "C"], as_of="2026-08-19", fetch=True, top_k=3)
+    assert len(fetched) == 1 and set(fetched[0]) == {"B", "C"}   # 只补 B/C(A 命中缓存跳过)
+    assert v["入选数"] == 3                                        # 都拿到数据 → 入选
+
+
+def test_fetch_true_all_cached_no_refetch(patch_universe, tmp_path, monkeypatch):
+    """fetch=True 且全命中缓存时,不重复采(skip-if-cached 幂等)。"""
+    called = {"fin": 0}
+    monkeypatch.setattr(sf.fin, "load_financial", lambda c: {})   # 全命中
+    monkeypatch.setattr(sf.fin, "fetch_financial",
+                        lambda codes, **_: called.__setitem__("fin", called["fin"] + 1) or {})
+    monkeypatch.setattr(sf.fd, "load_fundamental", lambda c: _fund(500.0))
+    monkeypatch.setattr(sf.fr_analyzer, "build_financial_block",
+                        lambda c, as_of=None: _fin(5.0, 30.0, 1e10))
+    monkeypatch.setattr(sf.market, "load_kline_recent", lambda c: _kline())
+    monkeypatch.setattr("tools.store.repo.put_view", lambda name, view, **_: str(tmp_path / f"{name}.json"))
+    sf.run_semi_factor_screen(["A", "B", "C"], as_of="2026-08-19", fetch=True, top_k=3)
+    assert called["fin"] == 0                                    # 全 cached → 零采集调用
