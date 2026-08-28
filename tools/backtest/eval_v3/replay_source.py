@@ -9,6 +9,10 @@ signal 依赖历史无快照的外部数据,强行回放会引入未来函数或
 
 覆盖策略(全部纯技术、long-only、direction=+1):
   S01 趋势深跌反包 / S02 放量后缩量回踩 / 3 箱体形态 / S03 最大范围选股 / S04 量价放量
+  / SEPA-合格 SEPA 趋势模板·合格池(广筛型状态池,纯日K三均线判定;带连续趋势分作 rank_score)
+
+判定函数约定:fn(kdf, t, code) 返回 bool(纯 SELECT)或 dict{"SELECT": bool, "rank_score": float}
+(排序分随预测一并落表,方向型默认无分记 NaN)。SEPA 走 dict 形态,带上 60 日涨幅趋势分。
 """
 from __future__ import annotations
 
@@ -16,6 +20,7 @@ import logging
 
 import numpy as np
 
+from tools.analysis.sepa_vcp import sepa as sepa_mod
 from tools.collectors import market
 from tools.pipeline import (screen_box, screen_max_range, screen_s01,
                             screen_s02, screen_volume)
@@ -46,6 +51,23 @@ def _sel_volume(kdf, t, code):
     return bool(screen_volume.signal_at(kdf, t).get("SELECT"))
 
 
+def _sel_sepa(kdf, t, code):
+    """SEPA 合格池 as-of 判定 + 趋势分。
+
+    合格判定纯用 ≤t 日K(sepa_mod.sepa_pass:股价>MA50>MA150>MA200 且 MA200向上 且站上MA50/MA200,
+    只用 t 及之前,无傍晚/外部/资金面依赖,可复现)。趋势分复现 screen_sepa_vcp 的 60 日涨幅口径
+    (as-of:close[t]/close[t-60]−1;历史不足退化用最早一根),仅带上供后续可选 Top-N / 设计升级参考,
+    不参与当前口径过滤。
+    """
+    r = sepa_mod.sepa_pass(kdf, t)
+    if not r.get("入池"):
+        return {"SELECT": False, "rank_score": np.nan}
+    close = kdf["close"].to_numpy(dtype=float)
+    score = (round(float(close[t] / close[t - 60] - 1.0), 4)
+             if t >= 60 else round(float(close[t] / close[0] - 1.0), 4))
+    return {"SELECT": True, "rank_score": score}
+
+
 # strategy_id → (展示名, SELECT 判定函数)。均为方向型 long-only,可回放。
 REPLAY_SCREENERS: dict[str, tuple] = {
     "S01": ("趋势深跌反包", _sel_s01),
@@ -53,6 +75,7 @@ REPLAY_SCREENERS: dict[str, tuple] = {
     "3": ("箱体形态", _sel_box),
     "S03": ("最大范围选股", _sel_maxrange),
     "S04": ("量价放量", _sel_volume),
+    "SEPA-合格": ("SEPA 趋势模板·合格池", _sel_sepa),
 }
 
 
@@ -113,10 +136,17 @@ def replay_predictions(strategy_ids=None, universe_n: int | None = 800,
             name, fn = REPLAY_SCREENERS[sid]
             for d, t in hit_ts:
                 try:
-                    if fn(kdf, t, code):
+                    res = fn(kdf, t, code)
+                    # fn 兼容两形态:bool(纯 SELECT,rank_score=NaN)或 dict{"SELECT","rank_score"}。
+                    if isinstance(res, dict):
+                        select = bool(res.get("SELECT"))
+                        score = res.get("rank_score", np.nan)
+                    else:
+                        select, score = bool(res), np.nan
+                    if select:
                         records.append({
                             "strategy_id": sid, "strategy": name, "pred_date": d,
-                            "code": code, "direction": 1, "rank_score": np.nan,
+                            "code": code, "direction": 1, "rank_score": score,
                             "source": "replay", "stype": schema.DIRECTIONAL,
                             "replayable": True})
                 except Exception as e:   # noqa: BLE001
