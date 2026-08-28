@@ -1,7 +1,8 @@
 """live 观测轨:从 data/analysis/<日期>/<策略>.json 读线上实际落盘预测 → 统一预测记录表。
 
 验"线上系统跑对没"。上线仅约 14 交易日,样本薄——所有长窗如实标数据不足。
-排序型策略额外抽 rank_score(策略0=综合分、反转低换手=综合分、指标条件化=上涨概率%)供 rank-IC。
+可排序型策略额外抽 rank_score(策略0/反转低换手=综合分、动量=动量分[嵌'特征']、SEPA=RPS250)
+供 Top-N 分档 + rank-IC;广筛/参考型 rank_score 缺失即 NaN,Top-N/IC 自动降级。
 方向文案 → ±1;纯多头选股缺方向字段默认 +1。
 """
 from __future__ import annotations
@@ -18,8 +19,10 @@ logger = logging.getLogger("backtest.eval_v3.live")
 
 _DIR = {"看多": 1, "看涨": 1, "多": 1, "看空": -1, "看跌": -1, "空": -1, "中性": 0}
 _PICK_KEYS = ("入选清单", "top", "rows", "达标清单", "达标", "观察清单")
-# 排序分候选字段名(按优先级):不同策略命名不同。
-_SCORE_KEYS = ("综合分", "综合得分", "上涨概率%", "动量分", "score", "分数", "得分")
+# 排序分候选字段名(按优先级):不同策略命名不同。可排序型 Top-N/rank-IC 取此。
+_SCORE_KEYS = ("综合分", "综合得分", "上涨概率%", "动量分", "RPS250", "RPS", "score", "分数", "得分")
+# 部分策略把打分嵌在子字典里(如动量组合的 动量分 位于 '特征';综合分可能位于 '明细')。
+_SCORE_NESTS = ("特征", "明细", "组合", "features")
 _SKIP_STEMS = {"backtest", "panel", "screen", "sentiment", "sentiment_policy",
                "factor", "news_ai", "SEPA雷达", "形态选股回测汇总", "选股分析报告"}
 
@@ -33,10 +36,18 @@ def _dir_of(obj: dict) -> int:
 
 
 def _score_of(obj: dict):
+    """按优先级取连续打分:先顶层,再常见子字典(特征/明细)。bool 不算分。"""
     for k in _SCORE_KEYS:
         v = obj.get(k)
-        if isinstance(v, (int, float)):
+        if isinstance(v, (int, float)) and not isinstance(v, bool):
             return float(v)
+    for nest in _SCORE_NESTS:
+        sub = obj.get(nest)
+        if isinstance(sub, dict):
+            for k in _SCORE_KEYS:
+                v = sub.get(k)
+                if isinstance(v, (int, float)) and not isinstance(v, bool):
+                    return float(v)
     return np.nan
 
 

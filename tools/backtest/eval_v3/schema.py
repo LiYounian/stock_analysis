@@ -7,9 +7,10 @@
   pred_date     信号日 T(YYYY-MM-DD 字符串);预测在 T 收盘后生成,现实最早 T+1 入场
   code          6 位代码
   direction     方向 +1/-1/0(纯多头选股默认 +1;0=中性不计方向命中)
-  rank_score    排序分(仅排序型策略有,方向型为 NaN)——用于截面 rank-IC
+  rank_score    连续打分(可排序型策略有,广筛/参考型为 NaN)——用于 Top-N 分档 + 截面 rank-IC
   source        "live"(线上落盘)/ "replay"(本地历史复现)
-  stype         "directional"(方向型选股:命中率+收益质量+超额)/ "ranking"(排序型:rank-IC/ICIR)
+  stype         "directional"(广筛型:全部票等权 vs 市场基准)/ "rankable"(可排序型:广筛全量+Top-N+rank-IC)/
+                "reference"(参考·非alpha:伪排序,只广筛口径评、不跑 rank-IC/Top-N)
   replayable    该策略是否可历史回放(含 LLM/新闻/情绪/筹码的不可回放,仅 live 观测)
 
 打分层对这张表统一处理:定位 T+1 入场→算各 horizon T+1 基准实现收益→方向命中(期末/期内触及)
@@ -27,9 +28,20 @@ PRED_COLUMNS = [
     "direction", "rank_score", "source", "stype", "replayable",
 ]
 
-# 策略类型标签。
-DIRECTIONAL = "directional"   # 方向型选股:选出即看多/看空 → 命中率+收益质量+超额
-RANKING = "ranking"           # 排序型:截面打分排序 → rank-IC/ICIR(不套方向命中)
+# 策略类型标签(评测口径三分流)。
+#   ▸ 广筛型 DIRECTIONAL:布尔达标"全上",个股间无连续区分 → 全部票等权 vs 市场基准
+#     (命中率+收益质量+超额+显著性)。
+#   ▸ 可排序型 RANKABLE:有连续打分(综合分/动量分/RPS 等) → 除广筛全量指标外,
+#     额外按打分降序取 Top-5/10/20 算分档精度(命中/期望收益/超额),并报 rank-IC/ICIR。
+#     "全部票等权"浪费其排序信息,Top-N 精度检验"分数越高是否越准/越赚"。
+#   ▸ 参考/非alpha REFERENCE:伪排序——打分是离散状态格、个股间无真实区分(如指标条件化),
+#     跑 rank-IC/Top-N 会得"看着有排序其实是噪声"的误导结论 → 只作参考,按广筛口径评,
+#     明确不计入排序榜、不跑 rank-IC/Top-N。
+DIRECTIONAL = "directional"   # 广筛型:布尔达标全上 → 命中率+收益质量+超额(全部票等权 vs 市场基准)
+RANKABLE = "rankable"         # 可排序型:有连续打分 → 广筛全量指标 + Top-N精度 + rank-IC/ICIR
+REFERENCE = "reference"       # 参考/非alpha:伪排序(离散状态格) → 只作参考,不跑 rank-IC/Top-N
+# 向后兼容别名(旧口径 RANKING 拆成 RANKABLE/REFERENCE 两类,勿再新用)。
+RANKING = RANKABLE
 
 
 @dataclass
@@ -47,24 +59,32 @@ class StrategyMeta:
 # stype/replayable 决定该策略走哪套指标、进哪条轨。
 # 不可回放理由:策略0=多专家含新闻/LLM/情绪打分;策略9最强选股=含 Tushare 筹码/资金面。
 STRATEGY_META: dict[str, StrategyMeta] = {
-    "策略0合议": StrategyMeta("0", "多专家合议(全A)", RANKING, False,
-                              "含新闻/LLM/情绪专家,不可历史回放;综合分作排序分走 rank-IC"),
+    # ── 可排序型(有连续打分):广筛全量指标 + Top-N精度 + rank-IC ──
+    "策略0合议": StrategyMeta("0", "多专家合议(全A)", RANKABLE, False,
+                              "含新闻/LLM/情绪专家,不可历史回放;综合分作排序分→Top-N精度+rank-IC"),
+    "动量组合": StrategyMeta("4", "动量组合(A腿)", RANKABLE, True,
+                            "动量分连续排序→Top-N精度+rank-IC(动量分嵌于'特征')"),
+    "半导体多因子": StrategyMeta("5", "半导体多因子", RANKABLE, True,
+                                "综合分连续排序→Top-N精度+rank-IC"),
+    "反转低换手组合": StrategyMeta("10", "反转低换手组合", RANKABLE, True,
+                                  "综合分连续排序→Top-N精度+rank-IC"),
+    "SEPA合格池": StrategyMeta("SEPA-合格", "SEPA 趋势模板·合格池", RANKABLE, True,
+                              "趋势模板 RPS250 排序;live payload 未透出连续RPS则Top-N/IC自动降级为空(标注)"),
+    "SEPA观察池": StrategyMeta("SEPA-观察", "SEPA 趋势模板·观察池", RANKABLE, True,
+                              "同合格池口径,RPS250 排序"),
+    # ── 广筛型(布尔达标全上):全部票等权 vs 市场基准 ──
     "趋势深跌反包": StrategyMeta("S01", "趋势深跌反包", DIRECTIONAL, True),
     "放量后缩量回踩": StrategyMeta("S02", "放量后缩量回踩", DIRECTIONAL, True),
     "箱体形态": StrategyMeta("3", "箱体形态", DIRECTIONAL, True),
-    "动量组合": StrategyMeta("4", "动量组合(A腿)", DIRECTIONAL, True),
-    "半导体多因子": StrategyMeta("5", "半导体多因子", DIRECTIONAL, True),
     "最强选股": StrategyMeta("9", "最强选股", DIRECTIONAL, False,
                             "含 Tushare 筹码/资金面,不可历史回放,仅 live 观测"),
-    "反转低换手组合": StrategyMeta("10", "反转低换手组合", RANKING, True,
-                                  "综合分作排序分;方向型多头选股,同时给 rank-IC"),
-    "指标条件化状态排序": StrategyMeta("11", "指标条件化状态排序", RANKING, True,
-                                      "天然中性/排序型,用 rank-IC 而非方向命中"),
     "最大范围选股": StrategyMeta("S03", "最大范围选股", DIRECTIONAL, True),
     "量价放量": StrategyMeta("S04", "量价放量", DIRECTIONAL, True),
-    "SEPA合格池": StrategyMeta("SEPA-合格", "SEPA 趋势模板·合格池", DIRECTIONAL, True),
-    "SEPA观察池": StrategyMeta("SEPA-观察", "SEPA 趋势模板·观察池", DIRECTIONAL, True),
     "形态选股": StrategyMeta("形态", "形态选股(RS/杯柄等)", DIRECTIONAL, True),
+    # ── 参考/非alpha(伪排序):离散状态格、个股无区分,不跑 rank-IC/Top-N ──
+    "指标条件化状态排序": StrategyMeta("11", "指标条件化状态排序", REFERENCE, True,
+                                      "打分为离散状态格(上涨概率%分层)、个股间无真实区分,"
+                                      "代码自认非alpha;跑rank-IC/Top-N会得误导结论→仅参考、不计排序榜"),
 }
 
 
