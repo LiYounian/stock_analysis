@@ -27,16 +27,26 @@
 from __future__ import annotations
 
 import argparse
+import bisect
 import json
 import logging
 import os
-from collections import defaultdict
 
 import numpy as np
 import pandas as pd
 
 from tools.collectors import market
 from tools.config import settings
+from tools.store import repo as store
+
+
+def _load_universe() -> list[str]:
+    """base-rate 宇宙:全 master 已落地代码(稳定基线)。缺失时返回空(窗口分层降级为无基准)。"""
+    try:
+        return store.list_master_codes()
+    except Exception as e:   # noqa: BLE001
+        logger.warning("list_master_codes 失败,base-rate 宇宙为空: %s", str(e)[:60])
+        return []
 
 logger = logging.getLogger("backtest.strategy_scorecard")
 
@@ -70,6 +80,14 @@ _SKIP_STEMS = {"backtest", "panel", "screen", "sentiment", "sentiment_policy",
 _PICK_KEYS = ("入选清单", "top", "rows", "排行", "达标清单", "达标")
 
 _THIN_N = 30   # 样本 < 此阈值 → 标"薄样本,不足为凭"
+
+# 滚动时间窗:窗名 → 交易日数 N。按"预测日 T ∈ [最新交易日−N+1, 最新交易日]"划窗。
+# 观测目前仅约 3 周(≈19 交易日),近一季/近一年数据远不足 → 报告如实标注"数据不足"。
+WINDOWS: dict[str, int] = {"近一周": 5, "近一月": 20, "近一季": 60, "近一年": 250}
+
+# 交易日历参考票(高流动、几乎每日成交):用其 kline 的 date 列近似全市场交易日历,
+# 定"最新交易日"与"最近 N 个交易日"。取并集抗个别票停牌缺日。
+_CALENDAR_REF_CODES = ("000001", "600000", "600519", "000002", "601318", "600036")
 
 # 既有回测结论(权威来源:docs/策略/策略总览_定义计算与回测.md 一页总表 + 各策略回测效果段)。
 # 只做"差生候选"的**回测维度门**,不作单独判据。含 "弱"/"差" 视为回测偏弱(🔴 或经济上极小/不显著)。
@@ -317,6 +335,118 @@ def aggregate(rows: pd.DataFrame, horizons=(1, 5)) -> dict:
     return result
 
 
+# ──────────────────── 滚动时间窗 + base-rate 超额命中 ────────────────────
+def build_trading_calendar(book: KlineBook, ref_codes=_CALENDAR_REF_CODES) -> list[str]:
+    """用高流动参考票 kline 的 date 列并集近似全市场交易日历(升序,YYYY-MM-DD)。
+
+    并集抗个别参考票停牌/缺日;calendar[-1]=最新交易日,calendar[-N:]=最近 N 个交易日。
+    """
+    dates: set[str] = set()
+    for c in ref_codes:
+        rec = book.get(c)
+        if rec is not None:
+            dates.update(rec[3].keys())   # rec[3] = {date_str: idx}
+    return sorted(dates)
+
+
+def build_market_baseline(pred_dates, horizons, universe, book: KlineBook) -> dict:
+    """全市场方向基准:对每个 (预测日, 期限 h) 统计**全宇宙**已到期票中 h 日收益>0 的比例的原料。
+
+    返回 {(date, h): [up_count, total_count]}。防未来函数:某票仅当其 kline 存在 idx+h 才计入
+    total(与策略侧成熟度规则完全一致);total=0 表示该 (date,h) 全市场都未到期 → 基准率不可算。
+    基准为**方向基准**(收益>0 视为"涨",与命中口径同为方向,对齐 5 日期末/1 日期末)。
+    """
+    base: dict = {(d, h): [0, 0] for d in pred_dates for h in horizons}
+    date_set = set(pred_dates)
+    for code in universe:
+        rec = book.get(code)
+        if rec is None:
+            continue
+        close, _high, _low, dmap = rec
+        n = len(close)
+        for d in date_set:
+            idx = dmap.get(d)
+            if idx is None or close[idx] <= 0:
+                continue
+            for h in horizons:
+                if idx + h >= n:
+                    continue   # 未到期 → 不计入(防未来函数)
+                cell = base[(d, h)]
+                cell[1] += 1
+                if close[idx + h] > close[idx]:
+                    cell[0] += 1
+    return base
+
+
+def _base_rate(dates, h, market_base) -> float | None:
+    """对一组预测日 dates、期限 h,池化全市场 up/total → 方向基准率%(该批日的市场上涨占比)。"""
+    up = tot = 0
+    for d in dates:
+        cell = market_base.get((d, h))
+        if cell:
+            up += cell[0]
+            tot += cell[1]
+    return round(up / tot * 100, 1) if tot else None
+
+
+def aggregate_windows(rows: pd.DataFrame, calendar: list[str], market_base: dict,
+                      horizons=(1, 5), windows=None) -> dict:
+    """按滚动交易日窗分层聚合:每策略 × 每窗 × 每期限 → 命中率 + 市场基准率 + 超额命中。
+
+    · 窗口成员 = 预测日 T ∈ calendar 最近 N 个交易日;数据不足 N 时如实标注"实为全部 M 日"。
+    · 每窗只统计**已到期且方向非中性**样本(沿用主聚合成熟度规则)。
+    · 基准率与超额:用**该策略在该窗该期限的已到期预测日集合**(完全相同的预测日+期限+防未来函数)
+      去全市场算方向基准率;超额命中 = 策略期末命中率 − 基准率(>0 才叫跑赢市场同期)。
+    """
+    windows = windows or WINDOWS
+    out = {"口径": "滚动交易日窗;每窗只计已到期且方向非中性;基准率=同预测日集合全市场方向上涨占比;"
+                   "超额命中=策略期末命中率−基准率;非投资建议", "窗口": {}}
+    if rows.empty or not calendar:
+        for wname, N in windows.items():
+            out["窗口"][wname] = {"窗口交易日数N": N, "数据充足": False,
+                                  "实际覆盖交易日": 0, "说明": "无数据", "策略": {}}
+        return out
+
+    ncal = len(calendar)
+    # 观测覆盖的交易日跨度 = 交易日历中 ≥ 最早预测日的交易日数(含最新交易日)。用于判"数据充足否"。
+    # 用 bisect 而非 index:最早预测日可能落在**非交易日**(如周末批处理产出的 view),
+    # 直接 index 会抛错并误退化成整段历史,导致长窗被误判"数据充足"。
+    first_pred = str(rows["date"].min())
+    span = ncal - bisect.bisect_left(calendar, first_pred)
+
+    for wname, N in windows.items():
+        win_dates = set(calendar[-N:])              # 最近 N 个交易日(不足则全给)
+        sufficient = N <= span
+        actual = min(N, span)
+        note = (f"数据充足(窗内交易日≥{N})" if sufficient
+                else f"数据不足 {N} 交易日,实为全部 {actual} 日(观测仅约 {span} 交易日)")
+        wentry = {"窗口交易日数N": N, "数据充足": bool(sufficient),
+                  "实际覆盖交易日": int(actual), "说明": note, "策略": {}}
+        rw = rows[rows["date"].isin(win_dates)]
+        for sid, g in rw.groupby("strategy_id"):
+            name = g["strategy"].iloc[0]
+            sentry = {"策略名": name}
+            for h in horizons:
+                gh = g[(g["h"] == h) & (g["matured"])]
+                scored = gh.dropna(subset=["hit_end"])
+                n = int(len(scored))
+                pred_days = sorted(scored["date"].unique().tolist())
+                brate = _base_rate(pred_days, h, market_base) if n else None
+                hit_end = _rate(scored["hit_end"])
+                cell = {"已到期样本": n, "预测日数": len(pred_days),
+                        "命中率%_期末": hit_end, "基准率%": brate,
+                        "超额命中%": (round(hit_end - brate, 1)
+                                      if (hit_end is not None and brate is not None) else None)}
+                if h == 5:
+                    cell["命中率%_期内触及"] = _rate(scored["hit_intra"])
+                if 0 < n < _THIN_N:
+                    cell["薄样本"] = f"仅{n}"
+                sentry[f"{h}日"] = cell
+            wentry["策略"][sid] = sentry
+        out["窗口"][wname] = wentry
+    return out
+
+
 # ────────────────────────────── 差生候选 ──────────────────────────────
 def flag_laggards(agg: dict, backtest_verdicts: dict | None = None, weak_thresh=45.0) -> dict:
     """挑差生:分两档。返回 {"双弱差生候选": [...], "仅观测偏弱提示": [...]}。
@@ -350,13 +480,82 @@ def flag_laggards(agg: dict, backtest_verdicts: dict | None = None, weak_thresh=
 
 
 # ────────────────────────────── 产物 ──────────────────────────────
+_COL_LEGEND_MAIN = [
+    "### 列名说明(先读这个再看表)", "",
+    "> 一句话:这张表回答\"某策略当天选出的票,往后 1 个 / 5 个交易日,**涨跌方向猜对了多少**\"。"
+    "纯多头选股默认预测\"涨\"(除策略0/11带方向字段)。**命中率=方向准确率,不是收益、更不是 alpha。**", "",
+    "| 列名 | 含义 | 怎么读 |",
+    "|---|---|---|",
+    "| **策略** | 策略编号 + 名称(与选股页 / `strategy.json` 一致) | — |",
+    "| **预测日数** | 上线以来该策略累计**在多少个交易日**给出过选股 | 越大=积累越久 |",
+    "| **1日样本** | 所有\"预测日 × 选出的票\"里,**已过 1 个交易日、能算实现收益、且方向非中性**的样本数 | **样本 <30 结论不可信** |",
+    "| **1日命中%** | 上面 1 日样本里,**次日实际涨跌方向 = 预测方向**的比例 | 方向准确率;≈50% 相当于抛硬币 |",
+    "| **5日样本** | 同理,已过 **5 个交易日**、能算、方向非中性的样本数 | 通常远少于 1 日(上线短、多数还没到期) |",
+    "| **5日命中%(期末)** | **期末口径(严格)**:只看 T→T+5 **收盘累计收益**方向对不对 | 最能反映\"5 天后真站住了没\" |",
+    "| **5日命中%(期内触及)** | **期内口径(宽松)**:5 日窗口内**任意一天触及**预测方向就算对 | 天然远高于期末 |",
+    "| **5日均收益%** | 这些 5 日样本的**平均实现收益**本身(不是命中率;负值=平均在跌) | 与命中率互补:看幅度 |",
+    "| **薄样本** | 样本太少不足下结论的标注;`None` = 该期限**还没有已到期的方向样本**(全部 pending) | 标了就别据此判死 |", "",
+    "> **两个 5 日口径怎么合看**:期末低、期内高 = \"方向对但**回落没守住**\";两栏都低 = "
+    "\"**根本没往预测方向动**\";两栏都高 = 真的走对了。", "",
+]
+
+
+def _md_windows(wins: dict, horizons=(1, 5)) -> list[str]:
+    """渲染滚动时间窗分层 + base-rate 超额命中 section。"""
+    lines = ["## 二、滚动时间窗分层 + 市场基准超额", "",
+             f"> 宇宙 {wins.get('宇宙','—')};最新交易日 {wins.get('最新交易日','—')}。"
+             f"{wins.get('口径','')}", ""]
+    lines += [
+        "### 列名说明(新增维度,先读这个)", "",
+        "> 把\"上线以来\"再按**最近多少个交易日**切片,并给出**同期市场基准**,回答"
+        "\"最近这段时间选得准不准、有没有跑赢大盘涨跌面\"。", "",
+        "| 概念 | 含义 | 怎么读 |",
+        "|---|---|---|",
+        "| **窗口(近一周/一月/一季/一年)** | 按**交易日**数取最近 N 天:近一周=5 / 近一月=20 / 近一季=60 / 近一年=250。"
+        "预测日 T 落在 [最新交易日−N+1, 最新交易日] 才进该窗 | N 越大回看越久 |",
+        "| **数据充足** | 观测总跨度是否 ≥N 个交易日。**目前观测仅约 3 周(≈19 交易日)**,故近一季/近一年**数据不足**,"
+        "如实标注\"实为全部 M 日\",**不等于真有一季/一年数据** | 标\"数据不足\"的窗只是\"把手上全部数据都算进来\",别当独立长窗读 |",
+        "| **样本 / 预测日数** | 该窗内已到期且方向非中性的\"票次\"数 / 覆盖的预测交易日数 | <30 仍薄,不足为凭 |",
+        "| **命中%(期末)** | 该窗样本的期末方向命中率(口径同上表) | — |",
+        "| **基准率%** | **同一批预测日、同一期限、同样只用已到期**,去**全市场(全 master)**算的"
+        "\"h 日收盘涨(收益>0)的股票占比\"——即大盘同期的\"上涨面\" | 这是\"随便买/买指数\"的方向基线 |",
+        "| **超额命中%** | = 策略期末命中率 − 基准率。**>0 才叫跑赢市场同期**(方向上比大盘涨跌面更准) | 命中率高但基准更高 → 超额可能为负 |", "",
+        "> 为什么要基准:\"近一周命中 40%\"单看像很差,但若同期全市场只有 30% 的票在涨,"
+        "策略其实**跑赢了 10 个百分点**。基准率就是把\"大盘整体涨跌面\"摆在命中率旁边,让绝对命中率可被解读。", "",
+        "> 口径注:基准为**方向基准**(收益>0 记\"涨\",与命中口径同为方向),对齐**期末**命中;"
+        "5 日\"期内触及\"无自然基准,故超额只对期末算。短/中性预测占比小的纯多头策略,超额≈\"选股上涨面 − 大盘上涨面\"。", "",
+    ]
+    for wname, w in wins.get("窗口", {}).items():
+        if not w:
+            continue
+        tag = "" if w.get("数据充足") else " ⚠️数据不足"
+        lines += ["", f"### {wname}(N={w.get('窗口交易日数N')} 交易日{tag})", "",
+                  f"> {w.get('说明','')}", ""]
+        strat = w.get("策略", {})
+        if not strat:
+            lines.append("该窗内暂无已到期方向样本。")
+            continue
+        lines.append("| 策略 | 1日样本 | 1日命中% | 1日基准% | 1日超额% | "
+                     "5日样本 | 5日命中%(期末) | 5日期内% | 5日基准% | 5日超额% |")
+        lines.append("|---|---|---|---|---|---|---|---|---|---|")
+        for sid, e in sorted(strat.items()):
+            c1, c5 = e.get("1日", {}), e.get("5日", {})
+            lines.append(
+                f"| {sid} {e['策略名']} | {c1.get('已到期样本',0)} | {c1.get('命中率%_期末')} | "
+                f"{c1.get('基准率%')} | {c1.get('超额命中%')} | {c5.get('已到期样本',0)} | "
+                f"{c5.get('命中率%_期末')} | {c5.get('命中率%_期内触及')} | "
+                f"{c5.get('基准率%')} | {c5.get('超额命中%')} |")
+    return lines
+
+
 def _md_report(agg: dict, laggards: dict, horizons=(1, 5)) -> str:
     lines = ["# 全策略上线以来·分策略成绩报告", "",
              f"> 生成于 {agg.get('生成于')}。{agg.get('口径')}",
              "> 历史观测≠未来保证;样本薄(<30)不足为凭。命中率=**方向准确率**(非 alpha,未减市场基线)。**非投资建议。**", "",
-             "## 一、分策略成绩", "",
-             "| 策略 | 预测日数 | 1日样本 | 1日命中% | 5日样本 | 5日命中%(期末) | 5日命中%(期内触及) | 5日均收益% | 薄样本 |",
-             "|---|---|---|---|---|---|---|---|---|"]
+             "## 一、分策略成绩(上线以来累计)", ""]
+    lines += _COL_LEGEND_MAIN
+    lines += ["| 策略 | 预测日数 | 1日样本 | 1日命中% | 5日样本 | 5日命中%(期末) | 5日命中%(期内触及) | 5日均收益% | 薄样本 |",
+              "|---|---|---|---|---|---|---|---|---|"]
     for sid, e in sorted(agg.get("策略", {}).items()):
         c1, c5 = e.get("1日", {}), e.get("5日", {})
         lines.append(
@@ -364,9 +563,13 @@ def _md_report(agg: dict, laggards: dict, horizons=(1, 5)) -> str:
             f"{c1.get('命中率%_期末')} | {c5.get('已到期样本',0)} | {c5.get('命中率%_期末')} | "
             f"{c5.get('命中率%_期内触及')} | {c5.get('平均实现收益%')} | {e.get('薄样本')} |")
 
+    wins = agg.get("窗口分层")
+    if wins:
+        lines += [""] + _md_windows(wins, horizons)
+
     double = laggards.get("双弱差生候选", [])
     obs_only = laggards.get("仅观测偏弱提示", [])
-    lines += ["", "## 二、差生候选(回测偏弱 ∧ 观测也弱)", "",
+    lines += ["", "## 三、差生候选(回测偏弱 ∧ 观测也弱)", "",
               "判据:5日期末方向命中 < 45% **且**样本≥30 **且**既有回测结论偏弱。单一维度差不进此表。", ""]
     if not double:
         lines.append("暂无。")
@@ -376,7 +579,7 @@ def _md_report(agg: dict, laggards: dict, horizons=(1, 5)) -> str:
         for l in double:
             lines.append(f"| {l['strategy_id']} {l['策略名']} | {l['5日期末命中率%']} | "
                          f"{l.get('5日期内触及%')} | {l['样本']} | {l.get('回测结论') or '—'} |")
-    lines += ["", "## 三、仅观测偏弱提示(回测未定弱,不判死)", ""]
+    lines += ["", "## 四、仅观测偏弱提示(回测未定弱,不判死)", ""]
     if not obs_only:
         lines.append("无。")
     else:
@@ -385,23 +588,43 @@ def _md_report(agg: dict, laggards: dict, horizons=(1, 5)) -> str:
         for l in obs_only:
             lines.append(f"| {l['strategy_id']} {l['策略名']} | {l['5日期末命中率%']} | "
                          f"{l['样本']} | {l.get('回测结论') or '—'} |")
-    lines += ["", "## 四、自审要点", "",
+    lines += ["", "## 五、自审要点", "",
               "- **防未来函数**:horizon h 仅当 kline 存在 idx+h(≤最近交易日)才计入,pending 一律排除;",
-              "  预测清单只读信号日 T 落盘的 view,实现收益取 T 之后价,双向无泄漏。",
+              "  预测清单只读信号日 T 落盘的 view,实现收益取 T 之后价,双向无泄漏。**基准率同样只用已到期收益**,",
+              "  窗口边界按**交易日**(交易日历)划,不是自然日,故\"近一周\"= 最近 5 个交易日而非 7 个日历日。",
               "- **样本量**:多数策略上线仅数日、5日窗口到期样本薄(1日样本远多于5日);薄样本已标注,勿据此判死。",
               "- **双口径**:期末=T→T+5 收盘累计收益方向;期内触及=窗口内最高(看多)/最低(看空)触及预测方向即算。",
               "  期内命中率天然远高于期末(触及门槛低),二者并列用于区分'方向对但回落'与'完全没动对'。",
-              "- **命中率≠alpha**:此处是方向准确率,未减市场同期基线;判死仍以既有全A回测(IC/Alpha/超额)为准,",
-              "  观测命中低只作**佐证**。口径 close[idx+h]/close[idx]-1 与 forward_scorecard 完全一致,无漂移。"]
+              "- **滚动窗数据不足**:观测仅约 3 周(≈19 交易日),**近一季(60)/近一年(250)数据远不够**,",
+              "  报告标\"数据不足 N 交易日,实为全部 M 日\",这些窗只是\"把手上全部数据都算进来\",**绝不等于真有一季/一年数据**。",
+              "- **超额命中口径**:策略命中率与基准率用**完全相同的预测日集合 + 同一期限 + 同样只计已到期**,",
+              "  基准率=同期全市场(全 master)h 日收益>0 占比(方向基准);超额=策略期末命中 − 基准。",
+              "  >0 才叫跑赢市场同期涨跌面。宇宙用全 master 作稳定基线(未按流动性/可交易性筛,口径从简、可复现)。",
+              "- **命中率≠alpha**:此处是方向准确率;超额命中已扣\"大盘涨跌面\"这一方向基线,但仍非严格因子 alpha;",
+              "  判死仍以既有全A回测(IC/Alpha/超额)为准,观测命中低 + 超额为负只作**佐证**。",
+              "  口径 close[idx+h]/close[idx]-1 与 forward_scorecard 完全一致,无漂移。"]
     return "\n".join(lines) + "\n"
 
 
 def run(analysis_dir=_DEFAULT_ANALYSIS, out_json=_DEFAULT_JSON, out_md=_DEFAULT_MD,
-        horizons=(1, 5), backtest_verdicts=None):
-    rows = build_rows(analysis_dir, horizons=horizons)
+        horizons=(1, 5), backtest_verdicts=None, windows=None, universe=None,
+        with_windows=True):
+    book = KlineBook()
+    rows = build_rows(analysis_dir, horizons=horizons, book=book)
     agg = aggregate(rows, horizons)
     laggards = flag_laggards(agg, backtest_verdicts)
     agg["差生分档"] = laggards
+
+    if with_windows and not rows.empty:
+        calendar = build_trading_calendar(book)
+        pred_dates = sorted(rows["date"].unique().tolist())
+        uni = universe if universe is not None else _load_universe()
+        logger.info("base-rate 宇宙 %d 票 × 预测日 %d × 期限 %s", len(uni), len(pred_dates), horizons)
+        market_base = build_market_baseline(pred_dates, horizons, uni, book)
+        wins = aggregate_windows(rows, calendar, market_base, horizons, windows)
+        wins["宇宙"] = f"全 master({len(uni)} 票)"
+        wins["最新交易日"] = calendar[-1] if calendar else None
+        agg["窗口分层"] = wins
     os.makedirs(os.path.dirname(out_json) or ".", exist_ok=True)
     with open(out_json, "w", encoding="utf-8") as f:
         json.dump(agg, f, ensure_ascii=False, indent=2)
@@ -421,16 +644,34 @@ def run(analysis_dir=_DEFAULT_ANALYSIS, out_json=_DEFAULT_JSON, out_md=_DEFAULT_
     obs = laggards.get("仅观测偏弱提示", [])
     if obs:
         print("  仅观测偏弱(不判死):", ", ".join(f"{l['strategy_id']} {l['策略名']}" for l in obs))
+    wins = agg.get("窗口分层")
+    if wins:
+        print(f"  滚动窗(宇宙 {wins.get('宇宙')} 最新 {wins.get('最新交易日')}):")
+        for wname, w in wins.get("窗口", {}).items():
+            flag = "" if w.get("数据充足") else " [数据不足]"
+            nstrat = len(w.get("策略", {}))
+            print(f"    {wname} N={w.get('窗口交易日数N')}{flag}: 覆盖{nstrat}策略, {w.get('说明','')}")
     return agg
 
 
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.WARNING)
+    logging.basicConfig(level=logging.INFO)
     ap = argparse.ArgumentParser()
     ap.add_argument("--analysis-dir", default=_DEFAULT_ANALYSIS)
     ap.add_argument("--out-json", default=_DEFAULT_JSON)
     ap.add_argument("--out-md", default=_DEFAULT_MD)
     ap.add_argument("--horizon", default="1,5")
+    ap.add_argument("--windows", default=None,
+                    help="覆盖窗口定义,如 '近一周=5,近一月=20';缺省用内置 4 窗")
+    ap.add_argument("--no-windows", action="store_true", help="只出上线以来累计表,不算滚动窗+基准")
     a = ap.parse_args()
+    wins = None
+    if a.windows:
+        wins = {}
+        for tok in a.windows.split(","):
+            k, _, v = tok.partition("=")
+            if k.strip() and v.strip().isdigit():
+                wins[k.strip()] = int(v.strip())
     run(analysis_dir=a.analysis_dir, out_json=a.out_json, out_md=a.out_md,
-        horizons=tuple(int(x) for x in a.horizon.split(",")))
+        horizons=tuple(int(x) for x in a.horizon.split(",")),
+        windows=wins, with_windows=not a.no_windows)
