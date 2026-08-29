@@ -1,12 +1,13 @@
-"""选股结果页单测(5 策略全读全A view:① 自选股 →【综合选股】→ 策略0 → 策略1 → 策略2 → 策略3 → 策略4)。
+"""选股结果页单测(各在产策略全读全A view:① 自选股 →【综合选股】→ 策略0 → 策略2 → 策略4 …)。
 
 锁死:
-  - 策略0 读 view「策略0合议」top;策略1 读 view「趋势深跌反包」入选清单。
-  - 策略2/3/4 改为读全A screener 预落盘 view(放量后缩量回踩 / 箱体形态 / 动量组合)的入选清单,
-    **不再** web 端实时算(不调用 screen_s02.signal_at / pattern.detect_box / momentum 组合函数)。
+  - 策略0 读 view「策略0合议」top。
+  - 策略2/4 读全A screener 预落盘 view(放量后缩量回踩 / 动量组合)的入选清单,
+    **不再** web 端实时算(不调用 screen_s02.signal_at / momentum 组合函数)。
   - 某 view 缺失 → 该策略 present=False 走「待运行」降级,页面不空、不抛。
-  - 综合选股 = 各策略入选代码并集(后端给全并集 + 命中来源,前端按勾选实时重算)。
-  - 区块顺序 + 5 策略标题 + 策略2/3 保留「待验证」标识。
+  - 综合选股 = 各在产策略入选代码并集(后端给全并集 + 命中来源,前端按勾选实时重算)。
+  - ⚠️ 策略1·趋势深跌反包(S01)与 策略3·箱体形态(箱体3)已因显著负下线,
+    不在页面展示、不进综合选股并集、page dict 无 strategy1/strategy3(本测试相应用例已删除)。
 data-independent(monkeypatch get_view + hermetic 不触网、不读盘)。
 """
 from fastapi.testclient import TestClient
@@ -47,19 +48,7 @@ def _strategy0_view(codes=("000001", "000002")):
             "扫描数": 5206, "有效": 5191, "top_n": len(top), "top": top}
 
 
-def _s01_view():
-    return {
-        "as_of": "2026-08-08", "策略": "趋势深跌反包(S01)",
-        "扫描数": 5539, "有效样本": 5124, "跳过数(历史不足)": 415, "入选数": 2,
-        "入选清单": [
-            {"code": "300311", "明细": {
-                "MA": {"5": 6.16, "10": 5.649, "20": 5.414, "30": 5.3593, "60": 5.3325, "200": 5.1149},
-                "close": 6.69, "H52": 7.16, "近强_涨/跌": [9, 1], "当日跌幅": -0.1257, "收阳": True}},
-            {"code": "603221", "明细": {
-                "MA": {"5": 22.254, "10": 18.191, "20": 14.6835, "30": 13.3203, "60": 12.8087, "200": 12.5568},
-                "close": 24.82, "H52": 24.79, "近强_涨/跌": [1, 0], "当日跌幅": -0.0891, "收阳": True}},
-        ],
-    }
+# _s01_view / _box_view 已随 S01/箱体3 下线删除(选股页不再读这两个 view)。
 
 
 def _s02_view(codes=("000001",)):
@@ -69,13 +58,6 @@ def _s02_view(codes=("000001",)):
             "入选清单": [{"code": c, "明细": {}} for c in codes]}
 
 
-def _box_view(codes=("000002",)):
-    """全A view「箱体形态」:入选清单 [{code, 行业}]。"""
-    return {"as_of": "2026-08-08", "策略": "箱体形态",
-            "扫描数": 5539, "有效样本": 5000, "入选数": len(codes),
-            "入选清单": [{"code": c, "行业": "芯片"} for c in codes]}
-
-
 def _momentum_view(codes=("000003",), combos="动量组合"):
     """全A view「动量组合」:入选清单 [{code, 组合}](组合标注命中"动量组合"/"红利动量组合")。"""
     return {"as_of": "2026-08-08", "策略": "动量组合",
@@ -83,10 +65,11 @@ def _momentum_view(codes=("000003",), combos="动量组合"):
             "入选清单": [{"code": c, "组合": [combos]} for c in codes]}
 
 
-def _dispatch(strategy0=None, s01=None, s02=None, box=None, momentum=None, semi=None):
-    """按 view 名分派 6 个 view;未提供 → 抛 FileNotFoundError(触发该策略「待运行」降级)。"""
-    mapping = {"策略0合议": strategy0, "趋势深跌反包": s01,
-               "放量后缩量回踩": s02, "箱体形态": box, "动量组合": momentum,
+def _dispatch(strategy0=None, s02=None, momentum=None, semi=None):
+    """按 view 名分派在产 view;未提供 → 抛 FileNotFoundError(触发该策略「待运行」降级)。
+    (S01「趋势深跌反包」/ 箱体3「箱体形态」已下线,不再在此分派。)"""
+    mapping = {"策略0合议": strategy0,
+               "放量后缩量回踩": s02, "动量组合": momentum,
                "半导体多因子": semi}
 
     def _fn(name, date="latest"):
@@ -144,21 +127,21 @@ def test_strategy0_name_fallback(monkeypatch):
 # 综合选股(并集)
 # ————————————————————————————————————————————————
 def test_combined_union_and_sources(monkeypatch):
-    """综合选股:策略0∪策略1 去重,每票命中来源标注;策略2/3/4 view 缺 → 均 available=False。"""
+    """综合选股:策略0∪策略2 去重,每票命中来源标注;其余在产策略 view 缺 → available=False。
+    ⚠️ 已下线的 策略1/策略3 不在勾选框列表中(编号 1/3 空缺属预期)。"""
     _patch(monkeypatch, {}, get_view=_dispatch(
-        strategy0=_strategy0_view(("000001", "300311")), s01=_s01_view()))
+        strategy0=_strategy0_view(("000001", "300311")), s02=_s02_view(("300311",))))
     combined = da.selection_page()["combined"]
     rows = {r["code"]: r for r in combined["rows"]}
-    # 000001 只在策略0;300311 在策略0∪策略1;603221 只在策略1
+    # 000001 只在策略0;300311 在策略0∪策略2
     assert rows["000001"]["sources"] == ["策略0"]
-    assert set(rows["300311"]["sources"]) == {"策略0", "策略1"}
-    assert rows["603221"]["sources"] == ["策略1"]
+    assert set(rows["300311"]["sources"]) == {"策略0", "策略2"}
     strat = {s["key"]: s for s in combined["strategies"]}
-    # 11 个策略勾选框都在(PR#15 增 策略7/8/9;策略10 反转低换手候选·前向观测中);key/label 对齐编号
+    # 在产策略勾选框:S01/箱体3 下线后 策略1/策略3 不再出现,编号 1/3 空缺
     assert [s["key"] for s in combined["strategies"]] == [
-        "策略0", "策略1", "策略2", "策略3", "策略4", "策略5", "策略6", "策略7", "策略8", "策略9", "策略10", "策略11"]
+        "策略0", "策略2", "策略4", "策略5", "策略6", "策略7", "策略8", "策略9", "策略10", "策略11"]
+    assert "策略1" not in strat and "策略3" not in strat
     assert strat["策略2"]["label"] == "放量后缩量回踩"
-    assert strat["策略3"]["label"] == "箱体形态"
     assert strat["策略4"]["label"] == "动量组合"
     assert strat["策略5"]["label"] == "自选池小市值"
     assert strat["策略6"]["label"] == "半导体多因子"
@@ -170,68 +153,48 @@ def test_combined_union_and_sources(monkeypatch):
     assert strat["策略10"]["available"] is False and strat["策略10"]["codes"] == []
     assert strat["策略11"]["label"] == "指标条件化状态排序(状态参考)"
     assert strat["策略11"]["available"] is False and strat["策略11"]["codes"] == []
-    assert strat["策略0"]["available"] and strat["策略1"]["available"]
-    # 策略2/3/4 view 缺 → present=False → available=False、codes=[]
-    for k in ("策略2", "策略3", "策略4"):
-        assert strat[k]["available"] is False and strat[k]["codes"] == []
+    assert strat["策略0"]["available"] and strat["策略2"]["available"]
+    # 策略4 view 缺 → present=False → available=False、codes=[]
+    assert strat["策略4"]["available"] is False and strat["策略4"]["codes"] == []
     # 策略5/6 无自选池 records → present=False(本用例 recs 空)
     for k in ("策略5", "策略6"):
         assert strat[k]["available"] is False and strat[k]["codes"] == []
-    # 全并集去重:000001, 300311, 603221
-    assert set(rows.keys()) == {"000001", "300311", "603221"}
+    # 全并集去重:000001, 300311
+    assert set(rows.keys()) == {"000001", "300311"}
 
 
 def test_combined_union_includes_view_strategies(monkeypatch):
-    """综合选股并集含策略2/3/4 全A view 入选(各来源正确标注)。"""
-    recs = {c: _rec(c) for c in ("000001", "000002", "000003")}
+    """综合选股并集含策略2/4 全A view 入选(各来源正确标注)。"""
+    recs = {c: _rec(c) for c in ("000001", "000003")}
     _patch(monkeypatch, recs, get_view=_dispatch(
-        strategy0=_strategy0_view(("000001",)), s01=_s01_view(),
-        s02=_s02_view(("000001",)), box=_box_view(("000002",)),
+        strategy0=_strategy0_view(("000001",)),
+        s02=_s02_view(("000001",)),
         momentum=_momentum_view(("000003",))))
     combined = da.selection_page()["combined"]
     rows = {r["code"]: r for r in combined["rows"]}
     # 000001 同时命中策略0 + 策略2
     assert set(rows["000001"]["sources"]) == {"策略0", "策略2"}
-    assert rows["000002"]["sources"] == ["策略3"]
     assert rows["000003"]["sources"] == ["策略4"]
     strat = {s["key"]: s for s in combined["strategies"]}
     assert strat["策略2"]["codes"] == ["000001"]
-    assert strat["策略3"]["codes"] == ["000002"]
     assert strat["策略4"]["codes"] == ["000003"]
 
 
 def test_combined_empty_when_no_strategies(monkeypatch):
-    """5 view 均缺 → 并集 rows 空,strategies 仍在(available=False),不炸。"""
+    """所有在产 view 均缺 → 并集 rows 空,strategies 仍在(available=False),不炸。"""
     _patch(monkeypatch, {}, get_view=_dispatch())
     combined = da.selection_page()["combined"]
     assert combined["rows"] == []
     assert all(not s["available"] for s in combined["strategies"])
 
 
-# ————————————————————————————————————————————————
-# 策略1(趋势深跌反包,原 S01)
-# ————————————————————————————————————————————————
-def test_strategy1_parses_view(monkeypatch):
-    """策略1 读 view「趋势深跌反包」:present + 扁平化(跌幅%/突破前高/均线多头/收阳)。"""
-    _patch(monkeypatch, {"300311": _rec("300311", bull=True)},
-           pool=set(), get_view=_dispatch(s01=_s01_view()))
-    s1 = da.selection_page()["strategy1"]
-    assert s1["present"] is True and s1["入选数"] == 2
-    byc = {r["code"]: r for r in s1["rows"]}
-    assert byc["300311"]["name"] == "T300311"              # 有记录取 meta 名
-    assert byc["300311"]["当日跌幅%"] == -12.57
-    assert byc["603221"]["突破前高"] is True                # close 24.82 > H52 24.79
-
-
-def test_strategy1_missing_view_fallback(monkeypatch):
-    """策略1 view 缺失 → present=False,不空页不抛。"""
-    _patch(monkeypatch, {}, get_view=_dispatch(s01=None))
-    s1 = da.selection_page()["strategy1"]
-    assert s1["present"] is False and s1["rows"] == []
+# 策略1(趋势深跌反包/S01)与 策略3(箱体形态/箱体3)已因显著负下线,
+# 相关用例(parses_view / missing_view / reads_view_not_realtime)已删除——
+# 选股页不再产出 strategy1/strategy3,screener 存档见 tools/pipeline/screen_s01|screen_box。
 
 
 # ————————————————————————————————————————————————
-# 策略2/3/4:读全A view(不再 web 实时算)
+# 策略2/4:读全A view(不再 web 实时算)
 # ————————————————————————————————————————————————
 def test_strategy2_reads_view_not_realtime(monkeypatch):
     """策略2 = 放量后缩量回踩:读 view 入选清单,**不调用** screen_s02.signal_at 实时算。"""
@@ -262,34 +225,6 @@ def test_strategy2_missing_view_fallback(monkeypatch):
     _patch(monkeypatch, {}, get_view=_dispatch(s02=None))
     s2 = da.selection_page()["strategy2"]
     assert s2["present"] is False and s2["picks"] == [] and s2["rows"] == []
-
-
-def test_strategy3_reads_view_not_realtime(monkeypatch):
-    """策略3 = 箱体形态:读 view 入选清单,**不调用** pattern.detect_box 实时算。"""
-    from tools.analysis.pattern_screener import pattern
-    calls = {"n": 0}
-
-    def _boom(*a, **k):
-        calls["n"] += 1
-        return {"达标": True}
-    monkeypatch.setattr(pattern, "detect_box", _boom)
-
-    recs = {"000002": _rec("000002")}
-    _patch(monkeypatch, recs, get_view=_dispatch(box=_box_view(("000002",))))
-    page = da.selection_page()
-    s3 = page["strategy3"]
-    assert s3["present"] is True and s3["picks"] == ["000002"]
-    assert {r["code"] for r in s3["rows"]} == {"000002"}
-    assert calls["n"] == 0                                  # 全程不实时算
-    strat = {s["key"]: s for s in page["combined"]["strategies"]}
-    assert strat["策略3"]["available"] is True and strat["策略3"]["codes"] == ["000002"]
-
-
-def test_strategy3_missing_view_fallback(monkeypatch):
-    """策略3 view 缺失 → present=False,不炸。"""
-    _patch(monkeypatch, {}, get_view=_dispatch(box=None))
-    s3 = da.selection_page()["strategy3"]
-    assert s3["present"] is False and s3["picks"] == [] and s3["rows"] == []
 
 
 def test_strategy4_reads_view_not_realtime(monkeypatch):
@@ -513,59 +448,60 @@ def test_block1_ranks_by_council_desc(monkeypatch):
 
 
 def test_empty_day_no_crash(monkeypatch):
-    """全空(无记录 + 无 view)→ 5 策略全兜底 present=False,不炸。"""
+    """全空(无记录 + 无 view)→ 各在产策略全兜底 present=False,不炸;
+    已下线的 strategy1/strategy3 不在 page dict 中。"""
     _patch(monkeypatch, {})
     page = da.selection_page()
     assert page["total"] == 0 and page["rows"] == []
-    for k in ("strategy0", "strategy1", "strategy2", "strategy3", "strategy4"):
+    for k in ("strategy0", "strategy2", "strategy4"):
         assert page[k]["present"] is False
+    assert "strategy1" not in page and "strategy3" not in page
     assert page["combined"]["rows"] == []
 
 
 # ————————————————————————————————————————————————
-# 路由渲染:区块顺序 + 5 策略标题 + 待验证标识
+# 路由渲染:区块顺序 + 在产策略标题 + 待验证标识
 # ————————————————————————————————————————————————
 def test_route_renders_order_and_no_removed_blocks(monkeypatch):
-    """锁 5 策略新结构:区块顺序 ① 自选股 → 综合选股 → 策略0 → 策略1 → 策略2 → 策略3 → 策略4;
-    无已删区块/旧字样;策略2/3 带「待验证」;策略4 = 动量组合。"""
+    """锁在产策略结构:区块顺序 ① 自选股 → 综合选股 → 策略0 → 策略2 → 策略4;
+    已下线的 策略1/策略3 区块与「S01」字样不再出现;策略2 带「待验证」;策略4 = 动量组合。"""
     _patch(monkeypatch, {"000001": _rec("000001", bull=True)}, pool={"000001"},
-           get_view=_dispatch(strategy0=_strategy0_view(), s01=_s01_view(),
-                              s02=_s02_view(("000001",)), box=_box_view(("000001",)),
+           get_view=_dispatch(strategy0=_strategy0_view(),
+                              s02=_s02_view(("000001",)),
                               momentum=_momentum_view(("000001",))))
     r = client.get("/selection")
     assert r.status_code == 200
     t = r.text
-    # 区块顺序:① 自选股 → 综合选股 → 策略0 → 策略1 → 策略2 → 策略3 → 策略4
+    # 区块顺序:① 自选股 → 综合选股 → 策略0 → 策略2 → 策略4(策略1/策略3 已下线)
     i_pool = t.find("<!-- 区块①")
     i_comb = t.find("<!-- 综合选股")
     i_s0 = t.find("<!-- 策略0")
-    i_s1 = t.find("<!-- 策略1")
     i_s2 = t.find("<!-- 策略2")
-    i_s3 = t.find("<!-- 策略3")
     i_s4 = t.find("<!-- 策略4")
-    assert -1 < i_pool < i_comb < i_s0 < i_s1 < i_s2 < i_s3 < i_s4
-    # 移除的区块 / 旧字样不再出现
+    assert -1 < i_pool < i_comb < i_s0 < i_s2 < i_s4
+    # 已下线区块 / 旧字样不再出现:无 策略1/策略3 标题、无 S01
+    assert "策略1 · 筛选低吸股票" not in t and "策略3 · 箱体形态" not in t
     assert "每日筛选" not in t and "今日精选" not in t and "S01" not in t
-    # 5 策略标题(策略1 命名已改为「筛选低吸股票」,不再是 S01)
+    # 在产策略标题
     assert "策略0 · 多专家合议(全A)" in t
-    assert "策略1 · 筛选低吸股票" in t
     assert "策略2 · 放量后缩量回踩" in t
-    assert "策略3 · 箱体形态" in t
     assert "策略4 · 动量组合" in t
-    # 策略2/3 带「待验证」中性标识(策略1 也有,至少 3 处)
-    assert t.count("待验证") >= 3
+    # 策略2 带「待验证」中性标识
+    assert "待验证" in t
     assert "/static/council.js" in t
     assert 'id="strat0Body"' in t and 'id="combinedBody"' in t
 
 
 def test_route_missing_views_show_hints(monkeypatch):
-    """5 view 缺失 → 各策略显示「待运行」提示,页面 200 不空。"""
+    """在产 view 缺失 → 各在产策略显示「待运行」提示,页面 200 不空;
+    已下线的 策略1/策略3 待运行提示不再出现。"""
     _patch(monkeypatch, {}, get_view=_dispatch())
     r = client.get("/selection")
     assert r.status_code == 200
     t = r.text
-    assert "策略0 待运行" in t and "策略1 待运行" in t
-    assert "策略2 待运行" in t and "策略3 待运行" in t and "策略4 待运行" in t
+    assert "策略0 待运行" in t
+    assert "策略2 待运行" in t and "策略4 待运行" in t
+    assert "策略1 待运行" not in t and "策略3 待运行" not in t
 
 
 # ————————————————————————————————————————————————

@@ -1,5 +1,10 @@
 """策略 3「箱体形态」全A规则型 Screener。
 
+⚠️ 已下线·显著负·仅存档,不接生产:全史深诊断坐实箱体放量突破「追高见光死」,
+固定持有期强显著负。已从每日 screenall 编排 / 前端选股页 / eval_v3 回放与记分卡摘除,
+代码保留仅供存档与未来「窄箱+回踩」改造候选复用。详见 docs/计划/箱体3_显著负根因诊断与救改删判定.md。
+注:本文件仅复用 tools.analysis.pattern_screener.pattern.detect_box(该识别器仍被在产「形态选股」策略使用,未下线)。
+
 当日盘后逐票:末根放量突破一段窄幅箱体上沿即入选(SELECT = 箱体达标,单日触发)。
 不重写箱体几何——**直接复用** `tools.analysis.pattern_screener.pattern.detect_box`
 (cfg 缺省读 `THRESHOLDS["形态选股"]["箱体"]`:窗口/高度上限%/突破幅度%/突破放量倍数)。

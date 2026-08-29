@@ -15,7 +15,7 @@
     python -m tools.run sepa         # SEPA+VCP 监控(午间/收盘):均线入池 + 波段收缩两表
     python -m tools.run all          # 全链路(采集→情绪→组装→事件→多因子→合议回写→视图),一个日期
     python -m tools.run pipeline     # 全A 两阶段流水线:全A便宜筛得达标池,再只对(达标∪自选)做新闻/LLM/合议
-    python -m tools.run screenall    # 全A 多策略选股(策略0/1/2/3/4)→ 只对(各策略选出并集∪自选)做新闻/LLM/合议
+    python -m tools.run screenall    # 全A 多策略选股(策略0/2/4… S01/箱体3 已下线)→ 只对(各策略选出并集∪自选)做新闻/LLM/合议
     # 追加 --all 用全池 32 只;默认开发子集 10 只(config/dev_sample.json)
     # pattern 额外支持 --universe [N]:从全 A 票池取前 N 只(默认 50)扫描
     # sepa 额外支持 --universe [N] --session 午间|收盘 --no-fetch:SEPA+VCP 监控扫描
@@ -626,7 +626,7 @@ def run_screen_all(codes_all: list[str], as_of: str, no_llm: bool = False,
                    no_fetch: bool = False) -> dict:
     """全A 多策略选股 → 只对(各策略选出并集 ∪ 自选)做新闻/LLM/合议。
 
-    与 run_two_stage(单形态达标池)的区别:达标池 = 策略0/1/2/3/4 **五个全A screener 选出票的并集**,
+    与 run_two_stage(单形态达标池)的区别:达标池 = 各在产全A screener 选出票的并集,
     把新闻/LLM 覆盖面扩到所有策略选出的票,而非仅形态。省 token 命门同 two_stage:
     最贵的新闻/LLM 只对 llm_subset(选出并集 ∪ 自选),不对全A codes_all。
 
@@ -634,16 +634,19 @@ def run_screen_all(codes_all: list[str], as_of: str, no_llm: bool = False,
 
     流程:
       ①  set_active_date + K线主档同步(主档缺失/太旧→baostock 全量;否则 spot 增量;失败回退逐只)。
-      ②  跑 5 个全A screener(council/s01/s02/box/momentum,均 fetch=False 读步骤①主档,不重采);
+      ②  跑各在产全A screener(council/s02/momentum/半导体/S03/S04/最强/反转/条件化;
+          S01 趋势深跌反包 与 箱体3 已因显著负下线摘除),均 fetch=False 读步骤①主档,不重采;
           各 _safe 隔离——单个 screener 失败降级跳过,不中止其余。
       ③  union_picks = 各 screener picks 并集(去重保序)。
       ④  llm_subset = union_picks ∪ 自选池(去重)——新闻/LLM 只对这批。
       ⑤  补缺数值面(skip-if-cached)→ 新闻(no_llm 跳过)→ 板块指数 → LLM 情绪(no_llm 跳过)→
           组装/事件/多因子/合议 → 横表/选股视图,全对 llm_subset。
     """
-    from tools.pipeline import (screen_box, screen_conditional_rank, screen_council,
+    # 注:screen_s01(趋势深跌反包)/ screen_box(箱体3)已因全史深诊断显著负下线,
+    # 不再进本编排(代码存档保留,见各文件顶部说明)。
+    from tools.pipeline import (screen_conditional_rank, screen_council,
                                  screen_max_range, screen_momentum, screen_reversal_turnover,
-                                 screen_s01, screen_s02, screen_semi_factor, screen_strong, screen_volume)
+                                 screen_s02, screen_semi_factor, screen_strong, screen_volume)
     store.set_active_date(as_of)
     logger.info("===== 全A多策略选股开始(日期 %s,全A %d 只)%s=====",
                 as_of, len(codes_all), "(数据-only)" if no_llm else "")
@@ -656,12 +659,11 @@ def run_screen_all(codes_all: list[str], as_of: str, no_llm: bool = False,
         ms = _safe("K线主档同步", lambda: master_sync.sync_master(codes_all, as_of=as_of)) or {}
         logger.info("K线主档同步:模式=%s 成功 %d", ms.get("mode"), ms.get("ok", 0))
 
-    # —— 步骤②:跑 5 个全A screener(fetch=False 只读主档);_safe 逐个隔离,单个失败不中止其余 ——
+    # —— 步骤②:跑各在产全A screener(fetch=False 只读主档);_safe 逐个隔离,单个失败不中止其余 ——
+    # 策略1·趋势深跌反包(S01)与 策略3·箱体形态(箱体3)已因显著负下线,不再编排(存档见 screen_s01/screen_box)。
     screeners = [
         ("策略0·多专家合议", lambda: screen_council.run_council_screen(codes_all, as_of=as_of, fetch=False)),
-        ("策略1·趋势深跌反包", lambda: screen_s01.run_s01_screen(codes_all, as_of=as_of, fetch=False)),
         ("策略2·放量后缩量回踩", lambda: screen_s02.run_s02_screen(codes_all, as_of=as_of, fetch=False)),
-        ("策略3·箱体形态", lambda: screen_box.run_box_screen(codes_all, as_of=as_of, fetch=False)),
         ("策略4·动量组合", lambda: screen_momentum.run_momentum_screen(codes_all, as_of=as_of, fetch=False)),
         # 策略5·半导体多因子:限半导体池 178 只,财报三大表/fundamental 需**触网补采**
         # (fetch=True),因为主闭环采数值面 collect_values 只对 llm_subset,半导体池票

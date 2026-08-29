@@ -73,7 +73,7 @@
     <li><b>{{ st.label }}</b>({{ st.key }}):{{ st.title }}</li>
     {% endfor %}
   </ul>
-  <p class="muted tiny">默认全勾(展示全并集)。命中来源用 key 拼接(如「策略0+策略1」)。一个都没勾 → 显示「无」。纯数据 · 非投资建议。</p>
+  <p class="muted tiny">默认全勾(展示全并集)。命中来源用 key 拼接(如「策略0+策略2」)。一个都没勾 → 显示「无」。纯数据 · 非投资建议。</p>
   <table>
     <thead><tr><th>代码</th><th>名称</th><th>行业</th><th>命中来源</th></tr></thead>
     <tbody id="combinedBody">
@@ -116,47 +116,7 @@
   {% endif %}
 </section>
 
-<!-- 策略1:趋势深跌反包(单日触发·纯数据) -->
-<section class="card wide">
-  <h2>策略1 · 筛选低吸股票
-    <span style="font-size:12px;padding:1px 8px;border:1px solid #b0883a;color:#b0883a;border-radius:10px;vertical-align:middle;">待验证</span>
-    {% if s.strategy1.present %}
-    <small>扫描 <b>{{ s.strategy1.扫描数 if s.strategy1.扫描数 is not none else '—' }}</b> ·
-      有效 <b>{{ s.strategy1.有效 if s.strategy1.有效 is not none else '—' }}</b> ·
-      入选 <b class="pos">{{ s.strategy1.入选数 if s.strategy1.入选数 is not none else (s.strategy1.rows|length) }}</b> ·
-      日期 <b>{{ s.strategy1.as_of }}</b></small>
-    {% endif %}</h2>
-  <p class="muted tiny">识别被资金「暴力洗盘/做低吸」的候选(均线多头 + 贴近52周高 + 近10日偏强 + 当日暴跌收阳);
-    <b>只筛选、不含买入</b>——买点(继续洗盘不破低点→低吸;反包高点→追)为后续主观/实时决策。
-    <b>待验证</b>:此前按「信号日收盘买入」的回测口径与本意不符,正按「午休选股→下午开盘买入」重设计验证。</p>
-  {% if not s.strategy1.present %}
-  <p class="muted">策略1 待运行(<code>python -m tools.pipeline.screen_s01</code>)。</p>
-  {% elif not s.strategy1.rows %}
-  <p class="muted">本日策略1 无入选标的。</p>
-  {% else %}
-  <table>
-    <thead>
-      <tr><th>代码</th><th>名称</th><th>收盘</th><th>H52</th>
-          <th>当日跌幅</th><th>近强(涨/跌)</th><th>均线多头</th><th>收阳</th></tr>
-    </thead>
-    <tbody>
-    {% for x in s.strategy1.rows %}
-      <tr data-code="{{ x.code }}">
-        <td>{{ x.code }}</td>
-        <td><a href="/stock/{{ x.code }}?date={{ s.as_of }}">{{ x.name }}</a></td>
-        <td>{{ x.close if x.close is not none else '—' }}</td>
-        <td>{% if x.H52 is not none %}{{ x.H52 }}{% if x.突破前高 %} <span class="pos tiny">突破前高</span>{% endif %}{% else %}—{% endif %}</td>
-        <td>{% if x['当日跌幅%'] is not none %}<span class="neg">{{ x['当日跌幅%'] }}%</span>{% else %}—{% endif %}</td>
-        <td class="muted tiny">{{ x.近强_涨 if x.近强_涨 is not none else '—' }} / {{ x.近强_跌 if x.近强_跌 is not none else '—' }}</td>
-        <td>{% if x.均线多头 %}<span class="pos">✓</span>{% elif x.均线多头 is none %}—{% else %}<span class="muted">—</span>{% endif %}</td>
-        <td>{% if x.收阳 %}<span class="pos">✓</span>{% elif x.收阳 is none %}—{% else %}<span class="muted">—</span>{% endif %}</td>
-      </tr>
-    {% endfor %}
-    </tbody>
-  </table>
-  {% endif %}
-</section>
-
+<!-- 趋势深跌反包:已因显著负下线,不在选股页展示(存档见 tools/pipeline;诊断见 docs/计划) -->
 <!-- 策略2:放量后缩量回踩(S02,全A view·待验证) -->
 <section class="card wide">
   <h2>策略2 · 放量后缩量回踩
@@ -190,39 +150,7 @@
   {% endif %}
 </section>
 
-<!-- 策略3:箱体形态(全A view·待验证) -->
-<section class="card wide">
-  <h2>策略3 · 箱体形态
-    <span style="font-size:12px;padding:1px 8px;border:1px solid #b0883a;color:#b0883a;border-radius:10px;vertical-align:middle;">待验证</span>
-    {% if s.strategy3.present %}
-    <small>扫描 <b>{{ s.strategy3.扫描数 if s.strategy3.扫描数 is not none else '—' }}</b> ·
-      有效 <b>{{ s.strategy3.有效 if s.strategy3.有效 is not none else '—' }}</b> ·
-      入选 <b class="pos">{{ s.strategy3.入选数 if s.strategy3.入选数 is not none else (s.strategy3.rows|length) }}</b> ·
-      数据日期 <b>{{ s.strategy3.as_of }}</b></small>
-    {% endif %}</h2>
-  <p class="muted tiny">箱体整理突破候选(欧奈尔/墨菲经典形态):末根放量突破窄幅箱体上沿。
-    <b>待验证</b>:形态几何参数刚录入、尚未回测,仅供观察。
-    全 A 筛选,读预落盘 view;入选多时页面仅展示前若干只。</p>
-  {% if not s.strategy3.present %}
-  <p class="muted">策略3 待运行(<code>python -m tools.pipeline.screen_box</code>)。</p>
-  {% elif not s.strategy3.rows %}
-  <p class="muted">本日策略3 无入选标的。</p>
-  {% else %}
-  <table>
-    <thead><tr><th>代码</th><th>名称</th><th>行业</th></tr></thead>
-    <tbody>
-    {% for x in s.strategy3.rows %}
-      <tr data-code="{{ x.code }}">
-        <td>{{ x.code }}</td>
-        <td><a href="/stock/{{ x.code }}?date={{ s.as_of }}">{{ x.name }}</a></td>
-        <td class="muted">{{ x.industry or '-' }}</td>
-      </tr>
-    {% endfor %}
-    </tbody>
-  </table>
-  {% endif %}
-</section>
-
+<!-- 箱体形态:已因显著负下线,不在选股页展示(存档见 tools/pipeline;诊断见 docs/计划) -->
 <!-- 策略4:动量组合(原策略2 改号·全A view) -->
 <section class="card wide">
   <h2>策略4 · 动量组合
