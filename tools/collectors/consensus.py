@@ -170,6 +170,21 @@ def fetch_consensus(codes: list[str]) -> dict[str, dict]:
     return out
 
 
-def load_consensus(code: str) -> dict:
-    """读单票一致预期。缺失抛 FileNotFoundError。"""
-    return store.get_raw("consensus", code)
+def load_consensus(code: str, as_of: str | None = None) -> dict:
+    """读单票一致预期。缺失抛 FileNotFoundError。
+
+    as_of point-in-time(去历史重建前视偏差):
+      - as_of=None(当日/存在性检查):读全局最新快照(store.get_raw)。
+      - as_of 指定(历史重建/回测):date-pin 到 **≤as_of 的最新采集分区**
+        (store.get_raw_resolved),绝不返回未来分区的预期值;≤as_of 无任何分区
+        (如首次采集之前的历史日)→ FileNotFoundError,交上层降级(不注入今值)。
+
+    **点数据局限(锁死)**:一致预期是「采集当时」的机构预期快照,只能 date-pin 到
+    最近的历史采集分区,**无法重构任意 as_of 当天的预期值**(源不提供历史快照)。
+    故历史重建时该块要么是最近的 ≤as_of 快照、要么缺失降级——已杜绝未来函数,但
+    分区颗粒度受实际采集频率限制(周级)。
+    """
+    if as_of is None:
+        return store.get_raw("consensus", code)
+    payload, _resolved, _fetched = store.get_raw_resolved("consensus", code, date=as_of)
+    return payload

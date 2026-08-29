@@ -77,25 +77,31 @@ def build_record(code: str, as_of: str) -> dict:
         flow = None
 
     # —— 借鉴 a-stock-data 新增采集的摘要块(缺采集→None,多因子该维降级)——
+    # 三块统一按 as_of point-in-time 取数,去历史重建(回填 panel/多因子回测)前视偏差:
+    #   · chip:纯本地推演,**天然可按 as_of 重算** → 只用 ≤as_of 的 K线 bar(真 point-in-time)。
+    #   · consensus/holder:**点数据、源无历史快照** → 只能 date-pin 到 ≤as_of 的最近采集分区
+    #     (get_raw_resolved,绝不返回未来分区);无 ≤as_of 分区则缺失降级(不注入今值)。
+    #     ⚠ 锁死:这两块历史重建只保证「无未来函数」,**不保证重构任意 as_of 当天的原值**
+    #     (分区颗粒度受实际采集频率限制)。详见各 load_* docstring。
     # 筹码分布(本地推演):获利比例/平均成本/成本区间/集中度90
     chip_block = None
     try:
         from tools.collectors import chip
-        chip_block = _safe(lambda: chip.load_chip(code))
+        chip_block = _safe(lambda: chip.load_chip(code, as_of))
     except Exception:
         chip_block = None
     # 一致预期(前瞻):预期EPS当年/次年、预期增速、覆盖机构数
     consensus_block = None
     try:
         from tools.collectors import consensus
-        consensus_block = _safe(lambda: consensus.load_consensus(code))
+        consensus_block = _safe(lambda: consensus.load_consensus(code, as_of))
     except Exception:
         consensus_block = None
     # 股东户数趋势(主力吸筹):最新户数/户数环比/连续减少期数
     holder_block = None
     try:
         from tools.collectors import smart_money as sm
-        holder_block = _safe(lambda: sm.summarize_holder(sm.load_holder_num(code)))
+        holder_block = _safe(lambda: sm.summarize_holder(sm.load_holder_num(code, as_of)))
     except Exception:
         holder_block = None
 

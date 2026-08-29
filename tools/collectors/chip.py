@@ -229,6 +229,35 @@ def _emit(code: str, rec: dict, out: dict, failed: list) -> None:
                 code, rec["获利比例"] * 100, rec["平均成本"])
 
 
-def load_chip(code: str) -> dict:
-    """从本地缓存读单票筹码因子。缓存缺失抛 FileNotFoundError。"""
-    return store.get_raw("chip", code)
+def summarize_asof(df: pd.DataFrame, as_of: str) -> dict:
+    """按 as_of point-in-time 推演筹码因子:**只用日期 ≤ as_of 的 K线 bar**。
+
+    去历史重建前视偏差(回填 panel / 多因子回测):筹码纯本地推演,天然可按任一
+    as_of 用「当时及之前」的 bar 重算 → 未来 bar 绝不参与。无 date 列(无法截断)
+    则退化为对整段 df 推演(与 summarize 一致,当日路径 df 尾部即今日,无差)。
+    """
+    if df is None or "date" not in getattr(df, "columns", []):
+        return summarize(df)
+    d = pd.to_datetime(as_of)
+    sub = df[pd.to_datetime(df["date"]) <= d]
+    return summarize(sub)
+
+
+def load_chip(code: str, as_of: str | None = None) -> dict:
+    """读单票筹码因子。
+
+    - as_of=None(当日/存在性检查路径):读本地缓存快照(store.get_raw,当日 latest)。
+    - as_of 指定(历史重建/回测路径):**point-in-time 重算**——读主档全历史 K线,
+      仅用 ≤as_of 的 bar 推演(见 summarize_asof),杜绝把未来值写进历史。
+      ≤as_of 数据不足/缺换手率而无法推演 → 抛 FileNotFoundError(交上层降级为 None,
+      使 provenance.chip 如实为 False,不伪造「有筹码」)。
+    缺 K线/缓存一律抛 FileNotFoundError(与其余 load_* 一致)。
+    """
+    if as_of is None:
+        return store.get_raw("chip", code)
+    df = market.load_kline(code)                 # 主档全历史(含 date/turnover)
+    rec = summarize_asof(df, as_of)
+    if rec.get("获利比例") is None:
+        raise FileNotFoundError(
+            f"{code} as_of={as_of} 无法 point-in-time 推演筹码(≤as_of 缺换手率/数据不足)")
+    return rec
