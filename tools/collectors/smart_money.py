@@ -156,11 +156,19 @@ def summarize_holder(items: list[dict]) -> dict:
 # ————————————————————————————————————————————————
 # 编排
 # ————————————————————————————————————————————————
-def fetch_smart_money(codes: list[str], days: int | None = None) -> dict[str, dict]:
+def fetch_smart_money(codes: list[str], days: int | None = None,
+                      holder_max_stale_days: float | None = None) -> dict[str, dict]:
     """采集龙虎榜/大宗/股东户数并落盘。返回 {code: {"lhb":n,"block":n,"holder":n}} 计数概览。
 
-    龙虎榜/大宗走**一次全市场区间拉取 + 按代码切片**;股东户数逐票拉。
+    龙虎榜/大宗走**一次全市场区间拉取 + 按代码切片**(日级变动,每日全量刷新);
+    股东户数逐票拉(**季度级变动**,唯一的逐票网络开销)。
     任一源整体失败只降级该源(记 warning),不阻断其余;港股整体落空。
+
+    holder_max_stale_days:股东户数**新鲜度门控**(去每日全量逐票拉的浪费/限流)。
+      None → 每次都拉(原行为);设阈值 → 缓存新鲜(距上次采集 ≤ 阈值天)的票**跳过**
+      逐票网络拉取(不重写今日分区,读取侧靠 store date-pin 回退到最近历史分区),
+      仅对陈旧/无缓存的票才拉。龙虎榜/大宗不受此门控(日级需每日刷新)。
+      节流 sleep 只在真正发起 holder 网络请求时才计,跳过则不 sleep。
     """
     from tools.config import stock_pool
 
@@ -176,6 +184,7 @@ def fetch_smart_money(codes: list[str], days: int | None = None) -> dict[str, di
 
     out: dict[str, dict] = {}
     failed: list[str] = []
+    skipped_holder = 0
     n = len(codes)
     for i, code in enumerate(codes, 1):
         logger.info("[%d/%d] 主力行为 %s 采集...", i, n, code)
@@ -187,13 +196,21 @@ def fetch_smart_money(codes: list[str], days: int | None = None) -> dict[str, di
         try:
             lhb = _lhb_rows_of(lhb_all, code) if lhb_all is not None else []
             block = _block_rows_of(block_all, code) if block_all is not None else []
+            store.put_raw("lhb", code, lhb, meta={"source": _SOURCE})
+            store.put_raw("block_trade", code, block, meta={"source": _SOURCE})
+            # 股东户数:季度级 → 新鲜则跳过逐票网络拉(不重写今日分区,读取侧 date-pin 回退)
+            if (holder_max_stale_days is not None
+                    and not store.is_stale("holder_num", code, holder_max_stale_days)):
+                skipped_holder += 1
+                out[code] = {"lhb": len(lhb), "block": len(block), "holder": -1}
+                logger.info("主力行为 %s:龙虎榜 %d / 大宗 %d / 户数(缓存新鲜跳过)",
+                            code, len(lhb), len(block))
+                continue                    # 跳过 → 不 sleep(无网络)
             try:
                 holder = _fetch_holder_num(code)
             except Exception as e:         # 股东户数逐票,单票失败只降级该项
                 logger.debug("股东户数 %s 失败: %s", code, e)
                 holder = []
-            store.put_raw("lhb", code, lhb, meta={"source": _SOURCE})
-            store.put_raw("block_trade", code, block, meta={"source": _SOURCE})
             store.put_raw("holder_num", code, holder,
                           meta={"source": _SOURCE, **summarize_holder(holder)})
             out[code] = {"lhb": len(lhb), "block": len(block), "holder": len(holder)}
@@ -203,6 +220,8 @@ def fetch_smart_money(codes: list[str], days: int | None = None) -> dict[str, di
             failed.append(code)
             logger.error("主力行为 %s 失败: %s", code, e)
         time.sleep(settings.FETCH_SLEEP_SEC)
+    if skipped_holder:
+        logger.info("股东户数新鲜度门控:跳过 %d 只(缓存 ≤ %s 天)", skipped_holder, holder_max_stale_days)
     if failed:
         logger.warning("主力行为拉取失败(%d): %s", len(failed), failed)
     return out
@@ -229,6 +248,19 @@ def load_block_trade(code: str) -> list[dict]:
     return store.get_raw("block_trade", code)
 
 
-def load_holder_num(code: str) -> list[dict]:
-    """读单票股东户数。缺失抛 FileNotFoundError。"""
-    return store.get_raw("holder_num", code)
+def load_holder_num(code: str, as_of: str | None = None) -> list[dict]:
+    """读单票股东户数。缺失抛 FileNotFoundError。
+
+    as_of point-in-time(去历史重建前视偏差):
+      - as_of=None(当日/存在性检查):读全局最新分区(store.get_raw)。
+      - as_of 指定(历史重建/回测):date-pin 到 **≤as_of 的最新采集分区**
+        (store.get_raw_resolved),绝不返回未来分区;≤as_of 无分区 → FileNotFoundError。
+
+    **点数据局限(锁死)**:股东户数是季度披露、采集当时的快照,只能 date-pin 到最近
+    历史采集分区,**无法重构任意 as_of 当天的户数**(且分区内各期均 ≤ 采集日,无未来泄漏)。
+    历史重建该块要么是最近 ≤as_of 快照、要么缺失降级——已杜绝未来函数。
+    """
+    if as_of is None:
+        return store.get_raw("holder_num", code)
+    payload, _resolved, _fetched = store.get_raw_resolved("holder_num", code, date=as_of)
+    return payload
