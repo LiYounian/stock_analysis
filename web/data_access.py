@@ -359,16 +359,18 @@ def screen_page(date: str = "latest") -> dict:
 
 
 def selection_page(date: str = "latest") -> dict:
-    """选股结果页(自选股 + 综合选股 + 5 策略):
+    """选股结果页(自选股 + 综合选股 + 各在产策略):
         ① 自选股(自选池成员,合议方向/分 + 止盈止损)
-        →【综合选股】(勾选策略0/1/2/3/4 → 各策略入选代码并集,前端实时重算)
+        →【综合选股】(勾选各在产策略 → 各策略入选代码并集,前端实时重算)
         → 策略0 · 多专家合议(全A,读 view「策略0合议」top)
-        → 策略1 · 趋势深跌反包(读 view「趋势深跌反包」,标「待验证」)
         → 策略2 · 放量后缩量回踩 S02(读 view「放量后缩量回踩」,标「待验证」)
-        → 策略3 · 箱体形态(读 view「箱体形态」,标「待验证」)
-        → 策略4 · 动量组合(读 view「动量组合」)
+        → 策略4 · 动量组合(读 view「动量组合」)…(其余策略见下)
 
-    纯读离线 view + 中心记录:策略0~4 全部读全A screener 预落盘 view(offline run.py 产出),
+    ⚠️ 策略1·趋势深跌反包(S01)与 策略3·箱体形态(箱体3)已因全史深诊断显著负下线,
+       不再在本页展示、不进综合选股并集(存档见 tools/pipeline/screen_s01|screen_box;
+       诊断见 docs/计划/S01诊断_删除判定_20260829.md、docs/计划/箱体3_显著负根因诊断与救改删判定.md)。
+
+    纯读离线 view + 中心记录:各在产策略全部读全A screener 预落盘 view(offline run.py 产出),
     web 不触网、不计算。任何 view 缺失 / pool 空全部走兜底(present=False / 空列表),
     页面永不空、不报错。合议 config(tau/权重/分母模式)供前端勾选实时重合成(复用 council.js councilSynth)。
     """
@@ -400,11 +402,10 @@ def selection_page(date: str = "latest") -> dict:
         })
     pool_rows.sort(key=lambda x: (x["council_score"] is not None, x["council_score"] or 0), reverse=True)
 
-    # 策略0~4 全部读全A screener 预落盘 view(策略0 top / 其余 入选清单)
+    # 各在产策略读全A screener 预落盘 view(策略0 top / 其余 入选清单)
+    # 策略1·趋势深跌反包(S01)/ 策略3·箱体形态(箱体3)已下线,不再读 view、不再展示。
     strategy0 = _strategy0_section(recs, date)
-    strategy1 = _s01_section(recs, date)
     strategy2 = _strategy2_section(recs, date)     # 放量后缩量回踩 S02(全A view,待验证)
-    strategy3 = _strategy3_section(recs, date)     # 箱体形态(全A view,待验证)
     strategy4 = _strategy4_section(recs, date)     # 动量组合(全A view,原策略2 改号 2→4)
     strategy5 = _strategy5_section(recs, date)     # 自选池小市值(web 层实时跑策略D,不读 view)
     strategy6 = _strategy6_section(recs, date)     # 半导体多因子(优先读 view「半导体多因子」,缺则实时兜底)
@@ -418,15 +419,15 @@ def selection_page(date: str = "latest") -> dict:
     strategy_strong = _strategy_strong_section(recs, date)  # S05 最强(PR#15,Tushare-only)
     strategy_rt = _strategy_reversal_turnover_section(recs, date)  # 策略10 反转低换手(候选·前向观测中)
     strategy_cr = _strategy_conditional_rank_section(recs, date)   # 策略11 指标条件化状态排序(状态参考·非alpha)
-    combined = _combined_section(strategy0, strategy1, strategy2, strategy3,
+    combined = _combined_section(strategy0, strategy2,
                                  strategy4, strategy5, strategy6, recs,
                                  strategy_mr=strategy_mr, strategy_vol=strategy_vol,
                                  strategy_strong=strategy_strong, strategy_rt=strategy_rt,
                                  strategy_cr=strategy_cr)
 
     return {"rows": pool_rows, "total": len(recs),
-            "combined": combined, "strategy0": strategy0, "strategy1": strategy1,
-            "strategy2": strategy2, "strategy3": strategy3, "strategy4": strategy4,
+            "combined": combined, "strategy0": strategy0,
+            "strategy2": strategy2, "strategy4": strategy4,
             "strategy5": strategy5, "strategy6": strategy6,
             "strategy_mr": strategy_mr, "strategy_vol": strategy_vol,
             "strategy_strong": strategy_strong, "strategy_rt": strategy_rt,
@@ -538,15 +539,8 @@ def _strategy2_section(recs: dict, date: str = "latest") -> dict:
     return _view_picks_section("放量后缩量回踩", recs, date)
 
 
-def _strategy3_section(recs: dict, date: str = "latest") -> dict:
-    """策略3「箱体形态」区块:读全A screener view「箱体形态」(screen_box 产出)。
-
-    schema:{as_of, 扫描数, 有效样本, 入选数, 入选清单:[{code, ...}]}。
-    与策略0/1 一致:全A 预落盘 view;view 缺失 → present=False(前端「策略3 待运行」)。
-
-    标「待验证」:箱体几何参数刚录入、未回测,仅供观察。
-    """
-    return _view_picks_section("箱体形态", recs, date)
+# 策略3「箱体形态」区块(_strategy3_section)已因箱体3 显著负下线删除,不再在选股页展示。
+# screener 存档见 tools/pipeline/screen_box.py;诊断见 docs/计划/箱体3_显著负根因诊断与救改删判定.md。
 
 
 def _strategy4_section(recs: dict, date: str = "latest") -> dict:
@@ -846,27 +840,27 @@ def _strategy5_section(recs: dict, date: str = "latest", top_k: int = 3) -> dict
     }
 
 
-def _combined_section(strategy0: dict, strategy1: dict, strategy2: dict,
-                      strategy3: dict, strategy4: dict, strategy5: dict,
+def _combined_section(strategy0: dict, strategy2: dict,
+                      strategy4: dict, strategy5: dict,
                       strategy6: dict, recs: dict, *,
                       strategy_mr: dict | None = None,
                       strategy_vol: dict | None = None,
                       strategy_strong: dict | None = None,
                       strategy_rt: dict | None = None,
                       strategy_cr: dict | None = None) -> dict:
-    """【综合选股】:11 策略(策略0-10)入选代码的并集(去重),每票标注命中来源(被哪几个策略选中)。
+    """【综合选股】:各在产策略入选代码的并集(去重),每票标注命中来源(被哪几个策略选中)。
 
     后端产出**全并集**(所有可用策略入选代码);前端按勾选的策略实时过滤 + 重算命中来源
     (一个都没勾 → 前端显示"无")。默认全勾(展示全并集)。
     name 走 code_name 回退;行业优先中心记录 meta,再回退策略0 view 自带行业。
 
-    策略0~4 入选代码均来自各自全A screener 预落盘 view(与页面各区块展示口径一致,已截到 cap);
+    ⚠️ 策略1·趋势深跌反包(S01)与 策略3·箱体形态(箱体3)已因显著负下线,不再进并集;
+       key「策略X」保持原编号以兼容 sources 已落库口径,编号 1/3 空缺属预期。
+    各在产策略入选代码均来自各自全A screener 预落盘 view(与页面各区块展示口径一致,已截到 cap);
     策略5 = 自选池小市值(web 实时跑) · 策略6 = 半导体多因子(优先读 view「半导体多因子」,缺则实时兜底)。
     """
     s0_codes = [r["code"] for r in strategy0.get("rows", []) if r.get("code")]
-    s1_codes = [r["code"] for r in strategy1.get("rows", []) if r.get("code")]
     s2_codes = list(strategy2.get("picks") or [])
-    s3_codes = list(strategy3.get("picks") or [])
     s4_codes = list((strategy4 or {}).get("picks") or [])
     s5_codes = list((strategy5 or {}).get("picks") or [])
     s6_codes = list((strategy6 or {}).get("picks") or [])
@@ -880,8 +874,8 @@ def _combined_section(strategy0: dict, strategy1: dict, strategy2: dict,
 
     sources: dict[str, list[str]] = {}
     order: list[str] = []
-    for key, codes in (("策略0", s0_codes), ("策略1", s1_codes), ("策略2", s2_codes),
-                       ("策略3", s3_codes), ("策略4", s4_codes), ("策略5", s5_codes),
+    for key, codes in (("策略0", s0_codes), ("策略2", s2_codes),
+                       ("策略4", s4_codes), ("策略5", s5_codes),
                        ("策略6", s6_codes), ("策略7", s7_codes), ("策略8", s8_codes),
                        ("策略9", s9_codes), ("策略10", s10_codes), ("策略11", s11_codes)):
         for c in codes:
@@ -906,18 +900,10 @@ def _combined_section(strategy0: dict, strategy1: dict, strategy2: dict,
          "available": bool(strategy0.get("present")),
          "title": "全 A 5000+ 只由 6 类数据专家(技术 / 资金 / 情绪 / 事件 / 多因子 …)"
                   "分头打分,弃权项自动剔除后按综合分排序,取 Top N。"},
-        {"key": "策略1", "label": "筛选低吸股票", "codes": s1_codes,
-         "available": bool(strategy1.get("present")),
-         "title": "识别庄家暴力洗盘后的低吸候选(只筛选、不含买入信号)。"
-                  "买点低吸 / 追为后续主观决策。"},
         {"key": "策略2", "label": "放量后缩量回踩", "codes": s2_codes,
          "available": bool(strategy2.get("present")),
          "title": "周线放量后当日缩量回踩 10 日线的候选(待验证);"
                   "回测为信号日收盘机械基线、非最终买法,仅供观察。"
-                  "全 A 筛选,读预落盘 view。"},
-        {"key": "策略3", "label": "箱体形态", "codes": s3_codes,
-         "available": bool(strategy3.get("present")),
-         "title": "箱体整理突破候选(欧奈尔/墨菲经典形态),参数已录入待回测(待验证)。"
                   "全 A 筛选,读预落盘 view。"},
         {"key": "策略4", "label": "动量组合", "codes": s4_codes,
          "available": bool(strategy4.get("present")),
@@ -964,61 +950,8 @@ def _combined_section(strategy0: dict, strategy1: dict, strategy2: dict,
     return {"strategies": strategies, "rows": rows}
 
 
-def _s01_section(recs: dict, date: str = "latest") -> dict:
-    """S01「趋势深跌反包」区块:读 store view「趋势深跌反包」(screen_s01 产出),逐票扁平化。
-
-    防空(同页其它区块口径):view 缺失 → present=False(前端"S01 待运行");
-    单票明细缺字段 → 对应值 None(前端渲染「—」),绝不抛异常。
-    schema:{扫描数, 有效样本, 跳过数(历史不足), 入选数, 入选清单:[{code, 明细:{MA{5..200}, close,
-    H52, 近强_涨/跌:[涨,跌], 当日跌幅(小数), 收阳}}]}。字段名兼容契约的两种写法(有效样本/有效 等)。
-    个股名从中心记录 meta 取(_name),取不到显代码。
-    """
-    empty = {"present": False, "扫描数": None, "有效": None, "跳过": None,
-             "入选数": None, "as_of": as_of(date), "rows": []}
-    try:
-        v = store.get_view("趋势深跌反包", date=date)
-    except FileNotFoundError:
-        return empty
-    if not isinstance(v, dict):
-        return empty
-
-    rows = []
-    for item in v.get("入选清单", []) or []:
-        if not isinstance(item, dict):
-            continue
-        code = item.get("code")
-        d = item.get("明细") or {}
-        ma = d.get("MA") or {}
-        seq = [ma.get(k) for k in ("5", "10", "20", "30", "60", "200")]
-        close = d.get("close")
-        # 均线完整多头:MA5>MA10>...>MA200 且 close>=MA5(缺 MA 时置 None→前端「—」)
-        bull = None
-        if all(x is not None for x in seq):
-            desc = all(seq[i] > seq[i + 1] for i in range(len(seq) - 1))
-            bull = bool(desc and (close is not None and close >= seq[0]))
-        h52 = d.get("H52")
-        # 是否突破前高:收盘超 52 周高(不含当日)→ 创新高
-        broke = (close is not None and h52 is not None and close > h52)
-        drop = d.get("当日跌幅")                       # 小数,如 -0.1257
-        drop_pct = round(drop * 100, 2) if isinstance(drop, (int, float)) else None
-        near = d.get("近强_涨/跌") or [None, None]
-        up = near[0] if len(near) > 0 else None
-        down = near[1] if len(near) > 1 else None
-        rows.append({
-            "code": code, "name": _name(recs, code),
-            "close": close, "H52": h52, "突破前高": broke,
-            "当日跌幅%": drop_pct, "近强_涨": up, "近强_跌": down,
-            "均线多头": bull, "收阳": d.get("收阳"),
-        })
-    return {
-        "present": True,
-        "扫描数": v.get("扫描数"),
-        "有效": v.get("有效样本", v.get("有效")),
-        "跳过": v.get("跳过数(历史不足)", v.get("跳过(历史不足)")),
-        "入选数": v.get("入选数"),
-        "as_of": v.get("as_of") or as_of(date),
-        "rows": rows,
-    }
+# S01「趋势深跌反包」区块(_s01_section)已因显著负下线删除,不再在选股页展示。
+# screener 存档见 tools/pipeline/screen_s01.py;诊断见 docs/计划/S01诊断_删除判定_20260829.md。
 
 
 def pool_page(date: str = "latest") -> dict:
