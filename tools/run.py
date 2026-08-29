@@ -42,7 +42,7 @@ from tools.collectors import master_sync
 from tools.collectors import news, policy
 from tools.collectors import smart_money as sm
 from tools.collectors import ugc
-from tools.config import stock_pool
+from tools.config import settings, stock_pool
 from tools.store import repo as store
 
 logging.basicConfig(level=logging.INFO, format="%(name)s %(levelname)s %(message)s")
@@ -100,8 +100,17 @@ def collect_values(codes: list[str]) -> None:
         logger.info("资金流:成功 %d", len(_safe("资金流", lambda: ff.fetch_fundflow(codes)) or {}))
         # 筹码本地推演(读上一步落好的主档 K线,无网络);主力行为/一致预期走东财
         logger.info("筹码:成功 %d", len(_safe("筹码", lambda: chip.fetch_chip(codes)) or {}))
-        logger.info("主力行为:成功 %d", len(_safe("主力行为", lambda: sm.fetch_smart_money(codes)) or {}))
-        logger.info("一致预期:成功 %d", len(_safe("一致预期", lambda: consensus.fetch_consensus(codes)) or {}))
+        # 主力行为:龙虎榜/大宗日级 → 每日全刷;股东户数季度级 → 新鲜度门控(缓存新鲜跳过逐票拉)
+        logger.info("主力行为:成功 %d", len(_safe(
+            "主力行为",
+            lambda: sm.fetch_smart_money(codes, holder_max_stale_days=settings.HOLDER_STALE_DAYS)) or {}))
+        # 一致预期周级变 → 新鲜度门控:只对缓存陈旧/无缓存的票逐票拉(对齐 industry 的 skip-if-cached)
+        need_cs = [c for c in codes if store.is_stale("consensus", c, settings.CONSENSUS_STALE_DAYS)]
+        if need_cs:
+            logger.info("一致预期:%d/%d 陈旧待拉,成功 %d", len(need_cs), len(codes),
+                        len(_safe("一致预期", lambda: consensus.fetch_consensus(need_cs)) or {}))
+        else:
+            logger.info("一致预期:全部缓存新鲜(≤%s 天),跳过", settings.CONSENSUS_STALE_DAYS)
         # 行业变迁史近乎静态(多年一变),只补尚无缓存的票,避免每日重复拉巨潮
         need_ih = [c for c in codes if not _load_ok(ih.load_industry_history, c)]
         if need_ih:
