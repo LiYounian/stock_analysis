@@ -85,8 +85,8 @@ def main(argv=None):
     lag = report.flag_laggards(replay_agg, live_agg, horizons)
     done = ("①双轨分明 ②T+1入场 ③收益质量(均值/中位/盈亏比/P10P90) "
             "④超额(全市场等权+随机bootstrap) ⑤按日聚类显著性(CI+p) ⑥rank-IC(排序型)")
-    undone = ("指数基准(HS300/中证1000)未接,用全市场等权代理(见假设);回放仅覆盖5个纯技术方向型"
-              "screener(S01/S02/箱体/S03/S04),动量/SEPA/条件化回放待接;live轨长窗数据不足如实标注")
+    undone = ("指数基准(HS300/中证1000)未接,用全市场等权代理(见假设);回放覆盖纯技术方向型"
+              "screener(S02/S03/S04;S01/箱体3 已因显著负下线仅存档),动量/SEPA/条件化回放待接;live轨长窗数据不足如实标注")
     assumptions = [
         "无 open 的历史 bar 用 close[T+1] 当入场价(极少数;单元格'用close入场占比%'量化)",
         "对标指数基准未接入,④超额暂用『全市场等权平均收益』作基准代理(口径可复现);随机同数量 bootstrap 已做",

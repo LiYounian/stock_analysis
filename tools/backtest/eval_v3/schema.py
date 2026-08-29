@@ -73,9 +73,15 @@ STRATEGY_META: dict[str, StrategyMeta] = {
     "SEPA观察池": StrategyMeta("SEPA-观察", "SEPA 趋势模板·观察池", RANKABLE, True,
                               "同合格池口径,RPS250 排序"),
     # ── 广筛型(布尔达标全上):全部票等权 vs 市场基准 ──
-    "趋势深跌反包": StrategyMeta("S01", "趋势深跌反包", DIRECTIONAL, True),
+    # ⚠️ S01 趋势深跌反包 / 箱体3 箱体形态 已因全史深诊断显著负下线,不再进 screenall/回放/前端
+    #    (记分卡不当在产);仅保留登记项以便历史 live/replay 记录的稳定命名与归类,note 标注存档。
+    "趋势深跌反包": StrategyMeta("S01", "趋势深跌反包", DIRECTIONAL, True,
+                              "已下线·显著负仅存档:入场方向反(dead-cat bounce),不进生产。"
+                              "详见 docs/计划/S01诊断_删除判定_20260829.md"),
     "放量后缩量回踩": StrategyMeta("S02", "放量后缩量回踩", DIRECTIONAL, True),
-    "箱体形态": StrategyMeta("3", "箱体形态", DIRECTIONAL, True),
+    "箱体形态": StrategyMeta("3", "箱体形态", DIRECTIONAL, True,
+                          "已下线·显著负仅存档:追高见光死,固定持有期强显著负,不进生产。"
+                          "详见 docs/计划/箱体3_显著负根因诊断与救改删判定.md"),
     "最强选股": StrategyMeta("9", "最强选股", DIRECTIONAL, False,
                             "含 Tushare 筹码/资金面,不可历史回放,仅 live 观测"),
     "最大范围选股": StrategyMeta("S03", "最大范围选股", DIRECTIONAL, True),

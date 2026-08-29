@@ -7,9 +7,13 @@
 **不可回放的策略**(策略0多专家含新闻/LLM/情绪、策略9最强选股含 Tushare 筹码)不在此——它们的
 signal 依赖历史无快照的外部数据,强行回放会引入未来函数或数据缺口,故只走 live 观测轨。
 
+⚠️ S01 趋势深跌反包 / 3 箱体形态 已因全史深诊断显著负下线,不再进本回放集(记分卡不再当在产策略);
+   screener 代码存档保留(tools/pipeline/screen_s01|screen_box),诊断见 docs/计划/S01诊断_删除判定_20260829.md、
+   docs/计划/箱体3_显著负根因诊断与救改删判定.md。
+
 覆盖策略(全部纯技术、long-only、direction=+1):
   · 逐票 as-of 型(per-(票,日) signal_at,fn(kdf,t,code) 返 bool 或 dict{"SELECT","rank_score"}):
-      S01 趋势深跌反包 / S02 放量后缩量回踩 / 3 箱体形态 / S03 最大范围选股 / S04 量价放量
+      S02 放量后缩量回踩 / S03 最大范围选股 / S04 量价放量
       / SEPA-合格 趋势模板合格池(广筛状态池,纯日K三均线;带 60 日涨幅趋势分作 rank_score)。
   · 截面 TopK 型(策略4 动量组合·A腿):每交易日对全宇宙打「动量分」→ R²+拉普拉斯闸门 → 按分降序取
       TopK,需**跨票截面**定 TopK,故单列 `replay_momentum_predictions`,带 rank_score=动量分。
@@ -23,8 +27,8 @@ import numpy as np
 
 from tools.analysis.sepa_vcp import sepa as sepa_mod
 from tools.collectors import market
-from tools.pipeline import (screen_box, screen_max_range, screen_s01,
-                            screen_s02, screen_volume)
+# 注:screen_s01(S01)/ screen_box(箱体3)已下线,不再回放(存档保留,见各文件顶部)。
+from tools.pipeline import screen_max_range, screen_s02, screen_volume
 from tools.store import repo as store
 
 from . import schema
@@ -32,16 +36,11 @@ from . import schema
 logger = logging.getLogger("backtest.eval_v3.replay")
 
 
-def _sel_s01(kdf, t, code):
-    return bool(screen_s01.signal_at(kdf, t).get("SELECT"))
+# _sel_s01 / _sel_box 已随 S01/箱体3 下线移除(screener 存档保留)。
 
 
 def _sel_s02(kdf, t, code):
     return bool(screen_s02.signal_at(kdf, t).get("SELECT"))
-
-
-def _sel_box(kdf, t, code):
-    return bool(screen_box.signal_at(kdf, t).get("SELECT"))
 
 
 def _sel_maxrange(kdf, t, code):
@@ -70,10 +69,9 @@ def _sel_sepa(kdf, t, code):
 
 
 # strategy_id → (展示名, SELECT 判定函数)。均为方向型 long-only,可回放。
+# S01「趋势深跌反包」/ 3「箱体形态」已因显著负下线,不再登记(记分卡不当在产)。
 REPLAY_SCREENERS: dict[str, tuple] = {
-    "S01": ("趋势深跌反包", _sel_s01),
     "S02": ("放量后缩量回踩", _sel_s02),
-    "3": ("箱体形态", _sel_box),
     "S03": ("最大范围选股", _sel_maxrange),
     "S04": ("量价放量", _sel_volume),
     "SEPA-合格": ("SEPA 趋势模板·合格池", _sel_sepa),

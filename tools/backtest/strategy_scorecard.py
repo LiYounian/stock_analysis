@@ -57,6 +57,7 @@ _DIR = {"看多": 1, "看涨": 1, "多": 1, "看空": -1, "看跌": -1, "空": -
 # 不在表内的 view 文件也会被通用提取器兜底处理(ID 用文件名),保证新策略不漏。
 STRATEGY_SPECS: dict[str, tuple[str, str]] = {
     "策略0合议": ("0", "多专家合议(全A)"),
+    # S01/箱体3 已下线(见 _RETIRED_STEMS,扫描时跳过);登记项仅留作历史 view 命名。
     "趋势深跌反包": ("S01", "趋势深跌反包"),
     "放量后缩量回踩": ("S02", "放量后缩量回踩"),
     "箱体形态": ("3", "箱体形态"),
@@ -75,6 +76,10 @@ STRATEGY_SPECS: dict[str, tuple[str, str]] = {
 # 非策略 view 的文件名前缀/名(逐票 record、面板、情绪等),跳过。
 _SKIP_STEMS = {"backtest", "panel", "screen", "sentiment", "sentiment_policy",
                "factor", "news_ai", "SEPA雷达", "形态选股回测汇总", "选股分析报告"}
+
+# 已下线策略 view stem:全史深诊断显著负,已从生产链路摘除,记分卡不再当在产策略统计
+# (即便历史目录仍有其 view 也跳过)。screener 代码存档保留;诊断见 docs/计划/。
+_RETIRED_STEMS = {"趋势深跌反包", "趋势深跌反包回测", "箱体形态", "箱体形态回测"}
 
 # 各策略"选股清单"可能的键名(按优先级)。通用提取器还会兜底扫 list[dict(code)]。
 _PICK_KEYS = ("入选清单", "top", "rows", "排行", "达标清单", "达标")
@@ -242,8 +247,8 @@ def _iter_strategy_files(analysis_dir: str, dates=None):
             if not fn.endswith(".json"):
                 continue
             stem = fn[:-5]
-            if stem in _SKIP_STEMS or (len(stem) == 6 and stem.isdigit()):
-                continue   # 逐票 record / 面板 / 情绪等
+            if stem in _SKIP_STEMS or stem in _RETIRED_STEMS or (len(stem) == 6 and stem.isdigit()):
+                continue   # 逐票 record / 面板 / 情绪 / 已下线策略(S01/箱体3)
             yield d, stem, os.path.join(ddir, fn)
 
 
