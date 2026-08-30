@@ -102,6 +102,52 @@ def test_two_stage_runs_backtest_at_tail(monkeypatch):
     assert calls.index("run_screen") < calls.index("run_backtest")
 
 
+# ———————————— 百度新闻前向滚存接入 collect_message ————————————
+def _stub_message_sources(monkeypatch):
+    """把 collect_message 里的其它源全部存根成 no-op,只留 baidu 观察。"""
+    monkeypatch.setattr(run.news, "fetch_news", lambda codes, **k: {})
+    monkeypatch.setattr(run.ugc, "fetch_ugc", lambda codes, **k: {})
+    monkeypatch.setattr(run.policy, "fetch_policy", lambda *a, **k: [])
+
+
+def test_collect_message_wires_baidu_same_scope(monkeypatch):
+    """百度采集挂进 collect_message,且对同一 codes(news_subset)——不另开全A范围。"""
+    _stub_message_sources(monkeypatch)
+    monkeypatch.setattr(run.settings, "BAIDU_NEWS_COLLECT", True)
+    got = {}
+    monkeypatch.setattr(run.baidu_news, "fetch_baidu_news",
+                        lambda codes, **k: got.setdefault("codes", list(codes)) or {c: [] for c in codes})
+    run.collect_message(["000001", "600000"])
+    assert got["codes"] == ["000001", "600000"]        # 采集范围 == 传入子集,非全A
+
+
+def test_collect_message_baidu_failure_no_crash(monkeypatch):
+    """百度采集抛错 → _safe 吞掉,collect_message(闭环)不中止。"""
+    _stub_message_sources(monkeypatch)
+    monkeypatch.setattr(run.settings, "BAIDU_NEWS_COLLECT", True)
+
+    def boom(codes, **k):
+        raise RuntimeError("百度被限流")
+
+    monkeypatch.setattr(run.baidu_news, "fetch_baidu_news", boom)
+    run.collect_message(["000001"])                    # 不抛即通过
+
+
+def test_collect_message_baidu_toggle_off(monkeypatch):
+    """BAIDU_NEWS_COLLECT=False → 完全不调百度采集(限流时可关)。"""
+    _stub_message_sources(monkeypatch)
+    monkeypatch.setattr(run.settings, "BAIDU_NEWS_COLLECT", False)
+    called = {"n": 0}
+
+    def spy(codes, **k):
+        called["n"] += 1
+        return {}
+
+    monkeypatch.setattr(run.baidu_news, "fetch_baidu_news", spy)
+    run.collect_message(["000001"])
+    assert called["n"] == 0
+
+
 def test_recent_quarter_ends():
     qs = run._recent_quarter_ends("2026-08-08", 2)
     assert qs == ["20260630", "20260331"]           # as_of 前最近 2 个季度末
