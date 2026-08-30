@@ -44,8 +44,10 @@ def test_build_min_record_shape_and_abstention():
     conf = {e["专家"]: e["置信度"] for e in cblk["experts"]}
     for name in ("资金流", "情绪三层", "多因子", "事件驱动"):
         assert conf[name] == 0.0, f"{name} 应弃权(无全A数据)"
-    # 技术趋势总在场(有 signals)
-    assert conf["技术趋势"] == 1.0
+    # V2 重加权:技术趋势已从默认专家组删除,不再入合议;
+    # 存活技术专家(超买超卖/拐点,读 ob_os/reversal signals)仍在场。
+    assert "技术趋势" not in conf, "技术趋势 应已从合议默认专家组移除(V2 删除)"
+    assert "超买超卖" in conf and "拐点" in conf, "存活技术专家应仍在合议块中"
 
 
 def test_build_min_record_none_when_insufficient():

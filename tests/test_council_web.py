@@ -83,9 +83,10 @@ def test_stock_page_renders_council(_patch_stock):
     assert 'id="councilData"' in r.text               # 前端重合成数据
     assert "/static/council.js" in r.text             # 前端脚本已引入
     assert 'id="councilAttr"' in r.text               # 归因表容器
-    # 默认专家组的专家名出现在勾选区
-    for name in ("技术趋势", "超买超卖", "情绪三层"):
+    # 默认专家组的专家名出现在勾选区(技术趋势已 V2 删除,不应再出现)
+    for name in ("拐点", "超买超卖", "情绪三层"):
         assert name in r.text
+    assert "技术趋势" not in r.text, "技术趋势 已从默认专家组移除,勾选区不应再渲染"
 
 
 def test_stock_page_without_council_still_ok(monkeypatch):

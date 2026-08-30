@@ -35,7 +35,10 @@ from tools.strategy.momentum import combo_momentum_screen, weighted_log_momentum
 logger = logging.getLogger("pipeline.screen_momentum")
 
 # —— A 腿默认参数(与 momentum.combo_momentum_screen 缺省对齐,可 CLI 覆盖 top_k)——
-DEFAULT_TOP_K = 30
+# Top-K 30→10:回测坐实动量 edge 只在 1 日尺度、且越窄越准(h=1 Top5 超额+1.27%/Top10 +0.84% p=0.06;
+# 5 日起衰减转负)。收窄到 Top10(比 Top5 样本更厚更稳);清单仅供 1 日短线参考,不宜持有>1 日。
+# 详见 docs/策略成绩报告.md(动量4 处置:保留但限用途·1日/Top-N 尺度)。
+DEFAULT_TOP_K = 10
 LOOKBACK_DAYS = 25
 R2_MIN = 0.4
 LAPLACE_S = 0.07
@@ -129,10 +132,11 @@ def run_momentum_screen(codes: list[str], as_of: str | None = None,
         "扫描数": len(codes), "有效样本": scanned, "跳过数(历史不足)": skipped,
         "入选数": len(selected),
         "top_k": top_k,
+        "适用尺度": "⚠仅 1 日短线尺度有选择性(回测:h=1 Top-N 有超额,持有≥5 日衰减转负);不宜持有>1 日。",
         "入选清单": selected,
         "规则": (f"加权对数动量打分(lookback={LOOKBACK_DAYS})→ R²≥{R2_MIN} + "
                  f"拉普拉斯低通末根='买'(s={LAPLACE_S},min_slope={MIN_SLOPE})闸门 → "
-                 f"按动量分降序取 Top{top_k}"),
+                 f"按动量分降序取 Top{top_k}(限 1 日尺度)"),
         "复用": "tools.strategy.momentum.combo_momentum_screen(closes_loader 注入)",
         "防未来函数": f"动量/信号只用 t 及之前;尾部即当日;历史<{need} 跳过",
     }
