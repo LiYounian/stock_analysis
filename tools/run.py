@@ -244,6 +244,18 @@ def collect_lhb(codes: list[str], as_of: str) -> None:
         socket.setdefaulttimeout(_old)
 
 
+def _update_lhb_scorecard(as_of: str) -> None:
+    """龙虎榜轴前向观察记分卡:逐日滚存当日被龙虎榜否决降权的选股票 + 降权前后排名,
+    K 线到期后自动回填 T+1/T+5 前向收益与"见光死"证实标记。真前向需滚存 ~15~20 交易日出首版结论。
+
+    persist=False 复算全票排名,绝不覆盖闭环已落的 top-N「策略0合议」view(避免副作用)。
+    仅观察、不参与选股决策;防未来函数:排名/综合分只用 as_of 及之前 K 线,前向收益仅事后回填。
+    """
+    from tools.backtest import lhb_forward_scorecard as fsc
+    df = fsc.update(as_of)
+    logger.info("龙虎榜前向记分卡:滚存 %s → 累计 %d 行 → %s", as_of, len(df), fsc._DEFAULT_OUT)
+
+
 # ————————————————————————————————————————————————
 # 情绪:LLM 三层打分(政策全局 + 各票新闻/舆情)
 # ————————————————————————————————————————————————
@@ -771,6 +783,13 @@ def run_screen_all(codes_all: list[str], as_of: str, no_llm: bool = False,
     run_panel(llm_subset)
     run_screen(llm_subset)
     _safe("前瞻回测汇总", run_backtest)              # 收尾可选增强(失败降级,不中止闭环)
+    # —— 风控微结构轴:收盘后采当日龙虎榜(T 落盘、list_date<as_of 次日生效)。
+    #    命门:生产日常走 screenall→run_screen_all,故龙虎榜的**实际每日采集入口在此**
+    #    (cmd_all/run_two_stage 也接了,但那两条非日常触发路径)。collect_lhb 自带优雅降级不中止闭环。
+    collect_lhb(codes_all, as_of)
+    # —— 前向观察:龙虎榜轴命中票逐日滚存记分卡(降权前后排名 + K线到期自动回填 T+1/T+5 与见光死标记)。
+    #    persist=False 复算全票排名不覆盖闭环已落 view;仅观察、不影响选股;失败降级不中止。
+    _safe("龙虎榜前向记分卡", lambda: _update_lhb_scorecard(as_of))
     logger.info("===== 全A多策略选股完成 → data/analysis/%s/;union=%d,llm_subset=%d 只含完整合议 =====",
                 as_of, len(union_picks), len(llm_subset))
     return {"as_of": as_of, "扫描": len(codes_all), "各策略入选": per_strategy,

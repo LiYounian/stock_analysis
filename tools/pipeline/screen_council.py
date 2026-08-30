@@ -118,7 +118,8 @@ def _safe(fn, default=None):
 
 
 def run_council_screen(codes: list[str], as_of: str | None = None,
-                       fetch: bool = True, top_n: int = TOP_N) -> dict:
+                       fetch: bool = True, top_n: int = TOP_N,
+                       persist: bool = True) -> dict:
     """扫描 codes,逐票合议默认专家组,按综合分降序落 view「策略0合议」。返回 view。
 
     fetch=True:缺 K 线自动采集;False:只读本地缓存(离线复算,不触网)。
@@ -200,7 +201,8 @@ def run_council_screen(codes: list[str], as_of: str | None = None,
         "防未来函数": ("只用 load_kline 历史 K 线 + 披露日≤as_of 的已披露财报(analyzer 控 as_of)"
                      "+ 龙虎榜 list_date<as_of 严格(盘后披露当天不可用),不引未来数据"),
     }
-    p = store.put_view("策略0合议", view)
+    # persist=False:只算不落盘(如前向记分卡复算全票排名时),避免覆盖闭环已落的 top-N view。
+    p = store.put_view("策略0合议", view) if persist else "(未落盘·persist=False)"
     logger.info("策略0合议:扫描 %d / 有效 %d / 跳过 %d / 财报覆盖 %d / 命中高危红旗 %d / 命中龙虎榜 %d / Top %d → %s",
                 len(codes), scanned, skipped, 带块数, 命中高危, 命中龙虎榜, len(top), p)
     return view
