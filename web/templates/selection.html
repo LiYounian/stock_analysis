@@ -1,8 +1,9 @@
 {% extends "base.html" %}
 {% block title %}选股结果 · A股策略辅助工具{% endblock %}
-{# 财报高危红旗风险标注(WI-6 风险层):命中严重度=高的财报红旗时挂⚠标注,悬停列出红旗名。
+{# 财报高危红旗风险标注(WI-6 升级:风险层已进选股排序):命中严重度=高的财报红旗时挂⚠标注,
+   悬停列出红旗名 + 本次对排序的降权/否决(risk_adjust)。红旗票在各清单中被降权/否决沉底;
    风险提示≠卖出建议;仅覆盖有财报数据的票(约175只),无财报优雅无标注。 #}
-{% macro risk_badge(x) %}{% if x.risk and x.risk.high_risk %}<span class="badge risk-flag" title="财报高危红旗：{{ x.risk.flags|join('、') }}(评级：{{ x.risk['评级'] or '—' }} · 报告期：{{ x.risk['报告期'] or '—' }})。红旗作风险/减仓/规避参考,非选股依据；风险提示≠卖出建议。">⚠财报高危</span>{% endif %}{% endmacro %}
+{% macro risk_badge(x) %}{% if x.risk and x.risk.high_risk %}<span class="badge risk-flag" title="财报高危红旗：{{ x.risk.flags|join('、') }}(评级：{{ x.risk['评级'] or '—' }} · 报告期：{{ x.risk['报告期'] or '—' }})。{% if x.risk_adjust and x.risk_adjust.应用 %}已{{ x.risk_adjust.模式 }}{% if x.risk_adjust.模式 == '降权' %}(排序扣分 {{ x.risk_adjust.罚分 }}){% endif %}沉底。{% else %}红旗作风险/减仓/规避参考。{% endif %}风险提示≠卖出建议,非投资建议。">⚠财报高危{% if x.risk_adjust and x.risk_adjust.应用 %}·已{{ x.risk_adjust.模式 }}{% endif %}</span>{% endif %}{% endmacro %}
 {% block content %}
 {% set expert_names = s.config.默认专家组 or (s.strategy0.rows[0].experts | map(attribute='专家') | list if s.strategy0.rows else (s.rows[0].experts | map(attribute='专家') | list if s.rows else [])) %}
 
