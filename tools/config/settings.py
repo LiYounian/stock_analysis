@@ -74,6 +74,12 @@ RAW_STALE_DAYS = 3          # raw 缓存超过此天数(或无采集元数据)�
 CONSENSUS_STALE_DAYS = float(os.getenv("CONSENSUS_STALE_DAYS", "5"))   # 一致预期(周级变,~3-5交易日)
 HOLDER_STALE_DAYS = float(os.getenv("HOLDER_STALE_DAYS", "28"))        # 股东户数(季度级,~20交易日≈28日历天)
 
+# —— 百度个股新闻情绪采集(collectors.baidu_news;前向增量,每日盘后快照)——
+# 新闻高频,但同日多次跑不必重拉:缓存 ≤ 阈值天视为新鲜 → 当日跳过(0.5 天≈半日,盘后日更仍会刷新)。
+BAIDU_NEWS_STALE_DAYS = float(os.getenv("BAIDU_NEWS_STALE_DAYS", "0.5"))
+# 单次单票拉取条数(百度 rn 参数;硬上限约 800~850。前向日更取近段即可,首采可调大做 warm-start)。
+BAIDU_NEWS_RN = int(os.getenv("BAIDU_NEWS_RN", "200"))
+
 # —— 情绪数据新鲜度(event 情绪引擎用,date-pin + 新鲜度标注)——
 # 回退策略:A2=可识别回退(默认,窗口内回退旧 raw 但标「陈旧」,超窗标「无数据」);
 #          A1=严格锁定(锁定日无 raw 即「无数据」,绝不回退旧数据)。

@@ -46,7 +46,8 @@ _JSON_KINDS = ("fundamental", "announcement", "news", "ugc", "policy", "llm_cach
                "chip",                 # 筹码分布摘要(collectors.chip 本地推演)
                "lhb", "block_trade", "holder_num",   # 主力行为:龙虎榜/大宗交易/股东户数(collectors.smart_money)
                "consensus",            # 机构一致预期(collectors.consensus)
-               "industry_history")     # 行业变迁史(collectors.industry_history)
+               "industry_history",     # 行业变迁史(collectors.industry_history)
+               "baidu_news")           # 百度个股新闻情绪(collectors.baidu_news;带真实发布时间+利好/利空标签)
 _RAW_KINDS = _PARQUET_KINDS + _JSON_KINDS
 _FLAT_KINDS = ("llm_cache",)   # 不按日期分区的 raw kind
 
