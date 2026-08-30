@@ -61,6 +61,8 @@ td.title { color: var(--muted); }
 .badges { display: flex; gap: 8px; flex-wrap: wrap; }
 .badge { background: #2a2e37; padding: 3px 10px; border-radius: 5px; font-size: 12px; }
 .badge.big { font-weight: 700; }
+/* 财报高危红旗风险标注(WI-6 风险层;风险提示≠卖出建议) */
+.badge.risk-flag { background: #4a2a12; color: #f0b060; font-weight: 600; margin-left: 6px; cursor: help; white-space: nowrap; }
 
 .chart-wrap { position: relative; height: 320px; margin-top: 6px; }
 .chart-wrap.vol { height: 110px; }

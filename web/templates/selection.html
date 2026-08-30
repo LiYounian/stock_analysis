@@ -1,5 +1,8 @@
 {% extends "base.html" %}
 {% block title %}选股结果 · A股策略辅助工具{% endblock %}
+{# 财报高危红旗风险标注(WI-6 风险层):命中严重度=高的财报红旗时挂⚠标注,悬停列出红旗名。
+   风险提示≠卖出建议;仅覆盖有财报数据的票(约175只),无财报优雅无标注。 #}
+{% macro risk_badge(x) %}{% if x.risk and x.risk.high_risk %}<span class="badge risk-flag" title="财报高危红旗：{{ x.risk.flags|join('、') }}(评级：{{ x.risk['评级'] or '—' }} · 报告期：{{ x.risk['报告期'] or '—' }})。红旗作风险/减仓/规避参考,非选股依据；风险提示≠卖出建议。">⚠财报高危</span>{% endif %}{% endmacro %}
 {% block content %}
 {% set expert_names = s.config.默认专家组 or (s.strategy0.rows[0].experts | map(attribute='专家') | list if s.strategy0.rows else (s.rows[0].experts | map(attribute='专家') | list if s.rows else [])) %}
 
@@ -32,7 +35,7 @@
       {% set a = x.anchor %}
       <tr data-code="{{ x.code }}">
         <td>{{ x.code }}</td>
-        <td><a href="/stock/{{ x.code }}?date={{ s.as_of }}">{{ x.name }}</a></td>
+        <td><a href="/stock/{{ x.code }}?date={{ s.as_of }}">{{ x.name }}</a>{{ risk_badge(x) }}</td>
         <td class="muted">{{ x.industry or x.sector or '-' }}</td>
         <td>{{ x.stops.现价 if x.stops.现价 is not none else '—' }}</td>
         <td class="muted tiny">{{ a.情景 or '—' }}</td>
@@ -104,7 +107,7 @@
     {% for x in s.strategy0.rows %}
       <tr data-code="{{ x.code }}">
         <td>{{ x.code }}</td>
-        <td><a href="/stock/{{ x.code }}?date={{ s.as_of }}">{{ x.name }}</a></td>
+        <td><a href="/stock/{{ x.code }}?date={{ s.as_of }}">{{ x.name }}</a>{{ risk_badge(x) }}</td>
         <td class="muted">{{ x.industry or '-' }}</td>
         <td><span class="sel-dir badge {{ 'buy' if x.council_dir=='看多' else ('sell' if x.council_dir=='看空' else 'wait') }}">{{ x.council_dir or '中性' }}</span>
             <span class="sel-conflict" title="专家分歧" style="{{ '' if x.council_conflict else 'display:none' }}">⚠️</span></td>
@@ -141,7 +144,7 @@
     {% for x in s.strategy2.rows %}
       <tr data-code="{{ x.code }}">
         <td>{{ x.code }}</td>
-        <td><a href="/stock/{{ x.code }}?date={{ s.as_of }}">{{ x.name }}</a></td>
+        <td><a href="/stock/{{ x.code }}?date={{ s.as_of }}">{{ x.name }}</a>{{ risk_badge(x) }}</td>
         <td class="muted">{{ x.industry or '-' }}</td>
       </tr>
     {% endfor %}
@@ -173,7 +176,7 @@
     {% for x in s.strategy4.rows %}
       <tr data-code="{{ x.code }}">
         <td>{{ x.code }}</td>
-        <td><a href="/stock/{{ x.code }}?date={{ s.as_of }}">{{ x.name }}</a></td>
+        <td><a href="/stock/{{ x.code }}?date={{ s.as_of }}">{{ x.name }}</a>{{ risk_badge(x) }}</td>
         <td class="muted">{{ x.industry or '-' }}</td>
         <td class="muted tiny">{{ x.combos|join('+') if x.combos else '-' }}</td>
       </tr>
@@ -203,7 +206,7 @@
     {% for x in s.strategy5.rows %}
       <tr data-code="{{ x.code }}">
         <td>{{ x.code }}</td>
-        <td><a href="/stock/{{ x.code }}?date={{ s.as_of }}">{{ x.name }}</a></td>
+        <td><a href="/stock/{{ x.code }}?date={{ s.as_of }}">{{ x.name }}</a>{{ risk_badge(x) }}</td>
         <td class="muted">{{ x.industry or '-' }}</td>
         <td>{{ x.mktcap_yi if x.mktcap_yi is not none else '—' }}</td>
         <td>{{ x.close if x.close is not none else '—' }}</td>
@@ -238,7 +241,7 @@
     {% for x in s.strategy6.rows %}
       <tr data-code="{{ x.code }}">
         <td>{{ x.code }}</td>
-        <td><a href="/stock/{{ x.code }}?date={{ s.as_of }}">{{ x.name }}</a></td>
+        <td><a href="/stock/{{ x.code }}?date={{ s.as_of }}">{{ x.name }}</a>{{ risk_badge(x) }}</td>
         <td class="muted">{{ x.industry or '-' }}</td>
         <td class="pos">{{ x.综合分 if x.综合分 is not none else '—' }}</td>
         <td>{% if x.rd_rev is not none %}{{ '%.2f'|format(x.rd_rev * 100) }}%{% else %}—{% endif %}</td>
@@ -274,7 +277,7 @@
     {% for x in s.strategy_mr.rows %}
       <tr data-code="{{ x.code }}">
         <td>{{ x.code }}</td>
-        <td><a href="/stock/{{ x.code }}?date={{ s.as_of }}">{{ x.name }}</a></td>
+        <td><a href="/stock/{{ x.code }}?date={{ s.as_of }}">{{ x.name }}</a>{{ risk_badge(x) }}</td>
         <td class="muted">{{ x.industry or '-' }}</td>
       </tr>
     {% endfor %}
@@ -313,7 +316,7 @@
     {% for x in s.strategy_vol.rows %}
       <tr data-code="{{ x.code }}" data-combos="{{ x.combos|join(',') }}">
         <td>{{ x.code }}</td>
-        <td><a href="/stock/{{ x.code }}?date={{ s.as_of }}">{{ x.name }}</a></td>
+        <td><a href="/stock/{{ x.code }}?date={{ s.as_of }}">{{ x.name }}</a>{{ risk_badge(x) }}</td>
         <td class="muted">{{ x.industry or '-' }}</td>
         <td class="muted tiny">{{ x.combos|join('+') if x.combos else '-' }}</td>
       </tr>
@@ -346,7 +349,7 @@
     {% for x in s.strategy_strong.rows %}
       <tr data-code="{{ x.code }}">
         <td>{{ x.code }}</td>
-        <td><a href="/stock/{{ x.code }}?date={{ s.as_of }}">{{ x.name }}</a></td>
+        <td><a href="/stock/{{ x.code }}?date={{ s.as_of }}">{{ x.name }}</a>{{ risk_badge(x) }}</td>
         <td class="muted">{{ x.industry or '-' }}</td>
       </tr>
     {% endfor %}
@@ -380,7 +383,7 @@
     {% for x in s.strategy_rt.rows %}
       <tr data-code="{{ x.code }}">
         <td>{{ x.code }}</td>
-        <td><a href="/stock/{{ x.code }}?date={{ s.as_of }}">{{ x.name }}</a></td>
+        <td><a href="/stock/{{ x.code }}?date={{ s.as_of }}">{{ x.name }}</a>{{ risk_badge(x) }}</td>
         <td class="muted">{{ x.industry or '-' }}</td>
         <td class="pos">{{ x.综合分 if x.综合分 is not none else '—' }}</td>
         <td class="{{ 'pos' if (x['近5日跌幅%'] or 0) > 0 else '' }}">
@@ -421,7 +424,7 @@
     {% for x in s.strategy_cr.排行[h] %}
       <tr data-code="{{ x.code }}">
         <td>{{ x.code }}</td>
-        <td><a href="/stock/{{ x.code }}?date={{ s.as_of }}">{{ x.name }}</a></td>
+        <td><a href="/stock/{{ x.code }}?date={{ s.as_of }}">{{ x.name }}</a>{{ risk_badge(x) }}</td>
         <td class="muted">{{ x.industry or '-' }}</td>
         <td class="{{ 'pos' if x.过下限 else '' }}">{% if x['上涨概率%'] is not none %}{{ x['上涨概率%'] }}%{% else %}—{% endif %}</td>
         <td class="muted">{{ x.方向 or '-' }}</td>
@@ -461,6 +464,16 @@
     return set;
   }
 
+  // 财报高危红旗风险标注(WI-6 风险层):命中严重度=高的财报红旗时挂⚠标注;风险提示≠卖出建议。
+  function esc(s) { return String(s == null ? "" : s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;"); }
+  function riskBadge(risk) {
+    if (!risk || !risk.high_risk) return "";
+    var flags = (risk.flags || []).join("、");
+    var title = "财报高危红旗：" + flags + "(评级：" + (risk["评级"] || "—") +
+      " · 报告期：" + (risk["报告期"] || "—") + ")。红旗作风险/减仓/规避参考,非选股依据；风险提示≠卖出建议。";
+    return "<span class='badge risk-flag' title='" + esc(title) + "'>⚠财报高危</span>";
+  }
+
   function renderCombined() {
     if (!combinedBody) return;
     var checked = checkedStrategies();
@@ -476,7 +489,7 @@
       var name = r.name || r.code;
       tr.innerHTML =
         "<td>" + r.code + "</td>" +
-        "<td><a href='/stock/" + r.code + "'>" + name + "</a></td>" +
+        "<td><a href='/stock/" + r.code + "'>" + name + "</a>" + riskBadge(r.risk) + "</td>" +
         "<td class='muted'>" + (r.industry || "-") + "</td>" +
         "<td class='muted tiny'>" + hits.join("+") + "</td>";
       combinedBody.appendChild(tr);
