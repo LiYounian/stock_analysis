@@ -1,0 +1,522 @@
+{
+  "window": [
+    "20240101",
+    "20251231"
+  ],
+  "bench": "000300",
+  "cost_rt": 0.002,
+  "horizons": [
+    1,
+    5,
+    10
+  ],
+  "disclaimer": "龙虎榜盘后披露,入场=T+1开盘、退出=T+H收盘(防未来函数);沪深300按日去市场超额,按交易日聚类bootstrap;扣往返0.2%成本。**否决/反转风控信号**,非多头买入建议;历史回测≠未来保证,非投资建议。",
+  "n_events": 38005,
+  "overall_by_direction": {
+    "H1": {
+      "all": {
+        "n": 31419,
+        "n_days": 485,
+        "mean_stk_ret": 0.0039,
+        "gross_excess": 0.0024,
+        "gross_p": 0.007,
+        "net_excess": 0.0004,
+        "net_p": 0.644,
+        "net_ci": [
+          -0.0013,
+          0.0022
+        ],
+        "avoided_underperf_net": -0.0004,
+        "rank_ic": -0.0615,
+        "rank_ic_p": 0.0
+      },
+      "net_buy(dir=+1)": {
+        "n": 16260,
+        "n_days": 485,
+        "mean_stk_ret": 0.0007,
+        "gross_excess": -0.0006,
+        "gross_p": 0.478,
+        "net_excess": -0.0026,
+        "net_p": 0.003,
+        "net_ci": [
+          -0.0044,
+          -0.0008
+        ],
+        "avoided_underperf_net": 0.0026,
+        "rank_ic": -0.0374,
+        "rank_ic_p": 0.0001
+      },
+      "net_sell(dir=-1)": {
+        "n": 14750,
+        "n_days": 485,
+        "mean_stk_ret": 0.0076,
+        "gross_excess": 0.006,
+        "gross_p": 0.0,
+        "net_excess": 0.004,
+        "net_p": 0.0,
+        "net_ci": [
+          0.002,
+          0.006
+        ],
+        "avoided_underperf_net": -0.004,
+        "rank_ic": -0.0203,
+        "rank_ic_p": 0.0356
+      }
+    },
+    "H5": {
+      "all": {
+        "n": 31419,
+        "n_days": 485,
+        "mean_stk_ret": -0.0034,
+        "gross_excess": -0.0149,
+        "gross_p": 0.0,
+        "net_excess": -0.0169,
+        "net_p": 0.0,
+        "net_ci": [
+          -0.0223,
+          -0.0122
+        ],
+        "avoided_underperf_net": 0.0169,
+        "rank_ic": -0.0189,
+        "rank_ic_p": 0.0072
+      },
+      "net_buy(dir=+1)": {
+        "n": 16260,
+        "n_days": 485,
+        "mean_stk_ret": -0.0058,
+        "gross_excess": -0.0148,
+        "gross_p": 0.0,
+        "net_excess": -0.0168,
+        "net_p": 0.0,
+        "net_ci": [
+          -0.0223,
+          -0.0118
+        ],
+        "avoided_underperf_net": 0.0168,
+        "rank_ic": 0.0042,
+        "rank_ic_p": 0.6479
+      },
+      "net_sell(dir=-1)": {
+        "n": 14750,
+        "n_days": 485,
+        "mean_stk_ret": -0.0008,
+        "gross_excess": -0.0153,
+        "gross_p": 0.0,
+        "net_excess": -0.0173,
+        "net_p": 0.0,
+        "net_ci": [
+          -0.0228,
+          -0.0121
+        ],
+        "avoided_underperf_net": 0.0173,
+        "rank_ic": -0.0165,
+        "rank_ic_p": 0.0945
+      }
+    },
+    "H10": {
+      "all": {
+        "n": 31419,
+        "n_days": 485,
+        "mean_stk_ret": -0.0049,
+        "gross_excess": -0.0235,
+        "gross_p": 0.0,
+        "net_excess": -0.0255,
+        "net_p": 0.0,
+        "net_ci": [
+          -0.0326,
+          -0.0185
+        ],
+        "avoided_underperf_net": 0.0255,
+        "rank_ic": -0.0366,
+        "rank_ic_p": 0.0
+      },
+      "net_buy(dir=+1)": {
+        "n": 16260,
+        "n_days": 485,
+        "mean_stk_ret": -0.0074,
+        "gross_excess": -0.0233,
+        "gross_p": 0.0,
+        "net_excess": -0.0253,
+        "net_p": 0.0,
+        "net_ci": [
+          -0.0329,
+          -0.0178
+        ],
+        "avoided_underperf_net": 0.0253,
+        "rank_ic": -0.0018,
+        "rank_ic_p": 0.846
+      },
+      "net_sell(dir=-1)": {
+        "n": 14750,
+        "n_days": 485,
+        "mean_stk_ret": -0.0026,
+        "gross_excess": -0.0249,
+        "gross_p": 0.0,
+        "net_excess": -0.0269,
+        "net_p": 0.0,
+        "net_ci": [
+          -0.0342,
+          -0.0197
+        ],
+        "avoided_underperf_net": 0.0269,
+        "rank_ic": -0.0453,
+        "rank_ic_p": 0.0
+      }
+    }
+  },
+  "by_year": {
+    "2024": {
+      "H1": {
+        "net_buy(dir=+1)": {
+          "n": 7826,
+          "n_days": 242,
+          "mean_stk_ret": 0.0002,
+          "gross_excess": -0.0013,
+          "gross_p": 0.353,
+          "net_excess": -0.0033,
+          "net_p": 0.023,
+          "net_ci": [
+            -0.006,
+            -0.0004
+          ],
+          "avoided_underperf_net": 0.0033,
+          "rank_ic": -0.0504,
+          "rank_ic_p": 0.0003
+        },
+        "net_sell(dir=-1)": {
+          "n": 7958,
+          "n_days": 242,
+          "mean_stk_ret": 0.0078,
+          "gross_excess": 0.0061,
+          "gross_p": 0.0,
+          "net_excess": 0.0041,
+          "net_p": 0.015,
+          "net_ci": [
+            0.0008,
+            0.0074
+          ],
+          "avoided_underperf_net": -0.0041,
+          "rank_ic": -0.021,
+          "rank_ic_p": 0.1295
+        }
+      },
+      "H5": {
+        "net_buy(dir=+1)": {
+          "n": 7826,
+          "n_days": 242,
+          "mean_stk_ret": -0.0105,
+          "gross_excess": -0.0233,
+          "gross_p": 0.0,
+          "net_excess": -0.0253,
+          "net_p": 0.0,
+          "net_ci": [
+            -0.0337,
+            -0.0166
+          ],
+          "avoided_underperf_net": 0.0253,
+          "rank_ic": -0.015,
+          "rank_ic_p": 0.2649
+        },
+        "net_sell(dir=-1)": {
+          "n": 7958,
+          "n_days": 242,
+          "mean_stk_ret": 0.0029,
+          "gross_excess": -0.0201,
+          "gross_p": 0.0,
+          "net_excess": -0.0221,
+          "net_p": 0.0,
+          "net_ci": [
+            -0.031,
+            -0.0131
+          ],
+          "avoided_underperf_net": 0.0221,
+          "rank_ic": 0.0106,
+          "rank_ic_p": 0.4547
+        }
+      },
+      "H10": {
+        "net_buy(dir=+1)": {
+          "n": 7826,
+          "n_days": 242,
+          "mean_stk_ret": -0.018,
+          "gross_excess": -0.0387,
+          "gross_p": 0.0,
+          "net_excess": -0.0407,
+          "net_p": 0.0,
+          "net_ci": [
+            -0.0529,
+            -0.028
+          ],
+          "avoided_underperf_net": 0.0407,
+          "rank_ic": -0.0221,
+          "rank_ic_p": 0.1022
+        },
+        "net_sell(dir=-1)": {
+          "n": 7958,
+          "n_days": 242,
+          "mean_stk_ret": -0.0015,
+          "gross_excess": -0.035,
+          "gross_p": 0.0,
+          "net_excess": -0.037,
+          "net_p": 0.0,
+          "net_ci": [
+            -0.0492,
+            -0.0243
+          ],
+          "avoided_underperf_net": 0.037,
+          "rank_ic": -0.0252,
+          "rank_ic_p": 0.0768
+        }
+      }
+    },
+    "2025": {
+      "H1": {
+        "net_buy(dir=+1)": {
+          "n": 8434,
+          "n_days": 243,
+          "mean_stk_ret": 0.0012,
+          "gross_excess": 0.0,
+          "gross_p": 0.982,
+          "net_excess": -0.002,
+          "net_p": 0.065,
+          "net_ci": [
+            -0.0041,
+            0.0002
+          ],
+          "avoided_underperf_net": 0.002,
+          "rank_ic": -0.0244,
+          "rank_ic_p": 0.058
+        },
+        "net_sell(dir=-1)": {
+          "n": 6792,
+          "n_days": 243,
+          "mean_stk_ret": 0.0074,
+          "gross_excess": 0.006,
+          "gross_p": 0.0,
+          "net_excess": 0.004,
+          "net_p": 0.001,
+          "net_ci": [
+            0.0016,
+            0.0063
+          ],
+          "avoided_underperf_net": -0.004,
+          "rank_ic": -0.0196,
+          "rank_ic_p": 0.1467
+        }
+      },
+      "H5": {
+        "net_buy(dir=+1)": {
+          "n": 8434,
+          "n_days": 243,
+          "mean_stk_ret": -0.0015,
+          "gross_excess": -0.0063,
+          "gross_p": 0.014,
+          "net_excess": -0.0083,
+          "net_p": 0.002,
+          "net_ci": [
+            -0.0136,
+            -0.0027
+          ],
+          "avoided_underperf_net": 0.0083,
+          "rank_ic": 0.0232,
+          "rank_ic_p": 0.0573
+        },
+        "net_sell(dir=-1)": {
+          "n": 6792,
+          "n_days": 243,
+          "mean_stk_ret": -0.005,
+          "gross_excess": -0.0106,
+          "gross_p": 0.0,
+          "net_excess": -0.0126,
+          "net_p": 0.0,
+          "net_ci": [
+            -0.0178,
+            -0.007
+          ],
+          "avoided_underperf_net": 0.0126,
+          "rank_ic": -0.0435,
+          "rank_ic_p": 0.0015
+        }
+      },
+      "H10": {
+        "net_buy(dir=+1)": {
+          "n": 8434,
+          "n_days": 243,
+          "mean_stk_ret": 0.0024,
+          "gross_excess": -0.008,
+          "gross_p": 0.031,
+          "net_excess": -0.01,
+          "net_p": 0.008,
+          "net_ci": [
+            -0.0172,
+            -0.0023
+          ],
+          "avoided_underperf_net": 0.01,
+          "rank_ic": 0.0185,
+          "rank_ic_p": 0.1207
+        },
+        "net_sell(dir=-1)": {
+          "n": 6792,
+          "n_days": 243,
+          "mean_stk_ret": -0.004,
+          "gross_excess": -0.0149,
+          "gross_p": 0.0,
+          "net_excess": -0.0169,
+          "net_p": 0.0,
+          "net_ci": [
+            -0.0237,
+            -0.0098
+          ],
+          "avoided_underperf_net": 0.0169,
+          "rank_ic": -0.0654,
+          "rank_ic_p": 0.0
+        }
+      }
+    }
+  },
+  "net_buy_ratio_buckets": {
+    "H1": [
+      {
+        "bucket": 0,
+        "ratio_range": [
+          0.0,
+          1.8
+        ],
+        "n": 4065,
+        "net_excess": 0.0007,
+        "net_p": 0.619
+      },
+      {
+        "bucket": 1,
+        "ratio_range": [
+          1.8,
+          4.41
+        ],
+        "n": 4065,
+        "net_excess": -0.0008,
+        "net_p": 0.558
+      },
+      {
+        "bucket": 2,
+        "ratio_range": [
+          4.41,
+          9.19
+        ],
+        "n": 4065,
+        "net_excess": -0.0022,
+        "net_p": 0.077
+      },
+      {
+        "bucket": 3,
+        "ratio_range": [
+          9.2,
+          89.23
+        ],
+        "n": 4065,
+        "net_excess": -0.0076,
+        "net_p": 0.0
+      }
+    ],
+    "H5": [
+      {
+        "bucket": 0,
+        "ratio_range": [
+          0.0,
+          1.8
+        ],
+        "n": 4065,
+        "net_excess": -0.0187,
+        "net_p": 0.0
+      },
+      {
+        "bucket": 1,
+        "ratio_range": [
+          1.8,
+          4.41
+        ],
+        "n": 4065,
+        "net_excess": -0.0222,
+        "net_p": 0.0
+      },
+      {
+        "bucket": 2,
+        "ratio_range": [
+          4.41,
+          9.19
+        ],
+        "n": 4065,
+        "net_excess": -0.0165,
+        "net_p": 0.0
+      },
+      {
+        "bucket": 3,
+        "ratio_range": [
+          9.2,
+          89.23
+        ],
+        "n": 4065,
+        "net_excess": -0.0101,
+        "net_p": 0.008
+      }
+    ],
+    "H10": [
+      {
+        "bucket": 0,
+        "ratio_range": [
+          0.0,
+          1.8
+        ],
+        "n": 4065,
+        "net_excess": -0.0304,
+        "net_p": 0.0
+      },
+      {
+        "bucket": 1,
+        "ratio_range": [
+          1.8,
+          4.41
+        ],
+        "n": 4065,
+        "net_excess": -0.0281,
+        "net_p": 0.0
+      },
+      {
+        "bucket": 2,
+        "ratio_range": [
+          4.41,
+          9.19
+        ],
+        "n": 4065,
+        "net_excess": -0.0262,
+        "net_p": 0.0
+      },
+      {
+        "bucket": 3,
+        "ratio_range": [
+          9.2,
+          89.23
+        ],
+        "n": 4065,
+        "net_excess": -0.0154,
+        "net_p": 0.005
+      }
+    ]
+  },
+  "veto_module_self_check": {
+    "n_vetoed": 16260,
+    "n_net_buy_dir": 16260,
+    "veto_equals_net_buy_leg": true,
+    "vetoed_H5_net_excess": -0.0168,
+    "vetoed_H5_net_p": 0.0,
+    "vetoed_H5_avoided_underperf": 0.0168
+  },
+  "conclusion": {
+    "否决腿H5显著负(见光死)": true,
+    "否决腿H1显著负(追高即跌)": true,
+    "否决腿逐年净超额均为负": true,
+    "净买H5避免跑输(净,%)": 0.0168,
+    "反转腿H1净超额(扣成本,%)": 0.004,
+    "反转扣成本后仍正": true,
+    "建议用法": "净买上榜→入选否决/持仓离场(H5见光死最稳);H1即已跑输,可作即时否决;净卖H1弱反转扣成本后微正,仅可小仓试探"
+  }
+}
