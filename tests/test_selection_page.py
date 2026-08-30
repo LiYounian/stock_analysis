@@ -104,6 +104,31 @@ def test_strategy0_reads_view_ranked(monkeypatch):
     assert s0["config"]                                     # 带合议 config(前端合成口径)
 
 
+def test_strategy0_view_risk_covers_full_a_not_in_recs(monkeypatch):
+    """断点修复锁死:策略0 的全A票**不在中心记录 recs** 里,也要从 view 的「财报风险/排序分」
+    拿到 risk 徽标 + risk_adjust 降权,而非走 recs 重推丢失。并透出三个 view 计数。"""
+    v = _strategy0_view(("000001", "000002"))
+    # 给 000002 造一个高危红旗 + 龙虎榜否决(view 权威预算),排序分降权沉底
+    v["top"][1]["财报风险"] = {"高危数": 1, "罚分": 0.5, "否决": False, "剔除": False,
+                              "归因": ["财报高危红旗×1"], "各轴": {"龙虎榜": {"应用": True}},
+                              "flags": ["扣非为负"]}
+    v["top"][1]["排序分"] = v["top"][1]["综合分"] - 0.5
+    v["top"][1]["有财报块"] = True
+    v["财报覆盖"] = 40
+    v["命中高危红旗"] = 1
+    v["命中龙虎榜否决"] = 1
+    # recs 全空 → 全A票取不到记录;修复后应从 view 拿到风控
+    _patch(monkeypatch, {}, get_view=_dispatch(strategy0=v))
+    s0 = da.selection_page()["strategy0"]
+    row = {r["code"]: r for r in s0["rows"]}["000002"]
+    assert row["risk"] and row["risk"]["high_risk"] and "扣非为负" in row["risk"]["flags"]
+    assert row["risk_adjust"] and row["risk_adjust"]["应用"] and row["risk_adjust"]["模式"] == "降权"
+    assert (row["risk_adjust"]["各轴"] or {}).get("龙虎榜", {}).get("应用") is True
+    assert s0["财报覆盖"] == 40 and s0["命中高危红旗"] == 1 and s0["命中龙虎榜否决"] == 1
+    # 干净票 000001 不应有徽标
+    assert {r["code"]: r for r in s0["rows"]}["000001"].get("risk_adjust") is None
+
+
 def test_strategy0_missing_view_fallback(monkeypatch):
     """策略0 view 缺失 → present=False、rows 空,不空页不抛。"""
     _patch(monkeypatch, {}, get_view=_dispatch(strategy0=None))

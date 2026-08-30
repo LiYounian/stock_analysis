@@ -383,19 +383,32 @@ def _high_flag_count(row: dict, recs: dict) -> int:
     return 0
 
 
-def _rerank_scored(rows: list, recs: dict, score_key: str = "council_score") -> list:
-    """有打分区块(自选股 / 策略0):按「财报高危红旗接入」重排,就地补 row['risk_adjust']。
+def _lhb_verdict(row: dict, recs: dict) -> dict | None:
+    """行对应票的**龙虎榜入选否决裁决**(风控微结构轴),从中心记录 record['lhb_veto'] 只读取用。
 
-    排序键(reverse=True):(未剔除, 非否决沉底, 有分, 调整后分) —— 保留>剔除、非否决>否决、
-    有分>无分(无 council_score 仍沉底,不回归)、调整后分高>低。降权=原分−罚分;否决靠标记沉底。
-    否决且「不保留展示」→ 从清单剔除。启用=False 时全 no-op(与原按分降序一致)。
-    ⚠️ 非投资建议。防未来函数:红旗来自已披露财报(as_of 由离线管线控),此处只做纯排序变换。
+    展示层不计算、不 import 分析器(§9.3):裁决由离线管线(serialize)按 as_of 无未来函数
+    (list_date<as_of 严格)预算好挂进 record,此处纯读。无记录/无该块/旧记录 → None(该轴不发声)。
+    """
+    rec = recs.get(row.get("code")) if isinstance(recs, dict) else None
+    v = rec.get("lhb_veto") if isinstance(rec, dict) else None
+    return v if isinstance(v, dict) else None
+
+
+def _rerank_scored(rows: list, recs: dict, score_key: str = "council_score") -> list:
+    """有打分区块(自选股 / 策略0):按「统一风控 veto 汇聚」重排,就地补 row['risk_adjust']。
+
+    两轴 OR 合成(财报高危红旗 + 龙虎榜净买上榜否决);排序键(reverse=True):
+    (未剔除, 非否决沉底, 有分, 调整后分) —— 保留>剔除、非否决>否决、有分>无分(无 council_score
+    仍沉底,不回归)、调整后分高>低。降权=原分−Σ罚分;否决靠标记沉底;否决且「不保留展示」→ 剔除。
+    无龙虎榜数据 / 关停 → 退化为红旗现状(不回归)。
+    ⚠️ 非投资建议。防未来函数:两轴均来自离线管线按 as_of 预算的裁决(红旗披露日、龙虎榜 list_date<as_of),
+    此处只做纯排序变换、不 import 分析器(§9.3)。
     """
     if not rows:
         return rows
     for r in rows:
         base = r.get(score_key)
-        info = strategy_cfg.redflag_adjust(base, _high_flag_count(r, recs))
+        info = strategy_cfg.risk_veto_adjust(base, _high_flag_count(r, recs), _lhb_verdict(r, recs))
         r["risk_adjust"] = info if info.get("应用") else None
     def _key(r):
         info = r.get("risk_adjust") or {}
@@ -409,16 +422,18 @@ def _rerank_scored(rows: list, recs: dict, score_key: str = "council_score") -> 
 
 
 def _demote_flagged(rows: list, recs: dict) -> list:
-    """无打分区块(综合选股并集 / 各策略入选清单):高危红旗票**稳定沉底**(dose 大者更靠后),
-    就地补 row['risk_adjust']。降权/否决都沉底(无分可扣,统一沉底);否决且不保留展示 → 剔除。
+    """无打分区块(综合选股并集 / 各策略入选清单):风控命中票(财报红旗 ∪ 龙虎榜否决)**稳定沉底**
+    (合成剂量大者更靠后),就地补 row['risk_adjust']。降权/否决都沉底(无分可扣,统一沉底);
+    否决且不保留展示 → 剔除。
 
-    干净票(无高危红旗)保持原并集顺序(稳定);启用=False 时全 no-op(不回归)。⚠️ 非投资建议。
+    干净票(两轴均未命中)保持原并集顺序(稳定);无龙虎榜数据/关停 → 退化红旗现状,启用=False 全 no-op
+    (不回归)。⚠️ 非投资建议。防未来函数:两轴均来自离线按 as_of 预算的裁决,此处纯排序变换。
     """
     if not rows:
         return rows
     clean, flagged = [], []
     for r in rows:
-        info = strategy_cfg.redflag_adjust(None, _high_flag_count(r, recs))
+        info = strategy_cfg.risk_veto_adjust(None, _high_flag_count(r, recs), _lhb_verdict(r, recs))
         if info.get("剔除"):
             r["risk_adjust"] = info
             continue                                   # 否决·不保留展示 → 剔除
@@ -597,7 +612,9 @@ def selection_page(date: str = "latest") -> dict:
     # 财报高危红旗风险层(WI-6):先给各展示行挂 risk 标注(风险/警示层)。
     _attach_risk(pool_rows, recs)
     _attach_risk(combined.get("rows"), recs)
-    for _sec in (strategy0, strategy2, strategy4, strategy5, strategy6,
+    # 注:strategy0 不入本循环——它的 risk/risk_adjust 已由 _strategy0_section 从 view 权威透传
+    #     (覆盖全A;走 recs 重推会丢全A票徽标,即本次修复的断点)。其余策略 picks 均在 recs 内,照常。
+    for _sec in (strategy2, strategy4, strategy5, strategy6,
                  strategy_mr, strategy_vol, strategy_strong, strategy_rt, strategy_cr):
         if isinstance(_sec, dict):
             _attach_risk(_sec.get("rows"), recs)
@@ -606,8 +623,8 @@ def selection_page(date: str = "latest") -> dict:
     # (口径 config 财报.红旗接入;启用=False 时全链路 no-op、不回归)。就地补 row['risk_adjust']。
     # ⚠️ 非投资建议:只改展示排序/入选,不构成买卖建议;不改 council 综合分本身(前端重合成不漂移)。
     pool_rows = _rerank_scored(pool_rows, recs)                       # 自选股:council 综合分 + 红旗调整重排
-    if isinstance(strategy0.get("rows"), list):
-        strategy0["rows"] = _rerank_scored(strategy0["rows"], recs)   # 策略0:同上(有 council_score)
+    # 策略0 不再 _rerank_scored:view 已按全A排序分排好序、risk_adjust 已由 _strategy0_section 透传
+    # (走 recs 重推会把全A票的 risk_adjust 覆盖成 None → 丢降权/否决沉底。这是本次修复的断点)。
     combined["rows"] = _demote_flagged(combined.get("rows"), recs)    # 综合选股并集:高危沉底
     for _sec in (strategy2, strategy4, strategy5, strategy6,
                  strategy_mr, strategy_vol, strategy_strong, strategy_rt):
@@ -649,6 +666,25 @@ def _strategy0_section(recs: dict, date: str = "latest") -> dict:
         if config is None and cblk.get("config"):
             config = cblk["config"]
         d = cblk.get("default") or {}
+        # 断点修复:view「策略0合议」的风控是按**全A**逐票预算好的(排序分/财报风险,含全A票),
+        # 而中心记录 recs 只覆盖 ~410 票(自选∪选出并集)。此前策略0走 _attach_risk/_rerank_scored
+        # 从 recs 重推 → 全A票取不到记录 → 徽标/降权丢失。这里直接透传 view 权威结果(covers 全A)。
+        vr = item.get("财报风险")          # None 或 {高危数,罚分,否决,剔除,归因,各轴,flags}
+        rank_score = item.get("排序分")
+        # risk 徽标详情:优先中心记录(带评级/报告期),回退 view 自带 flags(全A票没记录时)。
+        rrisk = financial_risk(recs.get(code))
+        if rrisk is None and vr and (vr.get("高危数")
+                                     or ((vr.get("各轴") or {}).get("龙虎榜") or {}).get("应用")):
+            rrisk = {"high_risk": bool(vr.get("高危数")), "flags": vr.get("flags") or [],
+                     "评级": None, "报告期": None,
+                     "label": "财报高危红旗" if vr.get("高危数") else None}
+        # risk_adjust:降权/否决信息 + 两轴归因(view 已按 as_of 无未来函数算好,此处纯透传)。
+        radj = None
+        if vr:
+            radj = {"应用": True, "模式": "否决" if vr.get("否决") else "降权",
+                    "罚分": vr.get("罚分"), "否决": vr.get("否决"), "剔除": vr.get("剔除"),
+                    "排序分": rank_score, "高危数": vr.get("高危数"),
+                    "归因": vr.get("归因"), "各轴": vr.get("各轴")}
         rows.append({
             "code": code, "name": _name(recs, code),
             "industry": _industry(recs, code, item.get("行业")),
@@ -656,6 +692,8 @@ def _strategy0_section(recs: dict, date: str = "latest") -> dict:
             "council_score": item.get("综合分", d.get("综合分")),
             "council_conflict": bool(d.get("是否冲突")),
             "experts": cblk.get("experts") or [],
+            "排序分": rank_score, "有财报块": item.get("有财报块"),
+            "risk": rrisk, "risk_adjust": radj,   # view 权威风控(covers 全A),selection_page 不再 recs 重推
         })
     return {
         "present": True,
@@ -663,6 +701,9 @@ def _strategy0_section(recs: dict, date: str = "latest") -> dict:
         "扫描数": v.get("扫描数"),
         "有效": v.get("有效", v.get("有效样本")),
         "top_n": v.get("top_n", len(rows)),
+        "财报覆盖": v.get("财报覆盖"),          # 有 as_of 财报块参与合议的票数(全A采财报后↑)
+        "命中高危红旗": v.get("命中高危红旗"),   # 财报高危红旗降权/否决沉底的票数
+        "命中龙虎榜否决": v.get("命中龙虎榜否决"),  # 龙虎榜净买上榜否决触发的票数
         "rows": rows,
         "config": config,
     }

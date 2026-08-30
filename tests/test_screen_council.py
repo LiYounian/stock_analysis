@@ -77,6 +77,24 @@ def test_run_council_screen_ranks_desc_and_lands_view(monkeypatch, tmp_path):
     assert top0["综合方向"] in ("看多", "看空", "中性")
 
 
+def test_run_council_screen_persist_false_no_write(monkeypatch):
+    """persist=False:只算不落盘——前向记分卡复算全票排名时不得覆盖闭环已落的 top-N view。
+
+    锁死语义:put_view 一次都不被调用,但仍正常返回 view(供记分卡在内存里读排名)。
+    """
+    kmap = {"000001": _kline(trend=0.15, seed=2), "000002": _kline(trend=-0.15, seed=3)}
+    monkeypatch.setattr(sc.market, "load_kline", lambda code: kmap[code])
+    monkeypatch.setattr(sc.board, "board_of", lambda code: None)
+    monkeypatch.setattr(sc.store, "set_active_date", lambda d: None)
+    calls = []
+    monkeypatch.setattr(sc.store, "put_view",
+                        lambda name, obj, date=None: calls.append(name) or "p")
+    v = sc.run_council_screen(["000001", "000002"], as_of="2026-08-08",
+                              fetch=False, persist=False)
+    assert calls == [], "persist=False 不得调用 put_view(防覆盖闭环 view)"
+    assert v["扫描数"] == 2 and v["top"], "仍应返回可用 view"
+
+
 def test_run_council_screen_empty_pool_still_lands_view(monkeypatch):
     """空池 / 全部历史不足 → view top=[] 仍产出,不崩。"""
     monkeypatch.setattr(sc.market, "load_kline",

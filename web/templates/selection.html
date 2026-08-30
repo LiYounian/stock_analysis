@@ -93,6 +93,9 @@
     <small>扫描 <b>{{ s.strategy0.扫描数 if s.strategy0.扫描数 is not none else '—' }}</b> ·
       有效 <b>{{ s.strategy0.有效 if s.strategy0.有效 is not none else '—' }}</b> ·
       Top <b class="pos">{{ s.strategy0.top_n if s.strategy0.top_n is not none else (s.strategy0.rows|length) }}</b> ·
+      财报覆盖 <b>{{ s.strategy0.财报覆盖 if s.strategy0.财报覆盖 is not none else '—' }}</b> ·
+      高危红旗 <b class="neg">{{ s.strategy0.命中高危红旗 if s.strategy0.命中高危红旗 is not none else '—' }}</b> ·
+      龙虎榜否决 <b class="neg">{{ s.strategy0.命中龙虎榜否决 if s.strategy0.命中龙虎榜否决 is not none else '—' }}</b> ·
       数据日期 <b>{{ s.strategy0.as_of }}</b></small>
     {% endif %}</h2>
   <p class="muted tiny">全A 按 6 类数据专家合议分排序(资金流 / 多因子 / 情绪 / 事件等无全A数据时弃权),纯数据 · 非投资建议。</p>

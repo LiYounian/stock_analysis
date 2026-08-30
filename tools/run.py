@@ -4,6 +4,7 @@
     python -m tools.run collect      # 采集数值面(K线/基本面/公告/资金流)
     python -m tools.run message      # 采集消息面(新闻/舆情/政策)
     python -m tools.run context      # 全市场指数(沪深300+申万一级行业)→ 供板块轮动 RRG 专家
+    python -m tools.run lhb           # 收盘后当日龙虎榜(风控微结构轴;T 落盘、T+1 生效)→ 进次日风控 veto 汇聚
     python -m tools.run sentiment    # LLM 三层情绪打分(需 LLM 配置)
     python -m tools.run serialize    # 组装中心记录 + K线图表视图(读情绪并入决策)
     python -m tools.run events       # 采集事件精数值(业绩预告/快报+增减持),供事件驱动专家
@@ -38,6 +39,7 @@ from tools.collectors import chip, consensus
 from tools.collectors import fundamental as fd
 from tools.collectors import fundflow as ff
 from tools.collectors import industry_history as ih
+from tools.collectors import lhb as lhb_collector
 from tools.collectors import market
 from tools.collectors import master_sync
 from tools.collectors import news, policy
@@ -217,6 +219,41 @@ def collect_market_context() -> None:
             logger.warning("申万一级清单为空/失败,板块指数跳过(RRG 将弃权)")
     finally:
         socket.setdefaulttimeout(_old)
+
+
+def collect_lhb(codes: list[str], as_of: str) -> None:
+    """**收盘后**采当日龙虎榜(WI-6 Phase 3 · 风控微结构轴 T 落盘、T+1 生效)。
+
+    数据源天然按**日**返回全市场(collectors.lhb.fetch_lhb 区间一次拉 → 分发到各票分区),
+    这里拉 [as_of, as_of] 当日榜单、只落 codes 白名单票。**披露时点=盘后**:落 list_date=as_of,
+    次日选股(as_of'=T+1)经 lhb_asof(list_date<as_of' 严格)自然生效 → 进入次日风控 veto 汇聚。
+    健壮性:失败/限流/空 → WARNING 降级(collectors.lhb 自带优雅降级),绝不中止闭环。走统一超时。
+
+    ⚠️ 定时触发(cron)由用户拍板接入,此处只提供采集步骤;on-demand 调用亦安全(幂等增量并集)。
+    """
+    if not codes:
+        return
+    logger.info("采集当日龙虎榜(风控微结构轴,%d 只白名单,日期 %s,盘后披露 T+1 生效)...", len(codes), as_of)
+    _old = socket.getdefaulttimeout()
+    socket.setdefaulttimeout(FETCH_TIMEOUT)
+    try:
+        got = _safe("龙虎榜",
+                    lambda: lhb_collector.fetch_lhb(start=as_of, end=as_of, codes=codes))
+        logger.info("龙虎榜:当日上榜落盘 %d 只(白名单 %d)", len(got or {}), len(codes))
+    finally:
+        socket.setdefaulttimeout(_old)
+
+
+def _update_lhb_scorecard(as_of: str) -> None:
+    """龙虎榜轴前向观察记分卡:逐日滚存当日被龙虎榜否决降权的选股票 + 降权前后排名,
+    K 线到期后自动回填 T+1/T+5 前向收益与"见光死"证实标记。真前向需滚存 ~15~20 交易日出首版结论。
+
+    persist=False 复算全票排名,绝不覆盖闭环已落的 top-N「策略0合议」view(避免副作用)。
+    仅观察、不参与选股决策;防未来函数:排名/综合分只用 as_of 及之前 K 线,前向收益仅事后回填。
+    """
+    from tools.backtest import lhb_forward_scorecard as fsc
+    df = fsc.update(as_of)
+    logger.info("龙虎榜前向记分卡:滚存 %s → 累计 %d 行 → %s", as_of, len(df), fsc._DEFAULT_OUT)
 
 
 # ————————————————————————————————————————————————
@@ -436,6 +473,7 @@ def cmd_events(argv): codes, as_of = _prep(argv); run_events(codes, as_of)
 def cmd_factor(argv): codes, as_of = _prep(argv); run_factor(codes, as_of)
 def cmd_council(argv): codes, as_of = _prep(argv); run_council(codes, as_of)
 def cmd_context(argv): store.set_active_date(_as_of()); collect_market_context()
+def cmd_lhb(argv): codes, as_of = _prep(argv); collect_lhb(codes, as_of)   # 收盘后当日龙虎榜(风控轴,T+1 生效)
 
 
 def cmd_pattern(argv):
@@ -503,8 +541,9 @@ def cmd_all(argv):
     collect_values(codes)
     collect_message(codes)
     collect_market_context()             # 全市场指数(沪深300+申万一级)→ 供板块轮动 RRG 专家
+    collect_lhb(codes, as_of)            # 收盘后当日龙虎榜(风控微结构轴;T 落盘、T+1 生效)
     run_sentiment(codes)                 # LLM 未配置则内部跳过
-    run_serialize(codes, as_of)          # 组装 record(首次 council:多因子/事件驱动此时弃权)
+    run_serialize(codes, as_of)          # 组装 record(首次 council:多因子/事件驱动此时弃权;挂 lhb_veto)
     run_events(codes, as_of)             # 事件精数值(降级不炸)→ 供事件驱动专家
     run_factor(codes, as_of)             # 多因子截面预算(读全池 record)→ 供多因子专家
     run_council(codes, as_of)            # 数据就绪后回写 council 块(全专家不再弃权)
@@ -585,6 +624,7 @@ def run_two_stage(codes_all: list[str], as_of: str, no_llm: bool = False) -> dic
                 len(qualified), len(near_codes), len(llm_subset), len(analysis_set))
     # —— 阶段②:新闻/LLM 只对 llm_subset;组装/合议 对 analysis_set(接近达标获技术/因子类合议分)——
     collect_values_missing(analysis_set)  # 补 K线/基本面/公告/资金流(无 LLM,skip-if-cached)
+    collect_lhb(analysis_set, as_of)      # 收盘后当日龙虎榜(风控微结构轴;T 落盘、T+1 生效)
     if not no_llm:
         collect_message(llm_subset)       # 新闻/舆情 只对达标∪自选 ← 关键省 token
     collect_market_context()              # 全市场指数(每轮一次、非逐票)→ RRG 专家
@@ -765,6 +805,13 @@ def run_screen_all(codes_all: list[str], as_of: str, no_llm: bool = False,
     run_panel(llm_subset)
     run_screen(llm_subset)
     _safe("前瞻回测汇总", run_backtest)              # 收尾可选增强(失败降级,不中止闭环)
+    # —— 风控微结构轴:收盘后采当日龙虎榜(T 落盘、list_date<as_of 次日生效)。
+    #    命门:生产日常走 screenall→run_screen_all,故龙虎榜的**实际每日采集入口在此**
+    #    (cmd_all/run_two_stage 也接了,但那两条非日常触发路径)。collect_lhb 自带优雅降级不中止闭环。
+    collect_lhb(codes_all, as_of)
+    # —— 前向观察:龙虎榜轴命中票逐日滚存记分卡(降权前后排名 + K线到期自动回填 T+1/T+5 与见光死标记)。
+    #    persist=False 复算全票排名不覆盖闭环已落 view;仅观察、不影响选股;失败降级不中止。
+    _safe("龙虎榜前向记分卡", lambda: _update_lhb_scorecard(as_of))
     logger.info("===== 全A多策略选股完成 → data/analysis/%s/;union=%d,llm_subset=%d 只含完整合议 =====",
                 as_of, len(union_picks), len(llm_subset))
     return {"as_of": as_of, "扫描": len(codes_all), "各策略入选": per_strategy,
@@ -794,12 +841,26 @@ def cmd_screenall(argv):
     run_screen_all(codes_all, as_of, no_llm=no_llm, no_fetch=no_fetch)
 
 
+def cmd_findata(argv):
+    """全A 财报三大表增量回填入口:python -m tools.run findata [--universe N] [--force] [--dry-run]。
+
+    把财报采集从"仅 picks(约 175 票)"扩到全A,让离线全A 策略0 也拿到 as_of 财报块
+    → 财报质地专家不弃权、红旗判定在全A排序生效。重操作(全量约 3~6 小时),建议后台长跑;
+    幂等 + 断点续采(新鲜票自动跳过),可反复跑。--dry-run 先估规模/耗时。
+    透传参数见 collectors.financial_backfill._main(--max-age-days/--chunk/--codes/--date/--include-bj)。
+    """
+    from tools.collectors import financial_backfill
+    financial_backfill._main(argv[2:])   # argv[0]=脚本 argv[1]=findata,其余透传
+
+
 _CMDS = {"collect": cmd_collect, "message": cmd_message, "sentiment": cmd_sentiment,
          "serialize": cmd_serialize, "panel": cmd_panel, "screen": cmd_screen,
          "events": cmd_events, "factor": cmd_factor, "council": cmd_council,
-         "context": cmd_context, "pipeline": cmd_pipeline, "screenall": cmd_screenall,
+         "context": cmd_context, "lhb": cmd_lhb, "pipeline": cmd_pipeline,
+         "screenall": cmd_screenall,
          "pattern": cmd_pattern, "sepa": cmd_sepa, "strong": cmd_strong,
-         "analyze": cmd_analyze, "all": cmd_all, "ticks": cmd_ticks}
+         "analyze": cmd_analyze, "findata": cmd_findata, "all": cmd_all,
+         "ticks": cmd_ticks}
 
 
 def main(argv: list[str]) -> int:
