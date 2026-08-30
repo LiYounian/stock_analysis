@@ -91,7 +91,10 @@ def test_flag_channel_stuffing_hit_and_miss():
 
 
 def test_flag_brand_premium_loss_hit_and_miss():
-    assert "品牌溢价流失" in _codes(auto.extra_flags({"毛利率": 20.0}, {}))
+    # 标定 2026-08:毛利率阈值 25.0→18.0(原 25≈行业中位=命中40%泛滥,把大众品常态低毛利误当红旗)
+    assert "品牌溢价流失" in _codes(auto.extra_flags({"毛利率": 15.0}, {}))   # 15 < 18 → 命中(真·低毛利)
+    # 毛利率 22:旧阈值 25 会误报,新阈值 18 不报(锁住去泛滥语义,防回退)
+    assert "品牌溢价流失" not in _codes(auto.extra_flags({"毛利率": 22.0}, {}))
     assert "品牌溢价流失" not in _codes(auto.extra_flags({"毛利率": 60.0}, {}))
 
 

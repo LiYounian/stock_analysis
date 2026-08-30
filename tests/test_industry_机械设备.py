@@ -70,12 +70,17 @@ def test_skip_flags():
 
 # ———————————— 专属红旗:边界断言 ————————————
 def test_flag_receivable_collection_hit_and_miss():
-    # 命中路径 A:应收/营收 偏高(工程机械命门,高严重度)
-    hitA = auto.extra_flags({}, {"资产负债表": {"应收账款": 5e8},
+    # 命中路径 A:应收/营收 > 1.0(标定 2026-08:原占位 0.4≈行业中位=命中62%泛滥,机械应收结构性偏高,
+    #   上调到 p75≈1.0)。应收 1.2e9 / 营收 1e9 = 1.2 > 1.0 → 命中
+    hitA = auto.extra_flags({}, {"资产负债表": {"应收账款": 1.2e9},
                                  "利润表": {"营业总收入": 1e9}})
     assert "应收回款风险" in _codes(hitA)
     assert [f for f in hitA if f["code"] == "应收回款风险"][0]["严重度"] == "高"
-    # 命中路径 B:应收增速远超营收增速
+    # 边界:应收/营收 = 0.5——旧阈值 0.4 会误报,新阈值 1.0 不报(锁住上调后语义,防回退)
+    boundary = auto.extra_flags({}, {"资产负债表": {"应收账款": 5e8},
+                                     "利润表": {"营业总收入": 1e9}})
+    assert "应收回款风险" not in _codes(boundary)
+    # 命中路径 B:应收增速远超营收增速(未改,保留)
     hitB = auto.extra_flags({"应收增速": 40.0, "营收增速": 10.0}, {})
     assert "应收回款风险" in _codes(hitB)
     # 不命中:应收占比低且增速同步
@@ -85,10 +90,13 @@ def test_flag_receivable_collection_hit_and_miss():
 
 
 def test_flag_aggressive_capex_hit_and_miss():
-    # 命中:在建工程/资产总计 > 0.15
-    hit = auto.extra_flags({}, {"资产负债表": {"在建工程": 3e8, "资产总计": 1e9}})
+    # 命中:在建工程/资产总计 > 0.10(标定 2026-08:原占位 0.15>p90=0.098 命中2.5%=近乎从不发声,下调到 p90≈0.10)
+    hit = auto.extra_flags({}, {"资产负债表": {"在建工程": 3e8, "资产总计": 1e9}})  # 0.30 > 0.10
     assert "扩产激进" in _codes(hit)
-    # 不命中:在建占比低
+    # 边界:在建占比 0.12——旧阈值 0.15 不报,新阈值 0.10 报(锁住下调后语义,防回退)
+    boundary = auto.extra_flags({}, {"资产负债表": {"在建工程": 1.2e8, "资产总计": 1e9}})
+    assert "扩产激进" in _codes(boundary)
+    # 不命中:在建占比低(0.05 < 0.10)
     miss = auto.extra_flags({}, {"资产负债表": {"在建工程": 5e7, "资产总计": 1e9}})
     assert "扩产激进" not in _codes(miss)
 
