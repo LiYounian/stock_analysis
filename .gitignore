@@ -37,3 +37,4 @@ docs/需求沟通/
 # 滚动主档(全A历史,几百MB,本地/远端各自维护,不入库)
 data/master/
 scratch_diag_out.txt
+data/analysis/backtest/finval/
