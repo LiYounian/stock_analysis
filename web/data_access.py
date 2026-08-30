@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import math
 
+from tools.config import strategy as strategy_cfg
 from tools.store import repo as store
 
 
@@ -305,6 +306,72 @@ def council_summary(rec: dict) -> dict | None:
             "是否冲突": bool(d.get("是否冲突"))}
 
 
+def financial_risk(rec: dict | None) -> dict | None:
+    """从中心记录 `financial` 块提取「财报高危红旗」风险标注(展示层用,只读不算)。
+
+    定位(WI-6 风险层):红旗作**风险/减仓/警示层**,非选股 alpha 源——行业财报验值坐实:
+    高危红旗票 60 日崩盘率约 2 倍、回撤更深、剂量单调(避暴雷可靠);但 quality_score
+    对后向收益 rank-IC 近 0(选 alpha 不达标)。故此处只做「风险提示」,不改选股逻辑、不参与打分排序。
+
+    高危口径与验值一致(tools.research.finval 用 flags.has_high_severity):**严重度=「高」**的红旗即高危。
+    高危红旗全集(config THRESHOLDS['财报']['严重度']):
+      · 通用高危:扣非为负(主业亏损)/ 非标审计意见 / 审计机构未备案;
+      · 行业专家专属高危:随 flags_detail 带 severity 一并纳入(如三道红线踩线等,口径同 has_high_severity)。
+    审计闸门补挂的「非标审计意见 / 审计机构未备案」只进轻量 flags 列表(未进 flags_detail),
+    故双源取并:flags_detail 里 severity=高 ∪ 轻量 flags 里 config 严重度=高。
+
+    Returns:
+        None —— 无财报数据(约 175 只有财报票之外优雅无标注)或无高危红旗;
+        {high_risk: True, flags: [高危红旗名…], 评级, 报告期, label} —— 命中高危红旗时的风险标注。
+    覆盖面:仅有财报数据的票(本机约 175 只);扩全A 采财报后覆盖更广。
+    ⚠️ 非投资建议:风险提示 ≠ 卖出建议,措辞中性。防未来函数:红旗基于该票当期已披露财报(analyzer 已控 as_of)。
+    """
+    fin = (rec or {}).get("financial")
+    if not fin:
+        return None
+    try:
+        sev_map = (strategy_cfg.THRESHOLDS.get("财报", {}) or {}).get("严重度", {}) or {}
+    except Exception:
+        sev_map = {}
+    high: list[str] = []
+    seen: set[str] = set()
+    # 源1:flags_detail 自带严重度(通用高危 + 行业专家专属高危,口径同 has_high_severity)
+    for f in (fin.get("flags_detail") or []):
+        if isinstance(f, dict) and f.get("严重度") == "高":
+            code = f.get("code")
+            if code and code not in seen:
+                high.append(code)
+                seen.add(code)
+    # 源2:轻量 flags 列表里 config 严重度=高但未进 flags_detail 的(审计闸门后补:非标审计意见/审计机构未备案)
+    for code in (fin.get("flags") or []):
+        if code and code not in seen and sev_map.get(code) == "高":
+            high.append(code)
+            seen.add(code)
+    if not high:
+        return None
+    return {
+        "high_risk": True,
+        "flags": high,
+        "评级": fin.get("评级"),
+        "报告期": fin.get("报告期"),
+        "label": "财报高危：" + "、".join(high),
+    }
+
+
+def _attach_risk(rows, recs: dict) -> list:
+    """给展示行(dict,含 code)挂 `risk` 财报高危红旗标注(就地补键,原样返回)。
+
+    风险层展示统一入口:自选股 / 综合选股 / 各在产策略区块的行都过这里。
+    行对应票无中心记录或无财报数据 → risk=None(前端不渲染标注,优雅降级)。
+    """
+    if not rows:
+        return rows
+    for r in rows:
+        if isinstance(r, dict) and r.get("code"):
+            r["risk"] = financial_risk(recs.get(r["code"]))
+    return rows
+
+
 def stops_view(rec: dict) -> dict:
     """从中心记录抽 5 日止盈止损 + 上涨概率,供选股页/首页榜单 L1 展示。
 
@@ -467,6 +534,17 @@ def selection_page(date: str = "latest") -> dict:
                                  strategy_mr=strategy_mr, strategy_vol=strategy_vol,
                                  strategy_strong=strategy_strong, strategy_rt=strategy_rt,
                                  strategy_cr=strategy_cr)
+
+    # 财报高危红旗风险层(WI-6):给自选股 / 综合选股 / 各在产策略展示行挂 risk 标注
+    # (红旗作风险/警示层,非 alpha 源;不改选股逻辑、不参与排序,仅展示层就地补键)。
+    # 融合降权 TODO:合议/综合选股暂不对高危红旗票做 veto-caution 降权(避免动选股逻辑/strategy.json 权重);
+    # 待验证降权口径后,可在 council/combined 排序层加「风险降权」,当前仅做展示警示。
+    _attach_risk(pool_rows, recs)
+    _attach_risk(combined.get("rows"), recs)
+    for _sec in (strategy0, strategy2, strategy4, strategy5, strategy6,
+                 strategy_mr, strategy_vol, strategy_strong, strategy_rt, strategy_cr):
+        if isinstance(_sec, dict):
+            _attach_risk(_sec.get("rows"), recs)
 
     return {"rows": pool_rows, "total": len(recs),
             "combined": combined, "strategy0": strategy0,
