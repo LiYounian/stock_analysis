@@ -104,6 +104,14 @@ def build_record(code: str, as_of: str) -> dict:
         holder_block = _safe(lambda: sm.summarize_holder(sm.load_holder_num(code, as_of)))
     except Exception:
         holder_block = None
+    # 盘口微观结构(逐笔;collectors.tdx_l2 盘后 run ticks 归档;缺则 None 降级,前端卡片不显示)
+    # date-pin 到 ≤as_of 分区(无未来函数);只读 meta 里的轻量摘要,不重载大 parquet。
+    tick_block = None
+    try:
+        from tools.collectors import tdx_l2
+        tick_block = _safe(lambda: tdx_l2.load_summary(code, date=as_of))
+    except Exception:
+        tick_block = None
 
     has_tech = "signal" in tech
     snapshot = None
@@ -173,6 +181,7 @@ def build_record(code: str, as_of: str) -> dict:
         "chip": chip_block,             # 筹码分布摘要(多因子「筹码」)
         "consensus": consensus_block,   # 一致预期摘要(多因子「预期」)
         "holder": holder_block,         # 股东户数趋势摘要(多因子「主力」)
+        "tick": tick_block,             # 盘口微观结构摘要(逐笔;主买占比/净主动买量/大单)
         "events": events,
         "timeseries_refs": {
             "kline": f"data/raw/kline/{code}.parquet",
@@ -182,7 +191,7 @@ def build_record(code: str, as_of: str) -> dict:
         "provenance": {"tech": bool(has_tech), "fundamental": bool(fund),
                        "announcements": len(anns), "fundflow": bool(flow),
                        "chip": bool(chip_block), "consensus": bool(consensus_block),
-                       "holder": bool(holder_block)},
+                       "holder": bool(holder_block), "tick": bool(tick_block)},
     }
 
     # 多策略合议(F5·D7):后端预算各专家信封 + 默认组合议结果 + config(tau/权重),随记录落库。

@@ -8,6 +8,7 @@ pyarrow>=14.0          # parquet 缓存
 requests>=2.31
 lxml>=4.9              # akshare 部分接口解析依赖
 curl_cffi>=0.16        # 伪装浏览器 TLS 指纹,解锁东财(资金流等),绕过 JA3 反爬
+mootdx>=0.11           # 通达信 TCP 行情(逐笔成交盘口微观结构,collectors.tdx_l2);仅 run ticks 用
 
 # Web 展示(FastAPI + Jinja2,uvicorn 起服务)
 fastapi>=0.110

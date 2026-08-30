@@ -404,6 +404,28 @@ def _prep(argv):
     return _pool(argv), as_of
 
 
+def cmd_ticks(argv):
+    """盘后逐笔归档:收盘后拉票池当日逐笔成交,落 tick/<date>/<code>.parquet。
+
+    python -m tools.run ticks              # 自选开发子集(默认)
+    python -m tools.run ticks --all        # 全票池(逐笔量大,慎用)
+    python -m tools.run ticks --date 20260827   # 回补历史某日(落该日分区)
+    通达信(mootdx)源;港股跳过。单票失败降级不中断整批。
+    """
+    from tools.collectors import tdx_l2
+    date = None
+    if argv and "--date" in argv:
+        i = argv.index("--date")
+        date = argv[i + 1] if i + 1 < len(argv) and argv[i + 1].isdigit() else None
+    # --date 回补:产物落该历史日分区(否则落今天)
+    as_of = f"{date[:4]}-{date[4:6]}-{date[6:8]}" if date and len(date) == 8 else _as_of()
+    store.set_active_date(as_of)
+    codes = _pool(argv)
+    logger.info("逐笔归档 %d 只(日期 %s,源 mootdx)...", len(codes), as_of)
+    r = _safe("逐笔归档", lambda: tdx_l2.fetch_ticks(codes, date=date)) or {}
+    logger.info("逐笔归档:成功 %d/%d", len(r), len(codes))
+
+
 def cmd_collect(argv): collect_values(_prep(argv)[0])
 def cmd_message(argv): collect_message(_prep(argv)[0])
 def cmd_sentiment(argv): run_sentiment(_prep(argv)[0])
@@ -777,7 +799,7 @@ _CMDS = {"collect": cmd_collect, "message": cmd_message, "sentiment": cmd_sentim
          "events": cmd_events, "factor": cmd_factor, "council": cmd_council,
          "context": cmd_context, "pipeline": cmd_pipeline, "screenall": cmd_screenall,
          "pattern": cmd_pattern, "sepa": cmd_sepa, "strong": cmd_strong,
-         "analyze": cmd_analyze, "all": cmd_all}
+         "analyze": cmd_analyze, "all": cmd_all, "ticks": cmd_ticks}
 
 
 def main(argv: list[str]) -> int:

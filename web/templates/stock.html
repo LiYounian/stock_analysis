@@ -298,6 +298,26 @@
   </section>
   {% endif %}
 
+  {% if r.tick and r.tick.总笔数 %}
+  {% set tk = r.tick %}
+  <section class="card">
+    <h2>盘口微观结构 <small>通达信逐笔;主动买卖 → 盘口买压(需先跑 run ticks)</small></h2>
+    <table>
+      <tr><td>主买占比</td>
+          <td class="{{ 'pos' if tk.主买占比 is not none and tk.主买占比>0.5 else ('neg' if tk.主买占比 is not none and tk.主买占比<0.5 else '') }}">
+          {% if tk.主买占比 is not none %}{{ '%.1f'|format(tk.主买占比*100) }}%{% else %}—{% endif %}</td>
+          <td>主卖占比</td>
+          <td>{% if tk.主卖占比 is not none %}{{ '%.1f'|format(tk.主卖占比*100) }}%{% else %}—{% endif %}</td></tr>
+      <tr><td>净主动买量(手)</td>
+          <td class="{{ 'pos' if tk.净主动买量 is not none and tk.净主动买量>0 else ('neg' if tk.净主动买量 is not none and tk.净主动买量<0 else '') }}">
+          {{ tk.净主动买量 if tk.净主动买量 is not none else '—' }}</td>
+          <td>大单笔数</td><td>{{ tk.大单笔数 }}</td></tr>
+      <tr><td>总笔数</td><td>{{ tk.总笔数 }}</td>
+          <td>总成交量(手)</td><td>{{ tk.总成交量 if tk.总成交量 is not none else '—' }}</td></tr>
+    </table>
+  </section>
+  {% endif %}
+
   {% if r.sentiment %}
   {% set sen = r.sentiment %}{% set L = sen.三层 or {} %}
   <section class="card wide">
