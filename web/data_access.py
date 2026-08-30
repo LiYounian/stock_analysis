@@ -372,6 +372,66 @@ def _attach_risk(rows, recs: dict) -> list:
     return rows
 
 
+def _high_flag_count(row: dict, recs: dict) -> int:
+    """行对应票的**高危红旗个数**(dose)。复用已挂的 row['risk'](_attach_risk 产出),缺则现算。"""
+    risk = row.get("risk")
+    if risk is None and "risk" not in row:
+        risk = financial_risk(recs.get(row.get("code")))
+        row["risk"] = risk
+    if isinstance(risk, dict) and risk.get("flags"):
+        return len(risk["flags"])
+    return 0
+
+
+def _rerank_scored(rows: list, recs: dict, score_key: str = "council_score") -> list:
+    """有打分区块(自选股 / 策略0):按「财报高危红旗接入」重排,就地补 row['risk_adjust']。
+
+    排序键(reverse=True):(未剔除, 非否决沉底, 有分, 调整后分) —— 保留>剔除、非否决>否决、
+    有分>无分(无 council_score 仍沉底,不回归)、调整后分高>低。降权=原分−罚分;否决靠标记沉底。
+    否决且「不保留展示」→ 从清单剔除。启用=False 时全 no-op(与原按分降序一致)。
+    ⚠️ 非投资建议。防未来函数:红旗来自已披露财报(as_of 由离线管线控),此处只做纯排序变换。
+    """
+    if not rows:
+        return rows
+    for r in rows:
+        base = r.get(score_key)
+        info = strategy_cfg.redflag_adjust(base, _high_flag_count(r, recs))
+        r["risk_adjust"] = info if info.get("应用") else None
+    def _key(r):
+        info = r.get("risk_adjust") or {}
+        base = r.get(score_key)
+        has = isinstance(base, (int, float)) and not isinstance(base, bool)
+        adj = info.get("排序分") if (info and has) else (base if has else None)
+        return (not info.get("剔除", False), not info.get("否决", False),
+                has, _num(adj, -1e18))
+    rows.sort(key=_key, reverse=True)
+    return [r for r in rows if not (r.get("risk_adjust") or {}).get("剔除")]
+
+
+def _demote_flagged(rows: list, recs: dict) -> list:
+    """无打分区块(综合选股并集 / 各策略入选清单):高危红旗票**稳定沉底**(dose 大者更靠后),
+    就地补 row['risk_adjust']。降权/否决都沉底(无分可扣,统一沉底);否决且不保留展示 → 剔除。
+
+    干净票(无高危红旗)保持原并集顺序(稳定);启用=False 时全 no-op(不回归)。⚠️ 非投资建议。
+    """
+    if not rows:
+        return rows
+    clean, flagged = [], []
+    for r in rows:
+        info = strategy_cfg.redflag_adjust(None, _high_flag_count(r, recs))
+        if info.get("剔除"):
+            r["risk_adjust"] = info
+            continue                                   # 否决·不保留展示 → 剔除
+        if info.get("应用") and (info.get("否决") or info.get("罚分", 0) > 0):
+            r["risk_adjust"] = info
+            flagged.append((_num(info.get("排序分"), 0.0), r))   # 排序分=−罚分,越负越沉
+        else:
+            r["risk_adjust"] = info if info.get("应用") else None
+            clean.append(r)
+    flagged.sort(key=lambda t: t[0], reverse=True)     # −罚分 降序 = 小剂量在前、大剂量沉底(稳定)
+    return clean + [r for _, r in flagged]
+
+
 def stops_view(rec: dict) -> dict:
     """从中心记录抽 5 日止盈止损 + 上涨概率,供选股页/首页榜单 L1 展示。
 
@@ -460,9 +520,8 @@ def screen_page(date: str = "latest") -> dict:
                 "council_score": cs.get("综合分"),
                 "council_conflict": cs.get("是否冲突", False),
             })
-        # 综合分参与排序(D9):有合议分的按分降序在前,无的(None)沉底
-        rows.sort(key=lambda x: (x["council_score"] is not None, x["council_score"] or 0),
-                  reverse=True)
+        # 综合分参与排序(D9)+ 红旗接入(WI-6):高危红旗票降权/否决沉底(启用=False → 等价原按分降序)。
+        rows = _rerank_scored(rows, recs)
         detail[name] = rows
     return {"presets": detail, "aggregate": data.get("aggregate", {}), "as_of": as_of(date)}
 
@@ -535,16 +594,25 @@ def selection_page(date: str = "latest") -> dict:
                                  strategy_strong=strategy_strong, strategy_rt=strategy_rt,
                                  strategy_cr=strategy_cr)
 
-    # 财报高危红旗风险层(WI-6):给自选股 / 综合选股 / 各在产策略展示行挂 risk 标注
-    # (红旗作风险/警示层,非 alpha 源;不改选股逻辑、不参与排序,仅展示层就地补键)。
-    # 融合降权 TODO:合议/综合选股暂不对高危红旗票做 veto-caution 降权(避免动选股逻辑/strategy.json 权重);
-    # 待验证降权口径后,可在 council/combined 排序层加「风险降权」,当前仅做展示警示。
+    # 财报高危红旗风险层(WI-6):先给各展示行挂 risk 标注(风险/警示层)。
     _attach_risk(pool_rows, recs)
     _attach_risk(combined.get("rows"), recs)
     for _sec in (strategy0, strategy2, strategy4, strategy5, strategy6,
                  strategy_mr, strategy_vol, strategy_strong, strategy_rt, strategy_cr):
         if isinstance(_sec, dict):
             _attach_risk(_sec.get("rows"), recs)
+
+    # 红旗接入选股逻辑(WI-6 升级:从"仅展示"→"进排序/入选"):高危红旗票降权/否决沉底
+    # (口径 config 财报.红旗接入;启用=False 时全链路 no-op、不回归)。就地补 row['risk_adjust']。
+    # ⚠️ 非投资建议:只改展示排序/入选,不构成买卖建议;不改 council 综合分本身(前端重合成不漂移)。
+    pool_rows = _rerank_scored(pool_rows, recs)                       # 自选股:council 综合分 + 红旗调整重排
+    if isinstance(strategy0.get("rows"), list):
+        strategy0["rows"] = _rerank_scored(strategy0["rows"], recs)   # 策略0:同上(有 council_score)
+    combined["rows"] = _demote_flagged(combined.get("rows"), recs)    # 综合选股并集:高危沉底
+    for _sec in (strategy2, strategy4, strategy5, strategy6,
+                 strategy_mr, strategy_vol, strategy_strong, strategy_rt):
+        if isinstance(_sec, dict) and isinstance(_sec.get("rows"), list):
+            _sec["rows"] = _demote_flagged(_sec["rows"], recs)        # 各在产策略入选清单:高危沉底
 
     return {"rows": pool_rows, "total": len(recs),
             "combined": combined, "strategy0": strategy0,
