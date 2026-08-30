@@ -447,6 +447,22 @@ THRESHOLDS = {
                 "回报": [["ROE%", "ROE", 0, 12]],
             },
         },
+        # ————————————————————————————————————————————————
+        # 红旗接入选股(WI-6 升级:从"仅展示"→"进选股逻辑")。additive、可整体关停(启用=False → 全链路 no-op)。
+        # 口径:financial_risk() 命中的**高危红旗(严重度=高)**才触发,数量=剂量(dose)。
+        # 「降权」= 候选排序分扣分(dose 单调、封顶),不改 council 综合分本身(前端重合成不漂移),不剔除、保留展示+⚠;
+        # 「否决」= 强制沉底(否决沉底保留展示=True,仍展示+⚠)或彻底剔除(=False)。
+        # 为何扣分而非"乘系数":council 综合分∈[-1,1] 有正有负,乘 <1 会把负分风险票抬高(方向反);
+        # 减正罚分对任意符号都单调下沉,语义正确。防未来函数:只读已披露财报的红旗(analyzer 控 as_of)。
+        # ⚠️ 非投资建议:红旗=风险/警示层,降权/否决只改展示排序,不构成买卖建议。
+        # ————————————————————————————————————————————————
+        "红旗接入": {
+            "启用": True,
+            "模式": "降权",              # "降权"(默认,软) | "否决"(硬)
+            "每面罚分": 0.5,             # 每个高危红旗从排序分里扣的分;dose 单调
+            "罚分上限": 1.2,             # 累计扣分封顶(防个别票扣到无穷,超过 council 综合分[-1,1]量级即足够沉底)
+            "否决沉底保留展示": True,     # 否决模式:True=强制沉底但仍展示(带⚠) / False=从入选清单剔除
+        },
     },
     # SEPA+VCP 监控(过滤器+人工翻图,不追 Alpha、不自动下单)。
     # 阈值除 SEPA 原书 3 条与失效 1.5% 外均为工程占位,待肉眼看结果后再标定。
@@ -501,6 +517,76 @@ THRESHOLDS = {
         "背离窗口": 20,
     },
 }
+
+
+# ————————————————————————————————————————————————
+# 财报高危红旗 → 选股排序接入(WI-6 升级:降权 / 否决)的**纯函数**(config 层,零依赖)。
+# 放这里的理由:展示层(web/data_access)按 §9.3 依赖方向**不得 import 分析器**(test_chart 守门),
+# 而 web 已 import 本 config 模块;合议层(council)也从这里再导出。→ 单一真源、两侧共用、不违层。
+# 剂量(dose)= financial_risk() 命中的高危红旗个数(严重度=高)。
+# 防未来函数:入参 high_flag_count 来自已披露财报的红旗(analyzer 控 as_of),本层只做纯变换、不触数据/网络。
+# ⚠️ 非投资建议:红旗=风险/警示层,降权/否决只改排序、不构成买卖建议。
+# ————————————————————————————————————————————————
+def redflag_cfg() -> dict:
+    """读红旗接入配置(缺失 → 空 dict → 关停默认,不炸)。单一真源。"""
+    try:
+        return (THRESHOLDS.get("财报", {}) or {}).get("红旗接入", {}) or {}
+    except Exception:                                  # noqa: BLE001
+        return {}
+
+
+def redflag_penalty(high_flag_count: int, cfg: dict | None = None) -> float:
+    """财报高危红旗数 → 排序惩罚分(≥0,dose 单调,封顶)。0 面 → 0 分。纯函数。"""
+    n = int(high_flag_count or 0)
+    if n <= 0:
+        return 0.0
+    c = cfg if cfg is not None else redflag_cfg()
+    per = float(c.get("每面罚分", 0.5))
+    cap = float(c.get("罚分上限", 1.2))
+    return min(per * n, cap)
+
+
+def redflag_adjust(base_score, high_flag_count: int, cfg: dict | None = None) -> dict:
+    """把财报高危红旗接入排序,返回接入信息(不改 council 综合分本身)。
+
+    Args:
+        base_score: 候选原始排序分(council 综合分等);None=无分(如无打分区块)。
+        high_flag_count: 高危红旗个数(financial_risk()['flags'] 的长度;0=无高危)。
+    Returns dict:
+        应用   —— 是否触发(启用 且 有高危红旗);
+        模式   —— "降权"/"否决"(未应用→None);
+        高危数 —— dose;罚分 —— 本次扣分;否决 —— 是否硬否决;剔除 —— 否决且不保留展示;
+        原始分 —— base_score 净化后(非数→None);
+        排序分 —— 供 web 排序的调整后分:
+                  · 有 base:降权=base−罚分;否决/未应用=base;
+                  · 无 base(None):−罚分(clean=0、越多面越负),供无打分区块沉底。
+    未启用 / 无高危 → 应用=False、罚分=0、排序分=base(或 0),全链路 no-op(不回归)。
+    """
+    c = cfg if cfg is not None else redflag_cfg()
+    n = int(high_flag_count or 0)
+    enabled = bool(c.get("启用", False)) and n > 0
+    mode = c.get("模式", "降权")
+    penalty = redflag_penalty(n, c) if enabled else 0.0
+    base = base_score if isinstance(base_score, (int, float)) and not isinstance(
+        base_score, bool) else None
+    vetoed = bool(enabled and mode == "否决")
+    if base is None:
+        rank = -penalty                                # 无打分区块:clean=0,高危按剂量沉底
+    elif enabled and mode == "降权":
+        rank = base - penalty
+    else:
+        rank = base                                    # 否决(靠 vetoed 标记沉底)/ 未应用
+    return {
+        "应用": enabled,
+        "模式": mode if enabled else None,
+        "高危数": n,
+        "罚分": round(penalty, 4),
+        "否决": vetoed,
+        "剔除": bool(vetoed and not c.get("否决沉底保留展示", True)),
+        "原始分": base,
+        "排序分": rank,
+    }
+
 
 # ————————————————————————————————————————————————
 # 公式描述(文字,便于人审;与代码实现一一对应)

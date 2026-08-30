@@ -177,6 +177,12 @@ def bias_council(tech: dict, fundflow: dict | None = None,
     return {"结论": 结论, "得分": score, "依据": reasons}
 
 
+# 财报高危红旗 → 选股排序接入(降权/否决)的纯函数移至 config 层(tools.config.strategy),
+# 以便**展示层(web)不 import 分析器**(§9.3 依赖方向,test_chart 守门)。此处按需再导出,
+# 便于分析/离线侧从合议模块直接取用(单一真源仍在 config)。
+from tools.config.strategy import redflag_adjust, redflag_penalty  # noqa: E402,F401
+
+
 def convene_default(record: dict, kline=None) -> dict:
     """用 config 默认专家组 + 默认(等权)权重召集合议。供批量落库 record['council']。"""
     return convene(list(_C["默认专家组"]), record, kline)
