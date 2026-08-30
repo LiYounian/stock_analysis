@@ -69,14 +69,14 @@ def test_skip_flags():
 
 # ———————————— 专属红旗:边界断言 ————————————
 def test_flag_rd_over_capitalization_hit_and_miss():
-    # 命中:开发支出/研发费用 > 1.0(头号利润质量红旗,高严重度)
+    # 命中:开发支出/研发费用 > 3.0(标定 2026-08:原占位 1.0≈行业中位=命中48%泛滥,上调到 p80≈3.0)
     hit = auto.extra_flags({}, {"利润表": {"研发费用": 1e8},
-                                "资产负债表": {"开发支出": 1.5e8}})
+                                "资产负债表": {"开发支出": 3.5e8}})
     assert "研发过度资本化" in _codes(hit)
     assert [f for f in hit if f["code"] == "研发过度资本化"][0]["严重度"] == "高"
-    # 不命中:资本化占比低
+    # 不命中:资本化占比 2.0——旧阈值 1.0 会误报,新阈值 3.0 不报(锁住上调后的语义,防回退)
     miss = auto.extra_flags({}, {"利润表": {"研发费用": 1e8},
-                                 "资产负债表": {"开发支出": 2e7}})
+                                 "资产负债表": {"开发支出": 2e8}})
     assert "研发过度资本化" not in _codes(miss)
 
 
@@ -109,12 +109,15 @@ def test_flag_inventory_expiry_hit_and_miss():
 
 
 def test_flag_goodwill_impairment_hit_and_miss():
-    # 命中:商誉/归母净资产 > 0.30(专属高严重度,替代通用商誉高企)
-    hit = auto.extra_flags({}, {"资产负债表": {"商誉": 5e8, "归母股东权益": 1e9}})
+    # 命中:商誉/归母净资产 > 0.10(标定 2026-08:原占位 0.30>p90=0.096 命中0%=从不发声,下调到 p90≈0.10)
+    hit = auto.extra_flags({}, {"资产负债表": {"商誉": 5e8, "归母股东权益": 1e9}})  # 0.50 > 0.10
     assert "商誉减值暴雷风险" in _codes(hit)
     assert [f for f in hit if f["code"] == "商誉减值暴雷风险"][0]["严重度"] == "高"
-    # 不命中:商誉占比低
-    miss = auto.extra_flags({}, {"资产负债表": {"商誉": 1e8, "归母股东权益": 1e9}})
+    # 边界:商誉占比 0.15——旧阈值 0.30 不报,新阈值 0.10 报(锁住下调后语义,防回退)
+    boundary = auto.extra_flags({}, {"资产负债表": {"商誉": 1.5e8, "归母股东权益": 1e9}})
+    assert "商誉减值暴雷风险" in _codes(boundary)
+    # 不命中:商誉占比低(0.05 < 0.10)
+    miss = auto.extra_flags({}, {"资产负债表": {"商誉": 5e7, "归母股东权益": 1e9}})
     assert "商誉减值暴雷风险" not in _codes(miss)
 
 
