@@ -44,11 +44,9 @@ logger = logging.getLogger("backtest.lhb_forward_scorecard")
 
 TOP_N = 20
 DEFAULT_HORIZONS = (1, 5)
-_SCRATCH = ("/private/tmp/claude-501/-Users-yqg-Documents-projects-stock-analysis/"
-            "c4815bd5-1307-454f-8c30-8e64377b1bf3/scratchpad")
-_DEFAULT_OUT = os.path.join(_SCRATCH, "lhb_forward_scorecard.csv")
-# 部署到每日闭环时由上层传持久路径(如 data/analysis/backtest/lhb_forward_scorecard.csv)
+# 记分卡持久路径:随 repo 逐日滚存(每日闭环 _update_lhb_scorecard 与 CLI 默认都写这里)。
 PERSIST_OUT = "data/analysis/backtest/lhb_forward_scorecard.csv"
+_DEFAULT_OUT = PERSIST_OUT
 
 _COLS = ["date", "code", "综合分", "排序分", "rank_before", "rank_after",
          "in_top20_before", "in_top20_after", "ejected", "net_buy_ratio", "reason"]
@@ -64,7 +62,8 @@ def _record_day(date: str, universe_limit: int | None) -> pd.DataFrame:
     lo = (pd.Timestamp(date) - pd.Timedelta(days=int(axis.get("窗口天数", 7)) + 3)).strftime("%Y%m%d")
     events = RP._fetch_events(lo, pd.Timestamp(date).strftime("%Y%m%d"))
 
-    v = sc.run_council_screen(codes, as_of=date, fetch=False, top_n=10_000_000)
+    # persist=False:记分卡复算全票排名,绝不覆盖闭环已落的 top-N「策略0合议」view(避免副作用)。
+    v = sc.run_council_screen(codes, as_of=date, fetch=False, top_n=10_000_000, persist=False)
     rows = v.get("top", [])
     if not rows:
         return pd.DataFrame(columns=_COLS)
