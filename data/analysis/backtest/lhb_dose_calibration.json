@@ -1,0 +1,240 @@
+{
+  "dates": [
+    "2026-08-18",
+    "2026-08-19",
+    "2026-08-20"
+  ],
+  "universe_limit": 2000,
+  "disclaimer": "罚分作用在合议综合分排序尺度上(经验实测 top≈0.53、中位0);标定协调锚=财报红旗0.5/面、合成封顶1.5;收益侧见光死证据引自 lhb_veto_lab(T+1开盘入、防未来函数)。仅改排序展示、非买卖建议;历史回测≠未来保证。",
+  "score_dist": {
+    "n": 5991,
+    "n_dates": 3,
+    "pct": {
+      "p50": 0.0,
+      "p75": 0.1875,
+      "p90": 0.2941,
+      "p95": 0.3371,
+      "p99": 0.55,
+      "p100": 0.6867
+    },
+    "min": -0.6961,
+    "frac_positive": 0.3135,
+    "top20_cut_mean": 0.55,
+    "top30_cut_mean": 0.5111
+  },
+  "penalty_sweep": [
+    {
+      "penalty": 0.3,
+      "ejected_from_topN": 1.0,
+      "ejected_from_top30": 1.0,
+      "below_zero": 0.0,
+      "median_rank_drop_pct": 0.098,
+      "landing_pct_of_max": 0.962,
+      "vs_redflag_face": 0.6,
+      "headroom_under_cap": 1.2
+    },
+    {
+      "penalty": 0.4,
+      "ejected_from_topN": 1.0,
+      "ejected_from_top30": 1.0,
+      "below_zero": 0.0,
+      "median_rank_drop_pct": 0.254,
+      "landing_pct_of_max": 0.899,
+      "vs_redflag_face": 0.8,
+      "headroom_under_cap": 1.1
+    },
+    {
+      "penalty": 0.5,
+      "ejected_from_topN": 1.0,
+      "ejected_from_top30": 1.0,
+      "below_zero": 0.0,
+      "median_rank_drop_pct": 0.282,
+      "landing_pct_of_max": 0.743,
+      "vs_redflag_face": 1.0,
+      "headroom_under_cap": 1.0
+    },
+    {
+      "penalty": 0.6,
+      "ejected_from_topN": 1.0,
+      "ejected_from_top30": 1.0,
+      "below_zero": 0.95,
+      "median_rank_drop_pct": 0.865,
+      "landing_pct_of_max": 0.716,
+      "vs_redflag_face": 1.2,
+      "headroom_under_cap": 0.9
+    },
+    {
+      "penalty": 0.8,
+      "ejected_from_topN": 1.0,
+      "ejected_from_top30": 1.0,
+      "below_zero": 1.0,
+      "median_rank_drop_pct": 0.925,
+      "landing_pct_of_max": 0.097,
+      "vs_redflag_face": 1.6,
+      "headroom_under_cap": 0.7
+    },
+    {
+      "penalty": 1.0,
+      "ejected_from_topN": 1.0,
+      "ejected_from_top30": 1.0,
+      "below_zero": 1.0,
+      "median_rank_drop_pct": 0.974,
+      "landing_pct_of_max": 0.037,
+      "vs_redflag_face": 2.0,
+      "headroom_under_cap": 0.5
+    }
+  ],
+  "threshold_analysis": {
+    "by_horizon": {
+      "H1": {
+        "buckets": [
+          {
+            "ratio_range": [
+              0.0,
+              1.8
+            ],
+            "net_excess": 0.0007,
+            "net_p": 0.619
+          },
+          {
+            "ratio_range": [
+              1.8,
+              4.41
+            ],
+            "net_excess": -0.0008,
+            "net_p": 0.558
+          },
+          {
+            "ratio_range": [
+              4.41,
+              9.19
+            ],
+            "net_excess": -0.0022,
+            "net_p": 0.077
+          },
+          {
+            "ratio_range": [
+              9.2,
+              89.23
+            ],
+            "net_excess": -0.0076,
+            "net_p": 0.0
+          }
+        ],
+        "all_buckets_sig_neg": false,
+        "only_high_sig_neg": true,
+        "monotone_worse_with_ratio": true
+      },
+      "H5": {
+        "buckets": [
+          {
+            "ratio_range": [
+              0.0,
+              1.8
+            ],
+            "net_excess": -0.0187,
+            "net_p": 0.0
+          },
+          {
+            "ratio_range": [
+              1.8,
+              4.41
+            ],
+            "net_excess": -0.0222,
+            "net_p": 0.0
+          },
+          {
+            "ratio_range": [
+              4.41,
+              9.19
+            ],
+            "net_excess": -0.0165,
+            "net_p": 0.0
+          },
+          {
+            "ratio_range": [
+              9.2,
+              89.23
+            ],
+            "net_excess": -0.0101,
+            "net_p": 0.008
+          }
+        ],
+        "all_buckets_sig_neg": true,
+        "only_high_sig_neg": false,
+        "monotone_worse_with_ratio": false
+      },
+      "H10": {
+        "buckets": [
+          {
+            "ratio_range": [
+              0.0,
+              1.8
+            ],
+            "net_excess": -0.0304,
+            "net_p": 0.0
+          },
+          {
+            "ratio_range": [
+              1.8,
+              4.41
+            ],
+            "net_excess": -0.0281,
+            "net_p": 0.0
+          },
+          {
+            "ratio_range": [
+              4.41,
+              9.19
+            ],
+            "net_excess": -0.0262,
+            "net_p": 0.0
+          },
+          {
+            "ratio_range": [
+              9.2,
+              89.23
+            ],
+            "net_excess": -0.0154,
+            "net_p": 0.005
+          }
+        ],
+        "all_buckets_sig_neg": true,
+        "only_high_sig_neg": false,
+        "monotone_worse_with_ratio": false
+      }
+    },
+    "recommended_min_net_buy_ratio": 0.0,
+    "rationale": "门槛=0.0:H5/H10 各净买占比档一致显著负(低档甚至更负),'只惩罚高档追高'假设被否;抬门槛会漏掉低档见光死。"
+  },
+  "recommendation": {
+    "触发罚分_前": 0.6,
+    "触发罚分_后": 0.5,
+    "触发罚分_依据": "罚分=0.5:在真实综合分分布上使命中票挤出 top-N 比例=100%、下沉中位 28% 分位;与财报红旗 0.5/面协调(=1.0倍)、封顶 1.5 下留 1.0 余量。",
+    "最小净买占比_前": 0.0,
+    "最小净买占比_后": 0.0,
+    "最小净买占比_依据": "门槛=0.0:H5/H10 各净买占比档一致显著负(低档甚至更负),'只惩罚高档追高'假设被否;抬门槛会漏掉低档见光死。",
+    "模式_前": "降权",
+    "模式_后": "降权",
+    "模式_依据": "模式=降权(软沉底):见光死是**分布性**均值效应(净买腿 H5 净超额 0.0168、逐年一致但非每票必跌),软降权把命中票压出前段即够,保留展示与可追溯,误伤小于硬剔除;'否决/剔除'留给未来'极高净买占比+近日多次上榜'高置信场景。",
+    "按条数加权": false,
+    "按条数加权_依据": "保持关闭:单次上榜给固定剂量;n_recent 的分级罚分缺独立标定,留作未来工作(避免越顶)。"
+  },
+  "lab_source": {
+    "path": "data/analysis/backtest/lhb_veto_lab.json",
+    "window": [
+      "20240101",
+      "20251231"
+    ],
+    "n_events": 38005,
+    "conclusion": {
+      "否决腿H5显著负(见光死)": true,
+      "否决腿H1显著负(追高即跌)": true,
+      "否决腿逐年净超额均为负": true,
+      "净买H5避免跑输(净,%)": 0.0168,
+      "反转腿H1净超额(扣成本,%)": 0.004,
+      "反转扣成本后仍正": true,
+      "建议用法": "净买上榜→入选否决/持仓离场(H5见光死最稳);H1即已跑输,可作即时否决;净卖H1弱反转扣成本后微正,仅可小仓试探"
+    }
+  }
+}
