@@ -538,3 +538,66 @@ def test_name_fallback_three_levels(monkeypatch):
     assert da._name(recs, "000001") == "平安银行"
     assert da._name(recs, "600519") == "贵州茅台"
     assert da._name(recs, "999999") == "999999"
+
+
+# ————————————————————————————————————————————————
+# 行业回退:全A 选出票带上行业(config/code_industry.json 兜底);自选票不回归
+# ————————————————————————————————————————————————
+def test_industry_fallback_priority(monkeypatch):
+    """_industry 回退优先级:meta.industry → meta.sector → hint(view 行业)→ 全A映射 → None。"""
+    monkeypatch.setattr(da, "_code_industry_map", lambda: {"600000": "银行", "600001": "钢铁"})
+    recs = {
+        "A": {"meta": {"industry": "半导体封测", "sector": "半导体"}},   # 人工细分优先
+        "B": {"meta": {"industry": None, "sector": "银行"}},           # 退 sector
+        "600000": {"meta": {}},                                        # 退全A映射
+        "600001": {},                                                  # 无 record → 退全A映射
+    }
+    assert da._industry(recs, "A") == "半导体封测"
+    assert da._industry(recs, "B") == "银行"
+    assert da._industry(recs, "600000") == "银行"          # meta 空 → 映射兜底
+    assert da._industry(recs, "600001") == "钢铁"          # 无记录 → 映射兜底
+    # hint(view 自带行业)先于映射
+    assert da._industry(recs, "600000", "计算机") == "计算机"
+    # 都缺 → None(前端渲染「—」)
+    assert da._industry({}, "999999") is None
+
+
+def test_fulla_picks_carry_industry(monkeypatch):
+    """全A screener 选出票(无中心记录 meta 行业)经全A映射后带行业:
+    策略0 / 策略2 / 动量 / 综合选股 各行 industry 非空(修复主页选股不显示行业的 bug)。"""
+    monkeypatch.setattr(da, "_code_industry_map",
+                        lambda: {"000001": "银行", "300311": "电子", "000003": "汽车"})
+    # recs 为空(全A 选出票通常无自选记录 meta),行业只能来自全A映射
+    _patch(monkeypatch, {}, get_view=_dispatch(
+        strategy0=_strategy0_view(("000001", "300311")),
+        s02=_s02_view(("300311",)),
+        momentum=_momentum_view(("000003",))))
+    # _strategy0_view 的 item 自带「行业」=芯片(hint 先于映射);清掉以验证映射兜底
+    page = da.selection_page()
+    s2 = {r["code"]: r for r in page["strategy2"]["rows"]}
+    assert s2["300311"]["industry"] == "电子"              # 全A映射兜底
+    s4 = {r["code"]: r for r in page["strategy4"]["rows"]}
+    assert s4["000003"]["industry"] == "汽车"
+    comb = {r["code"]: r for r in page["combined"]["rows"]}
+    assert comb["000003"]["industry"] == "汽车"
+    assert all(r.get("industry") for r in page["combined"]["rows"])   # 并集全带行业
+
+
+def test_pool_industry_no_regression(monkeypatch):
+    """自选池票仍用人工 meta.industry/sector,不被全A映射覆盖(防回归)。"""
+    monkeypatch.setattr(da, "_code_industry_map", lambda: {"000001": "银行"})
+    recs = {"000001": _rec("000001", bull=True)}          # meta.industry=芯片, sector=半导体
+    _patch(monkeypatch, recs, pool={"000001"})
+    row = da.selection_page()["rows"][0]
+    assert row["industry"] == "芯片" and row["sector"] == "半导体"   # 人工细分优先,未被"银行"覆盖
+
+
+def test_code_industry_map_loads_and_covers_picks():
+    """离线产出的 config/code_industry.json 存在、覆盖全A(与 code_name.json 同量级),
+    且是 {code: 行业名} 结构;锁"全A映射表可用",防未来误删/结构漂移。"""
+    m = da._code_industry_map()
+    assert isinstance(m, dict) and len(m) > 4000        # 全A 量级(~5200)
+    # 抽样已知票行业(申万一级),防归一逻辑退化
+    assert m.get("000001") == "银行"
+    for code, ind in list(m.items())[:20]:
+        assert isinstance(code, str) and len(code) == 6 and isinstance(ind, str) and ind
