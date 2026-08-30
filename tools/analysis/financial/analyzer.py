@@ -84,6 +84,31 @@ def _industry_key(code: str, industry: str | None = None) -> str | None:
     return sw
 
 
+def _route_disambig(code: str, as_of: str | None, industry: str | None,
+                    sector: str | None) -> dict:
+    """行业归属消歧 + 多路由聚合(见 disambiguate.disambiguate)。
+
+    产出:消歧结论 dis + `路由行业`(每个候选申万一级是否命中专家)+ `口径注解`(模糊时的口径说明,
+    非模糊 → None,保证单行业行为不变)。**主行业 scoring 仍由 `_industry_key` 决定(向后兼容)**;
+    本层只加候选/标注,不改主评分路径。消歧失败(数据缺)整体降级为空标注,不阻断财报分析。
+    """
+    from tools.analysis.financial import disambiguate as dis_mod
+    try:
+        dis = dis_mod.disambiguate(code, as_of=as_of, industry=industry, sector=sector)
+    except Exception as e:                                  # noqa: BLE001
+        logger.warning("行业消歧失败 %s: %s(降级为无标注)", code, e)
+        return {"消歧": None, "相关行业": [], "路由行业": [], "口径注解": None}
+    routes = [{"行业": c, "命中专家": get_expert(c) is not None} for c in dis["candidates"]]
+    注解 = None
+    if dis["ambiguous"]:
+        seg = [dis["ambiguity_reason"]]
+        if dis.get("market_label"):
+            seg.append(dis["market_label"])
+        seg.append("模糊:候选 " + "/".join(dis["candidates"]) + ",主口径按下方 行业专家 评分,余口径供多视角参考")
+        注解 = " | ".join(s for s in seg if s)
+    return {"消歧": dis, "相关行业": dis["candidates"], "路由行业": routes, "口径注解": 注解}
+
+
 def _is_financial_structural(periods_raw: dict) -> bool:
     """结构兜底(行业名解析不到时):有资产负债表数据、但**无'营业成本'且无'存货'** → 银行/保险/证券。
     银行等金融业利润表无营业成本行、资产负债表无存货,是稳定可判信号(不依赖会员/行业数据加载)。"""
@@ -151,7 +176,7 @@ def _profit_digest(rec: dict, derived: dict) -> dict:
 
 
 def analyze(code: str, as_of: str | None = None, persist: bool = True,
-            industry: str | None = None) -> dict:
+            industry: str | None = None, sector: str | None = None) -> dict:
     """对单票做财报数值分析,产出按报告期的财报视图。
 
     Args:
@@ -159,6 +184,7 @@ def analyze(code: str, as_of: str | None = None, persist: bool = True,
         as_of: 可见性锚(仅纳入 disclosure_date <= as_of 的报告期,防未来函数)。None=全部可见。
         persist: True 则把视图写 code_view("financial_report", code)。
         industry: 可选行业名(如 record.meta.industry);用于金融业红旗特判,缺省回退 board.board_of。
+        sector: 可选市场大类板块(record.meta.sector);仅用于行业消歧的「市场概念」标注,缺省回退自选池。
     Returns:
         {code, name, as_of, periods:{period: 单期分析}, latest: 最新可见期摘要, provenance}。
     缺 raw 抛 FileNotFoundError(与 store 缺失约定一致)。
@@ -215,6 +241,10 @@ def analyze(code: str, as_of: str | None = None, persist: bool = True,
                            "source": raw.get("meta_source", "sina+em")},
         }
 
+    # 行业归属消歧(时变正式行业 / 市场概念标注 / 多行业模糊标记 + 多路由聚合)。
+    # 主行业 scoring 仍由上面 key(_industry_key)决定,本层只加候选与标注,单行业行为不变。
+    route = _route_disambig(code, as_of, industry, sector)
+
     latest_p = max(out_periods) if out_periods else None
     result = {
         "code": code, "name": raw.get("name"), "as_of": as_of,
@@ -222,6 +252,10 @@ def analyze(code: str, as_of: str | None = None, persist: bool = True,
         "latest": out_periods.get(latest_p) if latest_p else None,
         "行业专家": key if exp else None,
         "口径说明": getattr(exp, "NOTE", None) if exp else None,
+        "消歧": route["消歧"],                # 三口径消歧结论(时变正式/市场概念/细分主业 + candidates)
+        "相关行业": route["相关行业"],          # 去重候选申万一级(单行业时=[primary])
+        "路由行业": route["路由行业"],          # 每个候选是否命中行业专家(多路由用)
+        "口径注解": route["口径注解"],          # 模糊时的口径说明;非模糊=None(向后兼容)
         "provenance": {"structured": bool(out_periods), "qualitative": False, "verdict": False},
     }
     if persist and out_periods:
@@ -233,14 +267,15 @@ def analyze(code: str, as_of: str | None = None, persist: bool = True,
 
 
 def build_financial_block(code: str, as_of: str | None = None,
-                          industry: str | None = None) -> dict | None:
+                          industry: str | None = None, sector: str | None = None) -> dict | None:
     """构建中心记录顶层 `financial` 轻量块(仅最新已披露报告期摘要)。
 
     供 panel/screen/web/Agent 直接消费(不塞多期大数组;多期在 code_view)。
-    industry:可选行业名(record.meta.industry),用于金融业红旗特判。无可见报告期 → None。
+    industry:可选行业名(record.meta.industry),用于金融业红旗特判。
+    sector:可选市场大类板块(record.meta.sector),用于行业消歧的市场概念标注。无可见报告期 → None。
     """
     try:
-        res = analyze(code, as_of=as_of, persist=False, industry=industry)
+        res = analyze(code, as_of=as_of, persist=False, industry=industry, sector=sector)
     except FileNotFoundError:
         return None
     latest = res.get("latest")
@@ -260,6 +295,10 @@ def build_financial_block(code: str, as_of: str | None = None,
         "金融业口径": latest.get("金融业口径", False),
         "行业专家": res.get("行业专家"),          # 命中的行业专家(无=通用兜底)
         "口径说明": res.get("口径说明"),          # 行业专属口径标注(页面展示)
+        "消歧": res.get("消歧"),                  # 行业归属消歧(时变正式/市场概念/模糊标记)
+        "相关行业": res.get("相关行业"),           # 候选申万一级(单行业=[primary])
+        "口径注解": res.get("口径注解"),           # 模糊时口径说明;非模糊=None
+        "行业模糊": bool((res.get("消歧") or {}).get("ambiguous")),  # 页面一眼可见的模糊标记
         "derived": latest.get("derived"),
         "verdict": None,   # LLM 层留口
     }
