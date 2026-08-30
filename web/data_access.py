@@ -243,6 +243,49 @@ def _name(recs, code):
     return _resolve_name((recs or {}).get(code), code)
 
 
+# ————————————————————————————————————————————————
+# 行业回退:自选票 meta.industry/sector(人工)→ 全A「代码→行业」映射(config/code_industry.json)
+# code_industry.json 是全A「代码→申万一级行业」映射(offline collectors.code_industry 产出),
+# 与 code_name.json 同构、同用法:web 不触网、模块级只加载一次、文件缺失/损坏 → 空 dict 优雅退回。
+# 用途:全A screener 选出的票中心记录 meta.industry=None(serialize 只给自选池填),此表兜底,
+# 让选股页各策略行「行业」列不再空。当前快照口径(仅展示标签,不进回测)。
+# ————————————————————————————————————————————————
+_CODE_INDUSTRY_CACHE: dict[str, str] | None = None
+
+
+def _code_industry_map() -> dict[str, str]:
+    """全A代码→行业(申万一级)映射(config/code_industry.json),模块级只加载一次。缺失/损坏 → 空 dict。"""
+    global _CODE_INDUSTRY_CACHE
+    if _CODE_INDUSTRY_CACHE is None:
+        try:
+            import json
+            from tools.config import settings
+            path = settings.PROJECT_ROOT / "config" / "code_industry.json"
+            data = json.loads(path.read_text(encoding="utf-8"))
+            _CODE_INDUSTRY_CACHE = data if isinstance(data, dict) else {}
+        except (FileNotFoundError, ValueError, OSError):
+            _CODE_INDUSTRY_CACHE = {}
+    return _CODE_INDUSTRY_CACHE
+
+
+def _industry(recs, code, *hints):
+    """行业回退链(全A 选股展示统一入口):
+    中心记录 meta.industry → meta.sector → 传入 hint(view 自带「行业」)→
+    全A code→行业映射(申万一级)→ None(前端渲染「—」)。
+
+    自选池票 meta 已带人工 industry/sector,优先命中、不受影响(不回归);
+    全A 票 meta 无行业,靠 code_industry 映射兜底,让选股页「行业」列显示出来。
+    """
+    meta = ((recs or {}).get(code) or {}).get("meta") or {}
+    v = meta.get("industry") or meta.get("sector")
+    if v:
+        return v
+    for h in hints:
+        if h:
+            return h
+    return _code_industry_map().get(code)
+
+
 def _pool_codes() -> set[str]:
     """当前自选池代码集合(区块①「自选股」过滤用)。读失败 → 空集合(区块① 空,不炸页)。"""
     try:
@@ -462,7 +505,7 @@ def _strategy0_section(recs: dict, date: str = "latest") -> dict:
         d = cblk.get("default") or {}
         rows.append({
             "code": code, "name": _name(recs, code),
-            "industry": item.get("行业"),
+            "industry": _industry(recs, code, item.get("行业")),
             "council_dir": item.get("综合方向") or d.get("综合方向"),
             "council_score": item.get("综合分", d.get("综合分")),
             "council_conflict": bool(d.get("是否冲突")),
@@ -512,10 +555,9 @@ def _view_picks_section(view_name: str, recs: dict, date: str = "latest",
         combos = item.get("组合") or item.get("combos") or []
         if isinstance(combos, str):
             combos = [combos]
-        meta = (recs.get(code) or {}).get("meta") or {}
         picks.append(code)
         rows.append({"code": code, "name": _name(recs, code),
-                     "industry": meta.get("industry") or meta.get("sector") or item.get("行业"),
+                     "industry": _industry(recs, code, item.get("行业")),
                      "combos": list(combos)})
     return {
         "present": True,
@@ -589,13 +631,12 @@ def _strategy_reversal_turnover_section(recs: dict, date: str = "latest", cap: i
         code = item.get("code")
         if not code or len(rows) >= cap:
             continue
-        meta = (recs.get(code) or {}).get("meta") or {}
         rev = item.get("rev")            # rev = -(近5日涨幅);>0=近5日下跌
         turn = item.get("turn")          # turn = -(近20日均换手);均换手% = -turn
         picks.append(code)
         rows.append({
             "code": code, "name": _name(recs, code),
-            "industry": meta.get("industry") or meta.get("sector"),
+            "industry": _industry(recs, code),
             "综合分": item.get("综合分"),
             "近5日跌幅%": round(rev * 100, 2) if isinstance(rev, (int, float)) else None,
             "均换手%": round(-turn, 3) if isinstance(turn, (int, float)) else None,
@@ -636,10 +677,9 @@ def _strategy_conditional_rank_section(recs: dict, date: str = "latest", cap: in
             if not isinstance(item, dict) or not item.get("code"):
                 continue
             code = item["code"]
-            meta = (recs.get(code) or {}).get("meta") or {}
             rows.append({
                 "code": code, "name": _name(recs, code),
-                "industry": meta.get("industry") or meta.get("sector"),
+                "industry": _industry(recs, code),
                 "上涨概率%": item.get("上涨概率%"), "方向": item.get("方向"),
                 "置信度": item.get("置信度"), "相似样本数": item.get("相似样本数"),
                 "成交额万元": item.get("成交额万元"), "过下限": item.get("过下限"),
@@ -725,11 +765,10 @@ def _strategy6_section(recs: dict, date: str = "latest", top_k: int = 8) -> dict
             if not code:
                 continue
             d = item.get("明细") or {}
-            meta = (recs.get(code) or {}).get("meta") or {}
             picks.append(code)
             rows.append({
                 "code": code, "name": _name(recs, code),
-                "industry": meta.get("industry") or meta.get("sector") or item.get("行业"),
+                "industry": _industry(recs, code, item.get("行业")),
                 "综合分": d.get("综合分"),
                 "rd_rev": d.get("rd_rev"),
                 "rd_mcap": d.get("rd_mcap"),
@@ -765,12 +804,10 @@ def _strategy6_section(recs: dict, date: str = "latest", top_k: int = 8) -> dict
     detail_by_code = {d["code"]: d for d in out.get("因子明细", [])}
     rows = []
     for code in out.get("codes", []):
-        r = recs.get(code) or {}
-        meta = r.get("meta") or {}
         d = detail_by_code.get(code, {})
         rows.append({
             "code": code, "name": _name(recs, code),
-            "industry": meta.get("industry") or meta.get("sector"),
+            "industry": _industry(recs, code),
             "综合分": d.get("综合分"),
             "rd_rev": d.get("rd_rev"),
             "rd_mcap": d.get("rd_mcap"),
@@ -819,12 +856,11 @@ def _strategy5_section(recs: dict, date: str = "latest", top_k: int = 3) -> dict
     rows = []
     for code in out.get("codes", []):
         r = scoped.get(code) or {}
-        meta = r.get("meta") or {}
         val = r.get("valuation") or {}
         snap = r.get("snapshot") or {}
         rows.append({
             "code": code, "name": _name(recs, code),
-            "industry": meta.get("industry") or meta.get("sector"),
+            "industry": _industry(recs, code),
             "mktcap_yi": val.get("mktcap_yi"),
             "close": snap.get("close"), "pct_chg": snap.get("pct_chg"),
         })
@@ -887,10 +923,9 @@ def _combined_section(strategy0: dict, strategy2: dict,
 
     rows = []
     for code in order:
-        meta = (recs.get(code) or {}).get("meta") or {}
         rows.append({
             "code": code, "name": _name(recs, code),
-            "industry": meta.get("industry") or meta.get("sector") or s0_industry.get(code),
+            "industry": _industry(recs, code, s0_industry.get(code)),
             "sources": sources[code],                    # 前端按勾选过滤 + 拼「策略0+策略2」
         })
 
