@@ -149,3 +149,29 @@ def evaluate_flags(derived: dict, structured: dict | None = None,
 def has_high_severity(flags: list[dict]) -> bool:
     """是否含「高」严重度红旗(评分封顶用)。"""
     return any(f.get("严重度") == "高" for f in flags)
+
+
+def high_flag_count(block: dict | None) -> int:
+    """统计财报 `financial` 块的**高危红旗个数**(dose;严重度=「高」)。
+
+    单一真源:红旗接入(config.strategy.redflag_adjust)与展示层(web.financial_risk)
+    的剂量口径统一到本函数,避免多处重复计数逻辑漂移。
+    双源取并(与 web.data_access.financial_risk 一致):
+      · 源1:block['flags_detail'] 里 严重度=「高」的红旗(通用高危 + 行业专家专属高危);
+      · 源2:block['flags'] 轻量列表里 config 严重度=「高」但未进 flags_detail 的
+             (审计闸门后补挂:非标审计意见 / 审计机构未备案)。
+    block 为 None / 无红旗 → 0。防未来函数:红旗基于已披露财报(analyzer 控 as_of),本层只计数。
+    """
+    if not block:
+        return 0
+    sev_map = _cfg().get("严重度", {}) or {}
+    seen: set[str] = set()
+    for f in (block.get("flags_detail") or []):
+        if isinstance(f, dict) and f.get("严重度") == "高":
+            code = f.get("code")
+            if code:
+                seen.add(code)
+    for code in (block.get("flags") or []):
+        if code and sev_map.get(code) == "高":
+            seen.add(code)
+    return len(seen)

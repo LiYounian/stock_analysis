@@ -24,7 +24,9 @@ import logging
 import pandas as pd
 
 from tools.analysis import council, technical
+from tools.analysis.financial import flags as fin_flags
 from tools.collectors import board, market
+from tools.config.strategy import redflag_adjust
 from tools.store import repo as store
 
 logger = logging.getLogger("pipeline.screen_council")
@@ -68,11 +70,17 @@ def _load_or_fetch_kline(code: str, fetch: bool):
             return None
 
 
-def build_min_record(code: str, kdf: pd.DataFrame) -> dict | None:
-    """组装单票最小中心记录:{meta:{code,行业}, signals, 其余字段 None}。
+def build_min_record(code: str, kdf: pd.DataFrame, as_of: str | None = None) -> dict | None:
+    """组装单票最小中心记录:{meta:{code,行业}, signals, financial?, 其余字段 None}。
 
     signals 由 technical.compute 现算(不改算法);行业取本地板块归属(缺则 None)。
     K 线不足 / 无技术信号 → 返回 None(该票跳过,不入选)。
+
+    财报块(全A 覆盖):若该票已缓存 as_of 可见的财报三大表 raw,则挂 `financial` 轻量块
+    (analysis.financial.build_financial_block,披露日锚定、防未来函数),使 **财报质地专家**
+    不再弃权、红旗判定在全A排序生效;无缓存 → None(优雅降级,专家自然弃权,行为同旧)。
+    注:**不往 meta 塞 as_of**——事件驱动专家以 meta.as_of 为发声闸,塞了会让它对有事件缓存的
+    票改判(超出本次"财报数据供给"范围);财报专家只读 record['financial'],无需 meta.as_of。
     """
     tech = technical.compute(kdf)
     if not isinstance(tech, dict) or "signal" not in tech:
@@ -82,11 +90,18 @@ def build_min_record(code: str, kdf: pd.DataFrame) -> dict | None:
         industry = board.board_of(code)               # 本地缓存映射,缺失 → None(不触网)
     except Exception:                                  # noqa: BLE001
         industry = None
+    financial = None
+    try:
+        from tools.analysis.financial import analyzer as fr_analyzer
+        financial = fr_analyzer.build_financial_block(code, as_of=as_of, industry=industry)
+    except Exception:                                  # noqa: BLE001
+        financial = None                               # 缺财报 raw / 分析失败 → 弃权(不炸)
     return {
         "meta": {"code": code, "industry": industry},   # 无 as_of → 事件驱动专家天然弃权
         "snapshot": None,
         "valuation": None,
         "fundamental": None,
+        "financial": financial,                          # 财报质地块(缺 → None,财报专家弃权)
         "signals": {"trend": tech["signal"], "reversal": tech["reversal"], "ob_os": tech["ob_os"]},
         "prediction": None,
         "sentiment": None,
@@ -119,7 +134,7 @@ def run_council_screen(codes: list[str], as_of: str | None = None,
         if kdf is None or len(kdf) < MIN_BARS:
             skipped += 1
             continue
-        rec = _safe(lambda: build_min_record(code, kdf))
+        rec = _safe(lambda: build_min_record(code, kdf, as_of=as_of))
         if rec is None:
             skipped += 1
             continue
@@ -128,18 +143,34 @@ def run_council_screen(codes: list[str], as_of: str | None = None,
         if not cblk or not isinstance(cblk.get("default"), dict):
             continue
         d = cblk["default"]
+        # 财报高危红旗接入排序(降权/否决;剂量=高危红旗数)——与 web 消费侧同一纯函数、同口径。
+        # 无财报块 / 无高危 → dose=0、no-op(不回归)。防未来函数:红旗基于已披露财报(analyzer 控 as_of)。
+        dose = fin_flags.high_flag_count((rec.get("financial") or None))
+        adj = redflag_adjust(d.get("综合分", 0.0), dose)
         scored.append({
             "code": code,
             "行业": (rec.get("meta") or {}).get("industry"),
             "综合方向": d.get("综合方向"),
             "综合分": d.get("综合分", 0.0),
+            "有财报块": rec.get("financial") is not None,  # 是否挂到 as_of 财报块(覆盖统计)
+            "排序分": adj["排序分"],                     # 降权后分(降权=综合分−罚分;否决靠标记沉底)
+            "财报风险": {"高危数": adj["高危数"], "罚分": adj["罚分"],
+                        "否决": adj["否决"], "剔除": adj["剔除"],
+                        "flags": (rec.get("financial") or {}).get("flags") if dose else []} if dose else None,
             "council": cblk,                            # {default, experts, config} 供前端勾选重排
         })
 
-    # 综合分降序(None 沉底);并列按 code 稳定
-    scored.sort(key=lambda x: (x["综合分"] is not None, x["综合分"] if x["综合分"] is not None else -1e9),
-                reverse=True)
+    # 财报红旗接入排序(与 web _rerank_scored 同键):(未剔除, 非否决沉底, 有分, 排序分) 降序;
+    # 未启用红旗接入 / 无高危时,排序分==综合分、否决/剔除全 False → 与旧「综合分降序」完全一致(不回归)。
+    scored = [x for x in scored if not (x.get("财报风险") or {}).get("剔除")]
+    scored.sort(key=lambda x: (
+        not (x.get("财报风险") or {}).get("否决"),      # 非否决 > 否决沉底
+        x["排序分"] is not None,                         # 有分 > 无分
+        x["排序分"] if x["排序分"] is not None else -1e9,
+    ), reverse=True)
     top = scored[:top_n]
+    命中高危 = sum(1 for x in scored if x.get("财报风险") is not None)  # 高危红旗降权/否决的票数
+    带块数 = sum(1 for x in scored if x.get("有财报块"))                # 挂到 as_of 财报块的票数(覆盖代理)
 
     view = {
         "as_of": as_of,
@@ -147,15 +178,18 @@ def run_council_screen(codes: list[str], as_of: str | None = None,
         "扫描数": len(codes),
         "有效": scanned,
         "跳过数(历史不足/无信号)": skipped,
+        "财报覆盖": 带块数,                    # 有 as_of 可见财报块参与合议的票数(全A采财报后↑)
+        "命中高危红旗": 命中高危,              # 高危红旗降权/否决沉底的票数
         "top_n": len(top),
         "top": top,
-        "口径": ("全A逐票 technical.compute → 合议默认专家组(资金流/多因子/情绪/事件因无全A数据自然弃权)"
-                 " → 按综合分降序 Top N;纯数据·非投资建议"),
-        "防未来函数": "只用 load_kline 历史 K 线(compute 取最后一根及之前),不引未来数据",
+        "口径": ("全A逐票 technical.compute → 合议默认专家组(有财报 raw 的票挂 as_of 财报块,财报质地"
+                 "专家发声;资金流/多因子/情绪/事件因无全A数据自然弃权)→ 财报高危红旗接入排序(降权/否决"
+                 "沉底,与 web 同一纯函数)→ Top N;纯数据·非投资建议"),
+        "防未来函数": "只用 load_kline 历史 K 线 + 披露日≤as_of 的已披露财报(analyzer 控 as_of),不引未来数据",
     }
     p = store.put_view("策略0合议", view)
-    logger.info("策略0合议:扫描 %d / 有效 %d / 跳过 %d / Top %d → %s",
-                len(codes), scanned, skipped, len(top), p)
+    logger.info("策略0合议:扫描 %d / 有效 %d / 跳过 %d / 财报覆盖 %d / 命中高危红旗 %d / Top %d → %s",
+                len(codes), scanned, skipped, 带块数, 命中高危, len(top), p)
     return view
 
 

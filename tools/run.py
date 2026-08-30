@@ -772,12 +772,24 @@ def cmd_screenall(argv):
     run_screen_all(codes_all, as_of, no_llm=no_llm, no_fetch=no_fetch)
 
 
+def cmd_findata(argv):
+    """全A 财报三大表增量回填入口:python -m tools.run findata [--universe N] [--force] [--dry-run]。
+
+    把财报采集从"仅 picks(约 175 票)"扩到全A,让离线全A 策略0 也拿到 as_of 财报块
+    → 财报质地专家不弃权、红旗判定在全A排序生效。重操作(全量约 3~6 小时),建议后台长跑;
+    幂等 + 断点续采(新鲜票自动跳过),可反复跑。--dry-run 先估规模/耗时。
+    透传参数见 collectors.financial_backfill._main(--max-age-days/--chunk/--codes/--date/--include-bj)。
+    """
+    from tools.collectors import financial_backfill
+    financial_backfill._main(argv[2:])   # argv[0]=脚本 argv[1]=findata,其余透传
+
+
 _CMDS = {"collect": cmd_collect, "message": cmd_message, "sentiment": cmd_sentiment,
          "serialize": cmd_serialize, "panel": cmd_panel, "screen": cmd_screen,
          "events": cmd_events, "factor": cmd_factor, "council": cmd_council,
          "context": cmd_context, "pipeline": cmd_pipeline, "screenall": cmd_screenall,
          "pattern": cmd_pattern, "sepa": cmd_sepa, "strong": cmd_strong,
-         "analyze": cmd_analyze, "all": cmd_all}
+         "analyze": cmd_analyze, "findata": cmd_findata, "all": cmd_all}
 
 
 def main(argv: list[str]) -> int:
