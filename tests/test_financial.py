@@ -642,3 +642,122 @@ def test_financial_structural_fallback_detects_bank(monkeypatch):
     blk = analyzer.build_financial_block("601838", as_of="2026-05-01")  # 不传 industry
     assert blk["金融业口径"] is True          # 结构兜底认出银行
     assert "高负债" not in blk["flags"]       # 高负债被金融业特判跳过
+
+
+# ————————————————————— 行业归属消歧层 / 多路由 —————————————————————
+def _patch_disambig_sources(monkeypatch, industry_at=None, board_of=None, pool=None):
+    """打桩消歧三来源:industry_history.industry_at / board.board_of / stock_pool.get。
+    industry_at/board_of 传字符串常量;pool 传 (industry, sector) 或 None。"""
+    from tools.collectors import industry_history as ih
+    from tools.collectors import board as bd
+    from tools.config import stock_pool as sp
+    monkeypatch.setattr(ih, "industry_at", lambda code, date, std=None: industry_at)
+    monkeypatch.setattr(bd, "board_of", lambda code: board_of)
+    if pool is None:
+        monkeypatch.setattr(sp, "get", lambda code: None)
+    else:
+        ind, sec = pool
+        monkeypatch.setattr(sp, "get", lambda code: types.SimpleNamespace(industry=ind, sector=sec))
+
+
+def test_disambig_formal_industry_time_varying(monkeypatch):
+    """时变正式行业:严格用 industry_at(as_of) 取当时证监会门类 → 申万一级;as_of=None 不谈'当时'。"""
+    from tools.analysis.financial import disambiguate as dis
+    # industry_at 返回证监会门类码,经 to_sw 对齐到申万一级'电子'
+    _patch_disambig_sources(monkeypatch, industry_at="C39", board_of=None, pool=("半导体", "半导体"))
+    d = dis.disambiguate("000001", as_of="2024-06-30")
+    assert d["formal_raw"] == "C39" and d["formal_sw"] == "电子"
+    # as_of=None → 不取时变行业(formal 留空,防未来函数:不用现状顶替'当时')
+    d0 = dis.disambiguate("000001", as_of=None)
+    assert d0["formal_sw"] is None
+
+
+def test_disambig_no_future_function(monkeypatch):
+    """防未来函数:formal 只认 industry_at(as_of);industry_at 无当时记录时 formal 不被现状顶替。"""
+    from tools.analysis.financial import disambiguate as dis
+    # industry_at 无记录(None),board 现状='电子';formal 应留空,只在 board_sw 兜底并打前视风险 note
+    _patch_disambig_sources(monkeypatch, industry_at=None, board_of="电子", pool=None)
+    d = dis.disambiguate("000001", as_of="2020-01-01")
+    assert d["formal_sw"] is None                 # 不用现状回填历史
+    assert d["board_sw"] == "电子"                 # 现状兜底口径另存
+    assert any("前视" in n for n in d["notes"])    # 诚实标注前视风险
+
+
+def test_disambig_market_concept_and_honest_degrade(monkeypatch):
+    """市场概念标注来自 sector(人工分类);无 sector → 诚实降级'待补',不硬编。"""
+    from tools.analysis.financial import disambiguate as dis
+    # 有 sector → 市场概念标注 + provenance 标注人工分类
+    _patch_disambig_sources(monkeypatch, industry_at=None, board_of=None, pool=("锂电材料", "新能源"))
+    d = dis.disambiguate("000001", as_of="2025-06-30")
+    assert d["market_sw"] == "电力设备"                     # '新能源' → 电力设备
+    assert "新能源" in d["market_label"]
+    assert "人工" in d["market_source"]
+    # 无 sector → 诚实降级
+    _patch_disambig_sources(monkeypatch, industry_at=None, board_of=None, pool=None)
+    d2 = dis.disambiguate("000001", as_of="2025-06-30")
+    assert d2["market_sw"] is None and d2["market_label"] is None
+    assert "待补" in d2["market_source"]
+    assert any("市场概念数据缺" in n for n in d2["notes"])
+
+
+def test_disambig_ambiguous_multi_industry(monkeypatch):
+    """三口径指向不同申万一级 → ambiguous=True + 候选列表(去重)。"""
+    from tools.analysis.financial import disambiguate as dis
+    # 细分主业='机器人'(机械设备)/ 时变正式 C39(电子)/ 市场'新能源'(电力设备)→ 三个不同
+    _patch_disambig_sources(monkeypatch, industry_at="C39", board_of=None, pool=("机器人", "新能源"))
+    d = dis.disambiguate("000001", as_of="2025-06-30")
+    assert d["ambiguous"] is True
+    assert set(d["candidates"]) == {"机械设备", "电子", "电力设备"}
+    assert d["primary"] == "机械设备"                        # meta 优先(向后兼容 _industry_key)
+    assert d["ambiguity_reason"] and "机械设备" in d["ambiguity_reason"]
+
+
+def test_disambig_single_industry_not_ambiguous(monkeypatch):
+    """三口径一致(或仅一个口径有值)→ ambiguous=False,candidates 单元素。"""
+    from tools.analysis.financial import disambiguate as dis
+    _patch_disambig_sources(monkeypatch, industry_at=None, board_of=None, pool=("半导体", "半导体"))
+    d = dis.disambiguate("000001", as_of="2025-06-30")
+    assert d["ambiguous"] is False
+    assert d["candidates"] == ["电子"]                      # 半导体 → 电子(meta 与 market 同一申万)
+
+
+def test_analyzer_route_backward_compat_single(monkeypatch):
+    """路由向后兼容:单行业时 相关行业=[primary]、口径注解=None、行业专家/评分不变。"""
+    _install_synthetic_raw(monkeypatch)
+    _patch_disambig_sources(monkeypatch, industry_at=None, board_of=None, pool=("半导体", "半导体"))
+    monkeypatch.setattr(analyzer, "get_expert", lambda key: None)
+    res = analyzer.analyze("000001", as_of="2026-05-01", persist=False)
+    assert res["消歧"]["ambiguous"] is False
+    assert res["口径注解"] is None
+    assert res["相关行业"] == ["电子"]
+    assert res["行业专家"] is None                           # 无专家(通用兜底)不变
+
+
+def test_analyzer_route_multi_when_ambiguous(monkeypatch):
+    """模糊时多路由:相关行业含多个候选,路由行业标注各候选是否命中专家,口径注解非空。"""
+    _install_synthetic_raw(monkeypatch)
+    _patch_disambig_sources(monkeypatch, industry_at="C39", board_of=None, pool=("机器人", "新能源"))
+    # 只有'电子'有专家;'机械设备'/'电力设备'无
+    fake = types.SimpleNamespace(
+        KEY="电子", NOTE="电子口径", dimension_specs=lambda: scoring.dimension_specs(),
+        weights=lambda: None, SKIP_FLAGS=[], extra_flags=lambda d, s: [])
+    monkeypatch.setattr(analyzer, "get_expert", lambda key: fake if key == "电子" else None)
+    res = analyzer.analyze("000001", as_of="2026-05-01", persist=False)
+    assert res["消歧"]["ambiguous"] is True
+    assert set(res["相关行业"]) == {"机械设备", "电子", "电力设备"}
+    hit = {r["行业"]: r["命中专家"] for r in res["路由行业"]}
+    assert hit["电子"] is True and hit["机械设备"] is False and hit["电力设备"] is False
+    assert res["口径注解"] and "模糊" in res["口径注解"]
+
+
+def test_build_block_surfaces_disambig(monkeypatch):
+    """financial 块透出消歧:行业模糊 / 相关行业 / 口径注解,供页面展示。"""
+    _install_synthetic_raw(monkeypatch)
+    monkeypatch.setattr(store, "get_code_view",
+                        lambda *a, **k: (_ for _ in ()).throw(FileNotFoundError("x")))
+    _patch_disambig_sources(monkeypatch, industry_at="C39", board_of=None, pool=("机器人", "新能源"))
+    monkeypatch.setattr(analyzer, "get_expert", lambda key: None)
+    blk = analyzer.build_financial_block("000001", as_of="2026-05-01")
+    assert blk["行业模糊"] is True
+    assert set(blk["相关行业"]) == {"机械设备", "电子", "电力设备"}
+    assert blk["口径注解"]
