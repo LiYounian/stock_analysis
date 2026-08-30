@@ -33,6 +33,7 @@ import pandas as pd
 
 from tools.analysis import technical as ta
 from tools.collectors import announcement as an
+from tools.collectors import baidu_news
 from tools.collectors import chip, consensus
 from tools.collectors import fundamental as fd
 from tools.collectors import fundflow as ff
@@ -181,6 +182,13 @@ def collect_message(codes: list[str]) -> None:
         # screenall/两阶段的 llm_subset 调用,天然不波及全A;补"挂不到个股的行业/宏观/管制"消息)。
         logger.info("新闻:成功 %d", len(_safe("新闻", lambda: news.fetch_news(codes, recall=True)) or {}))
         logger.info("舆情(股吧):成功 %d", len(_safe("舆情(股吧)", lambda: ugc.fetch_ugc(codes)) or {}))
+        # 百度个股新闻(前向情绪滚存):仅采集落盘、不接情绪评分。与上面 news/ugc 共用同一
+        # codes(news_subset=自选∪每策略前N),天然不波及全A;fetch_baidu_news 自带新鲜度门控
+        # (缓存≤BAIDU_NEWS_STALE_DAYS 天跳过重拉)+ 前向增量并集幂等,同日重跑不猛拉。
+        # 整块 _safe 兜底、内部单票失败已降级,任何失败都不阻断闭环。开关 BAIDU_NEWS_COLLECT。
+        if settings.BAIDU_NEWS_COLLECT:
+            logger.info("百度新闻(前向滚存):成功 %d",
+                        len(_safe("百度新闻", lambda: baidu_news.fetch_baidu_news(codes)) or {}))
         pol = _safe("政策", lambda: policy.fetch_policy())      # 政策按行业关键词(全池共用)
         logger.info("政策:%d 条", len(pol or []))
     finally:

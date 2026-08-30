@@ -79,6 +79,11 @@ HOLDER_STALE_DAYS = float(os.getenv("HOLDER_STALE_DAYS", "28"))        # 股东�
 BAIDU_NEWS_STALE_DAYS = float(os.getenv("BAIDU_NEWS_STALE_DAYS", "0.5"))
 # 单次单票拉取条数(百度 rn 参数;硬上限约 800~850。前向日更取近段即可,首采可调大做 warm-start)。
 BAIDU_NEWS_RN = int(os.getenv("BAIDU_NEWS_RN", "200"))
+# 每日闭环是否采集百度新闻(前向滚存开关;仅采集落盘、不接情绪评分)。
+# 默认开(前向样本靠时间累积,越早开始越好);若触发限流可置 0 临时停,不改代码。
+# 挂在 collect_message 的消息面采集里,天然只对 news_subset(自选∪每策略前N),绝不全A猛拉;
+# 单票失败 _safe 降级、整块 _safe 兜底,绝不阻断闭环。
+BAIDU_NEWS_COLLECT = os.getenv("BAIDU_NEWS_COLLECT", "1") == "1"
 
 # —— 情绪数据新鲜度(event 情绪引擎用,date-pin + 新鲜度标注)——
 # 回退策略:A2=可识别回退(默认,窗口内回退旧 raw 但标「陈旧」,超窗标「无数据」);
