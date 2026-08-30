@@ -114,8 +114,9 @@ def test_cross_section_orientation_and_direction():
     assert out["好"]["综合分"] > out["中"]["综合分"] > out["差"]["综合分"]  # 好>中>差
     assert out["好"]["方向"] == "看多" and out["好"]["强度"] > 0
     assert out["差"]["方向"] == "看空" and out["差"]["强度"] < 0
-    # 只有质量+价值 2/9 因子有数据(新增 筹码/预期/主力 后总因子=9)→ 部分降级
-    assert out["好"]["因子齐全度"] == pytest.approx(2 / 9, abs=1e-3)
+    # 齐全度分层口径:分母只算核心必备因子(质量/价值/低波/成长/股息=5),此处仅质量+价值有数据
+    # → 2/5(增强因子恒 None 不进分母、不稀释);仍属部分降级
+    assert out["好"]["因子齐全度"] == pytest.approx(2 / 5, abs=1e-3)
     assert out["好"]["数据充分度"] == "部分降级"
     # 低 PE 的"好"在价值因子上分位应高(方向-1 翻转生效)
     assert out["好"]["各因子分位"]["价值"] > out["差"]["各因子分位"]["价值"]
@@ -126,6 +127,63 @@ def test_cross_section_all_missing_is_neutral():
     out = sc.cross_section(raw)
     assert out["X"]["方向"] == "中性" and out["X"]["强度"] == 0.0
     assert out["X"]["数据充分度"] == "缺失"
+
+
+# ---------- 齐全度分层:增强因子不稀释置信度、有值能加分(修 PR#19 回归)----------
+def _kline_80():
+    return pd.DataFrame({"close": [100 * (1.005 ** i) for i in range(80)]})   # ≥61 根,低波可算
+
+
+def _full_core_rec(code):
+    """五个核心必备因子全有数据(质量/价值/成长/股息 from record,低波 from kline)。"""
+    return {"meta": {"code": code},
+            "fundamental": {"ROE": 15, "毛利率": 30, "负债率": 40, "净利增速": 20, "每股股利": 0.5},
+            "valuation": {"pe_ttm": 12, "pb": 1.5}}
+
+
+def test_completeness_enhancement_none_not_diluted():
+    """增强因子(北向/筹码/预期/主力)全 None 时,齐全度 = 只有核心因子的水平,不被恒 None 增强因子稀释。
+
+    锁 PR#19 回归:此前分母含 4 个恒 None 的增强因子 → 5/9≈0.556;修后核心 5/5=1.0(充分)。
+    """
+    df = _kline_80()
+    raw = {"C": fac.raw_factors(_full_core_rec("C"), df)}    # 无 chip/consensus/holder/北向
+    out = sc.cross_section(raw)
+    assert out["C"]["因子齐全度"] == pytest.approx(1.0, abs=1e-3)   # 核心全齐 → 满,不被增强稀释
+    assert out["C"]["数据充分度"] == "充分"
+    # 核心缺一(丢股息)→ 4/5=0.8,仍与增强因子无关(不因 4 个 None 增强再往下掉)
+    rec4 = _full_core_rec("D")
+    rec4["fundamental"].pop("每股股利")
+    raw4 = {"D": fac.raw_factors(rec4, df)}
+    out4 = sc.cross_section(raw4)
+    assert out4["D"]["因子齐全度"] == pytest.approx(4 / 5, abs=1e-3)
+
+
+def test_completeness_enhancement_present_adds_bonus():
+    """增强因子有值时能加分:同一核心水平下,带增强值的齐全度 > 不带增强的。"""
+    df = _kline_80()
+    rec = _full_core_rec("E")
+    rec["fundamental"].pop("每股股利")                       # 核心留 4/5,给加分留头寸(否则封顶 1.0 看不出)
+    base = {"E": fac.raw_factors(rec, df)}                   # 无增强 → 4/5=0.8
+    rec_enh = dict(rec)
+    rec_enh["chip"] = {"获利比例": 0.3, "集中度90": 0.12}    # 筹码增强因子有值
+    withenh = {"E": fac.raw_factors(rec_enh, df)}
+    c_base = sc.cross_section(base)["E"]["因子齐全度"]
+    c_enh = sc.cross_section(withenh)["E"]["因子齐全度"]
+    assert c_base == pytest.approx(4 / 5, abs=1e-3)
+    assert c_enh > c_base                                    # 增强落地 → 加分
+    assert c_enh == pytest.approx((4 + 0.5) / 5, abs=1e-3)   # +0.5 权/核心档
+
+
+def test_completeness_enhancement_never_exceeds_one():
+    """核心全齐 + 增强也有值 → 齐全度封顶 1.0(增强只上不下,绝不下拉核心水平)。"""
+    df = _kline_80()
+    rec = _full_core_rec("F")
+    rec["chip"] = {"获利比例": 0.3, "集中度90": 0.12}
+    rec["consensus"] = {"预期增速": 0.2}
+    raw = {"F": fac.raw_factors(rec, df)}
+    out = sc.cross_section(raw)
+    assert out["F"]["因子齐全度"] == pytest.approx(1.0, abs=1e-3)   # 封顶,不 >1
 
 
 def test_midrank_pctiles():

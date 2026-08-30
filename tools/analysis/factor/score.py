@@ -7,7 +7,9 @@
   → 综合分的截面分位 → 强度[-1,1](分位居中→0)、方向(看多/看空/中性)
   → 每票落 code_view "factor"(供「多因子」专家读)
 
-置信度 = 因子齐全度(有数据因子数 / 总因子数);缺因子(如股息/北向)降级不崩(I4)。
+置信度 = 因子齐全度(分层口径:有数据的核心因子数 / 核心因子总数,增强因子只加分不稀释,封顶 1.0)。
+  核心必备 = 生产真落地的因子(质量/价值/低波/成长/股息);增强 = 采集未落地或稀疏(资金流北向/筹码/预期/主力)。
+  修 PR#19 回归:此前分母含 4 个恒 None 的增强因子,把多因子专家置信度无端拉低 ~20-33%(见 config 注释)。
 分层单调性检验(monotonicity):高分组前瞻收益应 ≥ 低分组(复用 BT.1 纪律,真回测在批次C)。
 
 依赖:分析层。用 store 公开 API 落 code_view(不改 store);读记录/K线经 collectors/ store。
@@ -91,13 +93,23 @@ def cross_section(raw_by_code: dict, cfg: dict = None) -> dict:
                 fs[fname] = sum(vals) / len(vals)
         factor_score[c] = fs
 
+    # 齐全度分层(修 PR#19 稀释回归):分母只算「核心必备」因子;「增强」因子(采集未落地/稀疏,
+    # 恒 None)不撑分母、不稀释置信度,有值时按 增强齐全度权重 加分,封顶 1.0(绝不下拉)。
+    enh_set = set(cfg.get("增强因子") or [])
+    core_names = [f for f in factors if f not in enh_set]     # 核心 = 非增强(单一真源,防漂移)
+    core_total = len(core_names) or len(factors)               # 退化保护:无核心配置时回退全因子
+    enh_w = float(cfg.get("增强齐全度权重", 0.5))
+
     composite = {}
     completeness = {}
     for c in codes:
         fs = factor_score[c]
         wsum = sum(weights.get(f, 1.0) for f in fs)
         composite[c] = (sum(fs[f] * weights.get(f, 1.0) for f in fs) / wsum) if wsum else None
-        completeness[c] = round(len(fs) / len(factors), 4)
+        core_present = sum(1 for f in fs if f not in enh_set)
+        enh_present = sum(1 for f in fs if f in enh_set)
+        comp = (core_present + enh_w * enh_present) / core_total
+        completeness[c] = round(min(1.0, comp), 4)             # 增强只加分,封顶 1.0
 
     # 3) 综合分的截面分位 → 强度/方向
     comp_pairs = [(c, composite[c]) for c in codes if composite[c] is not None]
