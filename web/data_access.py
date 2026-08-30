@@ -383,19 +383,32 @@ def _high_flag_count(row: dict, recs: dict) -> int:
     return 0
 
 
-def _rerank_scored(rows: list, recs: dict, score_key: str = "council_score") -> list:
-    """有打分区块(自选股 / 策略0):按「财报高危红旗接入」重排,就地补 row['risk_adjust']。
+def _lhb_verdict(row: dict, recs: dict) -> dict | None:
+    """行对应票的**龙虎榜入选否决裁决**(风控微结构轴),从中心记录 record['lhb_veto'] 只读取用。
 
-    排序键(reverse=True):(未剔除, 非否决沉底, 有分, 调整后分) —— 保留>剔除、非否决>否决、
-    有分>无分(无 council_score 仍沉底,不回归)、调整后分高>低。降权=原分−罚分;否决靠标记沉底。
-    否决且「不保留展示」→ 从清单剔除。启用=False 时全 no-op(与原按分降序一致)。
-    ⚠️ 非投资建议。防未来函数:红旗来自已披露财报(as_of 由离线管线控),此处只做纯排序变换。
+    展示层不计算、不 import 分析器(§9.3):裁决由离线管线(serialize)按 as_of 无未来函数
+    (list_date<as_of 严格)预算好挂进 record,此处纯读。无记录/无该块/旧记录 → None(该轴不发声)。
+    """
+    rec = recs.get(row.get("code")) if isinstance(recs, dict) else None
+    v = rec.get("lhb_veto") if isinstance(rec, dict) else None
+    return v if isinstance(v, dict) else None
+
+
+def _rerank_scored(rows: list, recs: dict, score_key: str = "council_score") -> list:
+    """有打分区块(自选股 / 策略0):按「统一风控 veto 汇聚」重排,就地补 row['risk_adjust']。
+
+    两轴 OR 合成(财报高危红旗 + 龙虎榜净买上榜否决);排序键(reverse=True):
+    (未剔除, 非否决沉底, 有分, 调整后分) —— 保留>剔除、非否决>否决、有分>无分(无 council_score
+    仍沉底,不回归)、调整后分高>低。降权=原分−Σ罚分;否决靠标记沉底;否决且「不保留展示」→ 剔除。
+    无龙虎榜数据 / 关停 → 退化为红旗现状(不回归)。
+    ⚠️ 非投资建议。防未来函数:两轴均来自离线管线按 as_of 预算的裁决(红旗披露日、龙虎榜 list_date<as_of),
+    此处只做纯排序变换、不 import 分析器(§9.3)。
     """
     if not rows:
         return rows
     for r in rows:
         base = r.get(score_key)
-        info = strategy_cfg.redflag_adjust(base, _high_flag_count(r, recs))
+        info = strategy_cfg.risk_veto_adjust(base, _high_flag_count(r, recs), _lhb_verdict(r, recs))
         r["risk_adjust"] = info if info.get("应用") else None
     def _key(r):
         info = r.get("risk_adjust") or {}
@@ -409,16 +422,18 @@ def _rerank_scored(rows: list, recs: dict, score_key: str = "council_score") -> 
 
 
 def _demote_flagged(rows: list, recs: dict) -> list:
-    """无打分区块(综合选股并集 / 各策略入选清单):高危红旗票**稳定沉底**(dose 大者更靠后),
-    就地补 row['risk_adjust']。降权/否决都沉底(无分可扣,统一沉底);否决且不保留展示 → 剔除。
+    """无打分区块(综合选股并集 / 各策略入选清单):风控命中票(财报红旗 ∪ 龙虎榜否决)**稳定沉底**
+    (合成剂量大者更靠后),就地补 row['risk_adjust']。降权/否决都沉底(无分可扣,统一沉底);
+    否决且不保留展示 → 剔除。
 
-    干净票(无高危红旗)保持原并集顺序(稳定);启用=False 时全 no-op(不回归)。⚠️ 非投资建议。
+    干净票(两轴均未命中)保持原并集顺序(稳定);无龙虎榜数据/关停 → 退化红旗现状,启用=False 全 no-op
+    (不回归)。⚠️ 非投资建议。防未来函数:两轴均来自离线按 as_of 预算的裁决,此处纯排序变换。
     """
     if not rows:
         return rows
     clean, flagged = [], []
     for r in rows:
-        info = strategy_cfg.redflag_adjust(None, _high_flag_count(r, recs))
+        info = strategy_cfg.risk_veto_adjust(None, _high_flag_count(r, recs), _lhb_verdict(r, recs))
         if info.get("剔除"):
             r["risk_adjust"] = info
             continue                                   # 否决·不保留展示 → 剔除

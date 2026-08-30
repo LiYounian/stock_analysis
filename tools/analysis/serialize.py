@@ -154,6 +154,12 @@ def build_record(code: str, as_of: str) -> dict:
     events = [{"date": a.get("date"), "type": a.get("type"),
                "impact": a.get("impact"), "title": a.get("title")} for a in anns[:20]]
 
+    # 龙虎榜「入选否决」as-of 裁决(WI-6 Phase 3 · 风控微结构轴):挂进 record 供 web 只读取用
+    # (展示层不 import 分析器,§9.3 依赖方向)。缺快照/未采集/未触发 → None(优雅降级)。
+    # 防未来函数:走 lhb_veto → lhb_asof(list_date < as_of 严格,盘后披露当天不可用)。
+    from tools.analysis import risk_veto as _rv
+    lhb_veto_block = _safe(lambda: _rv.lhb_verdict_asof(code, as_of))
+
     rec = {
         "schema_version": SCHEMA_VERSION,
         "meta": {"code": code, "name": s.name if s else (_code_name(code) or code),
@@ -173,6 +179,7 @@ def build_record(code: str, as_of: str) -> dict:
         "chip": chip_block,             # 筹码分布摘要(多因子「筹码」)
         "consensus": consensus_block,   # 一致预期摘要(多因子「预期」)
         "holder": holder_block,         # 股东户数趋势摘要(多因子「主力」)
+        "lhb_veto": lhb_veto_block,     # 龙虎榜入选否决 as-of 裁决(风控微结构轴;缺→None)
         "events": events,
         "timeseries_refs": {
             "kline": f"data/raw/kline/{code}.parquet",
