@@ -254,12 +254,12 @@ def test_redflag_veto_mode_sinks_to_bottom(monkeypatch):
         "000009": {"评级": "风险", "flags": ["扣非为负"],
                    "flags_detail": [{"code": "扣非为负", "严重度": "高"}]},
     })
-    # 临时切否决模式(不改 config 文件,monkeypatch 纯函数读的 cfg)
-    monkeypatch.setattr(sc, "redflag_adjust",
-                        lambda base, dose: __import__("tools.config.strategy", fromlist=["x"])
-                        .redflag_adjust(base, dose, cfg={"启用": True, "模式": "否决",
-                                                         "每面罚分": 0.5, "罚分上限": 1.2,
-                                                         "否决沉底保留展示": True}))
+    # 临时切财报轴否决模式(不改 config 文件,monkeypatch 纯函数读的 cfg)。
+    # 汇聚器(risk_veto_adjust)财报轴读 redflag_cfg();龙虎榜轴无快照→不发声,只财报轴否决沉底。
+    from tools.config import strategy as _strat
+    monkeypatch.setattr(_strat, "redflag_cfg",
+                        lambda: {"启用": True, "模式": "否决", "每面罚分": 0.5,
+                                 "罚分上限": 1.2, "否决沉底保留展示": True})
     monkeypatch.setattr(sc.store, "set_active_date", lambda d: None)
     monkeypatch.setattr(sc.store, "put_view", lambda name, obj, date=None: "p")
     v = sc.run_council_screen(["000009", "000001"], as_of="2026-08-08", fetch=False)

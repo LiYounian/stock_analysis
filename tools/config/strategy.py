@@ -464,6 +464,29 @@ THRESHOLDS = {
             "否决沉底保留展示": True,     # 否决模式:True=强制沉底但仍展示(带⚠) / False=从入选清单剔除
         },
     },
+    # ————————————————————————————————————————————————
+    # 统一风控 veto 汇聚(WI-6 Phase 3):把「财报红旗(质量轴)」+「龙虎榜否决(微结构轴)」收进
+    # 同一个否决/降权出口(正交 OR 合成:任一轴触发即否决/降权)。纯映射见 config.risk_veto_adjust。
+    # ⚠️ 两轴动作语义统一到一致的 `Verdict集 → 排序分调整`:降权=排序分减罚分(dose 单调、封顶)、
+    #     否决=沉底标记(不改分)/ 剔除(不保留展示)。
+    # 向后兼容红线:**财报轴独立于本块总开关**(读 财报.红旗接入),无龙虎榜数据/本块关停 → 红旗现状不回归。
+    # 防未来函数:龙虎榜轴只吃 lhb_veto 产的 as-of 裁决(list_date<as_of 严格),汇聚器本身是纯变换。
+    # ⚠️ 非投资建议:风控层只改展示排序/入选,不构成买卖建议。
+    # ————————————————————————————————————————————————
+    "风控汇聚": {
+        "启用": True,                 # 龙虎榜轴总开关(仅门控龙虎榜轴;财报轴永远独立,不受此影响)
+        "罚分上限": 1.5,              # 两轴降权罚分求和后的合成封顶(略高于单轴 1.2,容两轴叠加)
+        "龙虎榜": {
+            "启用": True,             # 龙虎榜轴开关(与总开关同时为真才生效)
+            "模式": "降权",           # "降权"(默认,软:减罚分沉底) | "否决"(硬:标记沉底/剔除)
+            "触发罚分": 0.6,          # 触发时的降权罚分(降权模式);量级与财报单面 0.5 相当、略重(见光死实证显著)
+            "按条数加权": False,      # True: 罚分 = 触发罚分 × min(n_recent, 条数上限)(近日多次上榜更沉)
+            "条数上限": 3,           # 按条数加权时的封顶条数
+            "否决沉底保留展示": True,  # 否决模式:True=沉底但仍展示(带⚠) / False=从入选清单剔除
+            "窗口天数": 7,            # 传 lhb_veto.window_days:近 N 自然日内上榜才算活跃
+            "最小净买占比": 0.0,      # 传 lhb_veto.min_net_buy_ratio:>0 可只否决强追高
+        },
+    },
     # SEPA+VCP 监控(过滤器+人工翻图,不追 Alpha、不自动下单)。
     # 阈值除 SEPA 原书 3 条与失效 1.5% 外均为工程占位,待肉眼看结果后再标定。
     "SEPA_VCP": {
@@ -585,6 +608,118 @@ def redflag_adjust(base_score, high_flag_count: int, cfg: dict | None = None) ->
         "剔除": bool(vetoed and not c.get("否决沉底保留展示", True)),
         "原始分": base,
         "排序分": rank,
+    }
+
+
+# ————————————————————————————————————————————————
+# 统一风控 veto 汇聚(WI-6 Phase 3)—— **纯映射**(config 层,零依赖,web 可 import)。
+# 把「财报红旗(质量轴)」+「龙虎榜否决(微结构轴)」正交 OR 合成到同一否决/降权出口。
+# 入参:
+#   base_score       候选原始排序分(council 综合分等);None=无打分区块。
+#   high_flag_count  财报高危红旗个数(dose;financial_risk / flags.high_flag_count 产出)。
+#   lhb_verdict      龙虎榜 as-of 裁决(lhb_veto.Verdict.to_dict() 或轻量 dict);
+#                    需含 triggered(bool);可选 reason/n_recent。None/未触发 = 该轴不发声。
+# 出参 dict:应用/模式/罚分/否决/剔除/原始分/排序分/高危数/归因/各轴。
+# 语义统一:
+#   · 降权轴 → 排序分 = base − Σ罚分(两轴求和后封顶);dose 单调,符号安全(负分风险票被压更低)。
+#   · 否决轴 → 不改分,靠「否决」标记沉底;「剔除」= 否决且不保留展示。
+#   · OR 合成:任一轴否决 → 否决;任一轴否决且不保留展示 → 剔除。
+# 向后兼容红线:**财报轴独立于「风控汇聚.启用」总开关**(始终读 财报.红旗接入);
+#   lhb_verdict=None 且财报轴口径不变时,本函数排序结果与 redflag_adjust 完全一致(无回归)。
+# 防未来函数:纯函数,只吃 (base, count, verdict, cfg),不触任何数据/网络;龙虎榜无未来性由
+#   lhb_veto(list_date<as_of 严格)在生产 verdict 时保证,本层不放松。
+# ⚠️ 非投资建议:风控层只改展示排序/入选,不构成买卖建议。
+# ————————————————————————————————————————————————
+def risk_veto_cfg() -> dict:
+    """读风控汇聚配置(缺失 → 空 dict → 龙虎榜轴关停默认,不炸)。单一真源。"""
+    try:
+        return (THRESHOLDS.get("风控汇聚", {}) or {})
+    except Exception:                                  # noqa: BLE001
+        return {}
+
+
+def lhb_penalty(lhb_verdict: dict | None, axis_cfg: dict | None = None) -> float:
+    """龙虎榜轴触发 → 降权罚分(≥0)。未触发/无裁决 → 0。纯函数。
+
+    默认单次触发给固定罚分;开「按条数加权」则 罚分 = 触发罚分 × min(n_recent, 条数上限)。
+    """
+    if not lhb_verdict or not lhb_verdict.get("triggered"):
+        return 0.0
+    a = axis_cfg if axis_cfg is not None else (risk_veto_cfg().get("龙虎榜", {}) or {})
+    per = float(a.get("触发罚分", 0.6))
+    if a.get("按条数加权"):
+        n = max(1, int(lhb_verdict.get("n_recent", 1) or 1))
+        per = per * min(n, int(a.get("条数上限", 3)))
+    return per
+
+
+def risk_veto_adjust(base_score, high_flag_count: int,
+                     lhb_verdict: dict | None = None, cfg: dict | None = None) -> dict:
+    """统一风控汇聚:财报红旗 + 龙虎榜否决 → 一个合成的排序分调整(OR 合成)。
+
+    见上方段落注释(入参/出参/语义统一/向后兼容/防未来)。cfg 传入可覆盖 风控汇聚 配置(供测试)。
+    """
+    agg = cfg if cfg is not None else risk_veto_cfg()
+    master = bool(agg.get("启用", True))                # 仅门控龙虎榜轴
+
+    base = base_score if isinstance(base_score, (int, float)) and not isinstance(
+        base_score, bool) else None
+
+    # ── 财报轴(读 财报.红旗接入;独立于风控汇聚总开关,红旗永不回归)──
+    rf_cfg = redflag_cfg()
+    n = int(high_flag_count or 0)
+    rf_enabled = bool(rf_cfg.get("启用", False)) and n > 0
+    rf_mode = rf_cfg.get("模式", "降权")
+    rf_pen = redflag_penalty(n, rf_cfg) if rf_enabled else 0.0
+    rf_down = rf_pen if (rf_enabled and rf_mode == "降权") else 0.0   # 只有降权模式才进减分
+    rf_veto = bool(rf_enabled and rf_mode == "否决")
+    rf_drop = bool(rf_veto and not rf_cfg.get("否决沉底保留展示", True))
+
+    # ── 龙虎榜轴(读 风控汇聚.龙虎榜;受总开关门控)──
+    axis = agg.get("龙虎榜", {}) or {}
+    lhb_trig = bool(lhb_verdict) and bool(lhb_verdict.get("triggered"))
+    lhb_enabled = master and bool(axis.get("启用", True)) and lhb_trig
+    lhb_mode = axis.get("模式", "降权")
+    lhb_down = lhb_penalty(lhb_verdict, axis) if (lhb_enabled and lhb_mode == "降权") else 0.0
+    lhb_veto = bool(lhb_enabled and lhb_mode == "否决")
+    lhb_drop = bool(lhb_veto and not axis.get("否决沉底保留展示", True))
+
+    # ── OR 合成 ──
+    cap = float(agg.get("罚分上限", 1.5))
+    down_total = min(rf_down + lhb_down, cap)
+    veto_total = bool(rf_veto or lhb_veto)
+    drop_total = bool(rf_drop or lhb_drop)
+    applied = bool(rf_enabled or lhb_enabled)
+
+    if base is None:
+        rank = -down_total                             # 无打分区块:降权按合成剂量沉底
+    else:
+        rank = base - down_total                       # 降权轴减分;否决轴靠标记沉底(不改分)
+
+    归因: list[str] = []
+    if rf_enabled:
+        归因.append(f"财报高危红旗×{n}")
+    if lhb_enabled:
+        归因.append("龙虎榜:" + str((lhb_verdict or {}).get("reason") or "净买上榜否决"))
+
+    return {
+        "应用": applied,
+        "模式": ("否决" if veto_total else "降权") if applied else None,
+        "罚分": round(down_total, 4),
+        "否决": veto_total,
+        "剔除": drop_total,
+        "原始分": base,
+        "排序分": rank,
+        "高危数": n,                                    # 向后兼容红旗消费侧
+        "归因": 归因,
+        "各轴": {
+            "财报": {"应用": rf_enabled, "模式": rf_mode if rf_enabled else None,
+                    "高危数": n, "罚分": round(rf_down, 4), "否决": rf_veto},
+            "龙虎榜": {"应用": lhb_enabled, "模式": lhb_mode if lhb_enabled else None,
+                      "触发": lhb_trig, "罚分": round(lhb_down, 4), "否决": lhb_veto,
+                      "reason": (lhb_verdict or {}).get("reason"),
+                      "n_recent": int((lhb_verdict or {}).get("n_recent", 0) or 0)},
+        },
     }
 
 

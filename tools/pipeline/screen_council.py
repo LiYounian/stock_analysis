@@ -23,10 +23,10 @@ import logging
 
 import pandas as pd
 
-from tools.analysis import council, technical
+from tools.analysis import council, risk_veto, technical
 from tools.analysis.financial import flags as fin_flags
 from tools.collectors import board, market
-from tools.config.strategy import redflag_adjust
+from tools.config.strategy import risk_veto_adjust
 from tools.store import repo as store
 
 logger = logging.getLogger("pipeline.screen_council")
@@ -143,20 +143,29 @@ def run_council_screen(codes: list[str], as_of: str | None = None,
         if not cblk or not isinstance(cblk.get("default"), dict):
             continue
         d = cblk["default"]
-        # 财报高危红旗接入排序(降权/否决;剂量=高危红旗数)——与 web 消费侧同一纯函数、同口径。
-        # 无财报块 / 无高危 → dose=0、no-op(不回归)。防未来函数:红旗基于已披露财报(analyzer 控 as_of)。
+        # 统一风控 veto 汇聚(WI-6 Phase 3):财报高危红旗 + 龙虎榜否决 正交 OR 合成 → 同一排序出口。
+        #   · 财报轴 dose = 高危红旗数(缺财报块/无高危 → 0);
+        #   · 龙虎榜轴 = as-of 入选否决裁决(缺快照/未触发 → None,该轴不发声)。
+        # 无龙虎榜数据时退化为红旗现状(向后兼容)。防未来函数:红旗基于已披露财报(analyzer 控 as_of),
+        # 龙虎榜走 lhb_asof(list_date < as_of 严格,盘后披露当天不可用)。
         dose = fin_flags.high_flag_count((rec.get("financial") or None))
-        adj = redflag_adjust(d.get("综合分", 0.0), dose)
+        lhbv = risk_veto.lhb_verdict_asof(code, as_of)
+        adj = risk_veto_adjust(d.get("综合分", 0.0), dose, lhbv)
+        _lhb_hit = bool((adj.get("各轴") or {}).get("龙虎榜", {}).get("应用"))
         scored.append({
             "code": code,
             "行业": (rec.get("meta") or {}).get("industry"),
             "综合方向": d.get("综合方向"),
             "综合分": d.get("综合分", 0.0),
             "有财报块": rec.get("financial") is not None,  # 是否挂到 as_of 财报块(覆盖统计)
-            "排序分": adj["排序分"],                     # 降权后分(降权=综合分−罚分;否决靠标记沉底)
+            "排序分": adj["排序分"],                     # 降权后分(降权=综合分−Σ罚分;否决靠标记沉底)
+            # 风控风险归因(两轴合成;无触发 → None,保持旧展示语义)。键名沿用「财报风险」向后兼容,
+            # 增补「归因/各轴」透出龙虎榜轴命中。
             "财报风险": {"高危数": adj["高危数"], "罚分": adj["罚分"],
                         "否决": adj["否决"], "剔除": adj["剔除"],
-                        "flags": (rec.get("financial") or {}).get("flags") if dose else []} if dose else None,
+                        "归因": adj.get("归因"), "各轴": adj.get("各轴"),
+                        "flags": (rec.get("financial") or {}).get("flags") if dose else []}
+                        if (dose or _lhb_hit) else None,
             "council": cblk,                            # {default, experts, config} 供前端勾选重排
         })
 
@@ -169,7 +178,9 @@ def run_council_screen(codes: list[str], as_of: str | None = None,
         x["排序分"] if x["排序分"] is not None else -1e9,
     ), reverse=True)
     top = scored[:top_n]
-    命中高危 = sum(1 for x in scored if x.get("财报风险") is not None)  # 高危红旗降权/否决的票数
+    命中高危 = sum(1 for x in scored if (x.get("财报风险") or {}).get("高危数"))   # 财报高危红旗票数
+    命中龙虎榜 = sum(1 for x in scored                                          # 龙虎榜否决触发票数
+                   if ((x.get("财报风险") or {}).get("各轴") or {}).get("龙虎榜", {}).get("应用"))
     带块数 = sum(1 for x in scored if x.get("有财报块"))                # 挂到 as_of 财报块的票数(覆盖代理)
 
     view = {
@@ -179,17 +190,19 @@ def run_council_screen(codes: list[str], as_of: str | None = None,
         "有效": scanned,
         "跳过数(历史不足/无信号)": skipped,
         "财报覆盖": 带块数,                    # 有 as_of 可见财报块参与合议的票数(全A采财报后↑)
-        "命中高危红旗": 命中高危,              # 高危红旗降权/否决沉底的票数
+        "命中高危红旗": 命中高危,              # 财报高危红旗降权/否决沉底的票数
+        "命中龙虎榜否决": 命中龙虎榜,          # 龙虎榜净买上榜否决/降权沉底的票数(风控微结构轴)
         "top_n": len(top),
         "top": top,
         "口径": ("全A逐票 technical.compute → 合议默认专家组(有财报 raw 的票挂 as_of 财报块,财报质地"
-                 "专家发声;资金流/多因子/情绪/事件因无全A数据自然弃权)→ 财报高危红旗接入排序(降权/否决"
-                 "沉底,与 web 同一纯函数)→ Top N;纯数据·非投资建议"),
-        "防未来函数": "只用 load_kline 历史 K 线 + 披露日≤as_of 的已披露财报(analyzer 控 as_of),不引未来数据",
+                 "专家发声;资金流/多因子/情绪/事件因无全A数据自然弃权)→ 统一风控 veto 汇聚接入排序"
+                 "(财报红旗 + 龙虎榜否决 正交 OR 合成,降权/否决沉底,与 web 同一纯函数)→ Top N;纯数据·非投资建议"),
+        "防未来函数": ("只用 load_kline 历史 K 线 + 披露日≤as_of 的已披露财报(analyzer 控 as_of)"
+                     "+ 龙虎榜 list_date<as_of 严格(盘后披露当天不可用),不引未来数据"),
     }
     p = store.put_view("策略0合议", view)
-    logger.info("策略0合议:扫描 %d / 有效 %d / 跳过 %d / 财报覆盖 %d / 命中高危红旗 %d / Top %d → %s",
-                len(codes), scanned, skipped, 带块数, 命中高危, len(top), p)
+    logger.info("策略0合议:扫描 %d / 有效 %d / 跳过 %d / 财报覆盖 %d / 命中高危红旗 %d / 命中龙虎榜 %d / Top %d → %s",
+                len(codes), scanned, skipped, 带块数, 命中高危, 命中龙虎榜, len(top), p)
     return view
 
 
