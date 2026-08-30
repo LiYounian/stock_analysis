@@ -65,10 +65,10 @@ def test_weight_override_shifts_result():
 
 def test_conflict_flagged_but_not_overturned():
     """强看多 + 强看空并存 → 标冲突;但方向仍由加权求和定(D1 不改判)。"""
-    rec = _rec(signals={"trend": {"评级": "偏多", "得分": 100, "依据": ["多头"]},
-                        "ob_os": {"verdict": "超买", "resonance": 3},   # 看空
-                        "reversal": {"拐点标签": "无", "拐点评分": 0}},
-               sentiment={"净情绪分": -0.8, "样本数": 20})              # 看空
+    # 冲突须在存活专家间构造:拐点=强看多 vs 超买超卖+情绪=看空(技术趋势已删权=0,不再供多头)。
+    rec = _rec(signals={"reversal": {"拐点标签": "反弹启动", "拐点评分": 80},  # 拐点:看多
+                        "ob_os": {"verdict": "超买", "resonance": 3}},           # 超买超卖:看空
+               sentiment={"净情绪分": -0.8, "样本数": 20})              # 情绪:看空
     r = council.convene_default(rec)
     assert r["是否冲突"] is True and r["冲突说明"]
     # 方向仍是加权求和结果(未被冲突改成中性/翻转)
@@ -80,9 +80,9 @@ def test_conflict_flagged_but_not_overturned():
 
 def test_weak_opposition_not_conflict():
     """一方贡献极微弱(<ε)→ 不算冲突。"""
-    rec = _rec(signals={"trend": {"评级": "偏多", "得分": 90, "依据": ["多头"]}},
+    rec = _rec(signals={"ob_os": {"verdict": "超卖", "resonance": 3}},   # 超买超卖:强看多
                sentiment={"净情绪分": -0.2, "样本数": 1})     # 极弱看空(样本1、置信度低)
-    r = council.convene(["技术趋势", "情绪三层"], rec)
+    r = council.convene(["超买超卖", "情绪三层"], rec)
     assert r["是否冲突"] is False
 
 
@@ -98,14 +98,14 @@ def test_attribution_sum_consistent_with_S():
 def test_abstain_does_not_dilute():
     """弃权稀释修正:一堆弃权专家不应把在场专家的综合分拉向 0。
 
-    构造:技术趋势强看多(置信度1),其余专家全弃权(缺数据→置信度0)。
+    构造:超买超卖强看多(置信度1),其余专家全弃权(缺数据→置信度0)。
     置信度加权分母下,S 应 ≈ 该单一专家的强度(不被弃权者稀释)。
     """
-    rec = _rec(signals={"trend": {"评级": "偏多", "得分": 80, "依据": ["多头"]}})
-    # 只有技术趋势有数据,其余(超买超卖/拐点/资金流/情绪/多因子/事件驱动/板块轮动)弃权
+    rec = _rec(signals={"ob_os": {"verdict": "超卖", "resonance": 3}})
+    # 只有超买超卖有数据(共振满档→置信度1),其余(拐点/资金流/情绪/多因子/事件驱动/板块轮动)弃权
     r = council.convene_default(rec)
-    tv = next(a for a in r["归因"] if a["专家"] == "技术趋势")
-    # 分母只剩技术趋势的 权重×置信度 → S == 其强度
+    tv = next(a for a in r["归因"] if a["专家"] == "超买超卖")
+    # 分母只剩超买超卖的 权重×置信度 → S == 其强度
     assert abs(r["综合分"] - tv["强度"]) < 1e-6
     assert r["综合方向"] == "看多"                  # 不被弃权者稀释到中性
 
@@ -113,7 +113,7 @@ def test_abstain_does_not_dilute():
 def test_abstain_dilution_vs_old_denominator():
     """对照:置信度加权(默认)的 |S| 应 ≥ 等权旧口径(弃权者被排除,分母更小、S 更大)。"""
     import tools.analysis.council as C
-    rec = _rec(signals={"trend": {"评级": "偏多", "得分": 80, "依据": ["多头"]}})
+    rec = _rec(signals={"ob_os": {"verdict": "超卖", "resonance": 3}})
     s_new = council.convene_default(rec)["综合分"]     # 置信度加权
     orig = C._C["分母模式"]
     try:
@@ -155,11 +155,25 @@ def test_build_council_block_config_carries_denominator_mode():
 
 
 def test_build_council_block_abstain_not_diluted():
-    """只有技术趋势有数据、其余弃权 → 落库 default 综合分 == 该专家强度(未被弃权者稀释)。"""
-    rec = _rec(signals={"trend": {"评级": "偏多", "得分": 80, "依据": ["多头"]}})
+    """只有超买超卖有数据、其余弃权 → 落库 default 综合分 == 该专家强度(未被弃权者稀释)。"""
+    rec = _rec(signals={"ob_os": {"verdict": "超卖", "resonance": 3}})
     blk = council.build_council_block(rec)
-    tv = next(a for a in blk["default"]["归因"] if a["专家"] == "技术趋势")
+    tv = next(a for a in blk["default"]["归因"] if a["专家"] == "超买超卖")
     assert abs(blk["default"]["综合分"] - tv["强度"]) < 1e-6
+
+
+def test_技术趋势_removed_v2_reweight():
+    """V2 重加权(锁死本次改动语义):技术趋势已从合议删除——回测坐实趋势 rank-IC 显著为负
+    (−0.0105,删后翻正 +0.041,t=4.16),任何正权重都拖累,删除是原则性选择。
+    锁三条:①不在默认专家组;②默认权重=0;③即便 signals.trend 存在,也不产生非零贡献。"""
+    assert "技术趋势" not in _C["默认专家组"]
+    assert _C["默认权重"].get("技术趋势") == 0.0
+    # 只有 trend 有数据,但技术趋势已删 → 无有效在场专家 → 中性(不再被趋势拖着走)
+    rec = _rec(signals={"trend": {"评级": "偏多", "得分": 80, "依据": ["多头"]}})
+    r = council.convene_default(rec)
+    tv = [a for a in r["归因"] if a["专家"] == "技术趋势"]
+    assert all(a["贡献"] == 0 for a in tv), "技术趋势若仍出现在归因,其贡献必须为 0"
+    assert r["综合方向"] == "中性"
 
 
 def test_council_does_not_import_web_or_store():
