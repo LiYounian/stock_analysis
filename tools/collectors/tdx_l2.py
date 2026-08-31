@@ -7,9 +7,14 @@
 契合项目现有盘后 EOD 流水线;五档是纯实时快照、不能历史回补,不在本采集器内。
 
 数据源:mootdx `Quotes.factory(market="std")`,惰性导入(不装 mootdx 也能 import 本模块)。
-  - `transaction(symbol, start, offset)`      当日分笔
-  - `transactions(symbol, start, offset, date)` 历史某日分笔(date=YYYYMMDD)
+  - `transaction(symbol, start, offset)`      当日分笔(实时/盘中)
+  - `transactions(symbol, start, offset, date)` 指定日分笔(date=YYYYMMDD,含**当日**)
   分页拉取(每页 _PAGE 条)累积到全天;列名按 mootdx 各版本**防御式归一**。
+
+⚠️ 当日采集回退(mootdx 0.11.7 实测):通达信服务器池的当日 `transaction()` 接口
+   常返回**空**(0 行,尤其盘后),但历史 `transactions(date=当日)` 对**同一天**能拉到
+   全天已成交逐笔。故 date=None(盘后当日归档)时:先试 `transaction()`,空则回退
+   `transactions(date=<当日>)`——当日取 store.active_date()(编排设的 as_of),不引未来。
 落盘:走 store 层,kind="tick"(parquet,大表),按 store 当前日期分区。港股不支持 → 跳过。
 
 ⚠️ 依赖 `mootdx`(requirements 已加);通达信走服务器池,盘中/服务器波动时可能失败,
@@ -19,6 +24,7 @@ from __future__ import annotations
 
 import logging
 import time
+from datetime import datetime
 
 import pandas as pd
 
@@ -40,8 +46,16 @@ def _get_client():
     return Quotes.factory(market="std")
 
 
+def _active_yyyymmdd() -> str:
+    """当日交易日(YYYYMMDD)。取 store.active_date()(编排入口 set_active_date 设的 as_of)
+    → 缺省今天。用于当日逐笔回退:mootdx 当日 transaction() 常空,改走 transactions(date=当日)。
+    锚定 as_of 而非 datetime.now(),与全流水线同一 as_of,不引未来。"""
+    d = store.active_date() or datetime.now().strftime("%Y-%m-%d")
+    return d.replace("-", "")
+
+
 def _fetch_page(client, code: str, start: int, date: str | None) -> pd.DataFrame:
-    """拉一页分笔。date 为 None → 当日 transaction;否则历史 transactions(date=YYYYMMDD)。"""
+    """拉一页分笔。date 为 None → 当日 transaction;否则指定日 transactions(date=YYYYMMDD)。"""
     if date:
         df = client.transactions(symbol=code, start=start, offset=_PAGE, date=int(date))
     else:
@@ -49,9 +63,8 @@ def _fetch_page(client, code: str, start: int, date: str | None) -> pd.DataFrame
     return df if isinstance(df, pd.DataFrame) else pd.DataFrame()
 
 
-def _fetch_raw(code: str, date: str | None = None) -> pd.DataFrame:
-    """分页拉全天逐笔(拼接原始页)。空数据抛 ValueError。抽出便于测试 mock。"""
-    client = _get_client()
+def _pull_pages(client, code: str, date: str | None) -> list[pd.DataFrame]:
+    """分页拉全天逐笔,返回原始页列表(空则空列表)。抽出便于当日/回退两次调用共用。"""
     pages, start = [], 0
     while start < _MAX_TICKS:
         page = _fetch_page(client, code, start, date)
@@ -61,6 +74,22 @@ def _fetch_raw(code: str, date: str | None = None) -> pd.DataFrame:
         if len(page) < _PAGE:              # 末页
             break
         start += len(page)
+    return pages
+
+
+def _fetch_raw(code: str, date: str | None = None) -> pd.DataFrame:
+    """分页拉全天逐笔(拼接原始页)。空数据抛 ValueError。抽出便于测试 mock。
+
+    date=None(盘后当日归档):先试当日 transaction();mootdx 0.11.7 该接口常返回空,
+    则回退 transactions(date=<当日 as_of>)——历史接口对"今天"同样可取全天已成交逐笔。
+    date=YYYYMMDD(回补历史):直接走 transactions(date=...),不回退(该日无数据即真空)。
+    """
+    client = _get_client()
+    pages = _pull_pages(client, code, date)
+    if not pages and date is None:         # 当日 transaction 为空 → 回退指定日 transactions
+        fallback = _active_yyyymmdd()
+        logger.info("%s 当日 transaction() 为空,回退 transactions(date=%s)", code, fallback)
+        pages = _pull_pages(client, code, fallback)
     if not pages:
         raise ValueError(f"{code} 逐笔为空(非交易日/服务器无数据)")
     return pd.concat(pages, ignore_index=True)
