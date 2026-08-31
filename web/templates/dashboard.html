@@ -1,6 +1,11 @@
 {% extends "base.html" %}
 {% block content %}
-<h1>今日概览 <small>{{ d.total }} 只自选</small></h1>
+<h1>今日概览 <small>数据日期 <b>{{ cur_date }}</b> · {{ d.total }} 只自选</small></h1>
+<p class="home-cta">
+  <a class="cta-btn" href="/selection?date={{ cur_date }}">📋 查看最新选股结果 →</a>
+  <a class="cta-btn cta-ghost" href="/sepa?date={{ cur_date }}">📈 SEPA 监控</a>
+  <a class="cta-btn cta-ghost" href="/fund-flow">💰 资金流向</a>
+</p>
 
 <div class="grid">
   <section class="card">

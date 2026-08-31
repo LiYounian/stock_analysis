@@ -244,3 +244,12 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 .ai-note { margin: 8px 0; padding: 8px 12px; background: #21262e; border-left: 3px solid #3a4250; border-radius: 4px; }
 .ai-note p { margin: 4px 0; line-height: 1.5; }
 .ai-note .pos, .ai-note .neg { font-size: 13px; }
+
+/* 历史模式横幅(破粘性日期:显式提示+回最新)+ 主页直达入口 */
+.hist-banner { margin: 0; padding: 8px 14px; background: #3a2f14; border-bottom: 1px solid #5a4a1e; color: #f0c674; font-size: 13px; text-align: center; }
+.hist-banner a { color: #6db3f2; font-weight: 600; }
+.home-cta { margin: 10px 0 18px; display: flex; gap: 10px; flex-wrap: wrap; }
+.cta-btn { display: inline-block; padding: 8px 16px; background: #2f6fd0; color: #fff; border-radius: 6px; text-decoration: none; font-weight: 600; font-size: 14px; }
+.cta-btn:hover { background: #2559a8; }
+.cta-ghost { background: #21262e; color: #6db3f2; border: 1px solid #3a4250; }
+.cta-ghost:hover { background: #2a303a; }
