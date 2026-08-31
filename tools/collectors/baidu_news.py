@@ -141,17 +141,24 @@ def _fetch_raw(code: str, rn: int) -> list[dict]:
     """curl_cffi 伪装 chrome 拉百度 sentimentlist,返回原始条目列表(抽出便于 mock)。
 
     非 200 / JSON 解析失败 → 抛异常(交上层降级)。空列表正常返回 []。
+    百度 pae 偶发连接重置/超时 → 瞬时网络错误退避重试(retry_call);非网络错误不重试。
     """
     from curl_cffi import requests as creq
+
+    from tools.collectors._retry import retry_call
 
     params = {
         "market": "ab", "code": code, "query": code, "financeType": "stock",
         "benefitType": "", "pn": 0, "rn": rn, "is_fallback": 0, "finClientType": "pc",
     }
-    r = creq.get(_API, params=params, impersonate="chrome",
-                 timeout=float(os.getenv("FETCH_TIMEOUT", "10")))
-    r.raise_for_status()
-    return _extract_list(r.json())
+
+    def _do():
+        r = creq.get(_API, params=params, impersonate="chrome",
+                     timeout=float(os.getenv("FETCH_TIMEOUT", "10")))
+        r.raise_for_status()
+        return r.json()
+
+    return _extract_list(retry_call(_do, label=f"百度新闻{code}"))
 
 
 def _merge_incremental(new_items: list[dict], prev_items: list[dict]) -> list[dict]:

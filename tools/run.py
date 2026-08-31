@@ -14,7 +14,8 @@
     python -m tools.run screen       # 组合聚合 + 预设选股视图
     python -m tools.run pattern      # 形态选股(模块二)扫描:RS+硬规则AND+达标占比
     python -m tools.run sepa         # SEPA+VCP 监控(午间/收盘):均线入池 + 波段收缩两表
-    python -m tools.run all          # 全链路(采集→情绪→组装→事件→多因子→合议回写→视图),一个日期
+    python -m tools.run all          # 全链路(采集[含逐笔盘口]→情绪→组装→事件→多因子→合议回写→视图),一个日期
+    python -m tools.run ticks        # 单独跑逐笔盘口归档(run all 已含;此命令供 --all 全池/--date 回补)
     python -m tools.run pipeline     # 全A 两阶段流水线:全A便宜筛得达标池,再只对(达标∪自选)做新闻/LLM/合议
     python -m tools.run screenall    # 全A 多策略选股(策略0/2/4… S01/箱体3 已下线)→ 只对(各策略选出并集∪自选)做新闻/LLM/合议
     # 追加 --all 用全池 32 只;默认开发子集 10 只(config/dev_sample.json)
@@ -432,6 +433,25 @@ def run_council(codes: list[str], as_of: str) -> None:
     logger.info("合议块回写:%d 只(此时全专家数据就绪)", n)
 
 
+def collect_ticks(codes: list[str]) -> None:
+    """**收盘后**逐笔盘口微观结构归档(纳入 run all 的池级流程)。
+
+    数据源通达信(mootdx),对票池拉当日逐笔 → 落 tick(明细)+ tick_summary(摘要)。
+    ⚠️ 只在 run all 这种**票池级**流程带(池小、可控);**不进** collect_values,故
+    pipeline/screenall 的**全A**路径不会被逐笔拖垮。
+    ⚠️ 顺序命门:须排在 run_serialize **之前**——serialize 的 tick 块按 as_of date-pin
+    读当日摘要,先采后组装才能进 record/前端卡片。
+    非交易日/盘中/mootdx 不可用 → 单票空数据降级、整体 _safe,绝不中止闭环。
+    单独回补/全池另用 `python -m tools.run ticks [--all|--date]`。
+    """
+    if not codes:
+        return
+    from tools.collectors import tdx_l2
+    logger.info("逐笔盘口归档 %d 只(源 mootdx,盘后当日)...", len(codes))
+    r = _safe("逐笔归档", lambda: tdx_l2.fetch_ticks(codes)) or {}
+    logger.info("逐笔盘口归档:成功 %d/%d", len(r), len(codes))
+
+
 # ————————————————————————————————————————————————
 # CLI 命令(单步:各自设当天日期 + 开发池)
 # ————————————————————————————————————————————————
@@ -535,6 +555,7 @@ def cmd_all(argv):
     顺序命门(横截面依赖):serialize 先产 record;factor 截面打分与事件采集**读 record/全池**,
     故排在 serialize 之后;council 块含多因子/事件驱动专家 → 必须在这两个数据就绪**之后**回写,
     否则那两个专家因数据未就绪而弃权。panel/screen 读最终 record(含完整 council)。
+    逐笔盘口(collect_ticks)在 serialize **之前**采(池级、盘后当日),使 record 的 tick 块能装上。
     """
     codes, as_of = _prep(argv)
     logger.info("===== 全链路开始(日期 %s,%d 只)=====", as_of, len(codes))
@@ -542,6 +563,7 @@ def cmd_all(argv):
     collect_message(codes)
     collect_market_context()             # 全市场指数(沪深300+申万一级)→ 供板块轮动 RRG 专家
     collect_lhb(codes, as_of)            # 收盘后当日龙虎榜(风控微结构轴;T 落盘、T+1 生效)
+    collect_ticks(codes)                 # 收盘后逐笔盘口归档(须在 serialize 前;serialize 的 tick 块读当日摘要)
     run_sentiment(codes)                 # LLM 未配置则内部跳过
     run_serialize(codes, as_of)          # 组装 record(首次 council:多因子/事件驱动此时弃权;挂 lhb_veto)
     run_events(codes, as_of)             # 事件精数值(降级不炸)→ 供事件驱动专家

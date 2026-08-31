@@ -50,9 +50,14 @@ def _pick(row: pd.Series, *names, cast=None):
 # 龙虎榜
 # ————————————————————————————————————————————————
 def _fetch_lhb_market(start: str, end: str) -> pd.DataFrame:
-    """东财龙虎榜区间明细(全市场)。返回原始 df(含代码列),失败抛错。"""
+    """东财龙虎榜区间明细(全市场)。返回原始 df(含代码列),失败抛错。
+
+    东财偶发连接重置 → 瞬时网络错误退避重试(retry_call);空数据不重试。
+    """
     import akshare as ak
-    df = ak.stock_lhb_detail_em(start_date=start, end_date=end)
+
+    from tools.collectors._retry import retry_call
+    df = retry_call(ak.stock_lhb_detail_em, start_date=start, end_date=end, label="龙虎榜")
     if df is None or len(df) == 0:
         raise ValueError("龙虎榜区间明细为空")
     return df
@@ -83,9 +88,11 @@ def _lhb_rows_of(df: pd.DataFrame, code: str) -> list[dict]:
 # 大宗交易
 # ————————————————————————————————————————————————
 def _fetch_block_market(start: str, end: str) -> pd.DataFrame:
-    """东财大宗交易每日明细(全市场 A股)。返回原始 df,失败抛错。"""
+    """东财大宗交易每日明细(全市场 A股)。返回原始 df,失败抛错。瞬时网络错误退避重试。"""
     import akshare as ak
-    df = ak.stock_dzjy_mrmx(symbol="A股", start_date=start, end_date=end)
+
+    from tools.collectors._retry import retry_call
+    df = retry_call(ak.stock_dzjy_mrmx, symbol="A股", start_date=start, end_date=end, label="大宗交易")
     if df is None or len(df) == 0:
         raise ValueError("大宗交易明细为空")
     return df
@@ -116,9 +123,11 @@ def _block_rows_of(df: pd.DataFrame, code: str) -> list[dict]:
 # 股东户数
 # ————————————————————————————————————————————————
 def _fetch_holder_num(code: str) -> list[dict]:
-    """东财某票股东户数详情(按统计截止日倒序取近若干期)。空/失败抛错。"""
+    """东财某票股东户数详情(按统计截止日倒序取近若干期)。空/失败抛错。瞬时网络错误退避重试。"""
     import akshare as ak
-    df = ak.stock_zh_a_gdhs_detail_em(symbol=code)
+
+    from tools.collectors._retry import retry_call
+    df = retry_call(ak.stock_zh_a_gdhs_detail_em, symbol=code, label=f"股东户数{code}")
     if df is None or len(df) == 0:
         raise ValueError("股东户数为空")
     items = []

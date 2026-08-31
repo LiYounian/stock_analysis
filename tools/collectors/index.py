@@ -4,9 +4,12 @@
 以及模块一市场状态的"指数多头"因子。属采集层(与 market/universe 同级),
 策略层只经 store 读、不直接触网。
 
-多源 fallback(与 market.py 同思路):
-  - 新浪 `stock_zh_index_daily`(symbol 需 sh/sz 前缀):OHLCV。
-  - 东财 `index_zh_a_hist`(纯 6 位代码):中文列,含成交额/涨跌幅。
+多源 fallback(与 market.py 同思路;顺序按本机可靠性):
+  - baostock(query_history_k_data_plus,代码 sh./sz./bj.+6 位):**置首**——自有 TCP 协议,
+    不依赖 py_mini_racer、非东财,最稳(新浪指数接口需 mini_racer 跑 JS 解密,arm64 常坏;
+    东财指数接口偶发连接重置)。
+  - 东财 `index_zh_a_hist`(纯 6 位代码):中文列,含成交额/涨跌幅;瞬时网络错误走重试。
+  - 新浪 `stock_zh_index_daily`(symbol 需 sh/sz 前缀):OHLCV;依赖 py_mini_racer,置末兜底。
 落盘:store kind="index_kline",code=指数 6 位代码,parquet。
 列归一化复用 market._normalize(统一为 _STD_COLS)。
 """
@@ -60,18 +63,59 @@ def _fetch_eastmoney(code: str, start: str, end: str) -> pd.DataFrame:
     return ak.index_zh_a_hist(symbol=code, period="daily", start_date=start, end_date=end)
 
 
-_FETCHERS = {"sina": _fetch_sina, "eastmoney": _fetch_eastmoney}
-DEFAULT_SOURCES = ("sina", "eastmoney")
+def _bs_index_code(code: str) -> str:
+    """指数 6 位 → baostock 带点前缀代码(sh./sz./bj.)。"""
+    if code.startswith("399"):
+        return f"sz.{code}"
+    if code.startswith("899"):
+        return f"bj.{code}"
+    return f"sh.{code}"                    # 000xxx / 9xxxxx 归上证/中证
+
+
+def _fetch_baostock(code: str, start: str, end: str) -> pd.DataFrame:
+    """baostock 指数日 K线(不需 py_mini_racer、非东财,最稳)。start/end 接受 YYYYMMDD 或 YYYY-MM-DD。"""
+    import baostock as bs
+
+    from tools.collectors.baostock_src import session
+
+    def _dash(d: str) -> str:
+        return f"{d[:4]}-{d[4:6]}-{d[6:8]}" if len(d) == 8 and d.isdigit() else d
+
+    with session():
+        rs = bs.query_history_k_data_plus(
+            _bs_index_code(code), "date,open,high,low,close,volume,amount,pctChg",
+            start_date=_dash(start), end_date=_dash(end), frequency="d")
+        if rs.error_code != "0":
+            raise ConnectionError(f"baostock {code} error {rs.error_code}: {rs.error_msg}")
+        rows = []
+        while rs.next():
+            rows.append(rs.get_row_data())
+    if not rows:
+        raise ValueError("空数据")
+    df = pd.DataFrame(rows, columns=rs.fields).rename(columns={"pctChg": "pct_chg"})
+    for c in ("open", "high", "low", "close", "volume", "amount", "pct_chg"):
+        df[c] = pd.to_numeric(df[c], errors="coerce")
+    return df                              # 指数无换手率,_normalize 补 turnover=NA
+
+
+# 源优先级:baostock(最稳)→ 东财(网络偶断,可重试)→ 新浪(依赖 py_mini_racer,末位兜底)
+_FETCHERS = {"baostock": _fetch_baostock, "eastmoney": _fetch_eastmoney, "sina": _fetch_sina}
+DEFAULT_SOURCES = ("baostock", "eastmoney", "sina")
 
 
 def _fetch_one_with_source(code: str, start: str, end: str,
                            sources: tuple[str, ...] = DEFAULT_SOURCES
                            ) -> tuple[pd.DataFrame, str]:
-    """拉单指数日 K线,返回 (归一化 df, 命中源)。全失败抛 ConnectionError。"""
+    """拉单指数日 K线,返回 (归一化 df, 命中源)。全失败抛 ConnectionError。
+
+    每源套 retry_call:瞬时网络错误(东财 curl56/RemoteDisconnected)退避重试;
+    非瞬时错误(新浪 py_mini_racer 符号缺失)不重试、快速降级到下一源。
+    """
+    from tools.collectors._retry import retry_call
     errors = []
     for src in sources:
         try:
-            df = _FETCHERS[src](code, start, end)
+            df = retry_call(_FETCHERS[src], code, start, end, label=f"指数{code}/{src}")
             if df is None or len(df) == 0:
                 raise ValueError("空数据")
             return market._normalize(df), src
