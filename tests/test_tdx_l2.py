@@ -71,3 +71,46 @@ def test_fetch_raw_empty_raises(monkeypatch):
     monkeypatch.setattr(tdx_l2, "_fetch_page", lambda *a: pd.DataFrame())
     with pytest.raises(ValueError):
         tdx_l2._fetch_raw("600519")
+
+
+def test_fetch_raw_current_day_fallback_to_transactions(monkeypatch):
+    """根因回归:mootdx 当日 transaction()(date=None)常返回空,须回退到
+    transactions(date=<当日 as_of>)。锁住"当日空→回退当日历史接口→拿到数据"这条语义,
+    防未来重写把回退删掉又退回全空。"""
+    from tools.store import repo as store
+    monkeypatch.setattr(tdx_l2, "_get_client", lambda: object())
+    monkeypatch.setattr(store, "active_date", lambda: "2026-08-31")
+    seen_dates = []
+
+    def fake_page(client, code, start, date):
+        seen_dates.append(date)
+        if date is None:                 # 当日 transaction → 空(复现服务器池行为)
+            return pd.DataFrame()
+        return _raw(2)                   # transactions(date=当日) → 有数据
+
+    monkeypatch.setattr(tdx_l2, "_fetch_page", fake_page)
+    df = tdx_l2._fetch_raw("600519")     # date=None
+    assert len(df) == 2                          # 回退后拿到数据,非空
+    assert None in seen_dates                    # 先试了当日 transaction()
+    assert "20260831" in seen_dates              # 回退用了 as_of 当日的 transactions
+
+
+def test_fetch_raw_historical_no_fallback(monkeypatch):
+    """回补历史日(date 显式)时该日真空 → 直接抛错,**不**回退当日(防串日引未来)。"""
+    monkeypatch.setattr(tdx_l2, "_get_client", lambda: object())
+    calls = {"n": 0}
+
+    def fake_page(client, code, start, date):
+        calls["n"] += 1
+        return pd.DataFrame()
+    monkeypatch.setattr(tdx_l2, "_fetch_page", fake_page)
+    with pytest.raises(ValueError):
+        tdx_l2._fetch_raw("600519", date="20260827")
+    assert calls["n"] == 1                        # 只拉一次,无回退
+
+
+def test_active_yyyymmdd_uses_as_of(monkeypatch):
+    """回退日期锚定 store.active_date()(编排 as_of),非 datetime.now(),不引未来。"""
+    from tools.store import repo as store
+    monkeypatch.setattr(store, "active_date", lambda: "2026-08-27")
+    assert tdx_l2._active_yyyymmdd() == "20260827"
