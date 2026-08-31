@@ -10,9 +10,9 @@
 <body>
   {% set _d = cur_date if (cur_date is defined and cur_date) else 'latest' %}
   <header class="topbar">
-    <div class="brand"><a href="/?date={{ _d }}">📈 A股策略辅助工具</a></div>
+    <div class="brand"><a href="/">📈 A股策略辅助工具</a></div>
     <nav>
-      <a href="/?date={{ _d }}">今日概览</a>
+      <a href="/">今日概览</a>
       <a href="/selection?date={{ _d }}">选股结果</a>
       <a href="/sepa?date={{ _d }}">SEPA监控</a>
       <a href="/watch?date={{ _d }}">实时盯盘</a>
@@ -33,6 +33,11 @@
       {% else %}<span>{{ _d }}</span>{% endif %}
     </div>
   </header>
+  {% if dates and cur_date and cur_date != dates[0] %}
+  <div class="hist-banner">📅 正在查看<b>历史数据 {{ cur_date }}</b>(最新 {{ dates[0] }})——
+    <a href="#" onclick="location.href=location.pathname;return false;">回到本页最新</a> ·
+    <a href="/">回最新首页</a></div>
+  {% endif %}
   <div class="disclaimer">⚠️ 本工具仅供参考,所有信号/预测基于历史数据的概率化推算,<b>非投资建议</b>,据此交易风险自负。</div>
   <main>{% block content %}{% endblock %}</main>
   <footer>A股策略辅助工具 · 仅供研究
