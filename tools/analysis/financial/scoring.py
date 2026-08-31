@@ -84,8 +84,8 @@ def quality_score(derived: dict, flags: list[dict], specs: dict | None = None,
         den += w
     base = round(num / den, 2) if den else None
 
-    # 红旗扣分
-    ded_map = cfg.get("红旗扣分", {"高": 15, "中": 8, "低": 3})
+    # 红旗扣分(提示=0:纯信息标注不压分,如成长期未盈利半导体承接项)
+    ded_map = cfg.get("红旗扣分", {"高": 15, "中": 8, "低": 3, "提示": 0})
     deduction = sum(ded_map.get(f.get("严重度", "中"), 8) for f in flags)
 
     high_cap = cfg.get("高危封顶分", 35)

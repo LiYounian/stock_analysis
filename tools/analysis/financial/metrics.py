@@ -165,6 +165,12 @@ def compute_derived(periods: dict) -> dict[str, dict]:
             # 现金流结构(资金来源分析)
             "自由现金流": (round(CFO - capex, 4) if (CFO is not None and capex is not None) else None),
             "研发费用率": _pct(研发, 营收),
+            # 现金 runway(月):货币资金 ÷ 月净经营烧钱率;仅经营现金流为负(烧钱期)才有意义,否则 None。
+            # 未盈利/成长期公司(尤其半导体设计)真正的生存指标是"现金能烧多久"而非当期利润——
+            # 分析师用 cash runway 替代 CFO 弱势判断(CFI cash runway;Simply Wall St 案例:runway>3–5 年即安心)。
+            "现金runway月数": _div(货币资金,
+                              (-CFO / _period_months(p)) if (CFO is not None and CFO < 0
+                                                             and _period_months(p)) else None),
             # 银行/金融口径(非金融票各科目为空 → 下列自然为 None)
             "营收增速_银行": _yoy_pct(营业收入_金融, _f(prev, "利润表", "营业收入")),
             "存贷比": _pct(发放贷款, 吸收存款),                              # 发放贷款/吸收存款
@@ -202,6 +208,11 @@ def compute_derived(periods: dict) -> dict[str, dict]:
 def _period_days(period: str) -> int:
     """报告期累计对应的天数(用于周转天数的当期口径换算)。"""
     return {"03-31": 90, "06-30": 180, "09-30": 270, "12-31": 360}.get(period[5:10], 360)
+
+
+def _period_months(period: str) -> int:
+    """报告期累计对应的月数(用于把累计现金流折算成月均,如 runway)。"""
+    return {"03-31": 3, "06-30": 6, "09-30": 9, "12-31": 12}.get(period[5:10], 12)
 
 
 def _single_quarter_qoq(periods: dict, period: str, table: str, field: str):

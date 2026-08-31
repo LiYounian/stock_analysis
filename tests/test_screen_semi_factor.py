@@ -69,7 +69,7 @@ def patch_data(monkeypatch):
     monkeypatch.setattr(sf.fd, "load_fundamental",
                         lambda code: funds.get(code) or (_ for _ in ()).throw(FileNotFoundError()))
     monkeypatch.setattr(sf.fr_analyzer, "build_financial_block",
-                        lambda code, as_of=None: fins.get(code))
+                        lambda code, as_of=None, industry=None: fins.get(code))
     monkeypatch.setattr(sf.market, "load_kline_recent", lambda code: _kline())
 
 
@@ -100,7 +100,7 @@ def test_missing_mktcap_skipped(patch_universe, tmp_path, monkeypatch):
         return _fund(500.0)
     monkeypatch.setattr(sf.fd, "load_fundamental", _fund_partial)
     monkeypatch.setattr(sf.fr_analyzer, "build_financial_block",
-                        lambda c, as_of=None: _fin(5.0, 30.0, 1e10))
+                        lambda c, as_of=None, industry=None: _fin(5.0, 30.0, 1e10))
     monkeypatch.setattr(sf.market, "load_kline_recent", lambda c: _kline())
     monkeypatch.setattr("tools.store.repo.put_view", lambda name, view, **_: str(tmp_path / f"{name}.json"))
     v = sf.run_semi_factor_screen(["A", "B", "C"], as_of="2026-08-19", fetch=False, top_k=5)
@@ -111,7 +111,7 @@ def test_missing_mktcap_skipped(patch_universe, tmp_path, monkeypatch):
 def test_missing_financial_derived_skipped(patch_universe, tmp_path, monkeypatch):
     """financial.derived.研发费用率 缺 → 剔。"""
     monkeypatch.setattr(sf.fd, "load_fundamental", lambda c: _fund(500.0))
-    def _fin_partial(code, as_of=None):
+    def _fin_partial(code, as_of=None, industry=None):
         if code == "A":
             return None                                        # 完全无 financial 块
         if code == "B":
@@ -145,7 +145,7 @@ def test_universe_missing_falls_back_no_restrict(tmp_path, monkeypatch, loose_st
     monkeypatch.setattr(sf, "_load_semi_universe", lambda: set())
     monkeypatch.setattr(sf.fd, "load_fundamental", lambda c: _fund(500.0))
     monkeypatch.setattr(sf.fr_analyzer, "build_financial_block",
-                        lambda c, as_of=None: _fin(5.0, 30.0, 1e10))
+                        lambda c, as_of=None, industry=None: _fin(5.0, 30.0, 1e10))
     monkeypatch.setattr(sf.market, "load_kline_recent", lambda c: _kline())
     monkeypatch.setattr("tools.store.repo.put_view", lambda name, view, **_: str(tmp_path / f"{name}.json"))
     v = sf.run_semi_factor_screen(["X", "Y"], as_of="2026-08-19", fetch=False, top_k=3)
@@ -166,7 +166,7 @@ def test_no_fetch_does_not_touch_network(patch_universe, tmp_path, monkeypatch):
     monkeypatch.setattr(sf.fin, "fetch_financial",
                         lambda codes, **_: called.__setitem__("fin", called["fin"] + 1) or {})
     monkeypatch.setattr(sf.fr_analyzer, "build_financial_block",
-                        lambda c, as_of=None: None)
+                        lambda c, as_of=None, industry=None: None)
     monkeypatch.setattr(sf.market, "load_kline_recent", lambda c: _kline())
     monkeypatch.setattr("tools.store.repo.put_view", lambda name, view, **_: str(tmp_path / f"{name}.json"))
     v = sf.run_semi_factor_screen(["A", "B", "C"], as_of="2026-08-19", fetch=False, top_k=3)
@@ -186,7 +186,7 @@ def test_fetch_true_auto_collects_missing_financials(patch_universe, tmp_path, m
     monkeypatch.setattr(sf.fin, "fetch_financial", _fake_fetch_fin)
     monkeypatch.setattr(sf.fd, "load_fundamental", lambda c: _fund(500.0))
     monkeypatch.setattr(sf.fr_analyzer, "build_financial_block",
-                        lambda c, as_of=None: _fin(5.0, 30.0, 1e10))
+                        lambda c, as_of=None, industry=None: _fin(5.0, 30.0, 1e10))
     monkeypatch.setattr(sf.market, "load_kline_recent", lambda c: _kline())
     monkeypatch.setattr("tools.store.repo.put_view", lambda name, view, **_: str(tmp_path / f"{name}.json"))
     v = sf.run_semi_factor_screen(["A", "B", "C"], as_of="2026-08-19", fetch=True, top_k=3)
@@ -202,7 +202,7 @@ def test_fetch_true_all_cached_no_refetch(patch_universe, tmp_path, monkeypatch)
                         lambda codes, **_: called.__setitem__("fin", called["fin"] + 1) or {})
     monkeypatch.setattr(sf.fd, "load_fundamental", lambda c: _fund(500.0))
     monkeypatch.setattr(sf.fr_analyzer, "build_financial_block",
-                        lambda c, as_of=None: _fin(5.0, 30.0, 1e10))
+                        lambda c, as_of=None, industry=None: _fin(5.0, 30.0, 1e10))
     monkeypatch.setattr(sf.market, "load_kline_recent", lambda c: _kline())
     monkeypatch.setattr("tools.store.repo.put_view", lambda name, view, **_: str(tmp_path / f"{name}.json"))
     sf.run_semi_factor_screen(["A", "B", "C"], as_of="2026-08-19", fetch=True, top_k=3)

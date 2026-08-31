@@ -153,4 +153,4 @@ def test_红旗结构合法():
     for f in mod.extra_flags(d, s):
         assert set(f) >= {"code", "命中", "严重度", "值"}
         assert f["命中"] is True
-        assert f["严重度"] in {"高", "中", "低"}
+        assert f["严重度"] in {"高", "中", "低", "提示"}   # 提示=成长期未盈利承接项(0扣分)
