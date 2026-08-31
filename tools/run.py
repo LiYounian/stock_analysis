@@ -452,6 +452,38 @@ def collect_ticks(codes: list[str]) -> None:
     logger.info("逐笔盘口归档:成功 %d/%d", len(r), len(codes))
 
 
+def _chunks(seq: list, n: int):
+    """把序列切成每 n 个一批(record 分批增量推用)。"""
+    for i in range(0, len(seq), max(1, n)):
+        yield seq[i:i + n]
+
+
+def _push_incremental(as_of: str, shard_keys) -> None:
+    """流式增量推(WI:模块化抗断点):best-effort 推指定分片
+    (view 分片 key=`__view__:视图名`;record 分片 key=code)。每策略/每批 record 产出即推,
+    任一失败不回滚已推的;末尾统一 upload 兜底补漏。走**同一 receipt_path** → 天然幂等
+    (已成功分片不重传);网络/429 由 upload_date 内部退避处理。
+
+    降级:总开关关(STREAM_PUSH=false)/无同步凭证(如直接 `run screenall` 未加载 sync.env)/
+    空分片 → 静默跳过,绝不中止闭环(增量推是加速层,完整性由末尾兜底保证)。
+    """
+    from tools.config import settings
+    if not settings.STREAM_PUSH or not shard_keys:
+        return
+    if not (settings.SYNC_INGEST_URL and settings.SYNC_INGEST_TOKEN and settings.SYNC_SIGNING_KEY):
+        return                                    # 无凭证 → 跳过(不影响主流程,要推另跑 upload)
+    try:
+        from tools.sync import upload
+        r = upload.upload_date(
+            as_of, url=settings.SYNC_INGEST_URL, token=settings.SYNC_INGEST_TOKEN,
+            source=settings.SYNC_SOURCE_ID, key_id=settings.SYNC_KEY_ID, key=settings.SYNC_SIGNING_KEY,
+            receipt_path=upload._receipt_dir() / f"{as_of}.json", only_shards=set(shard_keys))
+        s = r.get("summary", {}) if isinstance(r, dict) else {}
+        logger.info("增量推 %d 分片 → 成功 %s / 失败 %s", len(shard_keys), s.get("ok"), s.get("failed"))
+    except Exception as e:                          # noqa: BLE001 - 增量推 best-effort,末尾兜底补
+        logger.warning("增量推失败(降级,末尾兜底补):%s", str(e)[:100])
+
+
 # ————————————————————————————————————————————————
 # CLI 命令(单步:各自设当天日期 + 开发池)
 # ————————————————————————————————————————————————
@@ -659,6 +691,8 @@ def run_two_stage(codes_all: list[str], as_of: str, no_llm: bool = False) -> dic
     run_events(analysis_set, as_of)
     run_factor(analysis_set, as_of)
     run_council(analysis_set, as_of)      # 接近达标获合议分(情绪/事件专家自然弃权)
+    for _b in _chunks(analysis_set, settings.STREAM_RECORD_BATCH):   # 流式增量推 record(对称 run_screen_all)
+        _push_incremental(as_of, set(_b))
     filled = _enrich_near_miss(as_of)     # 回填接近达标合议分 + 按合议分重排 top3
     run_panel(analysis_set)
     run_screen(analysis_set)
@@ -788,6 +822,15 @@ def run_screen_all(codes_all: list[str], as_of: str, no_llm: bool = False,
             codes_all, as_of=as_of, fetch=False)),
     ]
     news_topk = int(os.getenv("SCREENALL_NEWS_TOPK", "5"))  # 新闻/情绪 LLM 每策略只取前 N(省 token、去边缘票噪声)
+    # label → 该 screener 落盘的 view 名(供流式增量推构造分片 key `__view__:视图名`)
+    _screener_view = {
+        "策略0·多专家合议": "策略0合议", "策略2·放量后缩量回踩": "放量后缩量回踩",
+        "策略4·动量组合": "动量组合", "策略5·半导体多因子": "半导体多因子",
+        "S03·最大范围选股": "最大范围选股", "S04·量价放量": "量价放量",
+        "S05·最强选股": "最强选股", "策略10·反转低换手组合": "反转低换手组合",
+        "策略11·指标条件化状态排序": "指标条件化状态排序",
+    }
+    from tools.sync.upload import VIEW_SHARD_PREFIX as _VPREFIX
     union: list[str] = []
     news_union: list[str] = []
     per_strategy: dict[str, int] = {}
@@ -798,6 +841,10 @@ def run_screen_all(codes_all: list[str], as_of: str, no_llm: bool = False,
         union.extend(picks)
         news_union.extend(picks[:news_topk])        # 新闻/LLM 情绪 只取每策略前 N(排序型=前N强/规则型=前N只)
         logger.info("  %s 入选 %d(新闻取前%d)", label, len(picks), min(len(picks), news_topk))
+        # 流式增量推:该策略 view 落盘后立即推(抗断点——某策略/网络失败不影响已推的;末尾兜底补漏)
+        vname = _screener_view.get(label)
+        if view is not None and vname:
+            _push_incremental(as_of, {f"{_VPREFIX}{vname}"})
 
     union_picks = _dedup(union)                     # 各策略选出票并集(去重保序)
     watch = stock_pool.get_codes()
@@ -829,6 +876,9 @@ def run_screen_all(codes_all: list[str], as_of: str, no_llm: bool = False,
     run_events(llm_subset, as_of)
     run_factor(llm_subset, as_of)
     run_council(llm_subset, as_of)
+    # 流式增量推:record 含完整 council 后按批推(分片 key=code;抗断点——某批/网络失败不影响其余,末尾兜底补漏)
+    for _b in _chunks(llm_subset, settings.STREAM_RECORD_BATCH):
+        _push_incremental(as_of, set(_b))
     run_panel(llm_subset)
     run_screen(llm_subset)
     _safe("前瞻回测汇总", run_backtest)              # 收尾可选增强(失败降级,不中止闭环)
