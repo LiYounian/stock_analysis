@@ -154,3 +154,56 @@ def test_picks_extractor_prefers_selected_over_rank():
     assert run._picks_from_view(view) == ["Z"]
     view2 = {"top": [{"code": "T"}], "排行": {"1日": [{"code": "A"}]}}
     assert run._picks_from_view(view2) == ["T"]
+
+
+# ———————————————————— 流式增量推送(模块化抗断点)————————————————————
+def test_stream_incremental_push_per_strategy_and_record(monkeypatch):
+    """每策略 view 落盘即推该 view 分片(`__view__:名`);run_council 后按批推 record 分片(code)。"""
+    calls = []
+    _stub_stage2(monkeypatch, calls)
+    pushes = []
+    monkeypatch.setattr(run, "_push_incremental", lambda date, keys: pushes.append((date, set(keys))))
+    _stub_screeners(monkeypatch, {"council": ["C1"], "s02": ["S2"], "momentum": ["M1"]})
+    run.run_screen_all(["A"], "2026-08-11")
+    allkeys = [k for _, ks in pushes for k in ks]
+    # 层1:各策略 view 分片增量推(至少 council/momentum 落盘的 view)
+    assert "__view__:策略0合议" in allkeys
+    assert "__view__:动量组合" in allkeys
+    # 层2:run_council 后按批推 record 分片(非 __view__ 前缀 = code 分片)
+    assert [k for k in allkeys if not k.startswith("__view__:")], "run_council 后应按批推 record"
+
+
+def test_push_incremental_swallows_errors(monkeypatch):
+    """best-effort:upload 抛错也不向上抛(闭环不被增量推拖垮)。"""
+    from tools.config import settings
+    from tools.sync import upload
+    for k, v in (("STREAM_PUSH", True), ("SYNC_INGEST_URL", "http://x"),
+                 ("SYNC_INGEST_TOKEN", "t"), ("SYNC_SIGNING_KEY", "k")):
+        monkeypatch.setattr(settings, k, v)
+    monkeypatch.setattr(upload, "upload_date", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom")))
+    run._push_incremental("2026-08-11", {"__view__:x"})   # 不抛即通过
+
+
+def test_push_incremental_skips_without_creds(monkeypatch):
+    """无同步凭证 → 跳过,不调 upload(直接 screenall 未加载 sync.env 场景)。"""
+    from tools.config import settings
+    from tools.sync import upload
+    monkeypatch.setattr(settings, "STREAM_PUSH", True)
+    monkeypatch.setattr(settings, "SYNC_INGEST_URL", "")
+    called = []
+    monkeypatch.setattr(upload, "upload_date", lambda *a, **k: called.append(1) or {})
+    run._push_incremental("2026-08-11", {"__view__:x"})
+    assert not called
+
+
+def test_push_incremental_disabled_switch(monkeypatch):
+    """STREAM_PUSH=false → 完全不推(一键回退旧的末尾统一 upload 行为)。"""
+    from tools.config import settings
+    from tools.sync import upload
+    for k, v in (("STREAM_PUSH", False), ("SYNC_INGEST_URL", "http://x"),
+                 ("SYNC_INGEST_TOKEN", "t"), ("SYNC_SIGNING_KEY", "k")):
+        monkeypatch.setattr(settings, k, v)
+    called = []
+    monkeypatch.setattr(upload, "upload_date", lambda *a, **k: called.append(1) or {})
+    run._push_incremental("2026-08-11", {"__view__:x"})
+    assert not called
