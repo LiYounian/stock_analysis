@@ -25,7 +25,7 @@ def _stub_stage2(monkeypatch, calls):
         return _f
 
     for fn in ("collect_values_missing", "collect_message", "collect_market_context",
-               "run_sentiment", "run_serialize", "run_events", "run_factor",
+               "collect_ticks", "run_sentiment", "run_serialize", "run_events", "run_factor",
                "run_council", "run_panel", "run_screen"):
         monkeypatch.setattr(run, fn, rec(fn))
 
@@ -71,12 +71,18 @@ def test_llm_subset_is_union_of_picks_and_watchlist(monkeypatch):
     # llm_subset = union ∪ 自选(WATCH1 已在 union → 不重复,WATCH2 追加)
     assert out["llm_subset_codes"] == ["C1", "C2", "S2", "M1", "WATCH1", "WATCH2"]
 
-    # 新闻/LLM/组装/合议 全部只对 llm_subset,不是全A codes_all
+    # 新闻/LLM/组装/合议 + 逐笔归档 全部只对 llm_subset,不是全A codes_all
     for name in ("collect_message", "run_sentiment", "collect_values_missing",
-                 "run_serialize", "run_council", "run_panel", "run_screen"):
+                 "collect_ticks", "run_serialize", "run_council", "run_panel", "run_screen"):
         arg = next(a for n, a in calls if n == name)
         assert arg == out["llm_subset_codes"], f"{name} 应只对 llm_subset,实际 {arg}"
         assert "A" not in arg and "B" not in arg          # 全A codes 未泄漏到贵活
+
+    # 顺序命门(合作者注释强调):逐笔归档 collect_ticks 必须排在 run_serialize **之前**,
+    # 否则 serialize 的 tick 块读不到当日摘要、record/个股页卡片装不上。
+    order = [n for n, _ in calls]
+    assert order.index("collect_ticks") < order.index("run_serialize"), \
+        "collect_ticks 必须在 run_serialize 之前(serialize 的 tick 块按 as_of 读当日逐笔摘要)"
 
 
 def test_one_screener_failure_isolated(monkeypatch):
