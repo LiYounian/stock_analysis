@@ -70,20 +70,66 @@ def support_resistance(kline: pd.DataFrame, window: int = None, keep: int = None
 
 
 # ---------- 止盈止损(百分比,按持有期)----------
-def stop_targets(price: float, atr_pct: float) -> dict:
-    """各持有期止损/止盈位 + 最大亏损%/目标盈利% + 风险收益比。"""
+def _scen_bounds(sc: dict | None) -> tuple[float | None, float | None, int]:
+    """从单持有期情景 dict 抽 (悲观分位%, 乐观分位%, 样本数),不依赖分位数值(键名含'悲观'/'乐观'即可)。
+
+    分位标签形如 '悲观%(q7)'/'乐观%(q93)'(分位可调),故按前缀匹配而非硬编码键名。缺失→None。
+    """
+    if not isinstance(sc, dict):
+        return None, None, 0
+    q_lo = q_hi = None
+    for k, v in sc.items():
+        if not isinstance(v, (int, float)):
+            continue
+        if k.startswith("悲观"):
+            q_lo = float(v)
+        elif k.startswith("乐观"):
+            q_hi = float(v)
+    return q_lo, q_hi, int(sc.get("样本数") or 0)
+
+
+def _adaptive_rr(sc: dict | None, default_rr: float) -> tuple[float, str]:
+    """个股自适应风险收益比 RR + 来源标注。
+
+    RR = clip(乐观分位 / |悲观分位|, 下限, 上限);要求 悲观<0<乐观 且 样本数≥门槛,否则回退 default_rr。
+    纯读该票 as-of 历史前瞻收益分布(scenarios 产出),无未来函数。
+    """
+    if not _P.get("盈亏比自适应", True):
+        return default_rr, "固定回退(自适应关闭)"
+    q_lo, q_hi, n = _scen_bounds(sc)
+    if q_lo is None or q_hi is None:
+        return default_rr, "固定回退(无情景分位)"
+    if n < _P.get("盈亏比最小样本", 60):
+        return default_rr, "固定回退(样本不足)"
+    if not (q_lo < 0 < q_hi):                      # 分布退化(单边)→ 不对称度无意义,回退
+        return default_rr, "固定回退(分位退化)"
+    rr = q_hi / abs(q_lo)
+    rr = min(max(rr, _P.get("盈亏比下限", 0.8)), _P.get("盈亏比上限", 3.0))
+    return rr, "自适应(情景不对称度)"
+
+
+def stop_targets(price: float, atr_pct: float, scen: dict | None = None) -> dict:
+    """各持有期止损/止盈位 + 最大亏损%/目标盈利% + 风险收益比。
+
+    止损带宽不动(= 止损倍数×ATR%×√N,保留已回测标定的止损触发率);
+    风险收益比按**个股情景不对称度**自适应(scen=scenarios(kline) 输出,按持有期取分位);
+    目标盈利% = 最大亏损% × RR。scen 缺失或信号不可信 → RR 回退 止盈倍数/止损倍数(旧的恒定 1.33,逐字段等价旧行为)。
+    """
     sk, tk = _P["止损_ATR倍数"], _P["止盈_ATR倍数"]
+    default_rr = tk / sk
     out = {}
     for N in _P["持有期"]:
         band = atr_pct * math.sqrt(N)          # N 日预期波动(%)
-        loss_pct = round(sk * band, 2)
-        gain_pct = round(tk * band, 2)
+        loss_pct = round(sk * band, 2)         # 止损带宽:不动
+        rr, src = _adaptive_rr((scen or {}).get(f"{N}日"), default_rr)
+        gain_pct = round(loss_pct * rr, 2)     # 目标随个股 RR 伸缩(RR=default 时逐字段等于旧的 tk×band)
         out[f"{N}日"] = {
             "止损位": round(price * (1 - loss_pct / 100), 2),
             "最大亏损%": loss_pct,
             "止盈位": round(price * (1 + gain_pct / 100), 2),
             "目标盈利%": gain_pct,
-            "风险收益比": round(tk / sk, 2),
+            "风险收益比": round(rr, 2),
+            "盈亏比来源": src,
         }
     return out
 
@@ -345,6 +391,7 @@ def predict(kline: pd.DataFrame, tech: dict, fundflow: dict | None = None,
     atr_val = float(atr(kline).iloc[-1])
     atr_pct = atr_val / price * 100 if price else float("nan")
     sr = support_resistance(kline)
+    scen = scenarios(kline)                                # 计算一次,持有期建议(自适应RR)与情景预测共用
 
     out = {
         "现价": round(price, 2),
@@ -352,9 +399,9 @@ def predict(kline: pd.DataFrame, tech: dict, fundflow: dict | None = None,
         "atr_pct": round(atr_pct, 2),
         "近三次放量": recent_volume_spikes(kline),
         **sr,
-        "持有期建议": stop_targets(price, atr_pct),
+        "持有期建议": stop_targets(price, atr_pct, scen),   # 盈亏比按个股情景不对称度自适应(scen 缺失→回退固定)
         "结构位": structure_anchor(kline, price, atr_pct, sr, tech),  # L3:支撑压力/突破/情景锚定
-        "情景预测": scenarios(kline),                       # 无条件历史频率(保留作对照)
+        "情景预测": scen,                                   # 无条件历史频率(保留作对照)
         "买卖倾向": bias_recommendation(tech, fundflow, sentiment),
         "消息面提示": _sentiment_note(sentiment, tech),   # 保守版:纯文本提示,不改上面任何数字
         "免责": DISCLAIMER,
