@@ -162,13 +162,12 @@ def test_combined_union_and_sources(monkeypatch):
     assert rows["000001"]["sources"] == ["策略0"]
     assert set(rows["300311"]["sources"]) == {"策略0", "策略2"}
     strat = {s["key"]: s for s in combined["strategies"]}
-    # 在产策略勾选框:S01/箱体3 下线后 策略1/策略3 不再出现,编号 1/3 空缺
+    # 在产策略勾选框:S01/箱体3/自选池小市值 下线后 策略1/策略3/策略5 不再出现,编号 1/3/5 空缺
     assert [s["key"] for s in combined["strategies"]] == [
-        "策略0", "策略2", "策略4", "策略5", "策略6", "策略7", "策略8", "策略9", "策略10", "策略11"]
-    assert "策略1" not in strat and "策略3" not in strat
+        "策略0", "策略2", "策略4", "策略6", "策略7", "策略8", "策略9", "策略10", "策略11"]
+    assert "策略1" not in strat and "策略3" not in strat and "策略5" not in strat
     assert strat["策略2"]["label"] == "放量后缩量回踩"
     assert strat["策略4"]["label"] == "动量组合"
-    assert strat["策略5"]["label"] == "自选池小市值"
     assert strat["策略6"]["label"] == "半导体多因子"
     assert strat["策略7"]["label"] == "最大范围选股"
     assert strat["策略8"]["label"] == "量价放量"
@@ -181,9 +180,8 @@ def test_combined_union_and_sources(monkeypatch):
     assert strat["策略0"]["available"] and strat["策略2"]["available"]
     # 策略4 view 缺 → present=False → available=False、codes=[]
     assert strat["策略4"]["available"] is False and strat["策略4"]["codes"] == []
-    # 策略5/6 无自选池 records → present=False(本用例 recs 空)
-    for k in ("策略5", "策略6"):
-        assert strat[k]["available"] is False and strat[k]["codes"] == []
+    # 策略6 无自选池 records → present=False(本用例 recs 空)
+    assert strat["策略6"]["available"] is False and strat["策略6"]["codes"] == []
     # 全并集去重:000001, 300311
     assert set(rows.keys()) == {"000001", "300311"}
 
@@ -283,52 +281,23 @@ def test_strategy4_missing_view_fallback(monkeypatch):
 
 
 # ————————————————————————————————————————————————
-# 策略5(自选池小市值,web 层实时跑,不读 view)
+# 策略5(自选池小市值,策略D)已于 2026-09-01 下线(从未前瞻回测/未证明有效/无明确用途)。
+# 选股页不再产出 strategy5、综合选股并集不含策略5;算子 tools.strategy.small_cap 存档保留,
+# 其单测见 tests/test_strategy_small_cap.py(照常绿)。本文件相关展示用例已删除。
 # ————————————————————————————————————————————————
-def _mkt_rec(code, mktcap_yi, pct_chg=0.5, sector="半导体"):
-    """策略5 用最小 record:valuation.mktcap_yi + snapshot.pct_chg 即可。"""
-    return {
-        "meta": {"code": code, "name": "T" + code, "sector": sector, "industry": "芯片"},
-        "valuation": {"mktcap_yi": mktcap_yi},
-        "snapshot": {"close": 10.0, "pct_chg": pct_chg},
-    }
 
 
-def test_strategy5_runs_in_web_layer(monkeypatch):
-    """策略5 web 层实时跑:自选池 records 直接调 strategy D,不依赖 view。"""
+def test_strategy5_not_in_page(monkeypatch):
+    """下线锁死:page dict 无 strategy5,综合选股 strategies 不含「策略5」。"""
     recs = {
-        "002001": _mkt_rec("002001", 30.0),
-        "002002": _mkt_rec("002002", 20.0),      # 最小市值
-        "002003": _mkt_rec("002003", 50.0),
-        "300001": _mkt_rec("300001", 40.0),      # 创业板 D 不剥
+        "002001": {"meta": {"code": "002001", "name": "T002001", "sector": "半导体", "industry": "芯片"},
+                   "valuation": {"mktcap_yi": 20.0}, "snapshot": {"close": 10.0, "pct_chg": 0.5}},
     }
     _patch(monkeypatch, recs)
     page = da.selection_page()
-    s5 = page["strategy5"]
-    assert s5["present"] is True and s5["扫描数"] == 4
-    assert s5["picks"] == ["002002", "002001", "300001"]          # 市值升序 top_k=3
-    assert [r["mktcap_yi"] for r in s5["rows"]] == [20.0, 30.0, 40.0]
+    assert "strategy5" not in page
     strat = {s["key"]: s for s in page["combined"]["strategies"]}
-    assert strat["策略5"]["label"] == "自选池小市值" and strat["策略5"]["available"] is True
-    assert set(strat["策略5"]["codes"]) == {"002002", "002001", "300001"}
-
-
-def test_strategy5_still_filters_limit_up(monkeypatch):
-    """策略5 web 层仍剥触涨跌停(与策略D 一致)。"""
-    recs = {
-        "002001": _mkt_rec("002001", 20.0, pct_chg=9.9),   # 涨停 → 剔
-        "002002": _mkt_rec("002002", 30.0),
-        "002003": _mkt_rec("002003", 40.0),
-    }
-    _patch(monkeypatch, recs)
-    assert da.selection_page()["strategy5"]["picks"] == ["002002", "002003"]
-
-
-def test_strategy5_empty_pool(monkeypatch):
-    """自选池无 records → present=False,不炸,combined 里 available=False。"""
-    _patch(monkeypatch, {})
-    s5 = da.selection_page()["strategy5"]
-    assert s5["present"] is False and s5["rows"] == []
+    assert "策略5" not in strat
 
 
 # ————————————————————————————————————————————————

@@ -591,7 +591,8 @@ def selection_page(date: str = "latest") -> dict:
     strategy0 = _strategy0_section(recs, date)
     strategy2 = _strategy2_section(recs, date)     # 放量后缩量回踩 S02(全A view,待验证)
     strategy4 = _strategy4_section(recs, date)     # 动量组合(全A view,原策略2 改号 2→4)
-    strategy5 = _strategy5_section(recs, date)     # 自选池小市值(web 层实时跑策略D,不读 view)
+    # 策略5·自选池小市值(策略D)已于 2026-09-01 下线(从未前瞻回测/未证明有效/无明确用途,
+    # 见 docs/日志/开发日志.md);算子 tools/strategy/small_cap.py 存档保留、可恢复。
     strategy6 = _strategy6_section(recs, date)     # 半导体多因子(优先读 view「半导体多因子」,缺则实时兜底)
     # config 兜底:自选池无记录时,退用策略0 view 里带的 council config(前端合成口径真源)
     if not config and strategy0.get("config"):
@@ -604,7 +605,7 @@ def selection_page(date: str = "latest") -> dict:
     strategy_rt = _strategy_reversal_turnover_section(recs, date)  # 策略10 反转低换手(候选·前向观测中)
     strategy_cr = _strategy_conditional_rank_section(recs, date)   # 策略11 指标条件化状态排序(状态参考·非alpha)
     combined = _combined_section(strategy0, strategy2,
-                                 strategy4, strategy5, strategy6, recs,
+                                 strategy4, strategy6, recs,
                                  strategy_mr=strategy_mr, strategy_vol=strategy_vol,
                                  strategy_strong=strategy_strong, strategy_rt=strategy_rt,
                                  strategy_cr=strategy_cr)
@@ -614,7 +615,7 @@ def selection_page(date: str = "latest") -> dict:
     _attach_risk(combined.get("rows"), recs)
     # 注:strategy0 不入本循环——它的 risk/risk_adjust 已由 _strategy0_section 从 view 权威透传
     #     (覆盖全A;走 recs 重推会丢全A票徽标,即本次修复的断点)。其余策略 picks 均在 recs 内,照常。
-    for _sec in (strategy2, strategy4, strategy5, strategy6,
+    for _sec in (strategy2, strategy4, strategy6,
                  strategy_mr, strategy_vol, strategy_strong, strategy_rt, strategy_cr):
         if isinstance(_sec, dict):
             _attach_risk(_sec.get("rows"), recs)
@@ -626,7 +627,7 @@ def selection_page(date: str = "latest") -> dict:
     # 策略0 不再 _rerank_scored:view 已按全A排序分排好序、risk_adjust 已由 _strategy0_section 透传
     # (走 recs 重推会把全A票的 risk_adjust 覆盖成 None → 丢降权/否决沉底。这是本次修复的断点)。
     combined["rows"] = _demote_flagged(combined.get("rows"), recs)    # 综合选股并集:高危沉底
-    for _sec in (strategy2, strategy4, strategy5, strategy6,
+    for _sec in (strategy2, strategy4, strategy6,
                  strategy_mr, strategy_vol, strategy_strong, strategy_rt):
         if isinstance(_sec, dict) and isinstance(_sec.get("rows"), list):
             _sec["rows"] = _demote_flagged(_sec["rows"], recs)        # 各在产策略入选清单:高危沉底
@@ -634,7 +635,7 @@ def selection_page(date: str = "latest") -> dict:
     return {"rows": pool_rows, "total": len(recs),
             "combined": combined, "strategy0": strategy0,
             "strategy2": strategy2, "strategy4": strategy4,
-            "strategy5": strategy5, "strategy6": strategy6,
+            "strategy6": strategy6,
             "strategy_mr": strategy_mr, "strategy_vol": strategy_vol,
             "strategy_strong": strategy_strong, "strategy_rt": strategy_rt,
             "strategy_cr": strategy_cr,
@@ -1015,56 +1016,14 @@ def _strategy6_section(recs: dict, date: str = "latest", top_k: int = 8) -> dict
     }
 
 
-def _strategy5_section(recs: dict, date: str = "latest", top_k: int = 3) -> dict:
-    """策略5「自选池小市值组合」区块:web 层实时跑 tools.strategy.small_cap 策略D。
-
-    与策略0~4 不同——**不读预落盘 view**,自选池版数据已在 records 里,
-    直接调 strategy 函数拿结果(记不动 store)。传入 records = 自选池 ∩ recs。
-    top_k=3(策略D 默认);市值缺失/触涨跌停/停牌 由策略过滤,embargo 单独标透传前端。
-
-    输出与其他策略区块同构:{present, as_of, 扫描数, 入选数, rows:[{code, name, industry, ...}]}
-    额外一个 embargo 字段供模板显示"空仓月"提示,但不代买 ETF。
-    """
-    from tools.strategy import registry as _reg
-    from tools.strategy import small_cap as _sc  # noqa: F401 触发注册
-
-    pool = _pool_codes()
-    scoped = {c: r for c, r in (recs or {}).items() if c in pool}
-    empty = {"present": False, "as_of": as_of(date), "扫描数": len(scoped), "入选数": 0,
-             "rows": [], "picks": [], "embargo": False, "candidates": []}
-    if not scoped:
-        return empty
-
-    try:
-        out = _reg.run("策略D_自选池小市值组合", scoped, top_k=top_k)
-    except Exception:                                    # noqa: BLE001
-        return empty
-
-    rows = []
-    for code in out.get("codes", []):
-        r = scoped.get(code) or {}
-        val = r.get("valuation") or {}
-        snap = r.get("snapshot") or {}
-        rows.append({
-            "code": code, "name": _name(recs, code),
-            "industry": _industry(recs, code),
-            "mktcap_yi": val.get("mktcap_yi"),
-            "close": snap.get("close"), "pct_chg": snap.get("pct_chg"),
-        })
-    return {
-        "present": True, "as_of": as_of(date),
-        "扫描数": len(scoped), "入选数": len(rows),
-        "top_k": out.get("top_k", top_k),
-        "月度池": out.get("monthly_pool_size"),
-        "候选池": out.get("candidates", []),
-        "embargo": out.get("embargo", False),
-        "rows": rows,
-        "picks": list(out.get("codes") or []),
-    }
+# 策略5「自选池小市值组合」区块(_strategy5_section)已于 2026-09-01 下线:
+# 从未前瞻回测 / 未证明有效 / 无明确用途(见 docs/日志/开发日志.md、docs/策略/策略总览_定义计算与回测.md)。
+# 算子 tools.strategy.small_cap(策略C/D)存档保留、仍在 registry 注册、单测 test_strategy_small_cap 照常绿;
+# 仅从选股页与综合选股并集摘除。如需恢复:恢复本区块 + selection_page 里的 strategy5 装配 + 模板区块。
 
 
 def _combined_section(strategy0: dict, strategy2: dict,
-                      strategy4: dict, strategy5: dict,
+                      strategy4: dict,
                       strategy6: dict, recs: dict, *,
                       strategy_mr: dict | None = None,
                       strategy_vol: dict | None = None,
@@ -1077,15 +1036,15 @@ def _combined_section(strategy0: dict, strategy2: dict,
     (一个都没勾 → 前端显示"无")。默认全勾(展示全并集)。
     name 走 code_name 回退;行业优先中心记录 meta,再回退策略0 view 自带行业。
 
-    ⚠️ 策略1·趋势深跌反包(S01)与 策略3·箱体形态(箱体3)已因显著负下线,不再进并集;
-       key「策略X」保持原编号以兼容 sources 已落库口径,编号 1/3 空缺属预期。
+    ⚠️ 策略1·趋势深跌反包(S01)、策略3·箱体形态(箱体3)已因显著负下线,
+       策略5·自选池小市值 已于 2026-09-01 下线(未验证/无用途),均不再进并集;
+       key「策略X」保持原编号以兼容 sources 已落库口径,编号 1/3/5 空缺属预期。
     各在产策略入选代码均来自各自全A screener 预落盘 view(与页面各区块展示口径一致,已截到 cap);
-    策略5 = 自选池小市值(web 实时跑) · 策略6 = 半导体多因子(优先读 view「半导体多因子」,缺则实时兜底)。
+    策略6 = 半导体多因子(优先读 view「半导体多因子」,缺则实时兜底)。
     """
     s0_codes = [r["code"] for r in strategy0.get("rows", []) if r.get("code")]
     s2_codes = list(strategy2.get("picks") or [])
     s4_codes = list((strategy4 or {}).get("picks") or [])
-    s5_codes = list((strategy5 or {}).get("picks") or [])
     s6_codes = list((strategy6 or {}).get("picks") or [])
     s7_codes = list((strategy_mr or {}).get("picks") or [])     # S03 最大范围
     s8_codes = list((strategy_vol or {}).get("picks") or [])    # S04 量价放量
@@ -1098,7 +1057,7 @@ def _combined_section(strategy0: dict, strategy2: dict,
     sources: dict[str, list[str]] = {}
     order: list[str] = []
     for key, codes in (("策略0", s0_codes), ("策略2", s2_codes),
-                       ("策略4", s4_codes), ("策略5", s5_codes),
+                       ("策略4", s4_codes),
                        ("策略6", s6_codes), ("策略7", s7_codes), ("策略8", s8_codes),
                        ("策略9", s9_codes), ("策略10", s10_codes), ("策略11", s11_codes)):
         for c in codes:
@@ -1132,11 +1091,6 @@ def _combined_section(strategy0: dict, strategy2: dict,
          "title": "移植自聚宽社区双策略:加权对数动量打分 + 拉普拉斯闸门(策略A提炼);"
                   "质地过滤 + BBI 站上 + 24 日动量排序(策略B红利腿提炼)。"
                   "全 A 筛选,读预落盘 view。"},
-        {"key": "策略5", "label": "自选池小市值", "codes": s5_codes,
-         "available": bool((strategy5 or {}).get("present")),
-         "title": "移植自聚宽「价值选股与RSRS择时」:自选池内按市值升序,"
-                  "剔除触涨跌停/停牌;空仓月(12-22~1-28、3-20~4-28)仅标记不代买 ETF。"
-                  "web 层实时跑,不读预落盘 view。"},
         {"key": "策略6", "label": "半导体多因子", "codes": s6_codes,
          "available": bool((strategy6 or {}).get("present")),
          "title": "移植自聚宽「半导体板块多因子策略」:限申万二级 801081 半导体池 178 只 + "
