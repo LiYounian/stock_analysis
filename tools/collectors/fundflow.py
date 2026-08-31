@@ -68,8 +68,13 @@ def _parse(js: dict) -> pd.DataFrame:
 
 
 def fetch_one(code: str, days: int | None = None) -> pd.DataFrame:
-    """拉单票资金流(不落盘)。空数据抛错,不返回空 df 伪装成功。"""
-    df = _parse(_http_get(_secid(code)))
+    """拉单票资金流(不落盘)。空数据抛错,不返回空 df 伪装成功。
+
+    东财 push2his 对 IP 有连接层限流,单次偶发 curl(56)/RemoteDisconnected → 走 retry_call
+    对**瞬时网络错误**指数退避重试(默认 3 次);空数据(ValueError)不重试、原样抛。
+    """
+    from tools.collectors._retry import retry_call
+    df = _parse(retry_call(_http_get, _secid(code), label=f"资金流{code}"))
     if df.empty:
         raise ValueError(f"{code} 资金流为空(接口异常/代码错)")
     return df.tail(days).reset_index(drop=True) if days else df

@@ -28,6 +28,16 @@ def _em_df():
     })
 
 
+def _bs_df():
+    """baostock 风格(英文列,含 amount/pct_chg,无 turnover)。"""
+    return pd.DataFrame({
+        "date": ["2024-01-03", "2024-01-01", "2024-01-02"],   # 乱序,验证归一化排序
+        "open": [10.0, 9.9, 10.1], "high": [10.5, 10.0, 10.3],
+        "low": [9.8, 9.7, 9.9], "close": [10.2, 9.95, 10.0],
+        "volume": [100, 90, 110], "amount": [1000, 900, 1100], "pct_chg": [0.5, 0.5, 0.5],
+    })
+
+
 def test_index_prefix():
     assert index.index_prefix("000300") == "sh000300"
     assert index.index_prefix("399006") == "sz399006"
@@ -36,21 +46,23 @@ def test_index_prefix():
 
 
 def test_fetch_index_alias_and_roundtrip(monkeypatch, tmp_path):
+    """主源 baostock 命中 → 别名转码、排序归一、落盘读回一致。"""
     monkeypatch.setattr(store, "_RAW_DIR", tmp_path)
-    monkeypatch.setitem(index._FETCHERS, "sina", lambda *a, **k: _sina_df())
+    monkeypatch.setitem(index._FETCHERS, "baostock", lambda *a, **k: _bs_df())
     out = index.fetch_index(["沪深300"], start="20240101", end="20240103")
     assert "000300" in out                                   # 别名已转 6 位代码
     df = index.load_index("沪深300")                          # 读回也支持别名
     assert list(df["date"].dt.strftime("%Y-%m-%d")) == ["2024-01-01", "2024-01-02", "2024-01-03"]
-    assert store.get_raw_meta("index_kline", "000300")["source"] == "sina"
+    assert store.get_raw_meta("index_kline", "000300")["source"] == "baostock"
 
 
 def test_fetch_index_fallback_to_eastmoney(monkeypatch, tmp_path):
+    """baostock 失败 → 回退东财(顺序 baostock→eastmoney→sina)。"""
     monkeypatch.setattr(store, "_RAW_DIR", tmp_path)
 
     def boom(*a, **k):
-        raise ConnectionError("sina down")
-    monkeypatch.setitem(index._FETCHERS, "sina", boom)
+        raise ConnectionError("baostock down")
+    monkeypatch.setitem(index._FETCHERS, "baostock", boom)
     monkeypatch.setitem(index._FETCHERS, "eastmoney", lambda *a, **k: _em_df())
     out = index.fetch_index(["000905"], start="20240101", end="20240102")
     assert "000905" in out
@@ -62,7 +74,8 @@ def test_fetch_index_all_sources_fail_skips(monkeypatch, tmp_path):
 
     def boom(*a, **k):
         raise ConnectionError("down")
-    monkeypatch.setitem(index._FETCHERS, "sina", boom)
+    monkeypatch.setitem(index._FETCHERS, "baostock", boom)
     monkeypatch.setitem(index._FETCHERS, "eastmoney", boom)
+    monkeypatch.setitem(index._FETCHERS, "sina", boom)
     out = index.fetch_index(["000300"], start="20240101", end="20240102")
     assert out == {}                                         # 全失败→跳过,不伪造成功
