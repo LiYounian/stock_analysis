@@ -108,3 +108,87 @@ def test_liquidity_breaks_same_state_tie():
 def test_registered_in_registry():
     from tools.strategy import registry
     assert "指标条件化状态排序" in registry.list_strategies("选股")
+
+
+# ————————————————————————— 「破下轨接飞刀」市场广度门 —————————————————————————
+# 锁语义:平静日(市场破下轨广度低=个股孤立破位=真接飞刀)对破位候选降权 + 标风险,避免"抄在半山腰";
+# 恐慌日(广度高=全市场超卖,反弹是真 edge)不动;breadth=None → 门关、与旧版逐字等价(向后兼容,无未来函数纯变换)。
+
+def _rec_boll(code, name, boll, **horizons):
+    """带 snapshot.布林位置 的合成 record(接飞刀门读此字段)。"""
+    return {"meta": {"code": code, "name": name},
+            "snapshot": {"amount_wan": 100.0, "布林位置": boll},
+            "prediction": {"指标条件化预测": horizons}}
+
+
+def test_knife_gate_demotes_break_low_on_calm_day():
+    """平静日(广度 0.01 < 门槛 0.02):破下轨高概率票被降权(54−20=34)压到非超卖低概率票(50)之下,并标接飞刀风险。"""
+    recs = {
+        "A": _rec_boll("A", "破位票", "破下轨", **{"1日": _h(54.0)}),   # 超卖破位,平静日=接飞刀
+        "B": _rec_boll("B", "中性票", "中性", **{"1日": _h(50.0)}),     # 非超卖,不降权
+    }
+    out = cr.conditional_rank_screen(recs, horizons=["1日"], breadth=0.01,
+                                     knife_breadth=0.02, knife_demote=20.0)
+    rows = out["排行"]["1日"]
+    assert _codes(rows) == ["B", "A"]                    # A 被降权压到 B 之下(否则 54>50 应 A 在前)
+    flag = {r["code"]: r["接飞刀风险"] for r in rows}
+    assert flag["A"] is True and flag["B"] is False      # 只有破位票被标接飞刀
+    assert out["市场广度"]["接飞刀门生效"] is True
+    # 展示"上涨概率%"不被降权改写(降权只作用于排序键)
+    a = next(r for r in rows if r["code"] == "A")
+    assert a["上涨概率%"] == 54.0
+
+
+def test_knife_gate_inactive_on_high_breadth():
+    """恐慌日(广度 0.10 ≥ 门槛):破下轨=全市场超卖,反弹是真 edge → 不降权、不标风险,按概率正常排(A 在前)。"""
+    recs = {
+        "A": _rec_boll("A", "破位票", "破下轨", **{"1日": _h(54.0)}),
+        "B": _rec_boll("B", "中性票", "中性", **{"1日": _h(50.0)}),
+    }
+    out = cr.conditional_rank_screen(recs, horizons=["1日"], breadth=0.10,
+                                     knife_breadth=0.02, knife_demote=20.0)
+    rows = out["排行"]["1日"]
+    assert _codes(rows) == ["A", "B"]                    # 54 > 50,破位票保持榜首
+    assert all(r["接飞刀风险"] is False for r in rows)
+    assert out["市场广度"]["接飞刀门生效"] is False
+
+
+def test_knife_gate_off_when_breadth_none_backward_compat():
+    """breadth=None(单测/降级)→ 门整体关闭,排序与旧版逐字一致、无票被标接飞刀(向后兼容红线)。"""
+    recs = {
+        "A": _rec_boll("A", "破位票", "破下轨", **{"1日": _h(54.0)}),
+        "B": _rec_boll("B", "中性票", "中性", **{"1日": _h(50.0)}),
+    }
+    out = cr.conditional_rank_screen(recs, horizons=["1日"], breadth=None)
+    rows = out["排行"]["1日"]
+    assert _codes(rows) == ["A", "B"]                    # 无降权,54 > 50
+    assert all(r["接飞刀风险"] is False for r in rows)
+    assert out["市场广度"]["破下轨占比"] is None
+
+
+def test_knife_gate_only_flags_break_low_boll():
+    """平静日只降权/标"破位档(破下轨)";触下轨/中性等非破位票即使概率更低也不被门碰(门只治破位接飞刀)。"""
+    recs = {
+        "A": _rec_boll("A", "破位票", "破下轨", **{"1日": _h(55.0)}),
+        "B": _rec_boll("B", "触下轨", "触下轨", **{"1日": _h(52.0)}),
+    }
+    out = cr.conditional_rank_screen(recs, horizons=["1日"], breadth=0.005,
+                                     knife_breadth=0.02, knife_demote=20.0,
+                                     knife_boll=["破下轨"])
+    rows = out["排行"]["1日"]
+    flag = {r["code"]: r["接飞刀风险"] for r in rows}
+    assert flag["A"] is True and flag["B"] is False      # 触下轨不算破位接飞刀
+    assert _codes(rows) == ["B", "A"]                    # A 55−20=35 < B 52
+
+
+def test_knife_gate_disabled_by_switch():
+    """knife_on=False → 即便平静日 + 破位票也不降权、不标风险(总开关关停)。"""
+    recs = {
+        "A": _rec_boll("A", "破位票", "破下轨", **{"1日": _h(54.0)}),
+        "B": _rec_boll("B", "中性票", "中性", **{"1日": _h(50.0)}),
+    }
+    out = cr.conditional_rank_screen(recs, horizons=["1日"], breadth=0.001,
+                                     knife_on=False)
+    rows = out["排行"]["1日"]
+    assert _codes(rows) == ["A", "B"]
+    assert all(r["接飞刀风险"] is False for r in rows)
