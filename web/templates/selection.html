@@ -190,38 +190,8 @@
   {% endif %}
 </section>
 
-<!-- 策略5:自选池小市值(web 层实时跑,不读 view) -->
-<section class="card wide">
-  <h2>策略5 · 自选池小市值
-    {% if s.strategy5.present %}
-    <small>扫描 <b>{{ s.strategy5.扫描数 }}</b> ·
-      入选 <b class="pos">{{ s.strategy5.入选数 }}</b> · top_k=<b>{{ s.strategy5.top_k }}</b>
-      {% if s.strategy5.embargo %} · <span class="badge wait" title="空仓月(12-22~1-28、3-20~4-28):原脚本此段空仓切黄金 ETF,本项目仅标记不代买">空仓月标记</span>{% endif %}
-      · 数据日期 <b>{{ s.strategy5.as_of }}</b></small>
-    {% endif %}</h2>
-  <p class="muted tiny">移植自聚宽「价值选股与RSRS择时」:自选池内按 <b>市值升序</b> 取 top_k;
-    剔除 触涨跌停(|涨幅|≥9.7%)/ 停牌(snapshot 缺失);空仓月只标记不代买 ETF(仓位管理不在分析层做)。</p>
-  {% if not s.strategy5.present or not s.strategy5.rows %}
-  <p class="muted">本日策略5 无入选标的(自选池 records 为空或全部缺 valuation.mktcap_yi)。</p>
-  {% else %}
-  <table>
-    <thead><tr><th>代码</th><th>名称</th><th>行业</th><th>市值(亿)</th><th>收盘</th><th>当日涨幅</th></tr></thead>
-    <tbody>
-    {% for x in s.strategy5.rows %}
-      <tr data-code="{{ x.code }}">
-        <td>{{ x.code }}</td>
-        <td><a href="/stock/{{ x.code }}?date={{ s.as_of }}">{{ x.name }}</a>{{ risk_badge(x) }}</td>
-        <td class="muted">{{ x.industry or '-' }}</td>
-        <td>{{ x.mktcap_yi if x.mktcap_yi is not none else '—' }}</td>
-        <td>{{ x.close if x.close is not none else '—' }}</td>
-        <td class="{{ 'pos' if (x.pct_chg or 0) > 0 else ('neg' if (x.pct_chg or 0) < 0 else '') }}">
-          {% if x.pct_chg is not none %}{{ '%+.2f'|format(x.pct_chg) }}%{% else %}—{% endif %}</td>
-      </tr>
-    {% endfor %}
-    </tbody>
-  </table>
-  {% endif %}
-</section>
+<!-- 策略5 · 自选池小市值(策略D)已于 2026-09-01 下线:从未前瞻回测/未证明有效/无明确用途。
+     算子 tools/strategy/small_cap.py 存档保留、可恢复(见 docs/日志/开发日志.md)。 -->
 
 <!-- 策略6:半导体多因子(限申万二级 801081 半导体池,web 层实时跑) -->
 <section class="card wide">
