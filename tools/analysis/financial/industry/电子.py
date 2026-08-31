@@ -50,7 +50,47 @@ def weights() -> dict | None:
 
 # 本行业不适用的通用红旗:电子(制造业)不做金融业那种大规模跳过——
 # 高负债/存货对制造业适用,应收存货激增亦保留(方案 §③:电子加权关注)。故为空。
+# 注:半导体设计(fabless)成长期公司的豁免走**动态**钩子 dynamic_skip(按当期指标条件豁免),
+#     不进这个**静态**清单——避免对成熟/亏损的普通电子制造票一律放行。
 SKIP_FLAGS: list[str] = []
+
+
+# ── 成长期未盈利半导体(fabless/科创)豁免阈值 ────────────────────────────
+# 依据(2026-08 调研,见 docs/财报分析专家/半导体_成长期财报分析要点.md):
+#   · fabless/IC 设计研发强度典型 10%–25%,>8% 才算充足,高研发是竞争力而非红旗
+#     (Investing.com「How to Analyze Semiconductor Stocks」;EET-China 2026 China Fabless 100)。
+#   · 科创板第五套上市标准对营收/CFO/净利均不设门槛,专为「高研发、长期亏损但技术领先」硬科技设计;
+#     54 家未盈利企业营收复合增速 26%、合计减亏——当期扣非为负是成长期常态,不应封顶评分
+#     (新浪财经/证券日报/stcn 摘U观察;寒武纪 688256 累亏>50亿仍获认可为样板)。
+#   · 弱/负 CFO 是「以现金换增长」的正常形态,评估重点从 CFO 转向 cash runway
+#     (CFI「Cash Runway」;Simply Wall St 案例 runway>3–5 年即安心)。
+# 画像判定要**三条同时满足**(高研发 + 高增 + 当期未盈利),以严格圈定 fabless 成长期,
+# 避免误伤高研发但衰退、或低研发的普通电子制造亏损票。
+_成长半导体_研发费用率下限 = 15.0    # 研发费用率 ≥ 此 → 高研发(fabless/设计画像;>8% 才算充足,取更严的 15%)
+_成长半导体_营收增速下限 = 20.0      # 且 营收增速 ≥ 此 → 高增(在放量,非周期衰退)
+_成长半导体_runway承压月数 = 12.0    # runway < 此(<1 年)→ 即便成长期也算现金承压,提示风险(调研安全线 3–5 年)
+# 满足成长期未盈利半导体画像时,豁免的**通用**红旗(这些对该画像是行业常态/成长期特征,
+# 不该一票封顶或直接扣分;豁免后由下方专属「成长期未盈利」提示 + runway 承压红旗承接,保留透明度)。
+_成长半导体豁免红旗 = ["扣非为负", "现金含量不足"]
+
+
+def _is_growth_semi(derived: dict, structured: dict) -> bool:
+    """是否「成长期未盈利半导体(fabless/科创)」画像:高研发 + 高增 + 当期扣非为负,三条同时成立。
+
+    一切缺值 → False(不豁免,退回通用判定;宁可不豁免也不误放行)。"""
+    derived = derived or {}
+    研发费用率 = derived.get("研发费用率")
+    营收增速 = derived.get("营收增速")
+    扣非 = _num(structured or {}, "利润表", "扣非归母净利润")
+    return (研发费用率 is not None and 研发费用率 >= _成长半导体_研发费用率下限
+            and 营收增速 is not None and 营收增速 >= _成长半导体_营收增速下限
+            and 扣非 is not None and 扣非 < 0)
+
+
+def dynamic_skip(derived: dict, structured: dict) -> list[str]:
+    """动态跳过的通用红旗(analyzer 每报告期调用)。仅对「成长期未盈利半导体」画像豁免
+    扣非为负/现金含量不足(否则一律不豁免,普通电子票行为不变)。缺值/非该画像 → []。"""
+    return list(_成长半导体豁免红旗) if _is_growth_semi(derived, structured) else []
 
 
 # ── 专属红旗阈值 ──────────────────────────────────────────────────────
@@ -90,6 +130,33 @@ def extra_flags(derived: dict, structured: dict) -> list[dict]:
     存货增速 = derived.get("存货增速")
     毛利率同比升 = derived.get("毛利率同比升")   # analyzer 注入(可选);缺失 → 相关联动不加重
     研发费用率 = derived.get("研发费用率")
+
+    # 0) 成长期未盈利半导体(fabless/科创)专属承接:当画像成立(dynamic_skip 已豁免扣非为负/现金含量不足),
+    #    在此补两条专属信号以保留透明度——
+    #    (a)「成长期未盈利(研发驱动)」提示(严重度=提示,0 扣分):如实标注公司当期未盈利但属高研发+高增
+    #        成长期,评估锚定营收增速/研发强度/runway 而非当期利润(调研 §一/§三)。
+    #    (b) runway 承压(严重度=中):现金 runway < 12 个月时,即便成长期也是真实现金风险,须提示。
+    if _is_growth_semi(derived, structured):
+        扣非 = _num(structured, "利润表", "扣非归母净利润")
+        runway = derived.get("现金runway月数")
+        flags.append({
+            "code": "成长期未盈利_研发驱动",
+            "命中": True,
+            "严重度": "提示",
+            "值": {"研发费用率": (round(研发费用率, 4) if 研发费用率 is not None else None),
+                  "营收增速": 营收增速, "扣非归母净利润": 扣非,
+                  "现金runway月数": (round(runway, 1) if runway is not None else None),
+                  "说明": "高研发+高增+当期未盈利的成长期半导体:已豁免扣非为负/现金含量不足通用高危;"
+                          "评估锚定营收增速/研发强度/runway/减亏趋势,而非当期利润(见调研要点)"},
+        })
+        if runway is not None and runway < _成长半导体_runway承压月数:
+            flags.append({
+                "code": "现金runway承压",
+                "命中": True,
+                "严重度": "中",
+                "值": {"现金runway月数": round(runway, 1), "承压下限月": _成长半导体_runway承压月数,
+                      "说明": "经营烧钱且现金储备 < 1 年,成长期亦需警惕再融资/流动性风险"},
+            })
 
     # 1) 存货高企:存货增速远超营收(周期先行信号,易减值)。若叠加毛利率同比下滑 → 升级为「高」。
     if 营收增速 is not None and 存货增速 is not None and (存货增速 - 营收增速) > _存货增速超营收_pct:

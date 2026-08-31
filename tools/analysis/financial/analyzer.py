@@ -67,11 +67,35 @@ def _is_financial(code: str, industry: str | None = None) -> bool:
     return sw in fin_set
 
 
+_SEMI_UNIVERSE_CACHE: set[str] | None = None
+
+
+def _in_semi_universe(code: str) -> bool:
+    """该票是否在申万二级 801081 半导体池(config/semi_universe.json,178 只)。
+
+    背景:仓库 board_membership(个股→板块)成分数据在本机所有 akshare 接口下均不可用,
+    故 board.board_of(code) 对半导体票恒 None,证监会门类又把 fabless 芯片设计公司误判成
+    「计算机/软件」(C39/I64)。半导体行业归属**以申万二级 801081 成分为准**(见
+    collectors/semi_universe.py),命中即可靠地对齐到申万一级「电子」,不依赖缺失的 board 数据。
+    文件缺失/读取失败 → False(不误路由)。结果缓存,避免逐票读盘。
+    """
+    global _SEMI_UNIVERSE_CACHE
+    if _SEMI_UNIVERSE_CACHE is None:
+        try:
+            from tools.collectors import semi_universe
+            _SEMI_UNIVERSE_CACHE = set(semi_universe.load())
+        except Exception:                                   # noqa: BLE001
+            _SEMI_UNIVERSE_CACHE = set()
+    return code in _SEMI_UNIVERSE_CACHE
+
+
 def _industry_key(code: str, industry: str | None = None) -> str | None:
     """解析该票申万一级行业名(行业财报专家路由用)。
 
     优先用传入 industry(record.meta.industry),否则回退 board.board_of(code)(证监会门类),
-    统一经 industry_map 对齐到申万一级。任一步失败 → None(退回通用兜底,不误路由)。
+    统一经 industry_map 对齐到申万一级。两者皆缺时,再以申万二级 801081 半导体池成分兜底
+    →「电子」(修 board_membership 数据缺导致 fabless 半导体从不命中电子专家的路由 bug)。
+    全部失败 → None(退回通用兜底,不误路由)。
     """
     from tools.analysis import industry_map
     sw = industry_map.to_sw(industry) if industry else None
@@ -81,6 +105,8 @@ def _industry_key(code: str, industry: str | None = None) -> str | None:
             sw = industry_map.to_sw(board.board_of(code) or "")
         except Exception:                                   # noqa: BLE001
             sw = None
+    if sw is None and _in_semi_universe(code):              # 半导体池成分兜底 → 电子(申万 801081→电子)
+        sw = "电子"
     return sw
 
 
@@ -217,8 +243,16 @@ def analyze(code: str, as_of: str | None = None, persist: bool = True,
         derived = derived_all.get(p, {})
         struct = _struct_summary(rec)
         exp_extra = exp.extra_flags(derived, rec) if exp else None
+        # 行业专家「动态跳过」(可选钩子):按当期指标条件豁免通用红旗(如成长期未盈利半导体
+        # 豁免"扣非为负/现金含量不足"高危封顶)。与静态 SKIP_FLAGS 并集;缺钩子 → 只用静态。
+        skip_p = list(exp_skip) if exp_skip else []
+        if exp and hasattr(exp, "dynamic_skip"):
+            try:
+                skip_p += list(exp.dynamic_skip(derived, rec) or [])
+            except Exception:                               # noqa: BLE001
+                pass
         flags = flags_mod.evaluate_flags(derived, rec, is_financial=is_fin,
-                                         skip=exp_skip, extra=exp_extra)
+                                         skip=(skip_p or None), extra=exp_extra)
         score = scoring_mod.quality_score(derived, flags, specs=exp_specs, weights=exp_weights)
         out_periods[p] = {
             "report_date": rec.get("report_date", p),

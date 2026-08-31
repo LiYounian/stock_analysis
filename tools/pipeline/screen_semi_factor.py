@@ -69,8 +69,10 @@ def _build_record(code: str, as_of: str, fetch: bool) -> dict | None:
     mktcap_yi = float(fund["总市值"])
 
     # 2) financial 块(derived + 利润表摘要)
+    # 本 screener 只扫申万二级 801081 半导体池,故显式传 industry="电子"(申万 801081→电子),
+    # 让财报评分命中电子/半导体专家(成长期未盈利豁免等),不依赖缺失的 board_membership 数据。
     try:
-        fin_block = fr_analyzer.build_financial_block(code, as_of=as_of)
+        fin_block = fr_analyzer.build_financial_block(code, as_of=as_of, industry="电子")
     except Exception:                                    # noqa: BLE001
         fin_block = None
     if not fin_block:
