@@ -103,7 +103,9 @@ def load_earnings(period: str, kind: str = "yjyg") -> pd.DataFrame:
 def fetch_insider_trades(tag: str = "latest") -> pd.DataFrame:
     """拉高管/股东增减持(stock_ggcg_em)并落盘。失败返回空 df。
 
-    Returns 规整 df[code, 方向(增持/减持), 变动股数, 日期];列名模糊匹配 + 降级。
+    Returns 规整 df[code, 方向(增持/减持), 变动股数, 方式, 日期];列名模糊匹配 + 降级。
+    「方式」= 变动途径(如"协议转让"/"集中竞价"/"大宗交易"),供减持性质区分(协议转让给
+    产业方 ≠ 二级市场抛售);源列缺失时为空,不影响其它字段。
     """
     ak = _akshare()
     if ak is None:
@@ -119,6 +121,7 @@ def fetch_insider_trades(tag: str = "latest") -> pd.DataFrame:
     code_col = _find_col(raw, "代码")
     dir_col = _find_col(raw, "变动方向", "增减")
     qty_col = _find_col(raw, "变动数量", "变动股数", "数量")
+    method_col = _find_col(raw, "变动方式", "变动途径", "减持方式", "方式")
     date_col = _find_col(raw, "变动日期", "日期", "公告日")
     rows = []
     for _, r in raw.iterrows():
@@ -133,7 +136,11 @@ def fetch_insider_trades(tag: str = "latest") -> pd.DataFrame:
                 qty = float(r.get(qty_col))
             except (TypeError, ValueError):
                 qty = None
-        rows.append({"code": code, "方向": 方向, "变动股数": qty,
+        method = None
+        if method_col is not None:
+            mv = r.get(method_col)
+            method = str(mv) if mv is not None and str(mv).strip() not in ("", "nan", "None") else None
+        rows.append({"code": code, "方向": 方向, "变动股数": qty, "方式": method,
                      "日期": str(r.get(date_col)) if date_col else None})
     df = pd.DataFrame(rows)
     if not df.empty:

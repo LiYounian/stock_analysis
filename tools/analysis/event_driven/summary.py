@@ -46,8 +46,25 @@ def _quarter_ends_before(as_of: pd.Timestamp, back_days: int) -> list[str]:
     return ends
 
 
-def _load_precise(code: str, as_of: pd.Timestamp) -> list[dict]:
-    """从采集缓存取该票近期精数值事件 → 打分事件列表。无缓存/降级 → []。"""
+def _strategic_hint(announcements) -> str:
+    """把该票近期公告(类型/标题/摘要)拼成文本,供减持性质区分用(协议转让/战略引资识别)。
+
+    只用传入的已按 as_of 过滤的 record['events'],不触网、不引入未来函数。
+    """
+    if not announcements:
+        return ""
+    parts = []
+    for a in announcements:
+        parts.append(f"{a.get('type') or ''}{a.get('title') or ''}{a.get('summary') or ''}")
+    return " ".join(parts)
+
+
+def _load_precise(code: str, as_of: pd.Timestamp, ann_text: str = "") -> list[dict]:
+    """从采集缓存取该票近期精数值事件 → 打分事件列表。无缓存/降级 → []。
+
+    ann_text: 该票近期公告文本(标题/摘要),用于给减持做性质区分——采集的增减持缓存
+    未必带"变动方式/受让方"字段时,退而用公告文本辨"协议转让给产业方 vs 二级抛售"。
+    """
     from tools.collectors import event_driven as col
     events: list[dict] = []
     try:
@@ -71,9 +88,13 @@ def _load_precise(code: str, as_of: pd.Timestamp) -> list[dict]:
             for _, r in hit.iterrows():
                 atype = r.get("方向")
                 if atype in ("增持", "减持"):
-                    v = judge.judge_corporate_action(atype, None)
+                    method = r.get("方式") if "方式" in df.columns else None
+                    v = judge.judge_corporate_action(atype, None, method=method, text=ann_text)
+                    # 战略引资/协议转让待定 = 识别不清或偏正,非显著看空 → 降数据充分度(低置信)
+                    显著 = (not v["象征性"]) and v.get("类别") not in ("战略引资", "协议转让待定")
                     events.append({"来源": "ggcg", "方向": v["方向"], "强度": v["强度"],
-                                   "达显著线": not v["象征性"], "依据": v["依据"], "类别": "公司行为"})
+                                   "达显著线": 显著, "依据": v["依据"], "类别": "公司行为",
+                                   "性质": v.get("类别")})
     except Exception as e:                       # noqa: BLE001
         logger.debug("精数值增减持加载降级: %s", e)
     return events
@@ -101,16 +122,31 @@ def _coarse_from_announcements(announcements, as_of: pd.Timestamp) -> list[dict]
             dd = 0
         if not _within(dd, window):
             continue
-        # 方向:impact 优先,其次关键字
-        impact = a.get("impact")
-        if impact == "利好" or any(k in (atype + title) for k in good):
-            方向, s = "看多", 0.4
-        elif impact == "利空" or any(k in (atype + title) for k in bad):
-            方向, s = "看空", -0.4
+        summary_txt = a.get("summary") or ""
+        blob = atype + title + summary_txt
+        性质 = None
+        # 公司行为·减持:先判性质——协议转让给产业方/战投 ≠ 二级市场抛售套现,不一律看空
+        if is_act and atype == "减持":
+            cls = judge.classify_share_change("减持", text=blob)
+            性质 = cls["类别"]
+            if 性质 == "战略引资":                       # 引资背书 → 轻度偏正
+                方向, s = "看多", _C.get("战略引资强度", 0.15)
+            elif 性质 == "协议转让待定":                 # 识别不清 → 中性(而非默认看空)
+                方向, s = "中性", 0.0
+            else:                                        # 二级减持/普通减持 → 看空
+                方向, s = "看空", -0.4
         else:
-            方向, s = "中性", 0.0
+            # 方向:impact 优先,其次关键字(业绩类 / 增持回购)
+            impact = a.get("impact")
+            if impact == "利好" or any(k in blob for k in good):
+                方向, s = "看多", 0.4
+            elif impact == "利空" or any(k in blob for k in bad):
+                方向, s = "看空", -0.4
+            else:
+                方向, s = "中性", 0.0
         events.append({"来源": "公告", "方向": 方向, "强度": s, "达显著线": False,
-                       "依据": f"{atype}·{title[:16]}", "类别": "业绩" if is_earn else "公司行为"})
+                       "依据": f"{atype}·{title[:16]}", "类别": "业绩" if is_earn else "公司行为",
+                       "性质": 性质})
     return events
 
 
@@ -125,7 +161,8 @@ def summarize(code: str, as_of, announcements=None) -> dict | None:
     except Exception:                            # noqa: BLE001
         return None
 
-    precise = _load_precise(code, t)
+    ann_text = _strategic_hint(announcements)
+    precise = _load_precise(code, t, ann_text)
     used_precise = bool(precise)
     events = precise if used_precise else _coarse_from_announcements(announcements, t)
     if not events:
