@@ -96,11 +96,19 @@ def run_conditional_rank_screen(codes: list[str], as_of: str | None = None,
         amounts = kdf["amount"].tolist() if "amount" in kdf.columns else []
         valid_amt = [float(a) for a in amounts[-20:] if isinstance(a, (int, float)) and a == a]
         amount_wan = (sum(valid_amt) / len(valid_amt) / 1e4) if valid_amt else None
+        boll_pos = (tech.get("boll") or {}).get("位置")   # 当日 BOLL 位置(接飞刀广度门用;同日截面,无未来函数)
         records[str(code)] = {"meta": {"code": str(code)},
-                              "snapshot": {"amount_wan": amount_wan},   # 流动性:破同状态格并列的 per-stock 次级键
+                              # 流动性 amount_wan + 当日布林位置:破同状态格并列 + 接飞刀广度门的 per-stock 键
+                              "snapshot": {"amount_wan": amount_wan, "布林位置": boll_pos},
                               "prediction": {"指标条件化预测": block}}
 
-    out = conditional_rank_screen(records, top_k=top_k)
+    # 市场超卖广度 = 当日扫描有效票中"破下轨"占比(同日截面,无未来函数)。喂排序函数的接飞刀门:
+    # 广度低(平静日/个股孤立破位=真接飞刀)→ 破位候选降权+标风险;广度高(全市场恐慌)→ 不动(反弹是真 edge)。
+    n_break_low = sum(1 for r in records.values()
+                      if (r.get("snapshot") or {}).get("布林位置") == "破下轨")
+    breadth = (n_break_low / len(records)) if records else None
+
+    out = conditional_rank_screen(records, top_k=top_k, breadth=breadth)
 
     view = {
         "as_of": as_of,
@@ -108,6 +116,7 @@ def run_conditional_rank_screen(codes: list[str], as_of: str | None = None,
         "口径": out.get("口径"),
         "扫描数": len(codes),
         "有效样本": out.get("有效样本"),          # {horizon: 参与排序票数}
+        "市场广度": out.get("市场广度"),           # 破下轨占比 + 接飞刀门是否生效(平静日=接飞刀区)
         "预筛跳过": skip_pre,                      # 无K线/历史不足/条件化不可用
         "排行跳过": out.get("跳过"),               # {horizon:{退回/数据不足/...}}
         "排行": out.get("排行"),                   # {horizon:[{code,上涨概率%,方向,置信度,...}]}
