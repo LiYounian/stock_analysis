@@ -231,7 +231,133 @@ def _track(agg: dict, title: str, horizons, note: str = "") -> list[str]:
     return lines
 
 
-# ────────────────────── 差生名单 ──────────────────────
+# ────────────────────── 多维综合判定(不只看 alpha 一刀切) ──────────────────────
+# 判定阈值(命名常量:便于调参 + 测试锁语义)。判据默认取 5 日 horizon、全史窗为主。
+# 详见 docs/评测方法论_多维评估.md。
+SIG_P = 0.10        # 超额显著性阈值(与差生名单一致):p<SIG_P 才算"坐实"该方向的超额
+MIN_N = 30          # 样本充足下限:不足则只给"观察·样本不足",不下强/淘汰结论
+HIT_BAR = 50.0      # 命中率(期末)基线:≥则视作"能稳定选出方向对的票"(优于抛硬币)
+PF_BAR = 1.0        # 盈亏比下限:≥则"没有赢小亏大"
+
+VERDICT_STRONG = "强·alpha显著"
+VERDICT_KEEP = "可保留·配合择时"
+VERDICT_WATCH_THIN = "观察·样本不足"
+VERDICT_WATCH = "观察·证据不足"
+VERDICT_CUT_BETA = "淘汰·纯beta无绝对价值"
+VERDICT_CUT_NEG = "淘汰·显著负"
+VERDICT_REFERENCE = "参考·非alpha"
+
+# 档位展示排序(强→可保留→观察→参考→淘汰)。
+_VERDICT_ORDER = {
+    VERDICT_STRONG: 0, VERDICT_KEEP: 1, VERDICT_WATCH: 2, VERDICT_WATCH_THIN: 3,
+    VERDICT_REFERENCE: 4, VERDICT_CUT_BETA: 5, VERDICT_CUT_NEG: 6,
+}
+
+
+def verdict_from_metrics(ex, exp, hit, ret, pf, n) -> tuple[str, list[str]]:
+    """多维综合分档:alpha 防运气,但绝对收益/命中/盈亏比同权参与——**不再"超额不显著=直接否定"**。
+
+    入参(均可 None=该维缺测):ex=超额%_vs全市场, exp=超额聚类p, hit=命中率%期末,
+    ret=绝对收益均值%, pf=盈亏比(None=无输家,视作达标), n=已到期样本。
+    返回 (档位, 理由list)。判据按优先级(见 docs/评测方法论_多维评估.md 三):
+      · 样本 < MIN_N              → 观察·样本不足(证据不足,不下结论)
+      · 超额显著负(ex<0 & p<SIG_P) → 淘汰·显著负(坐实做反了)
+      · 超额显著正(ex>0 & p<SIG_P) → 强·alpha显著(有本事,普涨里也跑赢)
+      · 有绝对价值(ret>0 & pf达标)且命中率≥HIT_BAR
+                                   → 可保留·配合择时(能选涨票+真金白银赚,只是超额不突出)
+      · 无正超额(≤0/缺)且无绝对价值(ret≤0) → 淘汰·纯beta无绝对价值(纯跟大盘还不赚)
+      · 其余(信号互相矛盾)        → 观察·证据不足
+    """
+    if n is None or n < MIN_N:
+        return VERDICT_WATCH_THIN, [f"样本仅 {n},不足 {MIN_N},不下强/淘汰结论"]
+    sig = exp is not None and exp < SIG_P
+    # pf 为 None 表示"无输家"(极好)→ 视作达标;否则要求 ≥ PF_BAR。
+    pf_ok = pf is None or pf >= PF_BAR
+    has_abs = (ret is not None and ret > 0) and pf_ok
+    good_hit = hit is not None and hit >= HIT_BAR
+    if ex is not None and ex < 0 and sig:
+        return VERDICT_CUT_NEG, [f"超额 {ex}%<0 且聚类 p={exp}<{SIG_P},坐实显著负(做反了)"]
+    if ex is not None and ex > 0 and sig:
+        return VERDICT_STRONG, [f"超额 {ex}%>0 且聚类 p={exp}<{SIG_P},alpha 显著(防运气通过)"]
+    # 无显著正 alpha:核心修正——不再一票否决,改看绝对价值 + 命中。
+    if has_abs and good_hit:
+        r = [f"绝对收益 {ret}%>0、盈亏比 {pf}、命中率 {hit}%≥{HIT_BAR}:能选涨票且真金白银赚"]
+        r.append(f"超额{'' if ex is None else f' {ex}%'}不显著,定位配合择时/风控/仓位保留、非独立 alpha")
+        return VERDICT_KEEP, r
+    no_excess = ex is None or ex <= 0
+    if no_excess and not has_abs:
+        return VERDICT_CUT_BETA, [f"超额 {_fmt(ex)}无正、绝对收益 {_fmt(ret)}%不赚:纯跟大盘(beta)无绝对价值"]
+    return VERDICT_WATCH, ["信号互相矛盾/未达任一档(如超额正不显著但绝对收益弱),留观察补样本"]
+
+
+def multidim_verdict(replay_agg: dict, live_agg: dict, horizons=(1, 5)) -> list[dict]:
+    """对每策略给多维综合判定(替代"只看 alpha 一刀切")。
+
+    取样:优先 **replay 全史**(样本厚、有显著性);该策略不在回放轨(不可回放,如策略0/9)
+    → 退回 **live 全史**。判据 horizon 取 horizons 里的最大者(默认 5 日)。
+    参考·非alpha(策略11)不下强/淘汰,仅给『参考』档。可排序型附 Top5 超额作选择性佐证(不改档)。
+    """
+    h = max(horizons) if horizons else 5
+    rwin = replay_agg.get("窗口", {}).get("全史", {}).get("策略", {})
+    lwin = live_agg.get("窗口", {}).get("全史", {}).get("策略", {})
+    sids = list(rwin.keys()) + [s for s in lwin if s not in rwin]
+    out = []
+    for sid in sids:
+        track = "replay" if sid in rwin else "live"
+        e = rwin.get(sid) or lwin.get(sid) or {}
+        cell = e.get(f"{h}日", {}) or {}
+        rq = cell.get("收益质量", {}) or {}
+        ex = cell.get("超额收益%_vs全市场")
+        exp = cell.get("超额_聚类p值")
+        hit = cell.get("命中率%_期末")
+        ret = rq.get("均值%")
+        pf = rq.get("盈亏比")
+        n = cell.get("已到期样本", 0) or 0
+        stype = e.get("类型")
+        if stype == REFERENCE:
+            grade, reasons = VERDICT_REFERENCE, ["伪排序(离散状态格),不下 alpha 判定;见参考收益分布"]
+        else:
+            grade, reasons = verdict_from_metrics(ex, exp, hit, ret, pf, n)
+        sel = None
+        if stype == RANKABLE:
+            top5 = (cell.get("Top-N精度") or {}).get(5) or {}
+            sel = top5.get("超额%_vs全市场")
+            if sel is not None:
+                reasons.append(f"Top5 超额 {sel}%(排序选择性佐证)")
+        out.append({
+            "strategy_id": sid, "策略名": e.get("策略名", sid), "类型": stype, "轨": track,
+            "判据horizon": h, "档位": grade, "命中%": hit, "绝对收益%": ret, "盈亏比": pf,
+            "胜率%": rq.get("胜率%"), "超额%": ex, "超额p": exp, "Top5超额%": sel,
+            "样本": int(n), "理由": "；".join(reasons),
+        })
+    return sorted(out, key=lambda x: (_VERDICT_ORDER.get(x["档位"], 9), -x["样本"]))
+
+
+def _verdict_section(verdicts: list[dict], horizons) -> list[str]:
+    h = max(horizons) if horizons else 5
+    lines = [
+        "## 三、多维综合判定(不只看 alpha 一刀切)", "",
+        "> **方法论**:alpha/超额**有必要**——防普涨里把 beta 当本事(区分运气 vs 本事),但**不是唯一裁判**。"
+        "一个命中率高、能稳定选出上涨票、真金白银赚(绝对收益+盈亏比)的策略,即便超额不突出,配合择时/风控/仓位"
+        "在实盘仍有价值,不该被单一指标一票否决。详见 `docs/评测方法论_多维评估.md`。", "",
+        f"> **判据**:取 **{h}日 · 全史**为主(样本厚);不可回放策略退回 live 全史。**分档**:"
+        f"**强**=超额显著正(p<{SIG_P});**可保留·配合择时**=超额不突出但绝对收益>0+盈亏比≥{PF_BAR}+命中率≥{HIT_BAR}%;"
+        f"**淘汰·纯beta**=无正超额且不赚;**淘汰·显著负**=坐实做反;**观察**=样本<{MIN_N}或证据不足。"
+        "此表为**辅助共评视图**,非自动处置——删/降/留由共评拍板。", "",
+        "| 策略 | 轨 | 档位 | 命中%期末 | 绝对收益% | 盈亏比 | 超额% | 超额p | Top5超额% | 样本 | 理由 |",
+        "|---|---|---|---|---|---|---|---|---|---|---|",
+    ]
+    if not verdicts:
+        return lines[:2] + ["(无已到期样本,暂无综合判定。)", ""]
+    for v in verdicts:
+        lines.append(
+            f"| {v['strategy_id']} {v['策略名']} | {v['轨']} | **{v['档位']}** | "
+            f"{_fmt(v['命中%'])} | {_fmt(v['绝对收益%'])} | {_fmt(v['盈亏比'])} | "
+            f"{_fmt(v['超额%'])} | {_fmt(v['超额p'])} | {_fmt(v['Top5超额%'])} | {v['样本']} | {v['理由']} |")
+    return lines + [""]
+
+
+# ────────────────────── 差生名单(下行视图,多维判定的一个切面) ──────────────────────
 def flag_laggards(replay_agg: dict, live_agg: dict, horizons=(1, 5)) -> list[dict]:
     """T+1 口径下差生:回放全史 5日超额<0 且聚类 p<0.1(方向型),或 live 也弱作佐证。
 
@@ -261,8 +387,9 @@ def flag_laggards(replay_agg: dict, live_agg: dict, horizons=(1, 5)) -> list[dic
 
 
 def _laggard_section(lag: list[dict]) -> list[str]:
-    lines = ["## 三、差生名单(T+1 口径 · 以回放轨全史为主判据)", "",
-             "> 判据:回放全史 **5日超额<0** 且**按日聚类 p<0.1(显著负)**为坐实;仅超额<0 但不显著 → 提示不判死。"
+    lines = ["## 四、差生名单(下行视图 · 多维判定的显著负切面)", "",
+             "> 本节是**三、多维综合判定**的一个下行切面(只挑坐实做反的),不作独立结论。"
+             "判据:回放全史 **5日超额<0** 且**按日聚类 p<0.1(显著负)**为坐实;仅超额<0 但不显著 → 提示不判死。"
              "live 超额/命中作佐证(样本薄)。排序型见 rank-IC 表(IC≤0 即无 edge)。", ""]
     if not lag:
         return lines + ["回放轨暂无坐实差生。", ""]
@@ -277,7 +404,7 @@ def _laggard_section(lag: list[dict]) -> list[str]:
 
 # ────────────────────── 自审 + 顶层 ──────────────────────
 def _self_audit(replay_meta: dict, done: str, undone: str, assumptions: list[str]) -> list[str]:
-    lines = ["## 四、自审要点", "",
+    lines = ["## 五、自审要点", "",
              "- **① 防未来函数**:回放复用各策略 `signal_at(kdf,t)` 纯 as-of 筛选(只用 ≤t 数据,等价性由各 backtest_* 单测锁死);"
              "基准/bootstrap 与策略侧**同一 T+1 口径、同样只算已到期**,不用未来价选票。",
              "- **② 双基准,命中≠收益**:**命中/触及基准=close[T]**(期末=sign(close[T+h]/close[T]−1)==方向;期内触及=[T+1,T+h] 任意日越过 close[T]),"
@@ -292,7 +419,7 @@ def _self_audit(replay_meta: dict, done: str, undone: str, assumptions: list[str
              "- **⑥ 列名口径写死**:期末 vs 期内触及、触及=任意触及即算(宽松)、基准=同预测日 T+1 全市场等权、"
              "Top-N=按打分降序取前 N 只(vs 全量等权看选择性),均在列名说明写明。",
              f"- **回放元信息**:{replay_meta}", "",
-             "## 五、完成情况与假设", "",
+             "## 六、完成情况与假设", "",
              f"- **已完成维度**:{done}",
              f"- **未完成/降级**:{undone}"]
     for a in assumptions:
@@ -301,14 +428,19 @@ def _self_audit(replay_meta: dict, done: str, undone: str, assumptions: list[str
 
 
 def render(live_agg: dict, replay_agg: dict, replay_meta: dict, generated: str,
-           horizons=(1, 5), laggards=None, done="", undone="", assumptions=None) -> str:
+           horizons=(1, 5), laggards=None, verdicts=None, done="", undone="",
+           assumptions=None) -> str:
     lines = ["# 全策略成绩报告 v3(双轨 · 六维 · 双基准:命中=close[T] / 收益=T+1入场)", "",
-             f"> 生成于 {generated}。历史观测≠未来保证;命中率=**方向准确率**(非 alpha)。**非投资建议。**", ""]
+             f"> 生成于 {generated}。历史观测≠未来保证;命中率=**方向准确率**(非 alpha)。**非投资建议。**", "",
+             "> **判定原则(多维,不一刀切)**:alpha/超额防运气(区分本事 vs beta),但**非唯一裁判**——"
+             "命中率高、能选涨票、真金白银赚(绝对收益+盈亏比)的策略即便超额不突出,配合择时/风控/仓位仍有价值,"
+             "见 **三、多维综合判定** 与 `docs/评测方法论_多维评估.md`。", ""]
     lines += legend()
     lines += _track(live_agg, "一、live 观测轨(线上实际落盘 · 上线以来)", horizons,
                     "验线上系统跑对没;上线仅约 14 交易日,长窗一律数据不足,薄样本以 CI/p 判读。")
     lines += _track(replay_agg, "二、replay 回放回测轨(本地历史复现 · 长样本)", horizons,
                     "对确定性/纯技术策略复现历史预测,给真实统计力;不可回放策略不在此。")
+    lines += _verdict_section(verdicts or [], horizons)
     lines += _laggard_section(laggards or [])
     lines += _self_audit(replay_meta, done, undone, assumptions or [])
     return "\n".join(lines) + "\n"
