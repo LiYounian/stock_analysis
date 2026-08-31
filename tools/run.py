@@ -654,6 +654,7 @@ def run_two_stage(codes_all: list[str], as_of: str, no_llm: bool = False) -> dic
         logger.info("数据-only 模式:跳过新闻采集 + LLM 情绪(情绪三层专家将弃权)")
     else:
         run_sentiment(llm_subset)         # LLM 情绪 只对达标∪自选 ← 关键省 token
+    collect_ticks(analysis_set)           # 逐笔盘口归档(须在 serialize 前;票池级、盘后当日)→ record tick 块
     run_serialize(analysis_set, as_of)    # 记录含接近达标(其情绪为空,情绪专家弃权)
     run_events(analysis_set, as_of)
     run_factor(analysis_set, as_of)
@@ -820,6 +821,10 @@ def run_screen_all(codes_all: list[str], as_of: str, no_llm: bool = False,
     run_annual_report(news_subset)                   # 年报 PDF 抽段(无 LLM,缺 pymupdf 降级)
     if not no_llm:
         run_financial_text(news_subset, as_of)       # 财报 LLM 文本层(定性+归纳,缓存)
+    # 逐笔盘口归档(collect_ticks):须在 serialize 前——serialize 的 tick 块按 as_of date-pin 读当日摘要,
+    # 先采后组装才进 record/个股页卡片。只对 llm_subset(选出并集∪自选,票池级、量可控),
+    # 不进全A codes_all(逐笔量大)——与合作者「票池级、不进全A」设计一致,让逐笔在生产 screenall 闭环自动采。
+    collect_ticks(llm_subset)
     run_serialize(llm_subset, as_of)
     run_events(llm_subset, as_of)
     run_factor(llm_subset, as_of)
