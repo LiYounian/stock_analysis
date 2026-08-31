@@ -83,8 +83,10 @@ def main(argv=None):
             horizons, a.replay_universe_n, a.replay_days, a.replay_stride, book)
 
     lag = report.flag_laggards(replay_agg, live_agg, horizons)
+    verdicts = report.multidim_verdict(replay_agg, live_agg, horizons)
     done = ("①双轨分明 ②T+1入场 ③收益质量(均值/中位/盈亏比/P10P90) "
-            "④超额(全市场等权+随机bootstrap) ⑤按日聚类显著性(CI+p) ⑥rank-IC(排序型)")
+            "④超额(全市场等权+随机bootstrap) ⑤按日聚类显著性(CI+p) ⑥rank-IC(排序型) "
+            "⑦多维综合判定(alpha非唯一:强/可保留·配合择时/淘汰·纯beta/淘汰·显著负/观察,见 docs/评测方法论_多维评估.md)")
     undone = ("指数基准(HS300/中证1000)未接,用全市场等权代理(见假设);回放覆盖纯技术方向型"
               "screener(S02/S03/S04;S01/箱体3 已因显著负下线仅存档),动量/SEPA/条件化回放待接;live轨长窗数据不足如实标注")
     assumptions = [
@@ -95,13 +97,13 @@ def main(argv=None):
     ]
     md = report.render(live_agg, replay_agg, replay_meta,
                        generated=pd.Timestamp.now().strftime("%Y-%m-%d %H:%M"),
-                       horizons=horizons, laggards=lag, done=done, undone=undone,
-                       assumptions=assumptions)
+                       horizons=horizons, laggards=lag, verdicts=verdicts,
+                       done=done, undone=undone, assumptions=assumptions)
 
     os.makedirs(os.path.dirname(a.out_json) or ".", exist_ok=True)
     with open(a.out_json, "w", encoding="utf-8") as f:
         json.dump({"live": live_agg, "replay": replay_agg, "replay_meta": replay_meta,
-                   "差生名单": lag}, f, ensure_ascii=False, indent=2)
+                   "多维综合判定": verdicts, "差生名单": lag}, f, ensure_ascii=False, indent=2)
     os.makedirs(os.path.dirname(a.out_md) or ".", exist_ok=True)
     with open(a.out_md, "w", encoding="utf-8") as f:
         f.write(md)
@@ -110,6 +112,10 @@ def main(argv=None):
     print(f"live 策略数 {len(live_agg.get('窗口', {}).get('全史', {}).get('策略', {}))} | "
           f"replay 策略数 {len(replay_agg.get('窗口', {}).get('全史', {}).get('策略', {}))}")
     print(f"回放元信息: {replay_meta}")
+    vc = {}
+    for v in verdicts:
+        vc[v["档位"]] = vc.get(v["档位"], 0) + 1
+    print(f"多维综合判定分档: {vc}")
     print(f"差生名单(坐实显著负): {[l['strategy_id'] for l in lag if l['显著负']]}")
     print(f"→ {a.out_md}\n→ {a.out_json}")
     return {"live": live_agg, "replay": replay_agg, "laggards": lag}

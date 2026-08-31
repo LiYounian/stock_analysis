@@ -9,8 +9,8 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from tools.backtest.eval_v3 import (aggregate, live_source, prices, schema,
-                                    scoring, stats)
+from tools.backtest.eval_v3 import (aggregate, live_source, prices, report,
+                                    schema, scoring, stats)
 
 
 def _book(prices_by_code):
@@ -345,6 +345,115 @@ def test_live_source_source_tag_and_direction():
     assert all(r["source"] == "live" for r in recs)
     assert by["A"]["direction"] == 1 and by["B"]["direction"] == -1
     assert by["A"]["rank_score"] == 0.6
+
+
+# ─────────────── 多维综合判定(不只看 alpha 一刀切) ───────────────
+def test_verdict_significant_positive_excess_is_strong():
+    """超额显著正 → 强·alpha显著(有本事,防运气通过)。"""
+    g, _ = report.verdict_from_metrics(ex=1.5, exp=0.02, hit=58.0, ret=2.0, pf=1.4, n=200)
+    assert g == report.VERDICT_STRONG
+
+
+def test_verdict_significant_negative_excess_is_cut():
+    """超额显著负 → 淘汰·显著负(坐实做反),即便绝对收益碰巧为正也判死。"""
+    g, _ = report.verdict_from_metrics(ex=-1.5, exp=0.01, hit=45.0, ret=0.5, pf=1.1, n=200)
+    assert g == report.VERDICT_CUT_NEG
+
+
+def test_verdict_weak_alpha_but_absolute_value_is_keep():
+    """核心修正:超额不显著,但命中率高+绝对收益正+盈亏比达标 → 可保留·配合择时,
+    **不被单一 alpha 指标一票否决**。"""
+    g, reasons = report.verdict_from_metrics(ex=0.2, exp=0.6, hit=56.0, ret=1.8, pf=1.5, n=300)
+    assert g == report.VERDICT_KEEP
+    assert any("配合择时" in r or "真金白银" in r for r in reasons)
+
+
+def test_verdict_no_excess_no_absolute_is_cut_beta():
+    """无正超额(≤0/缺)且不赚(绝对收益≤0) → 淘汰·纯beta无绝对价值(纯跟大盘还不赚)。"""
+    g, _ = report.verdict_from_metrics(ex=-0.1, exp=0.7, hit=49.0, ret=-0.3, pf=0.9, n=300)
+    assert g == report.VERDICT_CUT_BETA
+    # 超额缺测同样按"无正超额"处理
+    g2, _ = report.verdict_from_metrics(ex=None, exp=None, hit=48.0, ret=-0.2, pf=0.8, n=300)
+    assert g2 == report.VERDICT_CUT_BETA
+
+
+def test_verdict_keep_vs_cutbeta_separates_two_weak_excess_cases():
+    """同为『超额不突出』,能选涨票+赚钱的判『可保留』、纯跟大盘不赚的判『淘汰·纯beta』——
+    这正是方法论要区分的两类,锁死不可混。"""
+    keep, _ = report.verdict_from_metrics(ex=0.1, exp=0.5, hit=55.0, ret=1.2, pf=1.3, n=200)
+    # 纯 beta:无正超额(≈0)且不赚(绝对收益<0)——跟大盘还亏
+    beta, _ = report.verdict_from_metrics(ex=0.0, exp=0.5, hit=40.0, ret=-0.5, pf=0.7, n=200)
+    assert keep == report.VERDICT_KEEP and beta == report.VERDICT_CUT_BETA
+
+
+def test_verdict_thin_sample_is_watch_not_judged():
+    """样本不足 MIN_N → 观察·样本不足,绝不下强/淘汰(样本薄不硬判)。"""
+    g, _ = report.verdict_from_metrics(ex=5.0, exp=0.001, hit=90.0, ret=9.0, pf=3.0, n=5)
+    assert g == report.VERDICT_WATCH_THIN
+
+
+def test_verdict_no_loser_profit_factor_none_counts_as_ok():
+    """盈亏比 None(无输家=极好)应视作达标,不因 None 掉出『可保留』。"""
+    g, _ = report.verdict_from_metrics(ex=0.2, exp=0.4, hit=60.0, ret=2.0, pf=None, n=100)
+    assert g == report.VERDICT_KEEP
+
+
+def test_multidim_verdict_reference_type_not_judged_alpha():
+    """参考·非alpha(策略11)在综合判定里只给『参考』档,绝不下强/淘汰。"""
+    replay_agg = {"窗口": {"全史": {"策略": {"11": {
+        "策略名": "指标条件化", "类型": schema.REFERENCE,
+        "5日": {"已到期样本": 500, "命中率%_期末": 55.0,
+                 "收益质量": {"均值%": 1.0, "盈亏比": 1.2, "胜率%": 52.0},
+                 "超额收益%_vs全市场": 0.1, "超额_聚类p值": 0.4}}}}}}
+    v = report.multidim_verdict(replay_agg, {"窗口": {}}, horizons=(1, 5))
+    assert len(v) == 1 and v[0]["档位"] == report.VERDICT_REFERENCE
+
+
+def test_multidim_verdict_falls_back_to_live_for_nonreplayable():
+    """不可回放策略(不在 replay 全史)→ 退回 live 全史取判据,轨标 live。"""
+    live_agg = {"窗口": {"全史": {"策略": {"0": {
+        "策略名": "多专家合议", "类型": schema.RANKABLE,
+        "5日": {"已到期样本": 120, "命中率%_期末": 57.0,
+                 "收益质量": {"均值%": 1.5, "盈亏比": 1.3, "胜率%": 54.0},
+                 "超额收益%_vs全市场": 0.3, "超额_聚类p值": 0.5,
+                 "Top-N精度": {5: {"超额%_vs全市场": 0.9}}}}}}}}
+    v = report.multidim_verdict({"窗口": {}}, live_agg, horizons=(1, 5))
+    assert len(v) == 1
+    assert v[0]["轨"] == "live" and v[0]["档位"] == report.VERDICT_KEEP
+    assert v[0]["Top5超额%"] == 0.9   # 可排序型附 Top5 选择性佐证
+
+
+def test_multidim_verdict_prefers_replay_over_live():
+    """同一策略 replay 与 live 都有 → 以 replay 全史为主判据(样本厚)。"""
+    replay_agg = {"窗口": {"全史": {"策略": {"S03": {
+        "策略名": "最大范围", "类型": schema.DIRECTIONAL,
+        "5日": {"已到期样本": 2000, "命中率%_期末": 45.0,
+                 "收益质量": {"均值%": -0.2, "盈亏比": 0.8},
+                 "超额收益%_vs全市场": -0.7, "超额_聚类p值": 0.08}}}}}}
+    live_agg = {"窗口": {"全史": {"策略": {"S03": {
+        "策略名": "最大范围", "类型": schema.DIRECTIONAL,
+        "5日": {"已到期样本": 40, "命中率%_期末": 90.0,
+                 "收益质量": {"均值%": 9.0, "盈亏比": 5.0},
+                 "超额收益%_vs全市场": 9.0, "超额_聚类p值": 0.001}}}}}}
+    v = report.multidim_verdict(replay_agg, live_agg, horizons=(1, 5))
+    assert v[0]["轨"] == "replay" and v[0]["档位"] == report.VERDICT_CUT_NEG
+
+
+def _one_strategy_agg(sid, meta):
+    """构造只含单策略全史 5 日单元的聚合结构,便于测综合判定渲染。"""
+    return {"窗口": {"全史": {"策略": {sid: meta}}}}
+
+
+def test_verdict_section_renders_table_and_methodology():
+    """报告『三、多维综合判定』节渲染出表格 + 多维方法论说明(不只看 alpha)。"""
+    meta = {"策略名": "示例", "类型": schema.DIRECTIONAL,
+            "5日": {"已到期样本": 100, "命中率%_期末": 56.0,
+                    "收益质量": {"均值%": 1.5, "盈亏比": 1.4},
+                    "超额收益%_vs全市场": 0.2, "超额_聚类p值": 0.5}}
+    verdicts = report.multidim_verdict(_one_strategy_agg("X", meta), {"窗口": {}}, horizons=(1, 5))
+    md = "\n".join(report._verdict_section(verdicts, (1, 5)))
+    assert "多维综合判定" in md and "不只看 alpha" in md
+    assert report.VERDICT_KEEP in md and "X 示例" in md
 
 
 # ─────────────── Student-t p 值自包含实现 ───────────────
