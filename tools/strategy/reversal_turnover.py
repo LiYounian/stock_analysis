@@ -127,6 +127,145 @@ def _finite(x) -> bool:
     return isinstance(x, (int, float)) and math.isfinite(x)
 
 
+# ————————————————————————————————————————————————————————————————
+# 一·补 换手数据护栏(治本现算兜底 + 覆盖率熔断)——
+#   需求源:docs/每日分析/策略建议/反转策略换手因子覆盖率退化.md
+#   根因:盘后闭环 spot 增量(带 turnover/amount)失败 → 回退腾讯逐只(volume-only)
+#         推进主档 → 近端 turnover/amount 整片 NaN → low_turnover_factor 近端有效点不足
+#         → 有效样本崩塌且无告警(静默失效)。
+#   两道防线均**纯函数**(不触 IO,可脱离数据独测);由薄管线在装载序列/组装视图时调用。
+# ————————————————————————————————————————————————————————————————
+def turnover_guard_cfg() -> dict:
+    """读「反转低换手.换手数据护栏」配置(单一真源,缺键兜默认)。"""
+    return (_CFG.get("换手数据护栏") or {})
+
+
+def _median(xs: list[float]) -> Optional[float]:
+    s = sorted(xs)
+    n = len(s)
+    if n == 0:
+        return None
+    m = n // 2
+    return s[m] if n % 2 else (s[m - 1] + s[m]) / 2.0
+
+
+def _mad_over_median(xs: list[float]) -> Optional[float]:
+    """稳健离散度:MAD/|median|(比 std/mean 抗离群,防个别除权/坏点误判"不稳")。"""
+    med = _median(xs)
+    if med is None or med == 0:
+        return None
+    mad = _median([abs(x - med) for x in xs])
+    if mad is None:
+        return None
+    return mad / abs(med)
+
+
+def derive_missing_turnover_amount(closes, volumes, turnovers, amounts,
+                                   cfg: Optional[dict] = None):
+    """近端缺 turnover/amount 时按 volume 现算兜底(治本;自校验,不确定就不填)。
+
+    输入:同一 kline 的等长时序(index 对齐;某列整缺时传空 → 视作整列 NaN)。
+    返回:(turnovers, amounts, info)——info 记 {turnover_derived/turnover_refused/amount_derived}。
+
+    换手率现算:换手率% = volume(股) / 流通股本 × 100 → 同一票 turnover/volume 近似常数。
+      取最近「参考窗口」内 (turnover,volume) 均有效的点估其中位比率 r_med;仅当
+      ①参考点数 ≥ 门槛 且 ②比率稳健离散度 MAD/median ≤ 上限(否则视为除权/单位漂移,不现算)
+      才对该窗口内"有 volume 无 turnover"的 bar 现算 turnover = volume × r_med;
+      且要求该 bar 的 volume 落在参考中位量的 [1/跳变上限, 跳变上限] 内(挡 volume 单位跳变),
+      越界则拒填(留 NaN 交给覆盖率熔断),绝不注入量级失真的伪值。
+    成交额现算:amount ≈ volume × close(VWAP 近似,实证中位相对误差 ~1%);仅填近端缺口。
+
+    防未来函数:比率只用"缺口之前"的有效 turnover 点(近端缺失区永远是序列尾部,参考点必在其前);
+      回测按 series[:t+1] 切片后调用,参考窗口天然 ≤ t,不引入未来信息。
+    """
+    cfg = turnover_guard_cfg() if cfg is None else cfg
+    info = {"turnover_derived": 0, "turnover_refused": 0, "amount_derived": 0}
+    n = len(closes) if closes is not None else 0
+    if n == 0 or not cfg.get("启用", True):
+        return turnovers, amounts, info
+
+    turnovers = list(turnovers) if turnovers else [float("nan")] * n
+    amounts = list(amounts) if amounts else [float("nan")] * n
+    volumes = list(volumes) if volumes else [float("nan")] * n
+    closes = list(closes)
+    ref_win = int(cfg.get("现算_参考窗口", 60))
+    lo = max(0, n - ref_win)
+
+    # —— 换手率现算 ——
+    if cfg.get("换手率现算兜底", True) and len(volumes) == n and len(turnovers) == n:
+        min_ref = int(cfg.get("现算_最少参考点", 20))
+        cv_max = float(cfg.get("现算_比率变异上限", 0.15))
+        vjump = float(cfg.get("现算_成交量跳变上限", 5.0))
+        ratios, ref_vols = [], []
+        for i in range(lo, n):
+            t, v = turnovers[i], volumes[i]
+            if _finite(t) and t > 0 and _finite(v) and v > 0:
+                ratios.append(t / v)
+                ref_vols.append(v)
+        if len(ratios) >= min_ref:
+            cv = _mad_over_median(ratios)
+            r_med = _median(ratios)
+            v_med = _median(ref_vols)
+            if cv is not None and cv <= cv_max and r_med and v_med:
+                for i in range(lo, n):
+                    t, v = turnovers[i], volumes[i]
+                    if _finite(t) or not (_finite(v) and v > 0):
+                        continue
+                    if v_med / vjump <= v <= v_med * vjump:
+                        turnovers[i] = v * r_med
+                        info["turnover_derived"] += 1
+                    else:
+                        info["turnover_refused"] += 1
+
+    # —— 成交额现算(amount ≈ volume × close)——
+    if cfg.get("成交额现算兜底", True) and len(volumes) == n and len(amounts) == n:
+        for i in range(lo, n):
+            a, v, c = amounts[i], volumes[i], closes[i]
+            if _finite(a) or not (_finite(v) and v > 0 and _finite(c) and c > 0):
+                continue
+            amounts[i] = v * c
+            info["amount_derived"] += 1
+
+    return turnovers, amounts, info
+
+
+def coverage_gate(coverage: Optional[float], valid_samples: Optional[int],
+                  cfg: Optional[dict] = None) -> dict:
+    """换手覆盖率熔断决策(纯函数;供薄管线组装视图时决定 present / ⚠ / 本日不出)。
+
+    返回 {present, level(正常|警示|不出), 熔断(bool), note, coverage}。
+      · 有效样本 < zscore_最小样本 → 不出(极小样本 z-score 虚高造伪极值)。
+      · 覆盖率 < 不出下限        → 不出(数据不足·本日不出;比输出"少而偏"更安全)。
+      · 覆盖率 ∈ [不出下限,警示下限) → 仍出但打 ⚠(排序可信度下降)。
+      · 否则                     → 正常。
+    kill-switch:护栏.启用=False → 恒 present=True 正常(现状)。
+    """
+    cfg = turnover_guard_cfg() if cfg is None else cfg
+    out = {"present": True, "level": "正常", "熔断": False, "note": None,
+           "coverage": coverage}
+    if not cfg.get("启用", True):
+        return out
+    not_out = float(cfg.get("覆盖率_不出下限", 0.30))
+    warn = float(cfg.get("覆盖率_警示下限", 0.50))
+    min_z = int(cfg.get("zscore_最小样本", 200))
+    if valid_samples is not None and valid_samples < min_z:
+        out.update(present=False, level="不出", 熔断=True,
+                   note=(f"有效样本 {valid_samples} < zscore 最小样本 {min_z},"
+                         "极小样本横截面 z-score 量级虚高会造伪极值,本日不出"))
+        return out
+    if coverage is not None and coverage < not_out:
+        out.update(present=False, level="不出", 熔断=True,
+                   note=(f"换手覆盖率 {coverage:.1%} < 不出下限 {not_out:.0%},"
+                         "数据不足·本日不出(拒绝输出少而偏的小样本 TopK)"))
+        return out
+    if coverage is not None and coverage < warn:
+        out.update(present=True, level="警示", 熔断=True,
+                   note=(f"⚠ 换手覆盖率 {coverage:.1%} 偏低(< 警示下限 {warn:.0%}),"
+                         "横截面排序可信度下降,谨慎采信"))
+        return out
+    return out
+
+
 def _pearson(a: list[float], b: list[float]) -> Optional[float]:
     n = len(a)
     ma, mb = sum(a) / n, sum(b) / n

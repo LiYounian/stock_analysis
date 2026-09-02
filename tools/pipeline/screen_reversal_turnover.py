@@ -31,6 +31,8 @@ from tools.strategy import reversal_veto
 from tools.strategy.reversal_turnover import (
     avg_amount_wan,
     combo_reversal_turnover_screen,
+    coverage_gate,
+    derive_missing_turnover_amount,
     low_turnover_factor,
     reversal_factor,
 )
@@ -49,24 +51,30 @@ def min_history() -> int:
     return max(MIN_LISTING_DAYS, REV_N + 1)
 
 
-def _load_series(code: str):
-    """code → (closes, turnovers, amounts, last_pct_chg) | None。只读本地缓存,不触网。"""
-    try:
-        kdf = market.load_kline_recent(code)
-    except FileNotFoundError:
-        return None
-    except Exception:                                  # noqa: BLE001
-        return None
+def _series_from_df(kdf):
+    """kdf → (closes, volumes, turnovers, amounts, last_pct_chg) | None。不做现算,仅取列。"""
     if kdf is None or len(kdf) == 0 or "close" not in kdf.columns:
         return None
     closes = kdf["close"].astype(float).tolist()
+    volumes = kdf["volume"].tolist() if "volume" in kdf.columns else []
     turnovers = kdf["turnover"].tolist() if "turnover" in kdf.columns else []
     amounts = kdf["amount"].tolist() if "amount" in kdf.columns else []
     last_pct = None
     if "pct_chg" in kdf.columns and len(kdf):
         v = kdf["pct_chg"].iloc[-1]
         last_pct = float(v) if pd.notna(v) else None
-    return closes, turnovers, amounts, last_pct
+    return closes, volumes, turnovers, amounts, last_pct
+
+
+def _load_series(code: str):
+    """code → (closes, volumes, turnovers, amounts, last_pct_chg) | None。只读本地缓存,不触网。"""
+    try:
+        kdf = market.load_kline_recent(code)
+    except FileNotFoundError:
+        return None
+    except Exception:                                  # noqa: BLE001
+        return None
+    return _series_from_df(kdf)
 
 
 def run_reversal_turnover_screen(codes: list[str], as_of: str | None = None,
@@ -87,21 +95,16 @@ def run_reversal_turnover_screen(codes: list[str], as_of: str | None = None,
                 kdf = market.fetch_kline([code]).get(code)
             except Exception:                          # noqa: BLE001
                 kdf = None
-            if kdf is not None and len(kdf) and "close" in kdf.columns:
-                closes = kdf["close"].astype(float).tolist()
-                turnovers = kdf["turnover"].tolist() if "turnover" in kdf.columns else []
-                amounts = kdf["amount"].tolist() if "amount" in kdf.columns else []
-                last_pct = None
-                if "pct_chg" in kdf.columns and len(kdf):
-                    v = kdf["pct_chg"].iloc[-1]
-                    last_pct = float(v) if pd.notna(v) else None
-                s = (closes, turnovers, amounts, last_pct)
+            s = _series_from_df(kdf)
         return s
 
     need = min_history()
     records: dict[str, dict] = {}
     scanned = 0
     skip_pre: dict[str, int] = {}
+    # 治本现算兜底统计(供视图/日志观测恢复量);raw = 现算前的换手因子缺失数(对照口径)
+    derive_stats = {"turnover_derived": 0, "turnover_refused": 0, "amount_derived": 0}
+    turn_missing_raw = 0
 
     def _skip(reason: str):
         skip_pre[reason] = skip_pre.get(reason, 0) + 1
@@ -111,10 +114,18 @@ def run_reversal_turnover_screen(codes: list[str], as_of: str | None = None,
         if s is None:
             _skip("无K线")
             continue
-        closes, turnovers, amounts, last_pct = s
+        closes, volumes, turnovers, amounts, last_pct = s
         if len(closes) < need:                         # 次新 / 历史不足
             _skip("历史不足(含次新)")
             continue
+        # 现算前口径:先看原始 turnover 能否成因子(对照"修复前"覆盖率,供验收)
+        if low_turnover_factor(turnovers, n=TURN_N) is None:
+            turn_missing_raw += 1
+        # 治本:近端缺 turnover/amount → 按 volume 现算兜底(护栏.启用=False 时函数内 no-op)
+        turnovers, amounts, dinfo = derive_missing_turnover_amount(
+            closes, volumes, turnovers, amounts)
+        for k in derive_stats:
+            derive_stats[k] += dinfo.get(k, 0)
         rev = reversal_factor(closes, n=REV_N)
         turn = low_turnover_factor(turnovers, n=TURN_N)
         amt = avg_amount_wan(amounts, n=TURN_N)
@@ -154,19 +165,36 @@ def run_reversal_turnover_screen(codes: list[str], as_of: str | None = None,
     for k, v in (out.get("跳过") or {}).items():
         skip_all[k] = skip_all.get(k, 0) + v
 
+    # —— 换手覆盖率(护栏输入)——
+    # 可评估票数 = 扫描数 - 无K线 - 历史不足(结构性缺数据,不计入分母);
+    # 换手覆盖率 = (可评估票数 - 换手因子缺失) / 可评估票数(直指"近端换手缺失"这一退化)。
+    scannable = len(codes) - skip_pre.get("无K线", 0) - skip_pre.get("历史不足(含次新)", 0)
+    turn_missing = skip_pre.get("换手因子缺失(近端NaN过多)", 0)
+    coverage = (scannable - turn_missing) / scannable if scannable > 0 else None
+    coverage_raw = (scannable - turn_missing_raw) / scannable if scannable > 0 else None
+    gate = coverage_gate(coverage, out.get("有效样本", scanned))
+
     selected = [d for d in (out.get("因子明细") or []) if d["code"] in set(out.get("codes") or [])]
+    present = gate.get("present", True)
     view = {
         "as_of": as_of,
         "策略": "反转低换手组合(策略10·前向观测中)",
+        "present": present,
         "口径": ("纯量价复合:反转 rev%d + 低换手 turn%d,各自 winsorize+zscore 后等权"
                  "(%.2f/%.2f)加权取 Top%d;近端 turnover 缺失按窗口有效值均值兜底。"
                  % (REV_N, TURN_N, out.get("权重", {}).get("反转", 0.5),
                     out.get("权重", {}).get("低换手", 0.5), top_k)),
         "扫描数": len(codes), "有效样本": out.get("有效样本", scanned),
+        "换手覆盖率": round(coverage, 4) if coverage is not None else None,
+        "换手覆盖率_现算前": round(coverage_raw, 4) if coverage_raw is not None else None,
+        "现算兜底": {**derive_stats,
+                     "说明": "近端缺 turnover/amount 按 volume 现算(自校验;换手率现算前后覆盖率见上)"},
+        "数据护栏": {"启用": True, "档位": gate.get("level"), "熔断": gate.get("熔断"),
+                     "note": gate.get("note")},
         "跳过": skip_all,
-        "入选数": len(out.get("codes") or []),
+        "入选数": (len(out.get("codes") or []) if present else 0),
         "top_k": top_k,
-        "入选清单": selected,
+        "入选清单": (selected if present else []),
         "权重": out.get("权重"),
         "参数": out.get("参数"),
         "复用": "tools.strategy.reversal_turnover.combo_reversal_turnover_screen",
@@ -174,13 +202,23 @@ def run_reversal_turnover_screen(codes: list[str], as_of: str | None = None,
                      f"尾部即当日;历史<{need}跳过"),
         "命名": "策略10(前向观测中,非已验证可用);诚实边界:可交易池+5-10日+TopK≤20,net绝对水平存幸存者水分,以前向观测为准",
     }
-    if out.get("否决层"):
+    if out.get("否决层") and present:
         view["否决层"] = out["否决层"]
     if out.get("note"):
         view["note"] = out["note"]
+    if gate.get("note"):
+        # 熔断/警示告警:上游数据缺位导致的静默失效是最危险的,必须显式 WARN
+        logger.warning("反转低换手组合·数据护栏[%s]:%s(换手覆盖率 %s,有效样本 %s)",
+                       gate.get("level"), gate.get("note"),
+                       f"{coverage:.1%}" if coverage is not None else "NA",
+                       out.get("有效样本", scanned))
+        if not present:
+            view["note"] = gate.get("note")
     p = store.put_view("反转低换手组合", view)
-    logger.info("反转低换手组合:扫描 %d / 有效 %d / 入选 %d → %s",
-                len(codes), view["有效样本"], view["入选数"], p)
+    logger.info("反转低换手组合:扫描 %d / 有效 %d / 入选 %d / 覆盖率 %s / 现算 turnover+%d amount+%d → %s",
+                len(codes), view["有效样本"], view["入选数"],
+                f"{coverage:.1%}" if coverage is not None else "NA",
+                derive_stats["turnover_derived"], derive_stats["amount_derived"], p)
     return view
 
 
