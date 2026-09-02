@@ -47,6 +47,7 @@ _JSON_KINDS = ("fundamental", "announcement", "news", "ugc", "policy", "llm_cach
                "chip",                 # 筹码分布摘要(collectors.chip 本地推演)
                "lhb", "block_trade", "holder_num",   # 主力行为:龙虎榜/大宗交易/股东户数(collectors.smart_money)
                "consensus",            # 机构一致预期(collectors.consensus)
+               "margin",               # 个股两融明细(融资买入额/融资余额;collectors.margin,按票累积日序列)
                "industry_history",     # 行业变迁史(collectors.industry_history)
                "baidu_news",           # 百度个股新闻情绪(collectors.baidu_news;带真实发布时间+利好/利空标签)
                "tick_summary")         # 逐笔微观结构摘要(小 json,供 as_of 无未来函数读;明细在 tick parquet)

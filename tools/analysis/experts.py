@@ -106,7 +106,13 @@ def expert_拐点(record: dict, kline=None) -> ExpertVerdict:
 
 
 def expert_资金流(record: dict, kline=None) -> ExpertVerdict:
-    """fundflow.今日主力净流入 → 方向;连续净流入天数抬升强度。缺失→弃权。"""
+    """fundflow.今日主力净流入 → 方向;连续净流入天数抬升强度。缺失→弃权。
+
+    治本(两融背离甄别):当看多信号由「大额主力净流入」驱动、但当日**融资买入额**能解释掉其
+    大部分时(疑似融资盘杠杆追高,非主力吸筹),对看多强度**降级 / 翻风险提示**
+    (config「资金流融资盘甄别」;kill-switch 关或无两融数据 → 完全现状,不回归)。
+    防未来函数:两融按 date≤as_of 取(collectors.margin.summarize_asof)。
+    """
     f = (record or {}).get("fundflow")
     if not isinstance(f, dict) or f.get("今日主力净流入") is None:
         return _missing("资金流")
@@ -122,10 +128,46 @@ def expert_资金流(record: dict, kline=None) -> ExpertVerdict:
         方向, 强度, 依据 = "看空", -0.5, ["主力净流出"]
     else:
         方向, 强度, 依据 = "中性", 0.0, ["主力净流入为0"]
+
+    原始 = {"今日主力净流入": net, "主力连续净流入天数": streak}
+    # —— 两融背离甄别(治本;仅对看多的「主力净流入」信号做,不动看空/中性)——
+    if 方向 == "看多":
+        div = _margin_divergence(record, net)
+        if div and div.get("命中"):
+            原始["融资盘背离"] = {k: div.get(k) for k in
+                             ("动作", "融资买入额", "主力净流入", "融资解释比",
+                              "融资占成交额", "融资余额占流通市值", "高两融占比")}
+            if div.get("动作") == "翻风险":
+                方向, 强度 = "中性", 0.0     # 翻风险提示:不再投看多票
+            else:                            # 降级:看多强度打折(挤出顶格看多档)
+                强度 = _clamp(强度 * float(div.get("强度系数", 1.0)))
+            依据 = list(div.get("依据") or []) + 依据
     return ExpertVerdict(专家="资金流", 能力类型="方向", 方向=方向, 强度=强度,
                          置信度=_SUFF["充分"], 默认权重=_w("资金流"),
-                         依据=依据, 数据充分度="充分",
-                         原始={"今日主力净流入": net, "主力连续净流入天数": streak})
+                         依据=依据, 数据充分度="充分", 原始=原始)
+
+
+def _margin_divergence(record: dict, net) -> dict | None:
+    """调 analysis.margin_divergence 做「主力净流入 vs 融资买入」as-of 背离甄别。
+
+    code/as_of 取自 record.meta;融资占成交额/流通市值档位为可选信息(缺则 None,不影响命中判据)。
+    kill-switch 关 / 缺 code / 无两融数据 / 任意异常 → None 或未命中(保守,不误压制资金流信号)。
+    """
+    meta = (record or {}).get("meta") or {}
+    code, as_of = meta.get("code"), meta.get("as_of")
+    if not code:
+        return None
+    # 信息档位:成交额(snapshot 无,留 None)、流通市值(valuation 总市值·亿→元 近似;缺则 None)
+    float_mv = None
+    val = (record or {}).get("valuation") or {}
+    mv_yi = val.get("mktcap_yi")
+    if isinstance(mv_yi, (int, float)):
+        float_mv = float(mv_yi) * 1e8     # ⚠近似:用总市值代流通市值(信息档位,不入命中判据)
+    try:
+        from tools.analysis import margin_divergence as md
+        return md.divergence_asof(str(code), as_of, net_inflow=net, float_mv=float_mv)
+    except Exception:                     # noqa: BLE001
+        return None
 
 
 def expert_情绪三层(record: dict, kline=None) -> ExpertVerdict:
