@@ -3,6 +3,7 @@
 每个 LLM 触点一个模板,schema 与 docs/计划/P2C_新闻情绪LLM.md §2 一一对应。
 写法:描述性约束(只抄原文、禁编造、拿不准留空/中性),强制 JSON,给全字段 schema。
 """
+from tools.config import settings
 
 # —— L1:新闻关键信息提取 ——
 # schema 精简自 9 字段 → 6 字段:删掉下游未消费的 涉及主体/关键数字/时间
@@ -20,16 +21,43 @@ NEWS_EXTRACT_SCHEMA = {
 }
 
 
+def _name_is_missing(name: str, code: str) -> bool:
+    """判断传入的「公司名」其实是缺失(拿代码顶替)的:空 / 与代码相等 / 形如纯数字。
+
+    A股/港股代码是 5~6 位纯数字,真实公司名绝不会是纯数字——据此识别 name→code 回退,
+    避免把「主体并非{name}即无关」这句约束里的 {name} 变成一串代码、诱导 LLM 判本股新闻为无关。
+    """
+    if not name or name == code:
+        return True
+    return name.strip().isdigit()
+
+
 def news_extract_instruction(name: str, code: str) -> str:
-    """L1 抽取指令。只抄原文事实、禁推断编造;拿不准的字段留空/中性。"""
+    """L1 抽取指令。只抄原文事实、禁推断编造;拿不准的字段留空/中性。
+
+    名字兜底(settings.NEWS_PROMPT_NAME_GUARD,默认开):当 name 缺失/等于代码/纯数字时,
+    不生成「主体并非{name}即无关」这句(那会诱导 LLM 把讲本公司的新闻误判为无关),改用
+    「以是否讲述该代码对应的上市公司为准,无法判断填'间接'」。关掉可恢复旧措辞做 A/B 比对。
+    """
+    guard_on = getattr(settings, "NEWS_PROMPT_NAME_GUARD", True)
+    missing = _name_is_missing(name, code)
+    label = name if not missing else f"该股票(代码 {code})"
+    if guard_on and missing:
+        rel_line = (
+            f"- '与本股关系':以新闻是否讲述**股票代码 {code} 对应的上市公司**为准——"
+            f"讲该公司自身填'直接';讲其所在行业/同板块的间接影响填'间接';"
+            f"只顺带提及代码、主体是别的公司填'无关';无法判断时填'间接'。\n")
+    else:
+        rel_line = (
+            f"- '与本股关系':若新闻只是顺带提及代码/名称、主体并非{name},填'无关';"
+            f"直接讲{name}自身填'直接';讲行业/同板块间接影响填'间接'。\n")
     return (
-        f"你是金融信息抽取助手。下面是一条与股票【{name}({code})】可能相关的新闻,"
+        f"你是金融信息抽取助手。下面是一条与股票【{label}({code})】可能相关的新闻,"
         f"请抽取结构化信息。要求:\n"
         f"- 只依据原文,禁止编造或外部推断;拿不准的字段留空或填'中性'。\n"
-        f"- '影响方向'是这条新闻对【{name}】股价的方向(利好/利空/中性)。\n"
-        f"- '与本股关系':若新闻只是顺带提及代码/名称、主体并非{name},填'无关';"
-        f"直接讲{name}自身填'直接';讲行业/同板块间接影响填'间接'。\n"
-        f"- '影响强度'按对{name}的实质影响给 1~5。\n"
+        f"- '影响方向'是这条新闻对【{label}】股价的方向(利好/利空/中性)。\n"
+        f"{rel_line}"
+        f"- '影响强度'按对{label}的实质影响给 1~5。\n"
         f"- '原因'用一句话说明你判定该影响方向/强度的依据(只据原文,禁编造;拿不准留空)。\n"
         f"只输出一个 JSON,不要任何解释/多余文字。")
 

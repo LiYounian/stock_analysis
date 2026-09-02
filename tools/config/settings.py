@@ -91,6 +91,12 @@ BAIDU_NEWS_COLLECT = os.getenv("BAIDU_NEWS_COLLECT", "1") == "1"
 SENTIMENT_FRESHNESS_MODE = os.getenv("SENTIMENT_FRESHNESS_MODE", "A2")
 # A2 允许回退的窗口(以 raw 分区/采集周期为「交易日」代理计数);超此距离标「无数据」。
 SENTIMENT_MAX_STALE_DAYS = int(os.getenv("SENTIMENT_MAX_STALE_DAYS", "3"))
+# —— 新闻关系判定 prompt 名字兜底(防「name 缺失静默翻转成无关」)——
+# 开:当传入 LLM 的公司名与代码相等 / 形如纯数字 / 为空时,不生成「主体并非{name}即无关」
+# 那句约束(避免拿代码当公司名致本股新闻被误判无关),改用「以是否讲述该代码对应公司为准」。
+# 关(=false):恢复旧措辞(便于 A/B 比对两种措辞的判定差异)。默认开。
+NEWS_PROMPT_NAME_GUARD = os.getenv("NEWS_PROMPT_NAME_GUARD", "true").lower() in ("1", "true", "yes")
+
 # —— 消息持续性研判(结构性 vs 短暂 + 印证强度)——
 # 只对根源消息(公司行为层新闻)逐条 LLM 研判并附加到情绪 event;附加、可选,不动净情绪口径。
 # 回测/批量若不需要该分量可置 false 省 LLM 调用(下游读不到字段=优雅退化)。
