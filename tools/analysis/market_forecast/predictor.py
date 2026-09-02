@@ -23,7 +23,8 @@ from .features import (
 )
 
 _CFG = THRESHOLDS["大盘预测"]
-_LABELS = _CFG["分档"]
+_LABELS = _CFG["分档"]                          # 幅度档:已实现 fwd 收益 → 档(训练标签/回测)
+_PROB_LABELS = _CFG.get("概率分档", _LABELS)     # 概率档:P(上涨) → 档(方向概率分位,非涨跌幅)
 
 
 def _sigmoid(z):
@@ -76,14 +77,28 @@ class _Scaler:
 
 # ————————————————————————— 档位映射 —————————————————————————
 def bucket_label(fwd_or_idx, edges=None) -> str:
-    """5 档序号(0..4)→ 标签名。"""
+    """【幅度档】已实现 fwd 收益的 5 档序号(0..4)→ 幅度标签名(大跌..大涨)。"""
     i = int(round(float(fwd_or_idx)))
     i = max(0, min(len(_LABELS) - 1, i))
     return _LABELS[i]
 
 
+def prob_bucket_label(idx) -> str:
+    """【概率档】P(上涨) 五档序号(0..4)→ 概率口径标签(上行概率低..上行概率高)。
+
+    与幅度词(大涨/大跌)彻底解耦:标签只表达"方向概率高低",不表达涨跌幅。
+    """
+    i = int(round(float(idx)))
+    i = max(0, min(len(_PROB_LABELS) - 1, i))
+    return _PROB_LABELS[i]
+
+
 def prob_to_bucket(p_up: float) -> int:
-    """P(上涨) → 五档序号(等宽概率分档:<.35 大跌 .. >.65 大涨)。"""
+    """P(上涨) → 五档序号(等宽概率分档:<.35 最低 .. >.65 最高)。
+
+    序号语义是"上行概率分位",渲染成标签请用 prob_bucket_label(概率口径),
+    不要套 bucket_label(那是已实现 fwd 收益的幅度口径)。
+    """
     for i, hi in enumerate((0.35, 0.45, 0.55, 0.65)):
         if p_up <= hi:
             return i
