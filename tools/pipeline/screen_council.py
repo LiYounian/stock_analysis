@@ -70,11 +70,56 @@ def _load_or_fetch_kline(code: str, fetch: bool):
             return None
 
 
-def build_min_record(code: str, kdf: pd.DataFrame, as_of: str | None = None) -> dict | None:
-    """组装单票最小中心记录:{meta:{code,行业}, signals, financial?, 其余字段 None}。
+def _industry_asof(code: str, as_of: str | None) -> str | None:
+    """as_of「当时」所属行业(证监会门类,collectors.industry_history;去回测前视)。
 
-    signals 由 technical.compute 现算(不改算法);行业取本地板块归属(缺则 None)。
-    K 线不足 / 无技术信号 → 返回 None(该票跳过,不入选)。
+    无 as_of / 无历史记录 / 该时点前无生效记录 / 数据损坏 → None(advisory,不抛)。
+    与 analysis.serialize._industry_asof 同源口径,供板块轮动专家做 point-in-time 回退。
+    """
+    if not as_of:
+        return None
+    try:
+        from tools.collectors import industry_history as ih
+        return ih.industry_at(code, as_of)
+    except Exception:                                  # noqa: BLE001
+        return None
+
+
+def _resolve_industry(code: str, as_of: str | None) -> str | None:
+    """meta.industry 回退链:人工池 → board_of(现状证监会码) → industry_at(as_of 门类)。
+
+    board_of 走 baostock 细分证监会码(J66/C39…)覆盖全A且能对齐申万一级,列首选;
+    末档 industry_at 是 point-in-time 兜底(board_of 未收录的票,如新股/特殊标的)。
+    任一档异常都吞掉、不炸(全A逐票不能因单票行业查询失败中断)。
+    """
+    # ① 人工池细分行业(建池时填的自由文本)
+    try:
+        from tools.config import stock_pool
+        s = stock_pool.get(code) or {}
+        ind = (s.get("industry") or s.get("行业") or "").strip() if isinstance(s, dict) else ""
+        if ind:
+            return ind
+    except Exception:                                  # noqa: BLE001
+        pass
+    # ② board_of:baostock 证监会细分码(覆盖全A、可对齐申万一级)
+    try:
+        ind = board.board_of(code)
+        if ind:
+            return ind
+    except Exception:                                  # noqa: BLE001
+        pass
+    # ③ industry_at:as_of「当时」证监会门类(point-in-time 末档兜底,去前视)
+    return _industry_asof(code, as_of)
+
+
+def build_min_record(code: str, kdf: pd.DataFrame, as_of: str | None = None) -> dict | None:
+    """组装单票最小中心记录:{meta:{code,industry,industry_asof}, signals, financial?, 其余字段 None}。
+
+    signals 由 technical.compute 现算(不改算法);行业走回退链 _resolve_industry
+    (人工池 → board_of → industry_at,缺则 None)。K 线不足 / 无技术信号 → 返回 None(该票跳过)。
+
+    meta.industry_asof:as_of「当时」证监会门类(industry_history,point-in-time),
+    供 **板块轮动专家** 在 meta.industry 空时多一档回退(去回测前视)。
 
     财报块(全A 覆盖):若该票已缓存 as_of 可见的财报三大表 raw,则挂 `financial` 轻量块
     (analysis.financial.build_financial_block,披露日锚定、防未来函数),使 **财报质地专家**
@@ -85,11 +130,8 @@ def build_min_record(code: str, kdf: pd.DataFrame, as_of: str | None = None) -> 
     tech = technical.compute(kdf)
     if not isinstance(tech, dict) or "signal" not in tech:
         return None
-    industry = None
-    try:
-        industry = board.board_of(code)               # 本地缓存映射,缺失 → None(不触网)
-    except Exception:                                  # noqa: BLE001
-        industry = None
+    industry = _resolve_industry(code, as_of)         # 人工池→board_of→industry_at(缺→None)
+    industry_asof = _industry_asof(code, as_of)       # point-in-time 门类,供专家多一档回退
     financial = None
     try:
         from tools.analysis.financial import analyzer as fr_analyzer
@@ -97,7 +139,8 @@ def build_min_record(code: str, kdf: pd.DataFrame, as_of: str | None = None) -> 
     except Exception:                                  # noqa: BLE001
         financial = None                               # 缺财报 raw / 分析失败 → 弃权(不炸)
     return {
-        "meta": {"code": code, "industry": industry},   # 无 as_of → 事件驱动专家天然弃权
+        # 无 as_of → 事件驱动专家天然弃权;industry_asof 供板块轮动专家 point-in-time 回退
+        "meta": {"code": code, "industry": industry, "industry_asof": industry_asof},
         "snapshot": None,
         "valuation": None,
         "fundamental": None,
