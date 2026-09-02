@@ -151,15 +151,26 @@ def run_council_screen(codes: list[str], as_of: str | None = None,
         # 龙虎榜走 lhb_asof(list_date < as_of 严格,盘后披露当天不可用)。
         dose = fin_flags.high_flag_count((rec.get("financial") or None))
         lhbv = risk_veto.lhb_verdict_asof(code, as_of)
-        adj = risk_veto_adjust(d.get("综合分", 0.0), dose, lhbv)
+        # 弃权置信度软收缩:发声专家过少的票综合分向中性收缩后再进排序(收缩启用=False → ==综合分,
+        # 排序回原口径)。收缩只降低"少数纯技术专家发声"票的排序竞争力,不剔除、保留展示(下方带标注)。
+        base_score = d.get("综合分_收缩", d.get("综合分", 0.0))
+        adj = risk_veto_adjust(base_score, dose, lhbv)
         _lhb_hit = bool((adj.get("各轴") or {}).get("龙虎榜", {}).get("应用"))
         scored.append({
             "code": code,
             "行业": (rec.get("meta") or {}).get("industry"),
             "综合方向": d.get("综合方向"),
             "综合分": d.get("综合分", 0.0),
+            # 弃权置信度标注(合议级;标注关 → 缺键,下游 .get 兜底):透出参与度与合议置信度供分析师辨识
+            # "纯技术极值"vs"多口径一致",并让软收缩后的综合分驱动排序(收缩关时 综合分_收缩==综合分)。
+            "合议置信度": d.get("合议置信度"),
+            "参与专家数": d.get("参与专家数"),
+            "口径多样性": d.get("口径多样性"),
+            "覆盖口径": d.get("覆盖口径"),
+            "低合议置信度": d.get("低合议置信度"),
+            "综合分_收缩": d.get("综合分_收缩", d.get("综合分", 0.0)),
             "有财报块": rec.get("financial") is not None,  # 是否挂到 as_of 财报块(覆盖统计)
-            "排序分": adj["排序分"],                     # 降权后分(降权=综合分−Σ罚分;否决靠标记沉底)
+            "排序分": adj["排序分"],                     # 收缩+降权后分(收缩后综合分−Σ罚分;否决靠标记沉底)
             # 风控风险归因(两轴合成;无触发 → None,保持旧展示语义)。键名沿用「财报风险」向后兼容,
             # 增补「归因/各轴」透出龙虎榜轴命中。
             "财报风险": {"高危数": adj["高危数"], "罚分": adj["罚分"],
@@ -183,6 +194,7 @@ def run_council_screen(codes: list[str], as_of: str | None = None,
     命中龙虎榜 = sum(1 for x in scored                                          # 龙虎榜否决触发票数
                    if ((x.get("财报风险") or {}).get("各轴") or {}).get("龙虎榜", {}).get("应用"))
     带块数 = sum(1 for x in scored if x.get("有财报块"))                # 挂到 as_of 财报块的票数(覆盖代理)
+    低置信数 = sum(1 for x in top if x.get("低合议置信度"))            # Top 内低合议置信度(少数/单口径发声)票数
 
     view = {
         "as_of": as_of,
@@ -193,6 +205,7 @@ def run_council_screen(codes: list[str], as_of: str | None = None,
         "财报覆盖": 带块数,                    # 有 as_of 可见财报块参与合议的票数(全A采财报后↑)
         "命中高危红旗": 命中高危,              # 财报高危红旗降权/否决沉底的票数
         "命中龙虎榜否决": 命中龙虎榜,          # 龙虎榜净买上榜否决/降权沉底的票数(风控微结构轴)
+        "Top内低合议置信度": 低置信数,         # 少数/单口径专家发声(合议置信度<阈)的 Top 票数;越少越健康
         "top_n": len(top),
         "top": top,
         "口径": ("全A逐票 technical.compute → 合议默认专家组(有财报 raw 的票挂 as_of 财报块,财报质地"
