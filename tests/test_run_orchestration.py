@@ -160,6 +160,7 @@ def test_run_events_degrade_no_crash(monkeypatch):
     from tools.collectors import event_driven as ed
     monkeypatch.setattr(ed, "fetch_earnings_forecast", lambda period, kind: pd.DataFrame())
     monkeypatch.setattr(ed, "fetch_insider_trades", lambda tag="latest": pd.DataFrame())
+    monkeypatch.setattr(ed, "fetch_management_change", lambda tag="latest": pd.DataFrame())
     run.run_events(["000001"], "2026-08-08")          # 不抛即通过
 
 
