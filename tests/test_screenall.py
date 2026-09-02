@@ -14,7 +14,12 @@ from tools.pipeline import screen_council, screen_momentum, screen_s02
 
 
 def _stub_stage2(monkeypatch, calls):
-    """把阶段②所有重活替换为「记录首个位置参数(codes)」的计数桩;K线主档同步/回测置空。"""
+    """把阶段②所有重活替换为「记录首个位置参数(codes)」的计数桩;K线主档同步/回测置空。
+
+    候选定向富集 enrich_candidates 也桩接为计数桩(额外记录 no_llm),并返回合法覆盖报告 dict
+    (run_screen_all 收尾会读 report['candidates']/['summary']),其内部 news/LLM 分维由
+    test_enrich_candidates.py 独立锁语义。
+    """
     monkeypatch.setattr(run.master_sync, "sync_master", lambda codes, as_of=None: {"mode": "test", "ok": len(codes)})
     monkeypatch.setattr(run.stock_pool, "get_codes", lambda: ["WATCH1", "WATCH2"])
     monkeypatch.setattr(run, "run_backtest", lambda: None)
@@ -24,10 +29,16 @@ def _stub_stage2(monkeypatch, calls):
             calls.append((name, list(a[0]) if a and isinstance(a[0], (list, tuple)) else None))
         return _f
 
-    for fn in ("collect_values_missing", "collect_message", "collect_market_context",
-               "collect_ticks", "run_sentiment", "run_serialize", "run_events", "run_factor",
+    def _enrich(codes, as_of, no_llm=False):
+        calls.append(("enrich_candidates", list(codes), {"no_llm": no_llm}))
+        return {"candidates": len(codes), "counts": {}, "per_code": {},
+                "degraded": {}, "summary": "stub"}
+
+    for fn in ("collect_values_missing", "collect_market_context",
+               "collect_ticks", "run_serialize", "run_events", "run_factor",
                "run_council", "run_panel", "run_screen"):
         monkeypatch.setattr(run, fn, rec(fn))
+    monkeypatch.setattr(run, "enrich_candidates", _enrich)
 
 
 def _stub_screeners(monkeypatch, picks_by_strategy, raise_for=None):
@@ -71,18 +82,45 @@ def test_llm_subset_is_union_of_picks_and_watchlist(monkeypatch):
     # llm_subset = union ∪ 自选(WATCH1 已在 union → 不重复,WATCH2 追加)
     assert out["llm_subset_codes"] == ["C1", "C2", "S2", "M1", "WATCH1", "WATCH2"]
 
-    # 新闻/LLM/组装/合议 + 逐笔归档 全部只对 llm_subset,不是全A codes_all
-    for name in ("collect_message", "run_sentiment", "collect_values_missing",
+    # 候选定向富集 + 组装/合议 + 逐笔归档 全部只对 llm_subset,不是全A codes_all
+    #  (SCREENALL_ENRICH_TOPK 默认 0 → 候选富集集 == llm_subset,airtight:所有 record 票都被富集)
+    for name in ("enrich_candidates", "collect_values_missing",
                  "collect_ticks", "run_serialize", "run_council", "run_panel", "run_screen"):
-        arg = next(a for n, a in calls if n == name)
+        arg = next(a for n, a, *_ in calls if n == name)
         assert arg == out["llm_subset_codes"], f"{name} 应只对 llm_subset,实际 {arg}"
         assert "A" not in arg and "B" not in arg          # 全A codes 未泄漏到贵活
 
-    # 顺序命门(合作者注释强调):逐笔归档 collect_ticks 必须排在 run_serialize **之前**,
-    # 否则 serialize 的 tick 块读不到当日摘要、record/个股页卡片装不上。
-    order = [n for n, _ in calls]
+    # 顺序命门:候选定向富集(新闻/情绪/财报/资金流)与逐笔归档都必须排在 run_serialize **之前**,
+    # 否则 serialize 组装 record 时读不到当日消息面/财报/资金流/逐笔摘要 → record 空、个股页卡片装不上。
+    order = [n for n, *_ in calls]
     assert order.index("collect_ticks") < order.index("run_serialize"), \
         "collect_ticks 必须在 run_serialize 之前(serialize 的 tick 块按 as_of 读当日逐笔摘要)"
+    assert order.index("enrich_candidates") < order.index("run_serialize"), \
+        "enrich_candidates 必须在 run_serialize 之前(serialize 读候选票已采消息面/财报/资金流组装 record)"
+
+
+def test_enrich_topk_bounds_candidate_set(monkeypatch):
+    """SCREENALL_ENRICH_TOPK=M>0 → 候选富集集收窄为 每策略前 M ∪ 自选(限成本模式);
+    serialize/合议仍对全 llm_subset(不缩记录),只是贵活富集集更小。"""
+    monkeypatch.setenv("SCREENALL_ENRICH_TOPK", "1")
+    calls: list[tuple] = []
+    _stub_stage2(monkeypatch, calls)
+    _stub_screeners(monkeypatch, {
+        "council": ["C1", "C2"],       # 前1 → C1
+        "s02": ["S1", "S2"],           # 前1 → S1
+        "momentum": ["M1", "M2"],      # 前1 → M1
+    })
+
+    out = run.run_screen_all(["A"], "2026-08-11")
+
+    # llm_subset 仍是全并集∪自选(记录不缩)
+    assert out["llm_subset_codes"] == ["C1", "C2", "S1", "S2", "M1", "M2", "WATCH1", "WATCH2"]
+    # 候选富集集 = 每策略前1 ∪ 自选(C2/S2/M2 被排除)
+    enrich_arg = next(a for n, a, *_ in calls if n == "enrich_candidates")
+    assert enrich_arg == ["C1", "S1", "M1", "WATCH1", "WATCH2"]
+    # serialize 仍对全 llm_subset(不因富集集收窄而缩记录)
+    ser_arg = next(a for n, a, *_ in calls if n == "run_serialize")
+    assert ser_arg == out["llm_subset_codes"]
 
 
 def test_one_screener_failure_isolated(monkeypatch):
@@ -100,11 +138,11 @@ def test_one_screener_failure_isolated(monkeypatch):
     assert out["union_picks"] == ["C1", "M1"]
     assert out["各策略入选"]["策略2·放量后缩量回踩"] == 0
     # 阶段②照常跑(未中止)
-    assert any(n == "run_council" for n, _ in calls)
+    assert any(n == "run_council" for n, *_ in calls)
 
 
-def test_no_llm_skips_message_and_sentiment(monkeypatch):
-    """--no-llm → 不调 collect_message / run_sentiment;数据类步骤仍跑。"""
+def test_no_llm_propagates_to_enrich(monkeypatch):
+    """--no-llm → 透传 no_llm=True 给候选定向富集(其内部跳过 LLM 情绪/财报文本);数据类步骤仍跑。"""
     calls: list[tuple] = []
     _stub_stage2(monkeypatch, calls)
     _stub_screeners(monkeypatch, {
@@ -113,9 +151,11 @@ def test_no_llm_skips_message_and_sentiment(monkeypatch):
 
     run.run_screen_all(["A"], "2026-08-11", no_llm=True)
 
-    names = [n for n, _ in calls]
-    assert "collect_message" not in names                 # 新闻跳过
-    assert "run_sentiment" not in names                   # LLM 情绪跳过
+    names = [n for n, *_ in calls]
+    assert "enrich_candidates" in names
+    # 候选富集收到 no_llm=True(其内部据此跳过 LLM 情绪 + 财报文本层)
+    enrich = next(c for c in calls if c[0] == "enrich_candidates")
+    assert enrich[2] == {"no_llm": True}
     assert "collect_values_missing" in names              # 数据补缺仍跑
     assert "run_serialize" in names and "run_council" in names
 
