@@ -86,6 +86,15 @@ def _load_precise(code: str, as_of: pd.Timestamp, ann_text: str = "") -> list[di
         if df is not None and not df.empty and "code" in df.columns:
             hit = df[df["code"] == code]
             for _, r in hit.iterrows():
+                # 防未来函数:增减持记录的披露/变动日期若晚于 as_of(未来),不可用——跳过。
+                # 缺日期(无法解析)则保守保留(沿用「latest 快照」既有行为,不因缺日期而漏)。
+                rd = r.get("日期")
+                if rd is not None and str(rd).strip() not in ("", "nan", "None", "NaT"):
+                    try:
+                        if pd.to_datetime(rd) > as_of:
+                            continue
+                    except Exception:                # noqa: BLE001
+                        pass
                 atype = r.get("方向")
                 if atype in ("增持", "减持"):
                     method = r.get("方式") if "方式" in df.columns else None
