@@ -27,6 +27,7 @@ import pandas as pd
 from tools.collectors import market
 from tools.config.strategy import THRESHOLDS
 from tools.store import repo as store
+from tools.strategy import reversal_veto
 from tools.strategy.reversal_turnover import (
     avg_amount_wan,
     combo_reversal_turnover_screen,
@@ -130,7 +131,23 @@ def run_reversal_turnover_screen(codes: list[str], as_of: str | None = None,
             "snapshot": {"pct_chg": last_pct, "close": closes[-1]},
         }
 
-    out = combo_reversal_turnover_screen(records, top_k=top_k)
+    # 第一遍:纯量价排序(不否决)。否决层开则据此挑高分候选抽取 as-of 风险特征,再第二遍加否决。
+    # (只对高分候选抽特征,避免全A逐票读财报/公告/龙虎榜的高成本;防未来函数由 extract_features 内保证。)
+    out = combo_reversal_turnover_screen(records, top_k=top_k, apply_veto=False)
+    if reversal_veto.enabled() and out.get("因子明细"):
+        cand_cap = max(top_k * 3, top_k + 40)
+        cand_codes = [d["code"] for d in out["因子明细"][:cand_cap]]
+        n_feat = 0
+        for c in cand_codes:
+            try:
+                feats = reversal_veto.extract_features(c, as_of)
+            except Exception:                              # noqa: BLE001
+                feats = None
+            if feats is not None and c in records:
+                records[c]["风险特征"] = feats
+                n_feat += 1
+        logger.info("反转否决层:为 %d 只高分候选抽取 as-of 风险特征", n_feat)
+        out = combo_reversal_turnover_screen(records, top_k=top_k, apply_veto=True)
 
     # 合并管线侧跳过 + 策略侧跳过,供人读
     skip_all = dict(skip_pre)
@@ -157,6 +174,8 @@ def run_reversal_turnover_screen(codes: list[str], as_of: str | None = None,
                      f"尾部即当日;历史<{need}跳过"),
         "命名": "策略10(前向观测中,非已验证可用);诚实边界:可交易池+5-10日+TopK≤20,net绝对水平存幸存者水分,以前向观测为准",
     }
+    if out.get("否决层"):
+        view["否决层"] = out["否决层"]
     if out.get("note"):
         view["note"] = out["note"]
     p = store.put_view("反转低换手组合", view)
