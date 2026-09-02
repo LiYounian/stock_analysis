@@ -16,6 +16,7 @@
     python -m tools.run sepa         # SEPA+VCP 监控(午间/收盘):均线入池 + 波段收缩两表
     python -m tools.run all          # 全链路(采集[含逐笔盘口]→情绪→组装→事件→多因子→合议回写→视图),一个日期
     python -m tools.run ticks        # 单独跑逐笔盘口归档(run all 已含;此命令供 --all 全池/--date 回补)
+    python -m tools.run enrich       # 候选定向富集:对指定票确保 新闻/情绪/财报/资金流(选股分析流程按需补数)
     python -m tools.run pipeline     # 全A 两阶段流水线:全A便宜筛得达标池,再只对(达标∪自选)做新闻/LLM/合议
     python -m tools.run screenall    # 全A 多策略选股(策略0/2/4… S01/箱体3 已下线)→ 只对(各策略选出并集∪自选)做新闻/LLM/合议
     # 追加 --all 用全池 32 只;默认开发子集 10 只(config/dev_sample.json)
@@ -182,11 +183,11 @@ def collect_message(codes: list[str]) -> None:
     socket.setdefaulttimeout(FETCH_TIMEOUT)
     try:
         # recall=True:开启行业主题词扩召回 + LLM 宁严相关性初筛(collect_message 只被自选池/
-        # screenall/两阶段的 llm_subset 调用,天然不波及全A;补"挂不到个股的行业/宏观/管制"消息)。
+        # screenall(候选定向富集)/两阶段的候选子集调用,天然不波及全A;补"挂不到个股的行业/宏观/管制"消息)。
         logger.info("新闻:成功 %d", len(_safe("新闻", lambda: news.fetch_news(codes, recall=True)) or {}))
         logger.info("舆情(股吧):成功 %d", len(_safe("舆情(股吧)", lambda: ugc.fetch_ugc(codes)) or {}))
         # 百度个股新闻(前向情绪滚存):仅采集落盘、不接情绪评分。与上面 news/ugc 共用同一
-        # codes(news_subset=自选∪每策略前N),天然不波及全A;fetch_baidu_news 自带新鲜度门控
+        # codes(候选定向富集集/自选,票池级),天然不波及全A;fetch_baidu_news 自带新鲜度门控
         # (缓存≤BAIDU_NEWS_STALE_DAYS 天跳过重拉)+ 前向增量并集幂等,同日重跑不猛拉。
         # 整块 _safe 兜底、内部单票失败已降级,任何失败都不阻断闭环。开关 BAIDU_NEWS_COLLECT。
         if settings.BAIDU_NEWS_COLLECT:
@@ -336,6 +337,127 @@ def run_financial_text(codes: list[str], as_of: str) -> None:
     from tools.analysis.financial import llm_text
     n = _safe("财报LLM文本层", lambda: llm_text.run_financial_text(codes, as_of)) or 0
     logger.info("财报LLM文本层:%d 只", n)
+
+
+# ————————————————————————————————————————————————
+# 候选定向富集:保证"会被深度分析/推荐的候选票"一定有系统全套消息面+财报+资金流
+# ————————————————————————————————————————————————
+def _dim_status(loader, code: str) -> str:
+    """单票单维数据落地状态(供富集覆盖报告 + 降级标记,绝不静默):
+      - 'ok'      本地已有非空数据(dict/list/DataFrame 非空);
+      - 'empty'   已尝试落盘但内容为空(数据源当日确无该票数据——合法降级、非错误);
+      - 'missing' 无缓存(采集失败/未采到——需引起注意的降级)。
+    """
+    try:
+        d = loader(code)
+    except FileNotFoundError:
+        return "missing"
+    except Exception:
+        return "missing"
+    if d is None:
+        return "empty"
+    try:
+        import pandas as _pd
+        if isinstance(d, _pd.DataFrame):
+            return "ok" if not d.empty else "empty"
+    except Exception:
+        pass
+    if isinstance(d, (list, dict, str)):
+        return "ok" if len(d) > 0 else "empty"
+    return "ok"
+
+
+def _enrich_report(codes: list[str], no_llm: bool) -> dict:
+    """富集后逐票核验四维(news/sentiment/financial/fundflow)落地状态,产出覆盖报告 + 降级明细。
+
+    缺数据一律显式标 'empty'(源无数据)/'missing'(采集失败)/'skipped_no_llm'(数据模式跳过 LLM),
+    绝不静默当作已覆盖——呼应"缺数据时降级标记不静默"的验收口径。
+    """
+    from tools.analysis import event
+    from tools.collectors import financial as fin
+    from tools.collectors import fundflow as ff
+    from tools.collectors import news
+    per_code: dict[str, dict] = {}
+    counts = {d: {"ok": 0, "empty": 0, "missing": 0, "skipped_no_llm": 0}
+              for d in ("news", "sentiment", "financial", "fundflow")}
+    for c in codes:
+        st = {
+            "news": _dim_status(news.load_news, c),
+            "financial": _dim_status(fin.load_financial, c),
+            "fundflow": _dim_status(ff.load_fundflow, c),
+        }
+        if no_llm:
+            st["sentiment"] = "skipped_no_llm"
+        else:
+            st["sentiment"] = _dim_status(event.load_sentiment, c)
+        per_code[c] = st
+        for d, v in st.items():
+            counts[d][v] = counts[d].get(v, 0) + 1
+    degraded = {c: {d: v for d, v in st.items() if v in ("missing", "empty")}
+                for c, st in per_code.items()
+                if any(v in ("missing", "empty") for v in st.values())}
+    summary = "; ".join(
+        f"{d}: ok{counts[d]['ok']}/empty{counts[d]['empty']}/missing{counts[d]['missing']}"
+        + (f"/no_llm{counts[d]['skipped_no_llm']}" if counts[d]['skipped_no_llm'] else "")
+        for d in ("news", "sentiment", "financial", "fundflow"))
+    return {"candidates": len(codes), "counts": counts, "per_code": per_code,
+            "degraded": degraded, "summary": summary}
+
+
+def enrich_candidates(codes: list[str], as_of: str, no_llm: bool = False) -> dict:
+    """**候选定向富集**(幂等 / skip-if-cached / 优雅降级 / 防未来函数):对一批候选票**确保**采到
+    新闻→LLM情绪→财报(三大表+年报+LLM文本)→资金流,让任何可能成为深度分析/买入候选的票都有
+    系统全套消息面+财报+资金流数据(修"被推荐买入的票反而没有系统数据支撑"的硬伤)。
+
+    可被 ① screenall 闭环(选出各策略后、上传前对候选集调用)、② 选股分析流程按需调用
+    (呼应"固定代码+工具调用"方向)。
+
+    幂等:各维按 skip-if-cached 只补尚无缓存的票;LLM 层(情绪/财报文本)结果按输入 hash 缓存,
+    重跑只对新票计费、不重复烧钱、不破坏已有数据。防未来函数:各采集器/文本层自身按 as_of/披露日
+    锚定,本函数不放宽口径。任一源失败 → _safe 降级不阻断,并在返回的覆盖报告里显式标记。
+
+    返回覆盖报告 dict(candidates/counts/per_code/degraded/summary),供调用方核验 + 台账留痕。
+    """
+    from tools.collectors import annual_report as ar
+    from tools.collectors import financial as fin
+    from tools.collectors import fundflow as ff
+    from tools.collectors import news
+    codes = _dedup([c for c in codes if c])
+    if not codes:
+        return {"candidates": 0, "counts": {}, "per_code": {}, "degraded": {}, "summary": "空候选集"}
+    # —— skip-if-cached:分维取尚无缓存的子集,只补缺、不重采 ——
+    need_news = [c for c in codes if not _load_ok(news.load_news, c)]
+    need_ff = [c for c in codes if not _load_ok(ff.load_fundflow, c)]
+    need_fin = [c for c in codes if not _load_ok(fin.load_financial, c)]
+    need_ar = [c for c in codes if not _load_ok(ar.load_annual_report, c)]
+    logger.info("候选定向富集:%d 只%s(skip-if-cached 需采 新闻 %d / 资金流 %d / 财报三表 %d / 年报 %d)",
+                len(codes), "(数据-only,跳过LLM情绪/财报文本)" if no_llm else "",
+                len(need_news), len(need_ff), len(need_fin), len(need_ar))
+    # 1) 新闻/舆情(网络;政策全局)——只补缺失票
+    if need_news:
+        collect_message(need_news)
+    # 2) 资金流——只补缺失票(修"候选票缺 fundflow"),走短超时快速失败降级
+    if need_ff:
+        _old = socket.getdefaulttimeout()
+        socket.setdefaulttimeout(FETCH_TIMEOUT)
+        try:
+            _safe("候选资金流富集", lambda: ff.fetch_fundflow(need_ff))
+        finally:
+            socket.setdefaulttimeout(_old)
+    # 3) 财报三大表 + 年报 PDF(无 LLM)——只补缺失票
+    if need_fin:
+        run_financial_collect(need_fin)
+    if need_ar:
+        run_annual_report(need_ar)
+    # 4) LLM 层(结果 hash 缓存,幂等;数据模式跳过)——对整批(已缓存票近乎零开销)
+    if not no_llm:
+        run_sentiment(codes)               # 三层情绪 + news_ai 视图(cached extract,只对新票计费)
+        run_financial_text(codes, as_of)   # 财报文本层(缓存免重烧)
+    # 5) 覆盖报告:逐票核验四维落地,缺数据显式降级标记(不静默)
+    report = _enrich_report(codes, no_llm)
+    logger.info("候选定向富集完成(%d 只):%s;降级 %d 只",
+                report["candidates"], report["summary"], len(report["degraded"]))
+    return report
 
 
 # ————————————————————————————————————————————————
@@ -836,7 +958,11 @@ def run_screen_all(codes_all: list[str], as_of: str, no_llm: bool = False,
         ("策略11·指标条件化状态排序", lambda: screen_conditional_rank.run_conditional_rank_screen(
             codes_all, as_of=as_of, fetch=False)),
     ]
-    news_topk = int(os.getenv("SCREENALL_NEWS_TOPK", "5"))  # 新闻/情绪 LLM 每策略只取前 N(省 token、去边缘票噪声)
+    # 候选定向富集口径:每策略取前 M 只并入候选集(∪自选)做全套消息面/财报/资金流富集。
+    # M=0(默认)→ 候选集=各策略选出并集∪自选(= llm_subset,即所有被 serialize 成 record 的票),
+    #   airtight:任何可能被深度分析/推荐买入的票都有系统数据,彻底修"买入候选反而无数据"硬伤。
+    # M>0 → 候选集=每策略前 M ∪ 自选(限成本模式;M 越小越省 token 但边缘候选可能仍缺数据)。
+    enrich_topk = int(os.getenv("SCREENALL_ENRICH_TOPK", "0"))
     # label → 该 screener 落盘的 view 名(供流式增量推构造分片 key `__view__:视图名`)
     _screener_view = {
         "策略0·多专家合议": "策略0合议", "策略2·放量后缩量回踩": "放量后缩量回踩",
@@ -847,15 +973,15 @@ def run_screen_all(codes_all: list[str], as_of: str, no_llm: bool = False,
     }
     from tools.sync.upload import VIEW_SHARD_PREFIX as _VPREFIX
     union: list[str] = []
-    news_union: list[str] = []
+    strategy_picks: list[list[str]] = []            # 各策略有序选出票(供候选集按每策略前 M 切片)
     per_strategy: dict[str, int] = {}
     for label, fn in screeners:
         view = _safe(f"{label} 全A筛选", fn)
         picks = _picks_from_view(view)
         per_strategy[label] = len(picks)
         union.extend(picks)
-        news_union.extend(picks[:news_topk])        # 新闻/LLM 情绪 只取每策略前 N(排序型=前N强/规则型=前N只)
-        logger.info("  %s 入选 %d(新闻取前%d)", label, len(picks), min(len(picks), news_topk))
+        strategy_picks.append(picks)
+        logger.info("  %s 入选 %d", label, len(picks))
         # 流式增量推:该策略 view 落盘后立即推(抗断点——某策略/网络失败不影响已推的;末尾兜底补漏)
         vname = _screener_view.get(label)
         if view is not None and vname:
@@ -864,25 +990,25 @@ def run_screen_all(codes_all: list[str], as_of: str, no_llm: bool = False,
     union_picks = _dedup(union)                     # 各策略选出票并集(去重保序)
     watch = stock_pool.get_codes()
     llm_subset = _dedup(union_picks + watch)         # 数值/serialize/因子/合议/横表 对这批(无 LLM,覆盖全并集,记录/网页不缩)
-    news_subset = _dedup(news_union + watch)         # ⭐ 新闻采集 + LLM 情绪 只对 自选∪每策略前N —— 省 token 命门
-    logger.info("各策略入选:%s;union=%d,分析集(∪自选)=%d,LLM新闻子集(自选∪每策略前%d)=%d",
-                per_strategy, len(union_picks), len(llm_subset), news_topk, len(news_subset))
-
-    # —— 阶段②:新闻/LLM 只对 llm_subset ——
-    collect_values_missing(llm_subset)               # 补 K线/基本面/公告/资金流(无 LLM,skip-if-cached)
-    if not no_llm:
-        collect_message(news_subset)                 # ⭐ 新闻/舆情 只对 自选∪每策略前N ← 关键省 token
-    collect_market_context()                         # 全市场指数(每轮一次、非逐票)→ RRG 专家
-    if no_llm:
-        logger.info("数据-only 模式:跳过新闻采集 + LLM 情绪(情绪三层专家将弃权)")
+    # —— 候选定向富集集:默认= llm_subset(所有被 serialize 成 record 的票,airtight);
+    #    SCREENALL_ENRICH_TOPK=M>0 时收窄为 每策略前 M ∪ 自选(限成本)。见 enrich_topk 注释。
+    if enrich_topk > 0:
+        cand_set = _dedup([c for ps in strategy_picks for c in ps[:enrich_topk]] + watch)
     else:
-        run_sentiment(news_subset)                   # ⭐ LLM 情绪 只对 自选∪每策略前N ← 关键省 token
-    # —— 财报(M2):三大表+年报PDF(无LLM)+ LLM文本,只对 news_subset(自选∪每策略前N,资源纪律)——
-    #    须在 serialize 前:serialize 的 build_financial_block 读这批已采数据+文本视图。
-    run_financial_collect(news_subset)               # 三大表(数值层,无 LLM)
-    run_annual_report(news_subset)                   # 年报 PDF 抽段(无 LLM,缺 pymupdf 降级)
-    if not no_llm:
-        run_financial_text(news_subset, as_of)       # 财报 LLM 文本层(定性+归纳,缓存)
+        cand_set = llm_subset
+    logger.info("各策略入选:%s;union=%d,分析集(∪自选)=%d,候选富集集(%s)=%d",
+                per_strategy, len(union_picks), len(llm_subset),
+                f"每策略前{enrich_topk}∪自选" if enrich_topk > 0 else "= llm_subset", len(cand_set))
+
+    # —— 阶段②:数值面补缺 对 llm_subset ——
+    collect_values_missing(llm_subset)               # 补 K线/基本面/公告/资金流(无 LLM,skip-if-cached)
+    collect_market_context()                         # 全市场指数(每轮一次、非逐票)→ RRG 专家
+    # —— 候选定向富集:对候选集**确保**新闻→LLM情绪→财报(三表+年报+文本)→资金流,
+    #    使任何可能成为深度分析/买入候选的票都有系统全套数据(修"买入候选反而无数据"硬伤)。
+    #    幂等/skip-if-cached/优雅降级/防未来函数;须在 serialize 前(serialize 读这批已采数据组装 record)。
+    if no_llm:
+        logger.info("数据-only 模式:候选富集跳过 LLM 情绪 + 财报文本层(情绪三层专家将弃权)")
+    enrich_report = enrich_candidates(cand_set, as_of, no_llm=no_llm)
     # 逐笔盘口归档(collect_ticks):须在 serialize 前——serialize 的 tick 块按 as_of date-pin 读当日摘要,
     # 先采后组装才进 record/个股页卡片。只对 llm_subset(选出并集∪自选,票池级、量可控),
     # 不进全A codes_all(逐笔量大)——与合作者「票池级、不进全A」设计一致,让逐笔在生产 screenall 闭环自动采。
@@ -904,11 +1030,14 @@ def run_screen_all(codes_all: list[str], as_of: str, no_llm: bool = False,
     # —— 前向观察:龙虎榜轴命中票逐日滚存记分卡(降权前后排名 + K线到期自动回填 T+1/T+5 与见光死标记)。
     #    persist=False 复算全票排名不覆盖闭环已落 view;仅观察、不影响选股;失败降级不中止。
     _safe("龙虎榜前向记分卡", lambda: _update_lhb_scorecard(as_of))
-    logger.info("===== 全A多策略选股完成 → data/analysis/%s/;union=%d,llm_subset=%d 只含完整合议 =====",
-                as_of, len(union_picks), len(llm_subset))
+    logger.info("===== 全A多策略选股完成 → data/analysis/%s/;union=%d,llm_subset=%d 只含完整合议;"
+                "候选富集 %d 只(%s)=====",
+                as_of, len(union_picks), len(llm_subset),
+                enrich_report.get("candidates", 0), enrich_report.get("summary", ""))
     return {"as_of": as_of, "扫描": len(codes_all), "各策略入选": per_strategy,
             "union": len(union_picks), "llm_subset": len(llm_subset),
-            "union_picks": union_picks, "llm_subset_codes": llm_subset}
+            "union_picks": union_picks, "llm_subset_codes": llm_subset,
+            "候选富集": enrich_report}
 
 
 def cmd_screenall(argv):
@@ -933,6 +1062,31 @@ def cmd_screenall(argv):
     run_screen_all(codes_all, as_of, no_llm=no_llm, no_fetch=no_fetch)
 
 
+def cmd_enrich(argv):
+    """候选定向富集入口:python -m tools.run enrich <code...> [--date YYYY-MM-DD] [--no-llm]。
+
+    对指定候选票**确保**采到 新闻→LLM情绪→财报(三表+年报+文本)→资金流(幂等/skip-if-cached/
+    优雅降级/防未来函数),供**选股分析流程按需补数**——闭环外发现某票缺系统数据时,先跑本命令
+    再深度分析,避免"被推荐买入的票反而无系统数据"。缺数据显式降级标记(不静默)、打印覆盖报告。
+    未显式传 --date 时锁今天;不传 code 时报用法。
+    """
+    as_of = _as_of()
+    if argv and "--date" in argv:
+        i = argv.index("--date")
+        if i + 1 < len(argv):
+            as_of = argv[i + 1]
+    store.set_active_date(as_of)
+    no_llm = bool(argv and "--no-llm" in argv)
+    skip = {"enrich", "--no-llm", "--date", as_of}
+    codes = [a for a in (argv[2:] if argv else []) if a not in skip and not a.startswith("--")]
+    if not codes:
+        print("用法: python -m tools.run enrich <code...> [--date YYYY-MM-DD] [--no-llm]")
+        return
+    rep = enrich_candidates(codes, as_of, no_llm=no_llm)
+    logger.info("候选定向富集(on-demand):候选 %d,%s;降级明细 %s",
+                rep["candidates"], rep["summary"], rep["degraded"])
+
+
 def cmd_findata(argv):
     """全A 财报三大表增量回填入口:python -m tools.run findata [--universe N] [--force] [--dry-run]。
 
@@ -952,7 +1106,7 @@ _CMDS = {"collect": cmd_collect, "message": cmd_message, "sentiment": cmd_sentim
          "screenall": cmd_screenall,
          "pattern": cmd_pattern, "sepa": cmd_sepa, "strong": cmd_strong,
          "analyze": cmd_analyze, "findata": cmd_findata, "all": cmd_all,
-         "ticks": cmd_ticks}
+         "ticks": cmd_ticks, "enrich": cmd_enrich}
 
 
 def main(argv: list[str]) -> int:
