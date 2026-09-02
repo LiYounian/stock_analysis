@@ -95,6 +95,8 @@ trap 'rmdir "$LOCK" 2>/dev/null' EXIT
   "$PY" -m tools.backtest.forward_scorecard --out "$REPO/data/analysis/backtest/forward_scorecard.csv" || echo "!! 记分卡(不阻断)"
   echo "-- ②.7 大盘预测v0.5(技术+广度+消息面→沪深300涨跌;产出 market_forecast.json 供选股定β背景) --"
   # 排在②screenall(sentiment_policy已写)+①主档之后、③上传之前:让预测吃全新数据、且随当日分片上传远端。非投资建议,β环境信号非交易门控。
+  # 先把指数更到当日(否则预测的技术维滞后);baostock/新浪源,失败不阻断(预测回退全A代理)。
+  "$PY" -c "from tools.collectors import index; index.fetch_index(['000300'], end='$D')" || echo "!! 指数更新(不阻断,预测用代理)"
   "$PY" -m tools.analysis.market_forecast.forecast --as-of "$D" --write-analysis || echo "!! 大盘预测(不阻断)"
   echo "-- ③ 上传远端(先不带 --force:只补未确认分片,规避 ingest 429 限速) --"
   "$PY" -m tools.sync.upload --date "$D" || echo "!! 上传第一轮"
