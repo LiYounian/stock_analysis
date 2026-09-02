@@ -67,6 +67,43 @@
 - **蹭词保护验收**：构造/挑选真蹭词样本（标题只顺带提及代码、主体是别的公司，如 301246 里的"电解液周报丨比亚迪…新宙邦冲刺港交所"），断言仍判"无关"。
 - **kill-switch**：不需要（纯输入修正，无策略语义变化）；但第2条 prompt 兜底建议加配置开关，便于比对两种措辞的判定差异。
 
+## 4.5 实现 + 验收结果（已落地）
+
+> 分支 `fix/news-name-fallback`（基于 origin/main）。⚠️ 数据正确性修复，非投资建议。
+
+**改了什么（分步 commit）**
+
+1. `tools/analysis/event.py`：新增 `resolve_name(code) -> (name, fell_back)`，回退链 = 自选池
+   `stock_pool` → 全A映射 `config/code_name.json`（复用 `serialize._code_name` 的模块级缓存）
+   → **最后才** code；`extract_news_events` / `ugc_sentiment` 改用它。新增 `name_fallback_stats(codes)`。
+2. `tools/llm/prompts.py` + `tools/config/settings.py`：`news_extract_instruction` 加名字兜底——
+   当 name 空/等于代码/纯数字时**不生成**"主体并非{name}即无关"这句，改"以是否讲述该代码对应
+   上市公司为准，无法判断填'间接'"；开关 `settings.NEWS_PROMPT_NAME_GUARD`（默认开，关掉复现旧措辞做 A/B）。
+3. `tools/run.py`：`run_sentiment` 富集前统计 `name_fallback_ratio`，>0 则 WARN，落 `name_fallback` 视图。
+4. `tests/test_news_name_fallback.py`：13 例 hermetic 单测锁四类语义。
+
+**「全A映射」数据源选择**：用**现有 `config/code_name.json`**（5539 条，含 002084→海鸥住工 /
+301246→宏源药业），复用 `serialize._code_name` 的已建加载缓存，不新造轮子。
+**为何丢弃提议里的「panel/per-stock meta.name」这层**：panel 的「名称」列本身就来自
+`serialize` 的 `meta.name = stock_pool → code_name.json → code`（见 `panel.py`/`serialize.py`），
+与本回退链**同源**——加进来是循环/冗余、不引入新信息，故回退链定为 stock_pool → 全A映射 → code。
+
+**验收结果（真实跑测,`pytest tests/test_news_name_fallback.py` 13 passed）**
+
+- ✅ **主验收**：`resolve_name('002084')==('海鸥住工',False)`、`resolve_name('301246')==('宏源药业',False)`；
+  端到端 `extract_news_events` 对 002084 本股新闻（7连板/停牌核查/主力净流出）判**「直接」**、
+  301246 中报+2789% 判**「直接」**，聚合样本数不再被掏空。
+- ✅ **回归验收**：`name_fallback_stats(['002084','301246','300308']).ratio == 0`。
+- ✅ **不劣化验收**：自选池票 300308 走 `stock_pool` 真名（`fell_back=False`）、prompt 保留原
+  "主体并非中际旭创"措辞——措辞与解析均不变，不会把无关过度翻正。
+- ✅ **蹭词保护验收**：301246 下"电解液周报丨比亚迪…新宙邦冲刺港交所"（主体是别家、只提代码）
+  修复后**仍判「无关」**；同时锁了"缺真名则本股新闻被误判无关"的复现回归，证明真名解析正是修复点。
+- kill-switch：主修为纯输入修正无需；prompt 兜底带 `NEWS_PROMPT_NAME_GUARD` 开关。
+
+**是否建议接生产**：建议接。主修是纯输入修正（拿真名喂 LLM），无策略语义变化、无未来函数；
+prompt 兜底默认开且只在"名字确实缺失"时改写措辞、有开关可回退。合并后当日重跑富集，
+应看到 `name_fallback_ratio` 从 ~0.72 降到 0、选中票情绪信号恢复。
+
 ## 5. 待决（需统筹拍板）
 
 - `name` 回退链里"全A代码名映射"用哪个数据源（panel / 现有 industry 映射文件 / akshare 名称表）？与 [财报路由验证](财报路由验证.md) 里"board_membership 数据文件缺失"是同一类**基础映射缺位**问题，**建议两件事一起补一份全A代码→名称/行业的基准映射**，避免重复造轮子。
