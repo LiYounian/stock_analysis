@@ -28,6 +28,53 @@ from tools.analysis.market_forecast import predictor as P
 logger = logging.getLogger("market_forecast.forecast")
 
 _TARGET_NAME = {"hs300": "沪深300", "proxy": "全A等权代理指数"}
+# 每个标的的 β 适用范围声明(选股环节据此选个股β基准,见提议问题B)。
+_TARGET_SCOPE = {
+    "hs300": "权重股/大盘β;不代表个股中位数",
+    "proxy": "个股/中小盘β基准(含幸存者偏差,方向用)",
+}
+
+
+def _style_divergence(out_targets: dict, cfg) -> dict:
+    """风格背离(二八分化)标记:比较 β 背景标的(hs300)与 β 基准标的(proxy)的 p_up。
+
+    逐 horizon 触发条件(任一):方向档背离 / p_up 跨越 0.5 两侧 / |差值| ≥ 阈值。
+    触发时按方向给类型:背景更强→"权重搭台中小盘偏弱";基准更强→"中小盘领跑权重滞后"。
+    让选股环节读 β 时知道"hs300 偏多 ≠ 个股偏多",以 proxy 为准。见提议问题B/提议3。
+    """
+    beta = cfg.get("个股β基准", "proxy")
+    bg = cfg.get("β背景标的", "hs300")
+    thr = float(cfg.get("风格背离差值阈值", 0.10))
+    ht = out_targets.get(bg, {}).get("horizons", {}) or {}
+    pt = out_targets.get(beta, {}).get("horizons", {}) or {}
+    dims, any_flag = {}, False
+    common = sorted(set(ht) & set(pt), key=lambda x: int(x))
+    for h in common:
+        hh, pp = ht[h], pt[h]
+        if "p_up" not in hh or "p_up" not in pp:
+            continue
+        p_bg, p_beta = float(hh["p_up"]), float(pp["p_up"])
+        diff = round(p_bg - p_beta, 4)
+        cross0 = (p_bg - 0.5) * (p_beta - 0.5) < 0
+        dir_diff = hh.get("direction") != pp.get("direction")
+        flag = cross0 or dir_diff or abs(diff) >= thr
+        typ = ("一致" if not flag else
+               ("权重搭台中小盘偏弱" if diff > 0 else "中小盘领跑权重滞后"))
+        any_flag = any_flag or flag
+        dims[h] = {
+            "触发": flag, "类型": typ,
+            f"{bg}_p_up": p_bg, f"{beta}_p_up": p_beta,
+            f"{bg}_direction": hh.get("direction"), f"{beta}_direction": pp.get("direction"),
+            "差值(背景-基准)": diff, "跨越0.5": cross0, "方向档背离": dir_diff,
+        }
+    return {
+        "触发": any_flag,
+        "口径": "二八分化/风格背离",
+        "阈值": thr,
+        "维度": dims,
+        "说明": (f"{bg}(权重股背景)与{beta}(个股β基准)方向/强度对比;个股选股 β 以 {beta} 为准,"
+                 f"{bg} 仅作权重股背景,勿被其偏多读成个股偏多。"),
+    }
 
 
 def _direction(p_up: float) -> str:
@@ -100,16 +147,25 @@ def build_forecast(as_of: str | None = None, targets=("hs300", "proxy"),
                 hz[str(h)] = {"error": "训练样本不足"}
                 continue
             contrib = model.explain(panel.loc[[aod]]) if hasattr(model, "explain") else {}
+            bidx = P.prob_to_bucket(ph)
             hz[str(h)] = {
                 "p_up": round(ph, 4),
                 "direction": _direction(ph),
-                "bucket": P._LABELS[P.prob_to_bucket(ph)],
-                "bucket_idx": P.prob_to_bucket(ph),
+                # 概率口径:档位=P(上涨)的方向概率分位,**不是**涨跌幅预测(命中率~55%,不说幅度)。
+                "prob_bucket": P.prob_bucket_label(bidx),
+                "prob_bucket_idx": bidx,
+                "bucket": P.prob_bucket_label(bidx),   # 兼容旧字段名,值已切概率口径(不再是"大涨/大跌")
+                "bucket_idx": bidx,
+                "bucket_kind": "上行概率分位(方向,非涨跌幅)",
+                "amplitude_forecast": None,            # 不预测涨跌幅
+                "amplitude_note": "仅方向概率,幅度未知;勿把高概率读成大幅",
                 "factor_contrib": {k: round(v, 4) for k, v in contrib.items()},
                 "model": model_name,
             }
         out_targets[tgt] = {"name": _TARGET_NAME.get(tgt, tgt),
-                            "as_of": str(aod)[:10], "horizons": hz}
+                            "as_of": str(aod)[:10],
+                            "适用范围": _TARGET_SCOPE.get(tgt, ""),
+                            "horizons": hz}
 
     # 广度 / 消息面快照(as_of 当日)
     bsnap, ssnap = {}, {}
@@ -159,11 +215,20 @@ def build_forecast(as_of: str | None = None, targets=("hs300", "proxy"),
         "generated_at": datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds"),
         "non_investment_advice": True,
         "model": model_name,
+        "选股用β基准": {
+            "默认": cfg.get("个股β基准", "proxy"),
+            "背景": cfg.get("β背景标的", "hs300"),
+            "说明": ("个股 β 读全A等权代理(proxy,≈中小盘);沪深300(hs300)仅作权重股背景;"
+                     "两者分歧时以 proxy 为准并看 '分歧标记'。"),
+        },
+        "分歧标记": _style_divergence(out_targets, cfg),
         "targets": out_targets,
         "breadth_snapshot": bsnap,
         "sentiment_snapshot": ssnap,
         "fundflow_snapshot": ffsnap,
-        "notes": ("v1 四维(技术+广度+消息面+资金流)。资金流=SSE市场级两融(akshare stock_margin_sse,"
+        "notes": ("档位=**上行概率分位(方向口径)**,不是涨跌幅预测(命中率~55%,不说'大涨/大跌');幅度未知。"
+                  "个股选股 β 基准默认 proxy(全A等权≈中小盘),hs300 仅权重股背景,分歧看'分歧标记'。"
+                  "v1 四维(技术+广度+消息面+资金流)。资金流=SSE市场级两融(akshare stock_margin_sse,"
                   "回溯2022),盘后披露→特征滞后≥1交易日;历史未采到的日子该维降级中性(按覆盖率自动降权)。"
                   "消息面历史浅(~1月)作近端因子,缺日降级中性。全A等权代理指数含幸存者偏差,"
                   "方向研究用,绝对收益勿当真。A/B回测详见 docs/计划/大盘预测策略.md §7 与 "
