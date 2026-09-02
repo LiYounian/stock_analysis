@@ -39,6 +39,7 @@ _ANALYSIS_DIR = settings.PROJECT_ROOT / "data" / "analysis"   # data/analysis
 # —— kind → 物理格式 ——
 _PARQUET_KINDS = ("kline", "fundflow", "index_kline", "board_kline",
                   "event_yjyg", "event_yjkb", "event_ggcg",   # 事件驱动采集缓存(业绩预告/快报/增减持)
+                  "event_ggcg_mgmt",   # 董监高持股变动明细(自带「变动原因」→ 方式;补 event_ggcg 缺的变动途径)
                   "tick")   # 通达信逐笔成交(盘口微观结构,大表→parquet;collectors.tdx_l2)
 _JSON_KINDS = ("fundamental", "announcement", "news", "ugc", "policy", "llm_cache",
                "board_membership", "financial_report",   # financial_report:按报告期的三大表(内层 period 字典)

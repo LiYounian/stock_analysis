@@ -160,6 +160,7 @@ def test_run_events_degrade_no_crash(monkeypatch):
     from tools.collectors import event_driven as ed
     monkeypatch.setattr(ed, "fetch_earnings_forecast", lambda period, kind: pd.DataFrame())
     monkeypatch.setattr(ed, "fetch_insider_trades", lambda tag="latest": pd.DataFrame())
+    monkeypatch.setattr(ed, "fetch_management_change", lambda tag="latest": pd.DataFrame())
     run.run_events(["000001"], "2026-08-08")          # 不抛即通过
 
 
@@ -231,7 +232,7 @@ def test_reattach_council_picks_up_factor_and_event(monkeypatch):
     monkeypatch.setattr(market, "load_kline", lambda c: (_ for _ in ()).throw(FileNotFoundError(c)))
     # 事件驱动:断精数值,走公告 fallback
     from tools.analysis.event_driven import summary as ed_sum
-    monkeypatch.setattr(ed_sum, "_load_precise", lambda code, t: [])
+    monkeypatch.setattr(ed_sum, "_load_precise", lambda code, t, ann_text="": [])
 
     # 1) 横截面预算
     score.precompute(as_of="2026-08-08", codes=["000001", "000002"])

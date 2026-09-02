@@ -159,8 +159,11 @@ def build_record(code: str, as_of: str) -> dict:
     financial_block = _safe(lambda: fr_analyzer.build_financial_block(
         code, as_of=as_of, industry=(s.industry if s else None)))
 
+    # summary 一并带上:事件专家减持性质区分(协议转让给战投 vs 二级抛售)靠公告标题/摘要文本
+    # 兜底,标题外的"引入战投/业务协同/集中竞价"等语义常落在摘要里(采集缺 summary 时为 None,不影响)。
     events = [{"date": a.get("date"), "type": a.get("type"),
-               "impact": a.get("impact"), "title": a.get("title")} for a in anns[:20]]
+               "impact": a.get("impact"), "title": a.get("title"),
+               "summary": a.get("summary")} for a in anns[:20]]
 
     # 龙虎榜「入选否决」as-of 裁决(WI-6 Phase 3 · 风控微结构轴):挂进 record 供 web 只读取用
     # (展示层不 import 分析器,§9.3 依赖方向)。缺快照/未采集/未触发 → None(优雅降级)。

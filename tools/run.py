@@ -410,6 +410,10 @@ def run_events(codes: list[str], as_of: str) -> None:
             got += 0 if df is None else len(df)
     df = ed.fetch_insider_trades("latest")
     got += 0 if df is None else len(df)
+    # 董监高持股变动明细:自带「变动原因」→ 补 stock_ggcg_em 缺的「方式」(协议转让/集中竞价/大宗),
+    # 供减持性质区分(战略引资 vs 二级抛售);load_insider_trades 会按 code+日期合并进「方式」列。
+    mdf = ed.fetch_management_change("latest")
+    got += 0 if mdf is None else len(mdf)
     logger.info("事件精数值采集:%d 行(降级则空,专家回退公告粗判)", got)
 
 

@@ -44,6 +44,23 @@ def _norm_code(x) -> str | None:
     return s.zfill(6) if s else None
 
 
+def _norm_date(x) -> str | None:
+    """归一化披露/变动日期为 "YYYY-MM-DD";空/无法解析 → None(不编造)。
+
+    两路增减持源(股东汇总 vs 董监高明细)日期列格式可能不一,按 code+日期对齐前先归一,
+    保证「协议转让方式」只挂到披露日期真正匹配的减持记录上(防未来函数:不跨日错配)。
+    """
+    if x is None:
+        return None
+    s = str(x).strip()
+    if s in ("", "nan", "None", "NaT"):
+        return None
+    try:
+        return pd.to_datetime(s).strftime("%Y-%m-%d")
+    except Exception:                                # noqa: BLE001
+        return s or None
+
+
 # ———————————————————— 业绩预告 / 快报 ————————————————————
 def fetch_earnings_forecast(period: str, kind: str = "yjyg") -> pd.DataFrame:
     """拉某报告期业绩预告(kind=yjyg)或快报(kind=yjkb)并落盘。失败返回空 df。
@@ -141,7 +158,8 @@ def fetch_insider_trades(tag: str = "latest") -> pd.DataFrame:
             mv = r.get(method_col)
             method = str(mv) if mv is not None and str(mv).strip() not in ("", "nan", "None") else None
         rows.append({"code": code, "方向": 方向, "变动股数": qty, "方式": method,
-                     "日期": str(r.get(date_col)) if date_col else None})
+                     "日期": _norm_date(r.get(date_col)) if date_col else None,
+                     "来源": "ggcg"})
     df = pd.DataFrame(rows)
     if not df.empty:
         try:
@@ -152,9 +170,162 @@ def fetch_insider_trades(tag: str = "latest") -> pd.DataFrame:
     return df
 
 
-def load_insider_trades(tag: str = "latest") -> pd.DataFrame:
-    """读增减持缓存。无缓存 → 空 df(不抛)。"""
+# 「方式」预期取值域(董监高明细「变动原因」实测枚举 + 股东汇总变动方式);取值合法性校验白名单。
+# 实测东财 stock_hold_management_detail_em「变动原因」取值:集中竞价/大宗交易/协议转让/竞价交易/
+# 二级市场买卖/盘后定价/询价转让/集合竞价/增持/减持…(可组合如"集中竞价,大宗交易")。
+METHOD_VALUES = ("集中竞价", "集合竞价", "竞价交易", "集中交易", "竞价", "大宗交易", "大宗",
+                 "协议转让", "股份转让", "股权转让", "询价转让", "盘后定价", "二级市场",
+                 "增持", "减持", "承继", "继承", "赠与", "无偿划转", "划转", "要约",
+                 "行权", "解除限售", "转融通", "司法", "拍卖", "质押", "解质")
+
+
+def is_valid_method(m) -> bool:
+    """「方式」取值是否落在预期枚举内(含组合值,如"集中竞价,大宗交易");供数据质量校验。"""
+    if m is None:
+        return False
+    s = str(m).strip()
+    if s in ("", "nan", "None"):
+        return False
+    return any(v in s for v in METHOD_VALUES)
+
+
+def fetch_management_change(tag: str = "latest") -> pd.DataFrame:
+    """拉董监高持股变动明细(stock_hold_management_detail_em)并落盘。失败返回空 df。
+
+    该接口**自带「变动原因」列**(取值即"集中竞价/大宗交易/协议转让"等),正是 stock_ggcg_em
+    缺的「方式」语义。规整 df[code, 方向, 变动股数, 方式, 日期, 变动人, 来源="mgmt"]。
+    **口径局限(须诚实):** 覆盖为董监高(含相关人员),与 stock_ggcg_em 的大股东/机构增减持
+    口径不完全重合——大股东协议转让减持不一定进此明细,故只能补一部分方式,非全覆盖。
+    方向由「变动股数」符号推断(正=增持/负=减持;此接口无显式增减列)。
+    """
+    ak = _akshare()
+    if ak is None:
+        return pd.DataFrame()
     try:
-        return store.get_raw("event_ggcg", tag)
+        raw = ak.stock_hold_management_detail_em()
+    except Exception as e:                       # noqa: BLE001
+        logger.warning("stock_hold_management_detail_em 采集失败,降级: %s", e)
+        return pd.DataFrame()
+    if raw is None or len(raw) == 0:
+        return pd.DataFrame()
+
+    code_col = _find_col(raw, "代码")
+    reason_col = _find_col(raw, "变动原因", "变动方式", "变动途径")
+    qty_col = _find_col(raw, "变动股数", "变动数量")
+    date_col = _find_col(raw, "变动日期", "日期", "公告日")
+    person_col = _find_col(raw, "变动人", "董监高人员姓名", "姓名")
+    rows = []
+    for _, r in raw.iterrows():
+        code = _norm_code(r.get(code_col)) if code_col else None
+        if not code:
+            continue
+        qty = None
+        if qty_col is not None:
+            try:
+                qty = float(r.get(qty_col))
+            except (TypeError, ValueError):
+                qty = None
+        方向 = None
+        if qty is not None and qty != 0:
+            方向 = "增持" if qty > 0 else "减持"
+        method = None
+        if reason_col is not None:
+            mv = r.get(reason_col)
+            method = str(mv).strip() if mv is not None and str(mv).strip() not in ("", "nan", "None") else None
+        rows.append({"code": code, "方向": 方向,
+                     "变动股数": abs(qty) if qty is not None else None, "方式": method,
+                     "日期": _norm_date(r.get(date_col)) if date_col else None,
+                     "变动人": str(r.get(person_col)) if person_col else None,
+                     "来源": "mgmt"})
+    df = pd.DataFrame(rows)
+    if not df.empty:
+        try:
+            store.put_raw("event_ggcg_mgmt", tag, df, meta={"source": "akshare-em-mgmt"})
+        except Exception as e:                   # noqa: BLE001
+            logger.warning("董监高变动缓存落盘失败: %s", e)
+    nn = int(df["方式"].notna().sum()) if not df.empty else 0
+    logger.info("董监高变动采集:%d 条(方式非空 %d)", len(df), nn)
+    return df
+
+
+def load_management_change(tag: str = "latest") -> pd.DataFrame:
+    """读董监高变动明细缓存。无缓存 → 空 df(不抛)。"""
+    try:
+        return store.get_raw("event_ggcg_mgmt", tag)
     except FileNotFoundError:
         return pd.DataFrame()
+
+
+def _merge_method_from_mgmt(base: pd.DataFrame, mgmt: pd.DataFrame) -> pd.DataFrame:
+    """把董监高明细的「方式」按 code+日期严格对齐,富集进 base(股东增减持)的空「方式」;
+    并把 base 里无对应(code+日期+方向)的董监高变动行**追加**进来(补董监高口径覆盖)。
+
+    防未来函数:只按 code + 归一化日期**精确相等**对齐——同一披露日期才认为是同一事件,
+    绝不用 mgmt 里日期更晚(未来)的方式去标注 base 的历史减持,也不跨日期错配他人方式。
+    追加时按(code,日期,方向)去重,避免同一事件在两表里被重复计数放大信号。
+    """
+    if base is None:
+        base = pd.DataFrame()
+    if mgmt is None or mgmt.empty or "方式" not in mgmt.columns:
+        return base
+    mgmt = mgmt[mgmt["方式"].notna()].copy()
+    if mgmt.empty:
+        return base
+    # code+日期 → 方式(取该 code+日期 下第一个非空方式)
+    method_lookup: dict[tuple, str] = {}
+    for _, r in mgmt.iterrows():
+        key = (r.get("code"), r.get("日期"))
+        if key[0] and key[1] and key not in method_lookup:
+            method_lookup[key] = r.get("方式")
+
+    if not base.empty:
+        base = base.copy()
+        if "方式" not in base.columns:
+            base["方式"] = None
+        # 1) 富集:base 里方式为空的行,按 code+日期查董监高方式回填
+        def _fill(row):
+            if row.get("方式") not in (None, "", "nan", "None"):
+                return row.get("方式")
+            return method_lookup.get((row.get("code"), row.get("日期")))
+        base["方式"] = base.apply(_fill, axis=1)
+
+    # 2) 追加:base 无对应(code,日期,方向)的董监高变动行(补覆盖,去重防重复计数)
+    seen = set()
+    if not base.empty:
+        for _, r in base.iterrows():
+            seen.add((r.get("code"), r.get("日期"), r.get("方向")))
+    extra = []
+    for _, r in mgmt.iterrows():
+        key = (r.get("code"), r.get("日期"), r.get("方向"))
+        if key in seen:
+            continue
+        seen.add(key)
+        extra.append({"code": r.get("code"), "方向": r.get("方向"),
+                      "变动股数": r.get("变动股数"), "方式": r.get("方式"),
+                      "日期": r.get("日期"), "来源": "mgmt"})
+    if extra:
+        base = pd.concat([base, pd.DataFrame(extra)], ignore_index=True)
+    return base
+
+
+def load_insider_trades(tag: str = "latest", with_method: bool = True) -> pd.DataFrame:
+    """读增减持缓存(股东汇总)。无缓存 → 空 df(不抛)。
+
+    with_method=True(默认):若存在董监高变动明细缓存(event_ggcg_mgmt),把其「变动原因」按
+    code+日期严格对齐富集进「方式」列、并追加董监高口径的变动行(见 _merge_method_from_mgmt),
+    使下游减持性质区分(协议转让给战投 vs 二级抛售)真正拿到方式。缺明细缓存 → 原样返回(优雅降级)。
+    """
+    try:
+        base = store.get_raw("event_ggcg", tag)
+    except FileNotFoundError:
+        base = pd.DataFrame()
+    if not with_method:
+        return base
+    mgmt = load_management_change(tag)
+    if (mgmt is None or mgmt.empty) and (base is None or base.empty):
+        return base
+    try:
+        return _merge_method_from_mgmt(base, mgmt)
+    except Exception as e:                       # noqa: BLE001
+        logger.warning("增减持方式合并降级(返回原始股东汇总): %s", e)
+        return base

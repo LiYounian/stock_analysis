@@ -251,3 +251,120 @@ def test_event_expert_does_not_break_bias_equivalence():
     from tools.analysis import predict as pr
     tech = {"ob_os": {"结论": "超卖"}, "reversal": {"拐点标签": "反弹启动"}, "signal": {"评级": "偏多"}}
     assert pr.bias_recommendation(tech, None, None) == pr.bias_recommendation_council(tech, None, None)
+
+
+# ———————————— 方式字段数据供给:董监高明细补采 + 合并 ————————————
+from tools.collectors import event_driven as _ed
+
+
+def test_fetch_management_change_maps_reason_to_method(monkeypatch):
+    """董监高明细采集:「变动原因」→ 方式,方向由变动股数符号推断(正增/负减),code 归一。"""
+    raw = pd.DataFrame([
+        {"日期": "2026-09-01", "代码": "301498", "变动人": "杜某", "变动股数": 25500,
+         "变动原因": "集中竞价"},
+        {"日期": "2026-08-15", "代码": "600000", "变动人": "李某", "变动股数": -1000000,
+         "变动原因": "协议转让"},
+    ])
+
+    class _FakeAk:
+        def stock_hold_management_detail_em(self):
+            return raw
+
+    monkeypatch.setattr(_ed, "_akshare", lambda: _FakeAk())
+    monkeypatch.setattr(_ed.store, "put_raw", lambda *a, **k: None)   # 不落盘
+    df = _ed.fetch_management_change("t")
+    assert not df.empty and set(["code", "方向", "方式", "日期", "来源"]) <= set(df.columns)
+    r0 = df[df["code"] == "301498"].iloc[0]
+    assert r0["方向"] == "增持" and r0["方式"] == "集中竞价"
+    r1 = df[df["code"] == "600000"].iloc[0]
+    assert r1["方向"] == "减持" and r1["方式"] == "协议转让"
+    assert (df["来源"] == "mgmt").all()
+
+
+def test_merge_method_enriches_by_code_date():
+    """按 code+日期精确对齐,把董监高「方式」富集进股东汇总的空「方式」列。"""
+    base = pd.DataFrame([{"code": "300684", "方向": "减持", "变动股数": 1e6,
+                          "方式": None, "日期": "2026-08-01", "来源": "ggcg"}])
+    mgmt = pd.DataFrame([{"code": "300684", "方向": "减持", "变动股数": 1e6,
+                          "方式": "协议转让", "日期": "2026-08-01", "来源": "mgmt"}])
+    out = _ed._merge_method_from_mgmt(base, mgmt)
+    hit = out[out["code"] == "300684"]
+    assert (hit["方式"] == "协议转让").any()          # 被富集
+    assert len(hit) == 1                              # 同事件不重复(同 code+日期+方向 去重)
+
+
+def test_merge_appends_management_only_rows():
+    """base 里无对应(code+日期+方向)的董监高变动行 → 追加进来(补董监高口径覆盖)。"""
+    base = pd.DataFrame([{"code": "000001", "方向": "减持", "变动股数": 2e6,
+                          "方式": None, "日期": "2026-08-02", "来源": "ggcg"}])
+    mgmt = pd.DataFrame([{"code": "600519", "方向": "减持", "变动股数": 5e5,
+                          "方式": "集中竞价", "日期": "2026-08-05", "来源": "mgmt"}])
+    out = _ed._merge_method_from_mgmt(base, mgmt)
+    added = out[out["code"] == "600519"]
+    assert len(added) == 1 and added.iloc[0]["方式"] == "集中竞价"
+
+
+def test_merge_no_future_leak_on_later_dated_method():
+    """防未来函数:董监高方式的日期晚于 base 减持日期 → 不回填(不用未来数据标注历史减持)。"""
+    base = pd.DataFrame([{"code": "000001", "方向": "减持", "变动股数": 2e6,
+                          "方式": None, "日期": "2026-08-02", "来源": "ggcg"}])
+    mgmt = pd.DataFrame([{"code": "000001", "方向": "减持", "变动股数": 2e6,
+                          "方式": "大宗交易", "日期": "2026-09-09", "来源": "mgmt"}])
+    out = _ed._merge_method_from_mgmt(base, mgmt)
+    base_row = out[(out["code"] == "000001") & (out["日期"] == "2026-08-02")].iloc[0]
+    assert base_row["方式"] in (None,) or pd.isna(base_row["方式"])   # 历史减持行未被未来方式污染
+
+
+def test_load_insider_trades_graceful_without_mgmt(monkeypatch):
+    """无董监高明细缓存 → load_insider_trades 原样返回股东汇总(优雅降级,不炸)。"""
+    base = pd.DataFrame([{"code": "000001", "方向": "减持", "变动股数": 1e6,
+                          "方式": None, "日期": "2026-08-01", "来源": "ggcg"}])
+    monkeypatch.setattr(_ed.store, "get_raw", lambda kind, tag: base if kind == "event_ggcg"
+                        else (_ for _ in ()).throw(FileNotFoundError()))
+    monkeypatch.setattr(_ed, "load_management_change", lambda tag="latest": pd.DataFrame())
+    out = _ed.load_insider_trades("latest")
+    assert len(out) == 1 and out.iloc[0]["方式"] is None
+
+
+def test_is_valid_method_enum():
+    """取值合法性:落在预期枚举(含组合值)为合法,乱码/空为非法。"""
+    assert _ed.is_valid_method("集中竞价") and _ed.is_valid_method("协议转让")
+    assert _ed.is_valid_method("集中竞价,大宗交易")     # 组合值
+    assert not _ed.is_valid_method("xyz乱码")
+    assert not _ed.is_valid_method(None) and not _ed.is_valid_method("")
+
+
+def test_precise_reduction_skips_future_dated_insider(monkeypatch):
+    """防未来函数(消费端):增减持记录日期晚于 as_of → summary 不计入(跳过未来事件)。"""
+    fake = pd.DataFrame([{"code": "300684", "方向": "减持", "变动股数": 1e6,
+                          "方式": "集中竞价", "日期": "2026-12-31", "来源": "mgmt"}])
+    monkeypatch.setattr(_ed, "load_insider_trades", lambda tag="latest": fake)
+    monkeypatch.setattr(summary, "_quarter_ends_before", lambda a, b: [])
+    # 未来日期(2026-12-31 > as_of 2026-08-08)→ 无可用事件 → 弃权 None
+    assert summary.summarize("300684", "2026-08-08", announcements=[]) is None
+
+
+def test_merged_protocol_method_flips_reduction_from_bearish(monkeypatch):
+    """端到端:董监高「协议转让」方式合并进减持后,下游不再机械强看空(战略引资/待定)。"""
+    base = pd.DataFrame([{"code": "300684", "方向": "减持", "变动股数": 1e6,
+                          "方式": None, "日期": "2026-08-01", "来源": "ggcg"}])
+    mgmt = pd.DataFrame([{"code": "300684", "方向": "减持", "变动股数": 1e6,
+                          "方式": "协议转让", "日期": "2026-08-01", "来源": "mgmt"}])
+    merged = _ed._merge_method_from_mgmt(base, mgmt)
+    monkeypatch.setattr(_ed, "load_insider_trades", lambda tag="latest": merged)
+    monkeypatch.setattr(summary, "_quarter_ends_before", lambda a, b: [])
+    s = summary.summarize("300684", "2026-08-08", announcements=[])
+    assert s is not None and s["方向"] != "看空"        # 协议转让→非强看空(待定中性/偏正)
+
+
+def test_merged_secondary_method_stays_bearish(monkeypatch):
+    """端到端回归:合并进「集中竞价」二级抛售方式的减持 → 仍看空(不被误改)。"""
+    base = pd.DataFrame([{"code": "000001", "方向": "减持", "变动股数": 1e6,
+                          "方式": None, "日期": "2026-08-01", "来源": "ggcg"}])
+    mgmt = pd.DataFrame([{"code": "000001", "方向": "减持", "变动股数": 1e6,
+                          "方式": "集中竞价", "日期": "2026-08-01", "来源": "mgmt"}])
+    merged = _ed._merge_method_from_mgmt(base, mgmt)
+    monkeypatch.setattr(_ed, "load_insider_trades", lambda tag="latest": merged)
+    monkeypatch.setattr(summary, "_quarter_ends_before", lambda a, b: [])
+    s = summary.summarize("000001", "2026-08-08", announcements=[])
+    assert s is not None and s["方向"] == "看空"        # 二级抛售看空不被误改
