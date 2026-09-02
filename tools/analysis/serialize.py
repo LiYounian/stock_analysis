@@ -209,7 +209,22 @@ def build_record(code: str, as_of: str) -> dict:
     # 展示层只读本块;前端勾选按落库 config 权重重合成(不触发后端重算)。
     from tools.analysis import council
     rec["council"] = _safe(lambda: council.build_council_block(rec, kdf))
+    # 同系统对账(弃权置信度标注 §3.4):合议综合方向 vs per-stock 买卖倾向 → 内部分歧标记(只标不改判)。
+    # 标注关 / 任一缺失 → None(优雅降级)。附加 rec 键,契约对 null/额外键宽容。
+    rec["合议对账"] = _safe(lambda: _council_bias_reconcile(rec))
     return rec
+
+
+def _council_bias_reconcile(rec: dict) -> dict | None:
+    """读 rec 的合议综合方向 + prediction.买卖倾向.结论,产内部分歧标记(纯读取 + 纯函数)。"""
+    from tools.analysis import council
+    if not bool((council._abstain_cfg()).get("标注启用", False)):
+        return None
+    方向 = (((rec.get("council") or {}).get("default") or {}).get("综合方向"))
+    结论 = (((rec.get("prediction") or {}).get("买卖倾向") or {}).get("结论"))
+    if 方向 is None or 结论 is None:
+        return None
+    return council.reconcile_direction(方向, 结论)
 
 
 def serialize_all(as_of: str | None = None, codes: list[str] | None = None) -> dict[str, str]:

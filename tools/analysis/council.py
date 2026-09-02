@@ -28,6 +28,72 @@ from tools.contracts.expert import validate_verdict
 _C = THRESHOLDS["合议"]
 
 
+def _abstain_cfg() -> dict:
+    """弃权置信度标注配置(单一真源;缺块给保守默认,老 config 兼容)。"""
+    return _C.get("弃权置信度标注", {}) or {}
+
+
+def _confidence_and_shrink(归因: list[dict], S: float, tau: float) -> dict:
+    """由逐专家归因派生「合议级参与度 / 置信度 / 软收缩」(纯函数,不改综合分/方向)。
+
+    口径(见 config「弃权置信度标注」注释):
+      · 参与(发声)= 权重×置信度 > 0(实际对分母有贡献);弃权 = 数据充分度=="缺失"(无数据);
+        在场无权(如技术趋势权重0、数据充分度非缺失)既不参与也不算弃权。
+      · 覆盖口径 = 参与专家所属语义桶(config 口径分组)去重;口径多样性 = 桶数。
+      · 合议置信度 = clip(参与权重×min(参与/参与饱和,1) + 口径权重×min(口径多样/口径饱和,1), 0, 1)。
+      · 收缩系数 = 1(参与≥收缩门槛 或 收缩关) 否则 clip(参与/收缩门槛, 收缩下限, 1);综合分_收缩 = S×系数。
+    副作用:给每条归因补 "参与"/"弃权" 布尔(可追溯)。
+    """
+    cfg = _abstain_cfg()
+    groups = cfg.get("口径分组", {}) or {}
+    参与饱和 = float(cfg.get("参与饱和", 3) or 3)
+    口径饱和 = float(cfg.get("口径饱和", 3) or 3)
+    w_part = float(cfg.get("参与权重", 0.6))
+    w_div = float(cfg.get("口径权重", 0.4))
+    低阈 = float(cfg.get("低置信阈值", 0.5))
+    收缩启用 = bool(cfg.get("收缩启用", False))
+    收缩门槛 = float(cfg.get("收缩门槛", 3) or 3)
+    收缩下限 = float(cfg.get("收缩下限", 0.4))
+
+    覆盖口径: set = set()
+    参与数 = 弃权数 = 0
+    for a in 归因:
+        弃权 = a.get("数据充分度") == "缺失"
+        参与 = (float(a.get("权重", 0.0)) * float(a.get("置信度", 0.0))) > 0
+        a["弃权"] = bool(弃权)
+        a["参与"] = bool(参与)
+        if 弃权:
+            弃权数 += 1
+        if 参与:
+            参与数 += 1
+            覆盖口径.add(groups.get(a["专家"], a["专家"]))
+    口径多样性 = len(覆盖口径)
+
+    part_ratio = min(参与数 / 参与饱和, 1.0) if 参与饱和 > 0 else 0.0
+    div_ratio = min(口径多样性 / 口径饱和, 1.0) if 口径饱和 > 0 else 0.0
+    合议置信度 = round(max(0.0, min(1.0, w_part * part_ratio + w_div * div_ratio)), 4)
+
+    if not 收缩启用 or 参与数 >= 收缩门槛:
+        收缩系数 = 1.0
+    else:
+        收缩系数 = max(收缩下限, min(1.0, 参与数 / 收缩门槛)) if 收缩门槛 > 0 else 1.0
+    综合分_收缩 = round(S * 收缩系数, 4)
+    方向_收缩 = "看多" if 综合分_收缩 >= tau else ("看空" if 综合分_收缩 <= -tau else "中性")
+
+    return {
+        "参与专家数": 参与数,
+        "弃权专家数": 弃权数,
+        "专家总数": len(归因),
+        "覆盖口径": sorted(覆盖口径),
+        "口径多样性": 口径多样性,
+        "合议置信度": 合议置信度,
+        "低合议置信度": bool(合议置信度 < 低阈),
+        "收缩系数": round(收缩系数, 4),
+        "综合分_收缩": 综合分_收缩,
+        "综合方向_收缩": 方向_收缩,
+    }
+
+
 def convene(expert_names: list[str], record: dict, kline=None,
             weight_override: dict | None = None) -> dict:
     """对一只票召集指定专家合议,返回综合结论(含逐专家归因)。
@@ -88,7 +154,7 @@ def convene(expert_names: list[str], record: dict, kline=None,
     if wo:
         口径 += "·含权重覆盖"
 
-    return {
+    out = {
         "综合方向": 综合方向,
         "综合分": round(S, 4),
         "参与专家": [v.专家 for v in verdicts],
@@ -97,6 +163,12 @@ def convene(expert_names: list[str], record: dict, kline=None,
         "冲突说明": 冲突说明,
         "口径": 口径,
     }
+
+    # 弃权置信度标注(总 kill-switch=标注启用):加合议级参与度/置信度 + 软收缩(纯附加字段,
+    # 不改「综合方向/综合分」——前端重合成与既有排序默认口径不漂移;收缩另由「收缩启用」二级开关门控)。
+    if bool(_abstain_cfg().get("标注启用", False)):
+        out.update(_confidence_and_shrink(归因, S, tau))
+    return out
 
 
 # ————————————————————————————————————————————————
@@ -177,6 +249,32 @@ def bias_council(tech: dict, fundflow: dict | None = None,
     return {"结论": 结论, "得分": score, "依据": reasons}
 
 
+_倾向_到_方向 = {"偏买入": "看多", "偏卖出": "看空", "观望": "中性"}
+
+
+def reconcile_direction(综合方向, 买卖倾向结论) -> dict:
+    """同系统对账:策略0合议「综合方向」vs per-stock「买卖倾向」结论 → 内部分歧标记(纯函数)。
+
+    动机(诊断源同名文档 §3.4):同一票合议看多、per-stock 观望(读到主力净流出等 per-stock 独有数据)
+    是"内部分歧",分析师应立刻查因。此处只标注、不改判(与合议 D1"冲突仅标注"同精神)。
+    程度:相反(看多 vs 看空)> 偏离(一方明确、一方中性/观望)> 一致(同向或都中性)。
+    数据不足(任一为空/未知)→ 分歧=False、程度="数据不足"(不误标)。⚠️ 非投资建议。
+    """
+    b = _倾向_到_方向.get(买卖倾向结论)
+    if 综合方向 not in ("看多", "看空", "中性") or b is None:
+        return {"分歧": False, "程度": "数据不足",
+                "council方向": 综合方向, "per_stock倾向": 买卖倾向结论,
+                "说明": "合议方向或买卖倾向缺失,不对账"}
+    if 综合方向 == b:
+        return {"分歧": False, "程度": "一致",
+                "council方向": 综合方向, "per_stock倾向": 买卖倾向结论,
+                "说明": f"合议{综合方向}与买卖倾向{买卖倾向结论}一致"}
+    程度 = "相反" if {综合方向, b} == {"看多", "看空"} else "偏离"
+    return {"分歧": True, "程度": 程度,
+            "council方向": 综合方向, "per_stock倾向": 买卖倾向结论,
+            "说明": f"内部{程度}:全A合议{综合方向} vs per-stock买卖倾向{买卖倾向结论}"}
+
+
 # 财报高危红旗 → 选股排序接入(降权/否决)的纯函数移至 config 层(tools.config.strategy),
 # 以便**展示层(web)不 import 分析器**(§9.3 依赖方向,test_chart 守门)。此处按需再导出,
 # 便于分析/离线侧从合议模块直接取用(单一真源仍在 config)。
@@ -201,5 +299,7 @@ def build_council_block(record: dict, kline=None) -> dict:
         # config 是前端重合成的口径真源:必须带「分母模式」,否则前端无从判分母 → 前后端漂移
         "config": {"tau": _C["tau"], "conflict_epsilon": _C["conflict_epsilon"],
                    "分母模式": _C.get("分母模式", "置信度加权"),
+                   # 前端重合成合议置信度/收缩的口径真源(缺则前端无从复算 → 前后端漂移)
+                   "弃权置信度标注": dict(_abstain_cfg()),
                    "默认权重": dict(_C["默认权重"]), "默认专家组": names},
     }

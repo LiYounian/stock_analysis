@@ -77,6 +77,25 @@ def test_run_council_screen_ranks_desc_and_lands_view(monkeypatch, tmp_path):
     assert top0["综合方向"] in ("看多", "看空", "中性")
 
 
+def test_run_council_screen_exposes_confidence_and_ranks_by_shrunk(monkeypatch):
+    """弃权置信度标注接入:Top 记录透出 合议置信度/综合分_收缩;无红旗时 排序分 == 综合分_收缩。
+
+    全A 最小记录里资金流/情绪/多因子/事件/财报/板块 均弃权 → 每票仅超买超卖+拐点(纯技术单口径)
+    可能发声 → 参与≤2 < 收缩门槛3 → 综合分_收缩被软收缩且标低置信度;排序按收缩后分,不按原综合分。
+    """
+    kmap = {"000001": _kline(trend=0.15, seed=2), "000002": _kline(trend=-0.15, seed=3)}
+    monkeypatch.setattr(sc.market, "load_kline", lambda code: kmap[code])
+    monkeypatch.setattr(sc.board, "board_of", lambda code: None)
+    monkeypatch.setattr(sc.store, "set_active_date", lambda d: None)
+    monkeypatch.setattr(sc.store, "put_view", lambda name, obj, date=None: "p")
+    v = sc.run_council_screen(["000001", "000002"], as_of="2026-08-08", fetch=False)
+    for t in v["top"]:
+        assert "合议置信度" in t and "综合分_收缩" in t and "参与专家数" in t
+        # 无财报/龙虎榜红旗(全A最小记录)→ 排序分应等于收缩后综合分(收缩驱动排序,非原综合分)
+        assert abs(t["排序分"] - t["综合分_收缩"]) < 1e-9
+    assert "Top内低合议置信度" in v
+
+
 def test_run_council_screen_persist_false_no_write(monkeypatch):
     """persist=False:只算不落盘——前向记分卡复算全票排名时不得覆盖闭环已落的 top-N view。
 
