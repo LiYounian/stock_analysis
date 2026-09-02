@@ -492,6 +492,24 @@ def run_screen(codes: list[str]) -> None:
     logger.info("选股视图 → %s(主线 %s,预设 %d 组)", p, agg.get("hot_theme"), len(presets))
 
 
+def run_multi_gate(picks_by_view: dict[str, list[str]], as_of: str) -> dict:
+    """多策略命中「同源信号闸门」(选股汇总层):独立口径命中数 + 游资过热前置闸 + veto 汇聚。
+
+    读各 screener 的 view 名→picks 映射,归族计"独立口径命中数"(替代原命中数),对候选逐票过
+    游资情绪过热多轴闸(默认软降级)与统一风控 veto 汇聚(复用 risk_veto_adjust),产出分层排序。
+    kill-switch(config 多策略命中闸门.启用)关 → 退回原命中数排序(no-op)。结果落 view
+    `多策略命中闸门` 供选股页/SOP 消费;随当日 analysis 产物被 upload 自动带到远端。
+    """
+    from tools.analysis import multi_strategy_gate as gate
+    result = gate.evaluate(picks_by_view, as_of)
+    p = store.put_view("多策略命中闸门", result)
+    top = result.get("票") or []
+    logger.info("多策略命中闸门(%s):候选 %d,过热命中 %d,veto否决 %d → %s",
+                "启用" if result.get("启用") else "关闭(no-op)", len(top),
+                len(result.get("过热命中") or []), len(result.get("否决") or []), p)
+    return result
+
+
 def run_backtest() -> None:
     """闭环收尾:跨多日累积的前瞻回测汇总(**可选增强**,失败绝不中止主闭环)。
 
@@ -975,12 +993,14 @@ def run_screen_all(codes_all: list[str], as_of: str, no_llm: bool = False,
     union: list[str] = []
     strategy_picks: list[list[str]] = []            # 各策略有序选出票(供候选集按每策略前 M 切片)
     per_strategy: dict[str, int] = {}
+    picks_by_view: dict[str, list[str]] = {}        # view 名 → picks(供多策略命中闸门归族/计数)
     for label, fn in screeners:
         view = _safe(f"{label} 全A筛选", fn)
         picks = _picks_from_view(view)
         per_strategy[label] = len(picks)
         union.extend(picks)
         strategy_picks.append(picks)
+        picks_by_view[_screener_view.get(label, label)] = picks
         logger.info("  %s 入选 %d", label, len(picks))
         # 流式增量推:该策略 view 落盘后立即推(抗断点——某策略/网络失败不影响已推的;末尾兜底补漏)
         vname = _screener_view.get(label)
@@ -1022,6 +1042,10 @@ def run_screen_all(codes_all: list[str], as_of: str, no_llm: bool = False,
         _push_incremental(as_of, set(_b))
     run_panel(llm_subset)
     run_screen(llm_subset)
+    # —— 多策略命中「同源信号闸门」(选股汇总层·统一一处):独立口径命中数替代命中数 +
+    #    游资情绪过热多轴前置闸 + 统一风控 veto 汇聚复用。kill-switch(config 多策略命中闸门.启用)。
+    #    只读已落盘的 picks/财报/龙虎榜/K线,失败降级不中止闭环;产物落 view 供选股/SOP 消费。
+    _safe("多策略命中闸门", lambda: run_multi_gate(picks_by_view, as_of))
     _safe("前瞻回测汇总", run_backtest)              # 收尾可选增强(失败降级,不中止闭环)
     # —— 风控微结构轴:收盘后采当日龙虎榜(T 落盘、list_date<as_of 次日生效)。
     #    命门:生产日常走 screenall→run_screen_all,故龙虎榜的**实际每日采集入口在此**
