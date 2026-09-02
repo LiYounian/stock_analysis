@@ -30,6 +30,7 @@ import pandas as pd
 
 from tools.collectors import market
 from tools.store import repo as store
+from tools.strategy import momentum_overheat as overheat
 from tools.strategy.momentum import combo_momentum_screen, weighted_log_momentum
 
 logger = logging.getLogger("pipeline.screen_momentum")
@@ -64,12 +65,18 @@ def _store_closes_loader(code: str) -> np.ndarray | None:
 
 
 def run_momentum_screen(codes: list[str], as_of: str | None = None,
-                        fetch: bool = True, top_k: int = DEFAULT_TOP_K) -> dict:
+                        fetch: bool = True, top_k: int = DEFAULT_TOP_K,
+                        apply_overheat: bool | None = None) -> dict:
     """扫描 codes,跑 A 腿动量组合,落 view「动量组合」。返回 summary。
 
     仅 A 腿(纯价格动量):加权对数动量 → R²≥{R2_MIN} + 拉普拉斯「买」闸门 → TopK。
     fetch=True:缺 K 线自动采集补齐收盘;False:只读本地缓存(离线复算,不触网)。
     历史不足(<回看+1)的票不参与打分(记入「跳过数」)。
+
+    高位超买抑制层(动量高位超买抑制,kill-switch 默认开):对动量分 Top M 候选算超买/涨幅透支
+    双轴裁决,命中 → 软降级(×系数,沉排名)/沉底/剔除后重排取 TopK。apply_overheat=None → 读
+    config「启用」;=False 显式关(A/B 回测的 A 腿:纯动量现状不回归)。防未来函数:抑制特征只用
+    as_of 及之前 K 线。
     """
     if as_of:
         store.set_active_date(as_of)
@@ -99,7 +106,8 @@ def run_momentum_screen(codes: list[str], as_of: str | None = None,
         scanned += 1
         records[code] = {"meta": {"code": code}}       # 最小 record,收盘由 loader 提供
 
-    picks = combo_momentum_screen(
+    # 过闸门的全部候选(动量分降序,未截断);供高位超买抑制层重排后再取 TopK。
+    scored = combo_momentum_screen(
         records,
         lookback_days=LOOKBACK_DAYS,
         r2_min=R2_MIN,
@@ -107,21 +115,49 @@ def run_momentum_screen(codes: list[str], as_of: str | None = None,
         s=LAPLACE_S,
         min_slope=MIN_SLOPE,
         closes_loader=lambda c: closes_cache.get(c),
+        return_scored=True,
     )
 
-    # 补充每只入选票的动量明细(重算一次评分,便于人读 view)。
+    # —— 高位超买抑制层(kill-switch;默认读 config「启用」)——
+    oh_cfg = overheat.cfg()
+    oh_on = overheat.enabled(oh_cfg) if apply_overheat is None else bool(apply_overheat)
+    eval_pool = max(int(oh_cfg.get("评估候选数", 50)), top_k) if oh_on else 0
+    suppressed: dict[str, dict] = {}     # code → 裁决(触发的,人读/审计)
+    ranked: list[tuple[int, float, str]] = []   # (tier, 原始动量分, code);分层排序(magnitude-robust)
+    for i, (code, raw) in enumerate(scored):
+        if oh_on and i < eval_pool:
+            v = overheat.overheat_asof(code, as_of, c=oh_cfg)
+            if v.get("触发"):
+                suppressed[code] = v
+                if v.get("剔除"):
+                    continue                              # 剔除模式:从候选移除,不入榜
+            tier, _ = overheat.sort_key(raw, v)
+            ranked.append((tier, raw, code))
+        else:
+            ranked.append((0, raw, code))
+    ranked.sort(key=lambda t: (t[0], -t[1]))              # tier 升序、动量分降序
+    picks_full = [(code, raw) for _tier, raw, code in ranked[:top_k]]
+
+    # 补充每只入选票的动量明细(重算一次评分,便于人读 view)+ 抑制标注。
     selected: list[dict] = []
-    for code in picks:
+    for code, raw in picks_full:
         arr = closes_cache.get(code)
         mom = weighted_log_momentum(arr, lookback_days=LOOKBACK_DAYS) if arr is not None else {}
-        selected.append({
+        item = {
             "code": code,
             "特征": {
                 "动量分": round(float(mom.get("score", 0.0)), 6),
                 "年化": round(float(mom.get("annualized", 0.0)), 4),
                 "R²": round(float(mom.get("r_squared", 0.0)), 4),
             },
-        })
+        }
+        v = suppressed.get(code)
+        if v is not None:                                 # 命中抑制但仍在榜(软降级/沉底)
+            item["高位超买抑制"] = {
+                "动作": v.get("动作"), "命中轴数": v.get("命中轴数"),
+                "原因": v.get("原因"), "⚠": "高位超买+涨幅透支,已降级沉排名",
+            }
+        selected.append(item)
 
     view = {
         "as_of": as_of,
@@ -137,8 +173,17 @@ def run_momentum_screen(codes: list[str], as_of: str | None = None,
         "规则": (f"加权对数动量打分(lookback={LOOKBACK_DAYS})→ R²≥{R2_MIN} + "
                  f"拉普拉斯低通末根='买'(s={LAPLACE_S},min_slope={MIN_SLOPE})闸门 → "
                  f"按动量分降序取 Top{top_k}(限 1 日尺度)"),
-        "复用": "tools.strategy.momentum.combo_momentum_screen(closes_loader 注入)",
-        "防未来函数": f"动量/信号只用 t 及之前;尾部即当日;历史<{need} 跳过",
+        "高位超买抑制层": {
+            "启用": bool(oh_on),
+            "模式": oh_cfg.get("模式") if oh_on else None,
+            "命中数": len(suppressed),
+            "命中票": sorted(suppressed.keys()),
+            "口径": ("双轴同时命中(超买共振 ob_os=超买 且 涨幅透支 bias20/近N日涨幅超阈)→ "
+                     "软降级(×系数沉排名)/沉底/剔除;kill-switch 关闭即纯动量现状"),
+        },
+        "复用": "tools.strategy.momentum.combo_momentum_screen(closes_loader 注入)"
+                " + tools.strategy.momentum_overheat(高位超买抑制)",
+        "防未来函数": f"动量/信号只用 t 及之前;尾部即当日;历史<{need} 跳过;抑制特征按 date<=as_of 切片",
     }
     p = store.put_view("动量组合", view)
     logger.info("动量组合:扫描 %d / 有效 %d / 跳过(历史不足)%d / 入选 %d → %s",

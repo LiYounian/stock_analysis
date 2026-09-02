@@ -234,7 +234,8 @@ def combo_momentum_screen(records: dict[str, dict],
                           top_k: int = 3,
                           s: float = 0.07,
                           min_slope: float = 0.002,
-                          closes_loader=None) -> list[str]:
+                          closes_loader=None,
+                          return_scored: bool = False):
     """策略 A 提炼版(改跑 A 股):加权对数动量打分 → R² + 拉普拉斯闸门过滤 → 排序取 TopK。
 
     原脚本对 ETF 池:动量粗筛 Top10 → 拉普拉斯/R²/均线/量能/短期风控/溢价率多重闸门 → Top1。
@@ -243,6 +244,10 @@ def combo_momentum_screen(records: dict[str, dict],
 
     closes_loader: 可选 `code -> np.ndarray|None` 的注入。缺省走 market.load_kline(采集层),
     web 层可传 store-only 版本以守分层(见 web/data_access._store_closes_loader)。
+
+    return_scored=True:返回**过 R²+拉普拉斯闸门的全部候选**(按动量分降序的 [(code, score)]),
+    不截断 top_k——供上层(如 screen_momentum 高位超买抑制层)重排序后再取 TopK。缺省 False 时返回
+    [code] TopK,行为与旧版逐字节一致(向后兼容)。
     """
     loader = closes_loader or _load_closes_from_record
     scored: list[tuple[str, float]] = []
@@ -258,6 +263,8 @@ def combo_momentum_screen(records: dict[str, dict],
             continue
         scored.append((code, float(mom["score"])))
     scored.sort(key=lambda kv: kv[1], reverse=True)
+    if return_scored:
+        return scored
     return [c for c, _ in scored[:top_k]]
 
 
