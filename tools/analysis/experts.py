@@ -208,13 +208,16 @@ def expert_事件驱动(record: dict, kline=None) -> ExpertVerdict:
 def expert_板块轮动(record: dict, kline=None) -> ExpertVerdict:
     """所属行业 RRG 象限 → 方向(改善/领先→看多、落后→看空、走弱→中性);强度=RS 偏离归一。
 
-    行业取自 record.meta.industry(缺则回退 board.board_of(code));行业无 RRG 数据(名称口径
-    不一致 / 板块或基准 K 线缺)→ 弃权(中性+强度0+置信度0+数据充分度=缺失,弃权可见)。
+    行业回退链:record.meta.industry/sector → meta.industry_asof(as_of 当时门类,point-in-time)
+    → board.board_of(code)(现状证监会码)。行业无 RRG 数据(名称口径不一致 / 板块或基准 K 线缺)
+    → 弃权(中性+强度0+置信度0+数据充分度=缺失,弃权可见)。
     计算内核在 tools/analysis/rrg.py(只经 store 读、不触网、恒不抛)。
     """
     from tools.analysis import rrg
     meta = (record or {}).get("meta") or {}
     industry = meta.get("industry") or meta.get("sector")
+    if not industry:
+        industry = meta.get("industry_asof")           # point-in-time 门类回退(去回测前视)
     if not industry:
         code = meta.get("code")
         if code:
