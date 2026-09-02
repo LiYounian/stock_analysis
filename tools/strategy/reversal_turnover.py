@@ -30,6 +30,7 @@ import math
 from typing import Optional
 
 from tools.config.strategy import THRESHOLDS
+from tools.strategy import reversal_veto
 from tools.strategy._factor_util import winsorize_med, zscore
 from tools.strategy.registry import strategy
 
@@ -164,6 +165,7 @@ def combo_reversal_turnover_screen(
     min_amount_wan: float = _MIN_AMOUNT_WAN,
     exclude_board_head: bool = _EXCLUDE_BOARD_HEAD,
     limit_pct: float = _LIMIT_PCT,
+    apply_veto: Optional[bool] = None,
 ) -> dict:
     """反转低换手复合选股(候选策略)。
 
@@ -171,13 +173,22 @@ def combo_reversal_turnover_screen(
     对 rev / turn 各自 winsorize+zscore,等权复合 score = w_rev·z(rev)+w_turn·z(turn),
     降序取 top_k。跳过原因(停牌/涨跌停/低流动性/剥离/因子缺失)分类计数,诚实降级。
     样本 <2 无法横截面标准化 → 空 + note。
+
+    否决层(反转专属·基本面/消息面):record 若挂 record['风险特征'](薄管线 as-of 抽取,见
+    reversal_veto.extract_features),且开关开(apply_veto=None 读 config 反转否决层.启用;
+    True/False 显式覆盖,供 A/B 回测)→ 打分后按裁决**降级(综合分减罚分沉底、标"高风险博弈")**或
+    **否决(剔除/强制沉底)**。无风险特征 / 开关关 → no-op(纯量价现状不回归)。⚠️ 非投资建议。
     """
     skip: dict[str, int] = {}
 
     def _skip(reason: str):
         skip[reason] = skip.get(reason, 0) + 1
 
+    veto_cfg = reversal_veto.cfg()
+    veto_on = reversal_veto.enabled(veto_cfg) if apply_veto is None else bool(apply_veto)
+
     scoped: list[tuple[str, float, float, float]] = []  # (code, rev, turn, amount_wan)
+    feat_map: dict[str, dict] = {}                      # code → record['风险特征'](供否决层)
     for code, rec in (records or {}).items():
         if exclude_board_head and _code_head_excluded(code):
             _skip("剥离板块头")
@@ -199,6 +210,8 @@ def combo_reversal_turnover_screen(
             _skip("低流动性")
             continue
         scoped.append((code, float(rev), float(turn), float(amt)))
+        if veto_on:
+            feat_map[code] = (rec or {}).get("风险特征")
 
     if len(scoped) < 2:                                 # 少于 2 只无法做横截面标准化
         return {"codes": [], "candidates": [], "top_k": top_k,
@@ -214,18 +227,51 @@ def combo_reversal_turnover_screen(
     turn_z = zscore(winsorize_med(turn_raw))
     scores = [rev_z[i] * w_rev + turn_z[i] * w_turn for i in range(len(codes))]
 
-    ranked = sorted(
-        zip(codes, scores, rev_raw, turn_raw, [a for *_, a in scoped], rev_z, turn_z),
-        key=lambda x: x[1], reverse=True,
-    )
-    detail = [{
-        "code": c, "综合分": round(s, 4),
-        "rev": round(rv, 4), "turn": round(tn, 4), "amount_wan": round(am, 1),
-        "rev_z": round(rz, 4), "turn_z": round(tz, 4),
-    } for c, s, rv, tn, am, rz, tz in ranked]
+    # —— 否决层:逐票裁决 → 调整后排序分(降级减罚分 / 否决强制沉底);未开或无特征 → 恒等 no-op ——
+    veto_hits = {"降级": 0, "否决": 0, "剔除": 0}
+    veto_by_axis: dict[str, int] = {}
+    verdicts: list[dict] = []
+    adj_scores: list[float] = []
+    for i, code in enumerate(codes):
+        v = reversal_veto.veto_verdict(feat_map.get(code), veto_cfg) if veto_on else \
+            {"触发": False, "否决": False, "剔除": False, "动作": None, "原因": [], "轴": {}, "罚分": 0.0}
+        verdicts.append(v)
+        adj_scores.append(reversal_veto.apply_to_score(scores[i], v))
+        if veto_on and v.get("触发"):
+            if v.get("否决"):
+                veto_hits["否决"] += 1
+                if v.get("剔除"):
+                    veto_hits["剔除"] += 1
+            else:
+                veto_hits["降级"] += 1
+            for ax, hit in (v.get("轴") or {}).items():
+                if hit:
+                    veto_by_axis[ax] = veto_by_axis.get(ax, 0) + 1
 
-    picked = [c for c, *_ in ranked[:top_k]]
-    return {
+    ranked = sorted(
+        zip(codes, scores, rev_raw, turn_raw, [a for *_, a in scoped],
+            rev_z, turn_z, adj_scores, verdicts),
+        key=lambda x: x[7], reverse=True,               # 按调整后分排序(否决层生效点)
+    )
+    detail = []
+    for c, s, rv, tn, am, rz, tz, adj, v in ranked:
+        row = {
+            "code": c, "综合分": round(s, 4),
+            "rev": round(rv, 4), "turn": round(tn, 4), "amount_wan": round(am, 1),
+            "rev_z": round(rz, 4), "turn_z": round(tz, 4),
+        }
+        if veto_on and v.get("触发"):
+            row["调整后分"] = round(float(adj), 4)
+            row["否决层"] = {"动作": v.get("动作"), "剔除": bool(v.get("剔除")),
+                            "罚分": v.get("罚分"), "原因": v.get("原因"),
+                            "标签": "高风险博弈,不作反转买入候选"}
+        detail.append(row)
+
+    # 入选:剔除(否决且不保留展示)的票不进榜;其余按调整后分序取 top_k
+    picked = [c for c, _s, _rv, _tn, _am, _rz, _tz, _adj, v in ranked
+              if not v.get("剔除")][:top_k]
+
+    out = {
         "codes": picked,
         "candidates": picked,
         "top_k": top_k,
@@ -236,3 +282,11 @@ def combo_reversal_turnover_screen(
         "参数": {"反转窗口": _REV_N, "换手窗口": _TURN_N,
                  "min_amount_wan": min_amount_wan},
     }
+    if veto_on:
+        out["否决层"] = {
+            "启用": True, "模式": veto_cfg.get("模式", "降级"),
+            "命中数": veto_hits, "分轴命中": veto_by_axis,
+            "有风险特征票数": sum(1 for c in codes if feat_map.get(c) is not None),
+            "说明": "反转专属否决/降级层(基本面空心/事件博弈/治理风险/重组未完成);⚠️非投资建议",
+        }
+    return out
