@@ -38,6 +38,44 @@ _LAYER_W = {"新闻": 0.5, "政策": 0.3, "舆情": 0.2}
 FRESH, STALE, NODATA = "新鲜", "陈旧", "无数据"
 
 
+# ---------- 代码→公司名解析(修「name 回退成 code 致 LLM 判本股新闻为无关」)----------
+def resolve_name(code: str) -> tuple[str, bool]:
+    """代码→公司名,按可靠性回退链解析。返回 (name, fell_back_to_code)。
+
+    链:① 自选池 stock_pool.get(code).name → ② 全A 代码名映射(config/code_name.json)
+        → ③ **最后才**回退成 code 本身。
+    fell_back_to_code=True 表示全链未命中真名、只能拿代码顶替——这是本 bug 的触发条件
+    (代码被当成「公司名」喂进关系判定 prompt,LLM 会把本股新闻判成「无关」),
+    下游据此统计 name_fallback_ratio + WARN。
+
+    为何不再取 panel/per-stock meta.name 作为独立一层:panel 的「名称」列本身就来自
+    serialize 的 meta.name = `stock_pool → code_name.json → code`(见 tools/analysis/panel.py
+    与 serialize.py:_code_name),与本链同源,加进来是循环/冗余,不引入新信息。
+    """
+    s = stock_pool.get(code)
+    if s and s.name and s.name != code:
+        return s.name, False
+    # 全A 代码名映射:复用 serialize 的模块级缓存(懒导入避免模块加载期循环依赖)
+    from tools.analysis import serialize
+    nm = serialize._code_name(code)
+    if nm and nm != code:
+        return nm, False
+    return code, True
+
+
+def name_fallback_stats(codes: list[str]) -> dict:
+    """批量统计 name→code 回退占比(富集环节可观测点)。
+
+    返回 {ratio, fallback, total, fallback_codes};ratio>0 说明有票拿不到真名、
+    其本股新闻有被判「无关」的风险(见 resolve_name)。调用方 >0 应 WARN 并落盘。
+    """
+    codes = list(codes or [])
+    fb = [c for c in codes if resolve_name(c)[1]]
+    total = len(codes)
+    return {"ratio": round(len(fb) / total, 4) if total else 0.0,
+            "fallback": len(fb), "total": total, "fallback_codes": fb}
+
+
 def _classify_freshness(resolved_date: str | None, locked_date: str | None,
                         max_stale_days: int, mode: str) -> tuple[str, str | None]:
     """由 (实际读到的分区日 resolved, 锁定日 locked) 判某层新鲜度 + 采集日期。
@@ -164,8 +202,7 @@ def extract_news_events(code: str, client=None, limit: int | None = None,
     缺省 None → 自读 nw.load_news(code)(向后兼容既有调用方/测试)。
     并发下按输入顺序回填结果(index 对齐),下游可按序处理。
     """
-    s = stock_pool.get(code)
-    name = s.name if s else code
+    name, _ = resolve_name(code)          # 真名回退链:自选池→全A映射→code(防喂错关系判定)
     items = nw.load_news(code) if items is None else items
     if limit:
         items = items[:limit]           # 取最近 limit 条(倒序在前)
@@ -393,8 +430,7 @@ def ugc_sentiment(code: str, client=None, n: int = UGC_SAMPLE_N,
     if not posts:
         return {"净情绪": 0.0, "多空": "中性", "样本数": 0, "degraded": "empty_ugc"}
 
-    s = stock_pool.get(code)
-    name = s.name if s else code
+    name, _ = resolve_name(code)          # 同新闻层:给 LLM 真名而非代码
     text = "\n".join(f"{i + 1}. {p.get('text', '')}" for i, p in enumerate(posts))
     instr = prompts.ugc_sentiment_instruction(name, code)
     client = client or lc.get_client()
