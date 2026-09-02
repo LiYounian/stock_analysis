@@ -12,6 +12,7 @@ import pandas as pd
 import pytest
 
 from tools.analysis.market_forecast import features as F
+from tools.analysis.market_forecast import forecast as FC
 from tools.analysis.market_forecast import predictor as P
 from tools.backtest import market_forecast_backtest as BT
 
@@ -64,6 +65,66 @@ def test_bucketize_monotonic():
     # 收益单调升 → 分档序号单调不降
     assert list(b) == sorted(b.tolist())
     assert b.min() == 0 and b.max() == 4
+
+
+# ————————————— 五档口径修正:概率 ≠ 幅度(锁提议问题A) —————————————
+_AMPLITUDE_WORDS = ("大涨", "大跌", "小涨", "小跌")
+
+
+def test_prob_bucket_labels_have_no_amplitude_words():
+    """P(上涨)→档 的标签必须是概率口径,不得出现涨跌幅措辞(命中率~55%撑不起'大涨')。"""
+    for idx in range(5):
+        lab = P.prob_bucket_label(idx)
+        assert not any(w in lab for w in _AMPLITUDE_WORDS), f"概率档标签含幅度词:{lab}"
+    # 概率档 与 幅度档(已实现fwd收益)是两套标签,必须解耦
+    assert P._PROB_LABELS != P._LABELS
+    # 幅度档仍保留涨跌幅口径(供 features._bucketize 的已实现收益分档/回测用)
+    assert any(w in "".join(P._LABELS) for w in _AMPLITUDE_WORDS)
+
+
+def test_prob_bucket_label_monotonic_and_extremes():
+    labs = [P.prob_bucket_label(i) for i in range(5)]
+    assert len(set(labs)) == 5                      # 五档互异
+    assert "低" in labs[0] and "高" in labs[-1]      # 最低/最高档语义正确
+
+
+# ————————————— 个股β基准 + 风格背离标记(锁提议问题B/提议3) —————————————
+def test_beta_baseline_default_is_proxy():
+    cfg = P._CFG
+    assert cfg["个股β基准"] == "proxy"              # 个股β默认读全A等权代理
+    assert cfg["β背景标的"] == "hs300"              # hs300 仅作权重股背景
+
+
+def _fake_targets(hs_p, px_p):
+    """构造 out_targets 片段(仅 p_up/direction),供风格背离单测。"""
+    mk = lambda p: {"p_up": p, "direction": FC._direction(p)}
+    return {
+        "hs300": {"horizons": {"1": mk(hs_p[0]), "5": mk(hs_p[1])}},
+        "proxy": {"horizons": {"1": mk(px_p[0]), "5": mk(px_p[1])}},
+    }
+
+
+def test_style_divergence_triggers_on_0902_case():
+    """09-02 复现:hs300 偏多(.6697/.6659) vs proxy 震荡/偏弱(.5477/.4869)→ 权重搭台中小盘偏弱。"""
+    out = _fake_targets((0.6697, 0.6659), (0.5477, 0.4869))
+    div = FC._style_divergence(out, P._CFG)
+    assert div["触发"] is True
+    for h in ("1", "5"):
+        assert div["维度"][h]["触发"] is True
+        assert div["维度"][h]["类型"] == "权重搭台中小盘偏弱"
+    # T+5 proxy<0.5<hs300 → 必须识别为跨越0.5
+    assert div["维度"]["5"]["跨越0.5"] is True
+
+
+def test_style_divergence_reverse_and_consistent():
+    # 中小盘更强 → 反向类型
+    rev = FC._style_divergence(_fake_targets((0.50, 0.48), (0.66, 0.70)), P._CFG)
+    assert rev["触发"] is True
+    assert rev["维度"]["5"]["类型"] == "中小盘领跑权重滞后"
+    # 两者一致(差值<阈值、同向、不跨0.5)→ 不触发
+    con = FC._style_divergence(_fake_targets((0.58, 0.60), (0.56, 0.57)), P._CFG)
+    assert con["触发"] is False
+    assert all(v["类型"] == "一致" for v in con["维度"].values())
 
 
 def test_walk_forward_no_future_leak():
