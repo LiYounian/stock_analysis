@@ -269,6 +269,17 @@ def run_sentiment(codes: list[str]) -> int:
     logger.info("LLM 政策打分...")
     if not event.score_policy():
         logger.warning("政策打分为空(缺政策缓存?),政策层降级")
+    # 富集前可观测:多少票拿不到真名、只能回退成代码(=本股新闻有被误判「无关」的风险)。
+    nf = event.name_fallback_stats(codes)
+    if nf["fallback"]:
+        logger.warning("name_fallback_ratio=%.4f(%d/%d 票取不到真名,回退成代码):%s",
+                       nf["ratio"], nf["fallback"], nf["total"], nf["fallback_codes"][:20])
+    else:
+        logger.info("name_fallback_ratio=0(%d 票全部取到真名)", nf["total"])
+    try:
+        store.put_view("name_fallback", nf)              # 落盘按日期视图,便于回溯/验收
+    except Exception as e:
+        logger.warning("name_fallback 视图落盘失败(不阻断):%s", str(e)[:80])
     ok = 0
     n = len(codes)
     fresh_stat = {"新鲜": 0, "陈旧": 0, "无数据": 0}          # 顶层新鲜度三态占比(验收观测点)
