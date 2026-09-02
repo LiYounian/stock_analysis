@@ -90,6 +90,9 @@ trap 'rmdir "$LOCK" 2>/dev/null' EXIT
   echo "-- ②.5 前瞻记分卡(picks+预测+情绪 配到期实际收益,幂等滚存;消息面回测长期样本源) --"
   # 持久 --out:每天重跑把"新到期"的前瞻收益补进,累积几周后供 backtest_sentiment / PEAD 复验
   "$PY" -m tools.backtest.forward_scorecard --out "$REPO/data/analysis/backtest/forward_scorecard.csv" || echo "!! 记分卡(不阻断)"
+  echo "-- ②.7 大盘预测v0.5(技术+广度+消息面→沪深300涨跌;产出 market_forecast.json 供选股定β背景) --"
+  # 排在②screenall(sentiment_policy已写)+①主档之后、③上传之前:让预测吃全新数据、且随当日分片上传远端。非投资建议,β环境信号非交易门控。
+  "$PY" -m tools.analysis.market_forecast.forecast --as-of "$D" --write-analysis || echo "!! 大盘预测(不阻断)"
   echo "-- ③ 上传远端(先不带 --force:只补未确认分片,规避 ingest 429 限速) --"
   "$PY" -m tools.sync.upload --date "$D" || echo "!! 上传第一轮"
   sleep 65   # 限速窗口(120/60s);分片>120 时首轮部分 429,等窗口重置补齐
