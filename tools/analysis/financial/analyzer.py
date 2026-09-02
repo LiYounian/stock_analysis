@@ -92,21 +92,26 @@ def _in_semi_universe(code: str) -> bool:
 def _industry_key(code: str, industry: str | None = None) -> str | None:
     """解析该票申万一级行业名(行业财报专家路由用)。
 
-    优先用传入 industry(record.meta.industry),否则回退 board.board_of(code)(证监会门类),
-    统一经 industry_map 对齐到申万一级。两者皆缺时,再以申万二级 801081 半导体池成分兜底
-    →「电子」(修 board_membership 数据缺导致 fabless 半导体从不命中电子专家的路由 bug)。
+    优先用传入 industry(record.meta.industry),否则先查申万二级 801081 半导体池成分
+    →「电子」,再回退 board.board_of(code)(证监会门类)经 industry_map 对齐。
     全部失败 → None(退回通用兜底,不误路由)。
+
+    半导体池优先于 board_of:申万二级 801081 成分对「电子」是**权威口径**,而证监会门类是
+    近似——它把 fabless 芯片设计公司误分到「软件/计算机」(I64/I65)、半导体设备误分到「机械」
+    (C35)等。board_membership 数据落地后 board_of 不再恒 None,若仍把 board_of 排在半导体池
+    之前,这 60/178 只 CSRC 口径不落电子的半导体票会被误路由到 计算机/机械设备。故半导体池
+    成分**先于** board_of 命中电子专家(仍让上游显式 industry 最优先,不覆盖人工池细分口径)。
     """
     from tools.analysis import industry_map
     sw = industry_map.to_sw(industry) if industry else None
+    if sw is None and _in_semi_universe(code):              # 申万二级 801081 权威 → 电子,先于 board_of 近似
+        sw = "电子"
     if sw is None:
         try:
             from tools.collectors import board
             sw = industry_map.to_sw(board.board_of(code) or "")
         except Exception:                                   # noqa: BLE001
             sw = None
-    if sw is None and _in_semi_universe(code):              # 半导体池成分兜底 → 电子(申万 801081→电子)
-        sw = "电子"
     return sw
 
 
