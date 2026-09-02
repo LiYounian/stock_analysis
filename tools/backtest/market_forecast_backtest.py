@@ -121,12 +121,15 @@ def score(rec: pd.DataFrame, n_buckets: int = 5) -> dict:
 
 
 def run(target="proxy", horizon=1, model="composite", stride=5,
-        min_train=None, data_root=None, breadth_df=None, cfg=None) -> dict:
+        min_train=None, data_root=None, breadth_df=None, cfg=None,
+        include_fundflow=True) -> dict:
     panel = F.build_panel(target=target, horizon=horizon, data_root=data_root,
-                          breadth_df=breadth_df, cfg=cfg)
+                          breadth_df=breadth_df, cfg=cfg,
+                          include_fundflow=include_fundflow)
     rec = walk_forward(panel, model_name=model, min_train=min_train, stride=stride, cfg=cfg)
     s = score(rec)
     s["target"], s["horizon"], s["model"] = target, horizon, model
+    s["include_fundflow"] = include_fundflow
     return {"summary": s, "records": rec}
 
 
@@ -138,11 +141,14 @@ def _main():
     ap.add_argument("--stride", type=int, default=5)
     ap.add_argument("--min-train", type=int, default=None)
     ap.add_argument("--data-root", default=None)
+    ap.add_argument("--no-fundflow", action="store_true",
+                    help="关闭资金流维(=v0.5 三维,A/B 回测的 A 组)")
     ap.add_argument("--out", default=None)
     a = ap.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s %(message)s")
     out = run(target=a.target, horizon=a.horizon, model=a.model, stride=a.stride,
-              min_train=a.min_train, data_root=a.data_root)
+              min_train=a.min_train, data_root=a.data_root,
+              include_fundflow=not a.no_fundflow)
     print(json.dumps(out["summary"], ensure_ascii=False, indent=2))
     if a.out:
         with open(a.out, "w", encoding="utf-8") as f:
