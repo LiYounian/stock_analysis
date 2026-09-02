@@ -81,6 +81,9 @@ trap 'rmdir "$LOCK" 2>/dev/null' EXIT
   # 必须排在①主档推进之后、②screenall之前:screenall 里的策略11 screener 只读 state_pool 索引、不建池;
   # 缺池则策略11 优雅出空(view 带 note、不崩)。落 data/backtest_local/state_pool.parquet(gitignore)。
   "$PY" -c "from tools.analysis import conditional_predict as cp; from tools.store import repo as s; cp.build_state_pool(sorted(s.list_master_codes()), save=True)" || echo "!! 建状态池失败(策略11 将出空,不阻断)"
+  echo "-- ①.6 个股两融采集(沪深北融资买入额/融资余额;供 expert_资金流 做'主力净流入vs融资盘'背离甄别) --"
+  # 必须排在②screenall之前:合议 expert_资金流 命中背离→看多降级,需当日两融在 store。akshare 单日增量,快;失败不阻断(甄别缺数据→保守no-op)。
+  "$PY" -c "from tools.collectors import margin; margin.fetch_margin(start='$D', end='$D')" || echo "!! 两融采集失败(背离甄别当日 no-op,不阻断)"
   echo "-- ② 全A多策略选股(策略0/1/2/3/4)+ 对(选出并集∪自选)做新闻/LLM/合议 + M2财报(数值+审计双闸门+LLM文本,仅news_subset) --"
   # --no-fetch:不触发 master_sync 回填/重采,直接用现有主档(近史护栏);财报三步在 run_screen_all 内对 news_subset 自然跑
   "$PY" -m tools.run screenall --no-fetch || echo "!! screenall 失败"
