@@ -46,8 +46,8 @@ def test_composite_explain_dims():
     y = (pan["fwd_ret"] > 0).astype(float).to_numpy()
     m = P.CompositeModel().fit(pan, y)
     ex = m.explain(pan.iloc[[-1]])
-    assert set(ex) == {"技术", "广度", "消息面"}
-    # 消息面在本合成盘全非零 → 覆盖率≈1;贡献量级有限(温莎化 ±4)
+    assert set(ex) == {"技术", "广度", "消息面", "资金流"}
+    # 各维在本合成盘全非零 → 覆盖率≈1;贡献量级有限(温莎化 ±4)
     assert all(abs(v) < 5.0 for v in ex.values())
 
 

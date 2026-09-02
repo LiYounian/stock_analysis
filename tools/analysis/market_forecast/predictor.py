@@ -1,8 +1,8 @@
 """预测器(可解释因子加权 / 逻辑回归)——大盘预测的判别核心。
 
 改造自 pattern_screener/regime.py 的"五因子加权"思路,但**加真标签 + 概率输出**:
-四(现三)维因子 → 标准化 → 按训练集定向(与标签相关方向)→ 分维打分 → 组权重合成
-→ 校准逻辑函数 → P(上涨) + 五档。
+四维因子(技术+广度+消息面+资金流)→ 标准化 → 按训练集定向(与标签相关方向)→ 分维打分
+→ 组权重合成 → 校准逻辑函数 → P(上涨) + 五档。消息面/资金流历史浅→按训练集覆盖率自动降权。
 
 两个模型(都**非黑箱**):
   · CompositeModel —— 单一可解释综合分(每维贡献可追溯),v1 主模型。
@@ -18,7 +18,9 @@ import pandas as pd
 
 from tools.config.strategy import THRESHOLDS
 
-from .features import FEATURE_COLS, _BREADTH_COLS, _SENTI_COLS, _TECH_COLS
+from .features import (
+    FEATURE_COLS, _BREADTH_COLS, _FUNDFLOW_COLS, _SENTI_COLS, _TECH_COLS,
+)
 
 _CFG = THRESHOLDS["大盘预测"]
 _LABELS = _CFG["分档"]
@@ -90,7 +92,7 @@ def prob_to_bucket(p_up: float) -> int:
 
 # ————————————————————————— 可解释综合模型 —————————————————————————
 class CompositeModel:
-    """三维因子加权综合分 → 校准 P(上涨)。每维贡献可追溯(报告/生产解释用)。"""
+    """四维因子加权综合分 → 校准 P(上涨)。每维贡献可追溯(报告/生产解释用)。"""
 
     def __init__(self, cfg=None):
         self.cfg = cfg or _CFG
@@ -99,9 +101,11 @@ class CompositeModel:
         self.orient = None       # 每特征定向符号(训练集 corr)
         self.calib = _LogReg(l2=1.0, lr=0.3, epochs=800)
         gw = self.cfg["因子权重"]
-        self.group_w = {"技术": gw["技术"], "广度": gw["广度"], "消息面": gw["消息面"]}
+        self.group_w = {"技术": gw["技术"], "广度": gw["广度"], "消息面": gw["消息面"],
+                        "资金流": gw.get("资金流", 1.0)}
         self.eff_group_w = dict(self.group_w)   # fit 时按覆盖率调整(见 fit)
-        self._groups = {"技术": _TECH_COLS, "广度": _BREADTH_COLS, "消息面": _SENTI_COLS}
+        self._groups = {"技术": _TECH_COLS, "广度": _BREADTH_COLS,
+                        "消息面": _SENTI_COLS, "资金流": _FUNDFLOW_COLS}
 
     def _dim_scores(self, Xs: np.ndarray) -> dict:
         """标准化+定向后,按维取均值 → {维: 分数向量}。"""
@@ -129,8 +133,13 @@ class CompositeModel:
         se_idx = [col_idx[c] for c in _SENTI_COLS]
         se_cov = float((np.abs(Xv[:, se_idx]).sum(axis=1) > 1e-9).mean()) if len(Xv) else 0.0
         self.se_coverage = se_cov
+        # 资金流覆盖率:训练集里有非零资金流特征的样本占比(历史未采到→缺省0→自动降权)
+        ff_idx = [col_idx[c] for c in _FUNDFLOW_COLS]
+        ff_cov = float((np.abs(Xv[:, ff_idx]).sum(axis=1) > 1e-9).mean()) if len(Xv) else 0.0
+        self.ff_coverage = ff_cov
         self.eff_group_w = dict(self.group_w)
         self.eff_group_w["消息面"] = self.group_w["消息面"] * se_cov
+        self.eff_group_w["资金流"] = self.group_w["资金流"] * ff_cov
         # 定向:每特征与标签的相关符号(训练集内)
         ori = np.zeros(Xs.shape[1])
         for j in range(Xs.shape[1]):

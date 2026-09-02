@@ -3,7 +3,10 @@
 给定特征截止日 T(收盘后),用**严格早于 T 且标签已到期**的样本训练预测器,对 T 预测其
 T+1 / T+5 涨跌方向概率 + 五档 + 各维贡献,落 data/analysis/<T>/market_forecast.json。
 
-schema(market_forecast/v0.5)见 build_forecast 返回。防未来函数:训练样本标签窗口需在 T 之前收口。
+schema(market_forecast/v1)见 build_forecast 返回。v1 相对 v0.5 补第四维「资金流」
+(SSE 市场级两融,盘后披露→特征滞后≥1交易日),各标的 horizon 的 factor_contrib 多一维「资金流」,
+新增 fundflow_snapshot(as_of 可用的最新一日两融,即 as_of 的前一交易日)。CLI 参数不变。
+防未来函数:训练样本标签窗口需在 T 之前收口;资金流特征只用 date < T 的两融。
 选股任务读它做 β 基准、算个股 α(设计对接口,详见 docs/计划/大盘预测策略.md §4"接入选股")。
 非投资建议。
 """
@@ -130,8 +133,28 @@ def build_forecast(as_of: str | None = None, targets=("hs300", "proxy"),
     except Exception:
         pass
 
+    # 资金流快照:as_of 可用的最新一日两融(严格早于 as_of,防未来函数)+ 滞后拼到 as_of 的资金流特征
+    ffsnap = {}
+    try:
+        from tools.analysis.market_forecast import fundflow as FF
+        mm = FF.load_market_margin(data_root)
+        if snap_date is not None and not mm.empty:
+            usable = mm[mm.index < snap_date]           # 严格早于 as_of(两融盘后披露)
+            if not usable.empty:
+                last = usable.iloc[-1]
+                ffsnap = {
+                    "margin_date": str(usable.index[-1])[:10],   # 用到的两融日(=as_of前一交易日)
+                    "融资余额": round(float(last["rz_bal"]), 2),
+                    "融资买入额": round(float(last["rz_buy"]), 2),
+                    "融资融券余额": round(float(last["rzrq_bal"]), 2),
+                    "source": "akshare:stock_margin_sse",
+                    "note": "SSE市场级两融,盘后披露,已滞后至as_of前一交易日(防未来函数)",
+                }
+    except Exception:
+        pass
+
     return {
-        "schema": "market_forecast/v0.5",
+        "schema": "market_forecast/v1",
         "as_of": str(snap_date)[:10] if snap_date is not None else None,
         "generated_at": datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds"),
         "non_investment_advice": True,
@@ -139,9 +162,12 @@ def build_forecast(as_of: str | None = None, targets=("hs300", "proxy"),
         "targets": out_targets,
         "breadth_snapshot": bsnap,
         "sentiment_snapshot": ssnap,
-        "notes": ("v0.5 三维(技术+广度+消息面)。消息面历史浅(~1月)作近端因子,缺日降级中性。"
-                  "全A等权代理指数含幸存者偏差,方向研究用,绝对收益勿当真。回测详见 "
-                  "tools.backtest.market_forecast_backtest。"),
+        "fundflow_snapshot": ffsnap,
+        "notes": ("v1 四维(技术+广度+消息面+资金流)。资金流=SSE市场级两融(akshare stock_margin_sse,"
+                  "回溯2022),盘后披露→特征滞后≥1交易日;历史未采到的日子该维降级中性(按覆盖率自动降权)。"
+                  "消息面历史浅(~1月)作近端因子,缺日降级中性。全A等权代理指数含幸存者偏差,"
+                  "方向研究用,绝对收益勿当真。A/B回测详见 docs/计划/大盘预测策略.md §7 与 "
+                  "tools.backtest.market_forecast_backtest(--no-fundflow 关资金流维=v0.5)。"),
     }
 
 
