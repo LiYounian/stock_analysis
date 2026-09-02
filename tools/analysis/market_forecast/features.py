@@ -21,6 +21,7 @@ import pandas as pd
 from tools.config.strategy import THRESHOLDS
 
 from . import breadth as B
+from . import fundflow as FF
 from . import sentiment as S
 from . import technical_index as TI
 
@@ -87,10 +88,37 @@ FEATURE_COLS = [
     "br_above_ma20", "br_below_ma20", "br_median",
     # 消息面
     "se_net_z", "se_ratio", "se_intensity",
+    # 资金流(v1:SSE 市场级两融;盘后披露→拼接时滞后≥1交易日,防未来函数)
+    "ff_buy_ratio", "ff_bal_mom5", "ff_bal_mom20",
 ]
 _TECH_COLS = [c for c in FEATURE_COLS if c.startswith("tech_")]
 _BREADTH_COLS = [c for c in FEATURE_COLS if c.startswith("br_")]
 _SENTI_COLS = [c for c in FEATURE_COLS if c.startswith("se_")]
+_FUNDFLOW_COLS = [c for c in FEATURE_COLS if c.startswith("ff_")]
+
+
+def _attach_fundflow_lagged(panel_index: pd.DatetimeIndex, ff: pd.DataFrame,
+                            lag_days: int) -> pd.DataFrame:
+    """把资金流特征(index=两融日 d)滞后拼到面板日 T:只取 d<T 的最近一行(≥1交易日滞后)。
+
+    防未来函数核心:merge_asof(direction=backward, allow_exact_matches=False)保证 d<T;
+    lag_days>1 时先在两融自身日序上 shift(lag_days-1)追加交易日滞后。返回 index=面板日。
+    """
+    cols = list(FF.FUNDFLOW_COLS)
+    if ff is None or ff.empty:
+        return pd.DataFrame(0.0, index=panel_index, columns=cols)
+    ff = ff.sort_index()
+    if lag_days > 1:
+        ff = ff.shift(lag_days - 1)
+    left = pd.DataFrame({"date": pd.DatetimeIndex(panel_index).astype("datetime64[ns]")})
+    left = left.sort_values("date")
+    right = ff.reset_index().rename(columns={ff.index.name or "index": "date"})
+    right["date"] = pd.to_datetime(right["date"]).astype("datetime64[ns]")
+    right = right.sort_values("date")
+    merged = pd.merge_asof(left, right, on="date", direction="backward",
+                           allow_exact_matches=False)
+    merged = merged.set_index("date").reindex(panel_index)
+    return merged[cols]
 
 
 def _bucketize(fwd: pd.Series, cfg=None) -> pd.Series:
@@ -110,11 +138,13 @@ def _bucketize(fwd: pd.Series, cfg=None) -> pd.Series:
 
 def build_panel(target: str = "proxy", horizon: int = 1, data_root=None,
                 breadth_df: pd.DataFrame | None = None,
-                cfg=None) -> pd.DataFrame:
+                cfg=None, include_fundflow: bool = True) -> pd.DataFrame:
     """拼装建模面板。返回 DataFrame(index=date):FEATURE_COLS + fwd_ret + direction + bucket。
 
     · target='proxy'|'hs300';horizon∈{1,5,...}
     · 消息面历史浅 → 缺失日以 0 填(降级中性),并记 se_avail 标志。
+    · 资金流(v1):SSE 市场级两融,盘后披露→拼接时滞后≥1交易日(防未来函数);
+      include_fundflow=False → 资金流列全 0(=v0.5 三维,A/B 回测的 A 组)。
     · 特征全 ≤T;label fwd_ret_h = close[T+h]/close[T]-1(未来,合法标签)。
     """
     cfg = cfg or _CFG
@@ -145,6 +175,21 @@ def build_panel(target: str = "proxy", horizon: int = 1, data_root=None,
         panel["se_avail"] = 0
     # 消息面缺失→0(降级中性);广度缺失极少(标的日历⊆广度日历)→0
     panel[_SENTI_COLS] = panel[_SENTI_COLS].fillna(0.0)
+
+    # 资金流维(v1):滞后拼接(防未来函数);include_fundflow=False → 全 0(A/B 的 A 组)
+    lag = int(cfg.get("资金流滞后交易日", 1))
+    if include_fundflow:
+        ff = FF.compute_features(data_root)
+        ff_lagged = _attach_fundflow_lagged(panel.index, ff, lag)
+        for c in _FUNDFLOW_COLS:
+            panel[c] = ff_lagged[c].values
+        panel["ff_avail"] = panel[_FUNDFLOW_COLS].notna().any(axis=1).astype(int)
+    else:
+        for c in _FUNDFLOW_COLS:
+            panel[c] = np.nan
+        panel["ff_avail"] = 0
+    # 资金流缺失(未采到/滞后越界)→0:composite 按覆盖率自动降权(诚实降级)
+    panel[_FUNDFLOW_COLS] = panel[_FUNDFLOW_COLS].fillna(0.0)
 
     # 标签:标的收盘前瞻收益
     close = idx.set_index("date")["close"].reindex(panel.index)
