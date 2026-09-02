@@ -183,11 +183,11 @@ def collect_message(codes: list[str]) -> None:
     socket.setdefaulttimeout(FETCH_TIMEOUT)
     try:
         # recall=True:开启行业主题词扩召回 + LLM 宁严相关性初筛(collect_message 只被自选池/
-        # screenall/两阶段的 llm_subset 调用,天然不波及全A;补"挂不到个股的行业/宏观/管制"消息)。
+        # screenall(候选定向富集)/两阶段的候选子集调用,天然不波及全A;补"挂不到个股的行业/宏观/管制"消息)。
         logger.info("新闻:成功 %d", len(_safe("新闻", lambda: news.fetch_news(codes, recall=True)) or {}))
         logger.info("舆情(股吧):成功 %d", len(_safe("舆情(股吧)", lambda: ugc.fetch_ugc(codes)) or {}))
         # 百度个股新闻(前向情绪滚存):仅采集落盘、不接情绪评分。与上面 news/ugc 共用同一
-        # codes(news_subset=自选∪每策略前N),天然不波及全A;fetch_baidu_news 自带新鲜度门控
+        # codes(候选定向富集集/自选,票池级),天然不波及全A;fetch_baidu_news 自带新鲜度门控
         # (缓存≤BAIDU_NEWS_STALE_DAYS 天跳过重拉)+ 前向增量并集幂等,同日重跑不猛拉。
         # 整块 _safe 兜底、内部单票失败已降级,任何失败都不阻断闭环。开关 BAIDU_NEWS_COLLECT。
         if settings.BAIDU_NEWS_COLLECT:
