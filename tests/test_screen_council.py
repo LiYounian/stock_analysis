@@ -55,6 +55,37 @@ def test_build_min_record_none_when_insufficient():
     assert sc.build_min_record("000001", _kline(n=1)) is None
 
 
+def test_build_min_record_industry_fallback_chain(monkeypatch):
+    """meta.industry 回退链:人工池 → board_of → industry_at;board_of 命中即用,
+    并旁挂 meta.industry_asof(as_of 当时门类,point-in-time)。"""
+    # 人工池无该票行业 → 落到 board_of
+    monkeypatch.setattr(sc, "board", sc.board)
+    monkeypatch.setattr(sc.board, "board_of", lambda code: "C39计算机、通信和其他电子设备制造业")
+    import tools.collectors.industry_history as ih
+    monkeypatch.setattr(ih, "industry_at", lambda code, as_of, std=None: "制造业")
+    from tools.config import stock_pool
+    monkeypatch.setattr(stock_pool, "get", lambda code: {})   # 人工池无行业
+    rec = sc.build_min_record("300476", _kline(trend=0.1, seed=7), as_of="2026-08-15")
+    assert rec["meta"]["industry"] == "C39计算机、通信和其他电子设备制造业"   # board_of 首选
+    assert rec["meta"]["industry_asof"] == "制造业"                          # point-in-time 旁挂
+
+
+def test_build_min_record_industry_pool_first_then_asof_fallback(monkeypatch):
+    """人工池有行业时优先池;board_of 缺时行业回退到 industry_at(as_of 门类)。"""
+    from tools.config import stock_pool
+    monkeypatch.setattr(stock_pool, "get", lambda code: {"industry": "半导体"})
+    monkeypatch.setattr(sc.board, "board_of", lambda code: None)
+    import tools.collectors.industry_history as ih
+    monkeypatch.setattr(ih, "industry_at", lambda code, as_of, std=None: "制造业")
+    rec = sc.build_min_record("000001", _kline(trend=0.1, seed=8), as_of="2026-08-15")
+    assert rec["meta"]["industry"] == "半导体"          # 人工池优先
+    # 人工池无行业 + board_of 空 → 落到 industry_at
+    monkeypatch.setattr(stock_pool, "get", lambda code: {})
+    rec2 = sc.build_min_record("000002", _kline(trend=0.1, seed=9), as_of="2026-08-15")
+    assert rec2["meta"]["industry"] == "制造业"          # 末档 industry_at 兜底
+    assert rec2["meta"]["industry_asof"] == "制造业"
+
+
 def test_run_council_screen_ranks_desc_and_lands_view(monkeypatch, tmp_path):
     """扫描多票 → 落 view「策略0合议」,top 按综合分降序,schema 完整。"""
     kmap = {"000001": _kline(trend=0.15, seed=2),   # 强上行 → 综合分高

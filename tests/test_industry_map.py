@@ -10,7 +10,8 @@
 import pytest
 
 from tools.analysis import industry_map as im
-from tools.analysis.industry_map import SW_INDUSTRIES, CSRC_CODE_TO_SW, ALIAS_TO_SW, to_sw
+from tools.analysis.industry_map import (
+    SW_INDUSTRIES, CSRC_CODE_TO_SW, CSRC_CATEGORY_TO_SW, ALIAS_TO_SW, to_sw)
 
 
 # ———————————— 申万一级直通 ————————————
@@ -85,6 +86,42 @@ def test_no_pool_stock_abstains_by_name(monkeypatch):
     pool = json.loads(cfg.read_text(encoding="utf-8"))
     unmapped = [(s["code"], s["industry"]) for s in pool if to_sw(s.get("industry")) is None]
     assert unmapped == [], f"仍对不齐申万一级(会弃权): {unmapped}"
+
+
+# ———————————— 证监会门类大类名 / GICS 粗行业名(无前缀码)→ 申万 ————————————
+# 来源:industry_history(cninfo)的 industry_at 返回门类大类名(不带 A01/C39 前缀码)。
+@pytest.mark.parametrize("name,expect", [
+    ("农、林、牧、渔业", "农林牧渔"),           # 标点与申万名不同,靠 CSRC_CATEGORY_TO_SW
+    ("电力、热力、燃气及水生产和供应业", "公用事业"),
+    ("建筑业", "建筑装饰"),
+    ("批发和零售业", "商贸零售"),
+    ("交通运输、仓储和邮政业", "交通运输"),
+    ("信息传输、软件和信息技术服务业", "计算机"),
+    ("房地产业", "房地产"),
+    ("水利、环境和公共设施管理业", "环保"),
+    ("卫生和社会工作", "医药生物"),
+    ("文化、体育和娱乐业", "传媒"),
+    ("医药卫生", "医药生物"),                    # GICS 粗名
+    ("电信业务", "通信"),
+])
+def test_csrc_category_coarse_maps(name, expect):
+    assert to_sw(name) == expect
+
+
+# ———————————— 跨多申万一级的粗桶:诚实返 None(不硬凑单一行业)————————————
+# 制造业/采矿业/金融业(证监会门类)+ 工业/信息技术/原材料/主要消费/可选消费(GICS)
+# 天然跨多个申万一级,硬映射会造错信号;这类个股应走 board_of 的细分证监会码。
+@pytest.mark.parametrize("name", [
+    "制造业", "采矿业", "金融业", "金融",
+    "工业", "信息技术", "原材料", "主要消费", "可选消费",
+])
+def test_ambiguous_coarse_buckets_return_none(name):
+    assert to_sw(name) is None
+
+
+def test_csrc_category_targets_valid():
+    for k, sw in CSRC_CATEGORY_TO_SW.items():
+        assert sw in SW_INDUSTRIES, f"门类大类 {k}→{sw} 非法申万一级"
 
 
 # ———————————— 无匹配 → None(绝不硬凑) ————————————

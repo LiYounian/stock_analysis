@@ -57,6 +57,50 @@ def test_sentiment_thresholds_and_sample_confidence():
     assert mid.方向 == "中性" and mid.强度 == 0.0
 
 
+# ———————————— 板块轮动:行业回退链(industry → industry_asof → board_of)————————————
+def _fake_row(quad="领先", dirn="看多"):
+    return {"方向": dirn, "强度": 0.7, "数据充分度": "充分", "象限": quad,
+            "RS_Ratio": 102.5, "RS_Momentum": 101.5, "依据": [f"{quad}象限·RS"]}
+
+
+def test_板块轮动_uses_meta_industry(monkeypatch):
+    """meta.industry 有值 → 以它查 RRG,不弃权。"""
+    from tools.analysis import rrg
+    seen = {}
+    def _row(name):
+        seen["name"] = name
+        return _fake_row()
+    monkeypatch.setattr(rrg, "industry_row", _row)
+    rec = {"meta": {"code": "000712", "industry": "J67资本市场服务"}}
+    v = ex.expert_板块轮动(rec)
+    assert seen["name"] == "J67资本市场服务"
+    assert v.方向 == "看多" and v.数据充分度 == "充分" and v.置信度 > 0
+
+
+def test_板块轮动_falls_back_to_industry_asof(monkeypatch):
+    """meta.industry/sector 皆空时,回退读 meta.industry_asof(point-in-time),不弃权。"""
+    from tools.analysis import rrg
+    seen = {}
+    def _row(name):
+        seen["name"] = name
+        return _fake_row()
+    monkeypatch.setattr(rrg, "industry_row", _row)
+    rec = {"meta": {"code": "000712", "industry": None, "industry_asof": "金融业"}}
+    v = ex.expert_板块轮动(rec)
+    assert seen["name"] == "金融业"                       # 用了 industry_asof 这一档
+    assert v.数据充分度 != "缺失" and v.置信度 > 0        # 不再"无所属行业"弃权
+
+
+def test_板块轮动_abstains_when_no_industry_anywhere(monkeypatch):
+    """三档皆空(industry/asof/board_of 都无)→ 诚实弃权。"""
+    from tools.analysis import rrg
+    from tools.collectors import board
+    monkeypatch.setattr(rrg, "industry_row", lambda name: _fake_row())
+    monkeypatch.setattr(board, "board_of", lambda code: None)
+    v = ex.expert_板块轮动({"meta": {"code": "000001"}})
+    assert v.方向 == "中性" and v.置信度 == 0.0 and v.数据充分度 == "缺失"
+
+
 # ———————————— 缺数据:弃权而非跳过 ————————————
 def test_missing_blocks_abstain():
     for name in ex.BUILTIN:
