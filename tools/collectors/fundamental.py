@@ -156,7 +156,12 @@ def fetch_dividends(codes: list[str], as_of: str | None = None) -> dict[str, flo
     try:
         with session() as bs:
             for code in a_codes:
-                out[code] = _dividend_ttm_ps(bs, bs_code(code), as_of)
+                sym = bs_code(code)
+                if sym is None:        # 北交所:baostock 不覆盖 → 显式记降级、标缺失
+                    logger.warning("股息率 %s 降级缺失:baostock 不覆盖北交所", code)
+                    out[code] = None
+                    continue
+                out[code] = _dividend_ttm_ps(bs, sym, as_of)
     except Exception as e:                             # noqa: BLE001 —— 登录失败等 → 全体缺失
         logger.warning("baostock 分红会话失败,股息率维度整体降级缺失: %s", e)
     return out
