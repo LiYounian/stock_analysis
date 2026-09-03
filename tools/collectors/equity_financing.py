@@ -24,6 +24,10 @@
   ⚠ 东财 datacenter 的「增发预案」结构化报表(RPT_SEO_PLAN 等一族)实调**全部 success=false**,
     即**结构化的定增预案进度表源不可得**;本模块用公告标题检索作为替代口径,并在
     `源状态.定增` 里标 "qbzf+公告检索",让消费方知道「推进中」是标题级证据、不是结构化进度。
+  ⚠ **公告条数 ≠ 定增笔数**:一笔定增从预案到发行结果会出十几条过程公告。故公告先归一成
+    带 `阶段信号`(进行/完成/终止)的记录,再由 `aggregate_plan_rounds` 按时序**聚合成笔**,
+    `定增.推进中` 报的是**笔数**。笔级状态区分 **已实施**(股份已发出→摊薄已发生、通常带锁定期)
+    与 **已终止**(股份从未发出→摊薄不会发生)——两者对摊薄的含义相反,不可同桶。
 解禁(可得,双源互补):
   · ak.stock_restricted_release_queue_sina(symbol) —— 有 **公告日期**(防未来函数的唯一权威锚点),
                                                      但字段粗(解禁日期/解禁数量万股/解禁股流通市值亿)。
@@ -93,11 +97,42 @@ NEAR_UNLOCK_DAYS = int(os.getenv("FINANCING_NEAR_UNLOCK_DAYS", "90"))    # 「�
 _PLAN_KEYWORDS = ("向特定对象发行", "非公开发行", "定向增发")
 _PLAN_TITLE_POS = re.compile(r"(向特定对象发行|非公开发行|定向增发)")
 _PLAN_TITLE_NEG = re.compile(r"(可转换公司债券|可转债|向不特定对象发行|公司债券|优先股)")
-# 「推进中」阶段词(命中即视为在途);「已完成/终止」阶段词命中则不算在途
+# 阶段信号三分类(判定顺序 = 已实施 → 终止 → 进行,**先看终局信号**;顺序理由见 plan_stage_signal):
+#   · 终止:这笔定增死了(终止/撤回/失效/不予注册)→ 股份**从未发出**,摊薄永不发生。
+#   · 已实施:这笔定增**已经发行落地**。除「发行结果/发行情况报告书/上市公告书」这类直接结果公告外,
+#     必须覆盖**发行完成后的配套/程序文件**:发行过程和认购对象合规性(律师/保荐核查报告)、验资报告、
+#     募集资金专户三方监管协议、股本变动/变更注册资本。这些文件只可能出现在发行完成之后,
+#     标题里却带「审核报告」「方案」字样 → 只按 LIVE 白名单判会把**已完成**的定增误判成推进中
+#     (实测 603161 科华控股:定增 2026-08-07 完成登记托管、08-11 公告发行结果,却报「推进中 12 条」)。
+#   · 进行:预案/受理/问询回复/同意注册等在途过程词。
+# ⚠ 终止 vs 已实施 **不可同桶**:对摊薄的含义完全相反(已实施=摊薄已发生+通常带锁定期;
+#   终止=摊薄永不发生)。笔级分类必须分开,否则下游问不出「这票有没有既成的摊薄」。
+# ⚠ 有意**不**把「中止」放进终止:审核中止是可恢复的暂停态,不是终局(宁可当在途,不灭真信号)。
+_PLAN_STAGE_TERMINATED = re.compile(r"(终止|撤回|失效|到期失效|不予)")
+_PLAN_STAGE_DONE = re.compile(
+    r"(发行结果|发行情况报告书|上市公告书|新增股份.*上市|"
+    r"发行过程(和|及)认购对象|认购对象(的)?合规性|验资报告|"
+    r"募集资金.*(专户|专项账户).*监管协议|三方监管协议|"
+    r"股本变动|变更注册资本|注册资本变更|新增注册资本)")
 _PLAN_STAGE_LIVE = re.compile(r"(预案|方案|议案|申请|受理|问询|回复|审核|过会|同意注册|批复|核准|募集说明书|发行方案|反馈意见)")
-_PLAN_STAGE_DEAD = re.compile(r"(终止|撤回|失效|到期失效|不予|发行结果|上市公告书|新增股份.*上市|发行情况报告书)")
+
+# 公告级 `阶段` 取值:"推进中"(在途过程公告)/ "终态公告"(该笔已走到终局的证据公告)。
+# **有意用中性名**「终态公告」:它只表示「这条公告是关笔证据」,不表达摊薄方向;
+# 方向由 `阶段信号`("完成"/"终止")与**笔级** `状态`("已实施"/"已终止")表达。
+_STAGE_ANN_LIVE = "推进中"
+_STAGE_ANN_FINAL = "终态公告"
+_SIGNAL_TO_STAGE = {"进行": _STAGE_ANN_LIVE, "完成": _STAGE_ANN_FINAL, "终止": _STAGE_ANN_FINAL}
+# 笔级状态(聚合后的「一笔定增」的状态)
+_ROUND_LIVE, _ROUND_DONE, _ROUND_TERM = "推进中", "已实施", "已终止"
+# 一笔定增关帐后,后续这么多天内**再来的终局类公告**算它的收尾文件串,不另开一笔。
+# 实测 603161:发行结果那几天连出 7 条终局类文件(发行情况报告书/上市公告书/发行结果暨股本变动/
+# 律师与保荐的合规性意见…),不合并就会把**一笔**报成「已实施 7 笔」——和「推进中 12」同一种荒谬。
+# 取 180 天:配套文件通常数日至数周出齐,而同一票的下一笔定增必然先出预案(进行信号)才开帐,
+# 不会以终局公告开头,故窗口取宽不会把两笔粘成一笔。
+_ROUND_TAIL_DAYS = int(os.getenv("FINANCING_ROUND_TAIL_DAYS", "180"))
 
 _MEM: dict[str, object] = {}            # 进程内 memo(市场级名单)
+_MISSING_CACHE: list[dict] = []          # build_financing_block 无缓存时的显式降级记录(见文末)
 
 
 # ————————————————————————————————————————————————
@@ -333,20 +368,50 @@ def normalize_seo_done(row: dict) -> dict:
     }
 
 
+def plan_stage_signal(title: str | None) -> str | None:
+    """定增公告标题 → 阶段信号:"终止" / "完成" / "进行";无阶段词 → None。
+
+    **判定顺序是语义的一部分**:已实施 → 终止 → 进行。
+    · 为什么 LIVE 排最后:发行完成后的配套文件(合规性审核报告 / 验资报告 / 三方监管协议 /
+      股本变动)标题里普遍带「审核」「方案」等在途词,先判 LIVE 会把**已经发完**的定增
+      当成在途(603161 实测)。
+    · 为什么「已实施」排在「终止」之前:**已实施的证据强于终止词**。发行落地后的收尾公告
+      会出现「募集资金专户三方监管协议**终止**」这类标题——那是协议终止、不是发行终止;
+      反过来,一笔真被撤回的定增**永远不会**产出发行结果/验资报告/股本变动这类文件。
+      若先判终止,会把已经发完的定增说成「摊薄不会发生」,方向同样是反的。
+    """
+    t = str(title or "")
+    if not t:
+        return None
+    if _PLAN_STAGE_DONE.search(t):
+        return "完成"
+    if _PLAN_STAGE_TERMINATED.search(t):
+        return "终止"
+    if _PLAN_STAGE_LIVE.search(t):
+        return "进行"
+    return None
+
+
 def normalize_seo_plan(row: dict) -> dict | None:
-    """归一单条**推进中**定增(公告标题级证据)。非定增/已完结阶段 → None(过滤掉)。
+    """归一单条定增**过程公告**(标题级证据)。非定增类 / 无阶段词 → None(过滤掉)。
 
     `披露日` = 公告时间(巨潮原生披露日,天然满足防未来函数闸门)。
+
+    ⚠ 与旧版的关键差别:**终局公告(发行结果/终止)不再直接丢弃**,而是保留成
+    `阶段="终态公告"` + `阶段信号∈{完成,终止}` 的记录。理由:要判断「这笔定增到底还在不在推进」
+    必须看得见它的**终局证据**;丢掉终局公告就只剩一串在途公告,于是**已完成的定增被永久判为推进中**。
+    终局公告留下后,`aggregate_plan_rounds` 才能按笔关帐(且关帐要过 as-of 闸门——
+    在终局公告披露之前的时点,该笔确实还算推进中)。
     """
     title = _strip_em(row.get("公告标题"))
     if not title or not _PLAN_TITLE_POS.search(title) or _PLAN_TITLE_NEG.search(title):
         return None
-    if _PLAN_STAGE_DEAD.search(title):
-        return None
-    if not _PLAN_STAGE_LIVE.search(title):
+    sig = plan_stage_signal(title)
+    if sig is None:
         return None
     return {
-        "阶段": "推进中",
+        "阶段": _SIGNAL_TO_STAGE[sig],
+        "阶段信号": sig,
         "发行方式": "定向增发",
         "披露日": _norm_date(row.get("公告时间")),
         "发行日期": None, "上市日期": None, "锁定期": None, "锁定月数": None,
@@ -354,6 +419,80 @@ def normalize_seo_plan(row: dict) -> dict | None:
         "标题": title,
         "链接": str(row.get("公告链接") or "") or None,
     }
+
+
+def aggregate_plan_rounds(plan_recs: list[dict] | None,
+                          done_recs: list[dict] | None = None) -> list[dict]:
+    """把「同一笔定增的多条过程公告」聚合成**笔**。返回每笔一条摘要(按起始披露日升序)。
+
+    **为什么必须聚合**:一笔定增从预案到发行结果会出十几条公告(预案/受理/问询回复/同意注册/
+    募集说明书/发行结果/验资…)。按公告**条数**计数会得出「推进中 = 12」这种荒谬结果
+    (603161 实测),而真相是**同一笔、且已经发完**。`推进中` 必须回答「有几**笔**在推进」。
+
+    **状态机**(按披露日时序):
+      · "进行"信号 → 没有开着的笔就开一笔,否则并入当前笔(**不新开**);
+      · "完成"/"终止"信号 → 关掉当前笔(状态置 已实施 / 已终止);若此前没开着的笔,
+        就补记一笔(只看到尾巴:预案早于回看窗口 540 天);
+      · 已实施(qbzf 结构化)记录的发行日期 ≥ 某笔起始披露日 → 那笔也判**已实施**
+        (兜住「发行结果公告标题没被正则命中、但结构化源已收录发行」的情况)。
+    同一时点最多保持**一笔**开着(A股实务:同一时点不会有两笔并行的向特定对象发行);
+    因此本函数的 `推进中` 笔数天然 ∈ {0,1},这是有意的保守口径,不是漏算。
+
+    调用方须先做 as-of 闸门:传进来的记录都应是「as_of 当天已披露」的,
+    否则会用**未来**的终局公告去关掉一笔在当时确实还在推进的定增(未来函数)。
+
+    副作用(有意):给每条入参公告写回 `笔序号` / `笔状态`,让直读 `明细` 的消费方
+    也能看见「这条在途公告属于哪一笔、那笔现在是什么状态」——否则单看公告级
+    `阶段="推进中"` 会重犯同一个反向误判。
+    """
+    anns = sorted([r for r in (plan_recs or []) if r.get("披露日")],
+                  key=lambda r: (str(r["披露日"]), str(r.get("标题") or "")))
+    rounds: list[dict] = []
+    cur: dict | None = None
+    for a in anns:
+        sig = a.get("阶段信号") or ("进行" if a.get("阶段") == _STAGE_ANN_LIVE else None)
+        d = str(a["披露日"])
+        if cur is None:
+            prev = rounds[-1] if rounds else None
+            tail_of_prev = (
+                sig in ("完成", "终止") and prev is not None
+                and prev["状态"] in (_ROUND_DONE, _ROUND_TERM)
+                and _gap_days(str(prev["终结披露日"] or prev["最新披露日"]), d)
+                <= _ROUND_TAIL_DAYS)
+            if tail_of_prev:
+                cur = prev              # 收尾文件串:归入上一笔,**不是新的一笔**
+            else:
+                cur = {"状态": _ROUND_LIVE, "起始披露日": d, "首个标题": a.get("标题"),
+                       "最新披露日": d, "最新标题": a.get("标题"), "公告条数": 0,
+                       "终结披露日": None, "终结标题": None, "终结依据": None}
+                rounds.append(cur)
+        cur["公告条数"] += 1
+        cur["最新披露日"], cur["最新标题"] = d, a.get("标题")
+        a["笔序号"] = rounds.index(cur) + 1          # 1-based
+        if sig in ("完成", "终止"):
+            new_state = _ROUND_DONE if sig == "完成" else _ROUND_TERM
+            # 「已实施」的证据强于「已终止」(理由同 plan_stage_signal):一笔股份已经发出去的定增,
+            # 不会因为后面又来一条「募集资金专户/监管协议终止」这类收尾公告就变回「没发出」。
+            cur["状态"] = (_ROUND_DONE if _ROUND_DONE in (cur["状态"], new_state)
+                           else new_state)
+            cur["终结披露日"], cur["终结标题"] = d, a.get("标题")
+            cur["终结依据"] = "公告标题"
+            cur = None                              # 关帐:后续「进行」信号属于新的一笔
+    # 结构化已实施增发也能关帐(发行日期落在该笔开始之后 → 这笔就是它发出去的那笔)
+    for s in sorted(done_recs or [], key=lambda x: str(x.get("披露日") or "")):
+        d = s.get("发行日期") or s.get("披露日")
+        if not d:
+            continue
+        for r in rounds:
+            if r["状态"] == _ROUND_LIVE and str(d) >= str(r["起始披露日"]):
+                r.update({"状态": _ROUND_DONE, "终结披露日": str(d), "终结标题": None,
+                          "终结依据": "已实施增发(qbzf 发行日期)"})
+    for i, r in enumerate(rounds):
+        r["序号"] = i + 1
+    for a in anns:                                  # 笔状态回写(必须在关帐全部结束后)
+        i = a.get("笔序号")
+        a["笔状态"] = rounds[i - 1]["状态"] if isinstance(i, int) and 0 < i <= len(rounds) else None
+    return rounds
 
 
 def normalize_unlocks(sina_rows: list[dict], em_rows: list[dict]) -> tuple[list[dict], dict]:
@@ -732,13 +871,26 @@ def summarize_asof(payload: dict | None, as_of: str | None = None,
     }
 
     # —— 定增 ——
-    live_plans = [s for s in seos if s.get("阶段") == "推进中"]
-    locked = [s for s in seos if s.get("阶段") == "已实施"
-              and s.get("解锁日") and str(s["解锁日"]) > ref]
+    # **按笔聚合,不按公告条数**:同一笔定增的十几条过程公告先聚合成「笔」,`推进中` 报笔数。
+    # (旧口径按条数,603161 一笔已完成的定增被报成「推进中 12」,消费侧据此打「再融资摊薄压力」
+    #  标签会完全反向——实质是摊薄**已经发生**、锁定 36 个月。)
+    done_seos = [s for s in seos if s.get("阶段") == "已实施"]
+    plan_anns = [s for s in seos if s.get("阶段") in (_STAGE_ANN_LIVE, _STAGE_ANN_FINAL)]
+    rounds = aggregate_plan_rounds(plan_anns, done_seos)
+    live_rounds = [r for r in rounds if r["状态"] == _ROUND_LIVE]
+    locked = [s for s in done_seos if s.get("解锁日") and str(s["解锁日"]) > ref]
     seo_block = {
-        "推进中": len(live_plans),
-        "已实施_锁定中": len(locked),
-        "最近推进中披露日": max((s["披露日"] for s in live_plans), default=None),
+        "推进中": len(live_rounds),                  # ← **笔数**(不是公告条数)
+        "已实施_锁定中": len(locked),                # 结构化已实施 + 锁定期未过(摊薄已发生)
+        "笔数": {_ROUND_LIVE: len(live_rounds),
+                 _ROUND_DONE: len([r for r in rounds if r["状态"] == _ROUND_DONE]),
+                 _ROUND_TERM: len([r for r in rounds if r["状态"] == _ROUND_TERM])},
+        "推进中公告条数": sum(r["公告条数"] for r in live_rounds),
+        "计数口径": ("推进中/已实施/已终止 = 定增**笔数**(同一笔的多条过程公告已按时序聚合);"
+                    "公告条数见 推进中公告条数 与 笔[].公告条数。"
+                    "已实施=股份已发出(摊薄已发生);已终止=股份从未发出(摊薄不会发生),二者不同桶"),
+        "最近推进中披露日": max((r["最新披露日"] for r in live_rounds), default=None),
+        "笔": rounds,
         "明细": sorted(seos, key=lambda x: str(x.get("披露日") or ""), reverse=True)[:12],
     }
 
@@ -786,12 +938,26 @@ def summarize_asof(payload: dict | None, as_of: str | None = None,
                  (f"占总股本 {nxt['占总股本_pct']}%" if nxt.get("占总股本_pct") is not None
                   else f"{nxt.get('解禁数量_股')} 股(占比源缺)"))
         notes.append(f"{nxt['解禁日']} 有解禁({nxt.get('限售股类型') or '类型未知'}),{scale}")
+    # 定增:把「摊薄已经发生」与「摊薄还没发生」明确写成两句不同的话——
+    # 这正是本轮 bug 的消费侧后果所在(把已完成的定增当成「待摊薄压力」会完全反向)。
+    for r in live_rounds:
+        notes.append(f"定增在推进(起 {r['起始披露日']},最新 {r['最新披露日']}:"
+                     f"{(r.get('最新标题') or '')[:40]}),摊薄尚未发生")
+    for s in locked:
+        notes.append(f"定增已实施({s.get('发行日期')} 发行,{s.get('锁定期') or '锁定期未知'}),"
+                     f"锁定至 {s.get('解锁日')} —— 摊薄**已发生**,不是待摊薄压力")
+    for r in rounds:
+        if r["状态"] == _ROUND_DONE and not locked:
+            notes.append(f"定增已发行落地(依据:{r['终结依据']},{r['终结披露日']}),"
+                         f"摊薄已发生;结构化锁定期明细暂缺")
+        elif r["状态"] == _ROUND_TERM:
+            notes.append(f"定增已终止/撤回({r['终结披露日']}),该笔摊薄不会发生")
 
     return {
         "as_of": as_of,
         "固定一问": {
             "有存续可转债": bool(outstanding),
-            "有推进中定增": bool(live_plans),
+            "有推进中定增": bool(live_rounds),        # 笔级「推进中」才算 true(已终止/已实施都不算)
             f"有临近解禁_{NEAR_UNLOCK_DAYS}日": bool(near),
         },
         "可转债": cb_block,
@@ -806,9 +972,40 @@ def summarize_asof(payload: dict | None, as_of: str | None = None,
 
 def build_financing_block(code: str, as_of: str | None = None,
                           总股本: float | None = None) -> dict | None:
-    """record 用的一站式入口:读缓存 → as-of 闸门 → 摘要。无缓存 → None(优雅降级)。"""
+    """record 用的一站式入口:读缓存 → as-of 闸门 → 摘要。**无缓存 → None + 显式 WARN**。
+
+    ⚠ 本函数只**读缓存**(`load_financing`),不采集:采集在批量入口 `fetch_financing`
+    (run.py 调度)。因此对「从未采过的票」它必然拿不到数据。
+    **为什么不在这里触发采集**:① 本函数跑在 record 序列化路径上(逐票),内嵌网络 I/O 会把
+    分析层变成采集层、逐票串行拉取;② 回测按历史 as_of 构记录时,采集只会拉到**今天**的数据,
+    等于给历史时点注入未来信息(防未来函数硬红线);③ 采集失败会阻断记录生成。
+    **为什么也不返回「带 源不可得 标记的空块」**:`serialize.py` 用 `bool(financing_block)`
+    定 `provenance.financing`,非空 dict 是真值 → 会从「静默缺失」升级成「明确谎报有数据」。
+    故本轮保持返回假值(None),只把**静默**变成**有声**:WARN 日志 + 模块内降级台账
+    (`missing_financing()`),批量跑完可直接读出「哪些票的 financing 维度其实没采」。
+    provenance 要真正如实,需 serialize 侧改成按数据存在性判定(见完工回执,归 B 线)。
+    """
+    code = _norm_code(code)
     try:
         payload = load_financing(code, as_of=as_of)
     except FileNotFoundError:
+        rec = {"code": code, "as_of": as_of, "原因": "无 ≤as_of 的 equity_financing 缓存分区",
+               "补救": "跑 fetch_financing([code])(run.py 的存量融资采集)后重建记录"}
+        _MISSING_CACHE.append(rec)
+        logger.warning("存量融资 %s:无缓存(as_of=%s)→ financing 维度整块缺失(**非「确实没有」**);"
+                       "先跑 fetch_financing 再重建记录", code, as_of)
         return None
     return summarize_asof(payload, as_of=as_of, 总股本=总股本)
+
+
+def missing_financing() -> list[dict]:
+    """本进程内 `build_financing_block` 因**无缓存**而返回空的台账(显式降级,不静默)。
+
+    批量跑完读它就知道「有几只票的 financing 维度其实是没采到、而不是确实没有」。
+    """
+    return list(_MISSING_CACHE)
+
+
+def reset_missing_financing() -> None:
+    """清空无缓存降级台账(单测/长跑分段统计用)。"""
+    _MISSING_CACHE.clear()
