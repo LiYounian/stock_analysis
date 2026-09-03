@@ -33,6 +33,21 @@ ENUMS = {
 HOLD_PERIODS = ("1日", "5日", "10日")
 
 # ————————————————————————————————————————————————
+# 口径日期(会过期的块必须自证「这个数是哪天的」)
+# ————————————————————————————————————————————————
+# 为什么进契约层:2026-09-03 实证过两起「产出不自证口径日期 → 过期数据被静默当成今日」的
+# 高危失真(资金流沿用 13 天前缓存、方向与当日真实值相反;基本面/估值整体滞后一个报告期,
+# PE_TTM 量级全变)。既然契约是层与层之间的 API,就该由它固化「这些块必须自报口径日期 +
+# 新鲜度三态」,否则滞后完全静默、下游无从察觉。
+# **值域复用 ENUMS["新鲜度"],不另造第四套**(生产者 analysis.serialize / analysis.event 同源)。
+VINTAGE_DATE = "口径日期"
+FRESHNESS = "新鲜度"
+VINTAGE_NOTE = "口径提示"
+# 应自证口径日期的块。附加可选:旧记录无这些字段仍合规,只在字段存在且非 null 时校验。
+VINTAGE_BLOCKS = ("snapshot", "valuation", "fundamental", "fundflow",
+                  "chip", "consensus", "holder", "tick")
+
+# ————————————————————————————————————————————————
 # 约定(类型/量纲统一)
 # ————————————————————————————————————————————————
 CONVENTIONS = {
@@ -45,11 +60,22 @@ CONVENTIONS = {
                           "本契约按现状固化,建议后续阶段统一(改动涉及多模块,单独排期)",
 }
 
-# 记录顶层块(12);核心必需 + 可空块
+# 记录顶层块;核心必需 + 可空块
+# chip/consensus/holder/tick 早已是 serialize 的实产块,但一直漏登记在此(声明与实际不一致)。
+# 本轮既然给它们加了口径日期校验,就一并登记进来,让 top_level_keys 与实产对齐。
 REQUIRED_TOP = ("schema_version", "meta", "events", "timeseries_refs", "provenance")
 OPTIONAL_TOP = ("snapshot", "valuation", "fundamental", "signals",
-                "prediction", "sentiment", "fundflow", "financial", "financing")
+                "prediction", "sentiment", "fundflow", "financial", "financing",
+                "chip", "consensus", "holder", "tick")
 TOP_LEVEL_KEYS = REQUIRED_TOP[:2] + OPTIONAL_TOP + REQUIRED_TOP[2:]
+
+# 口径三字段的统一说明片段(schema 文本里复用,避免 8 个块各写一套、写着写着就不一致)
+_VINTAGE_DOC = (
+    "口径日期:date|null(**这个数是哪天的**;序列块=最后一根 bar 日,分区块=命中的采集分区日), "
+    "新鲜度:新鲜/陈旧/无数据|null(=口径日期与 meta.as_of 比:相等→新鲜,更早→陈旧,更晚→保守记新鲜"
+    "但发未来函数提示;判不出→保守记新鲜并提示。「陈旧」时**数据保留不清空**,清空会丢掉"
+    "「有旧数据可参考」这一信息), 口径提示:str|null(需提醒时的人读/LLM 可读说明)"
+)
 
 # 人读 + 机读 schema(字段 → 说明)。详尽结构见各生产者;此处固化契约要点。
 RECORD_SCHEMA = {
@@ -58,9 +84,13 @@ RECORD_SCHEMA = {
              "industry": "str|null", "market": "str(A|HK)", "as_of": "date(YYYY-MM-DD)"},
     "snapshot": "null | {close, pct_chg, ma{ma5,ma10,ma20,ma60,排列}, "
                 "macd{dif,dea,macd,状态}, kdj{k,d,j,状态}, rsi{rsi6,rsi12,rsi24}, "
-                "bias20, vol_ratio, vol_state}",
-    "valuation": "null | {pe_ttm, pb, mktcap_yi(亿), 报告期, pe_valid:bool, ...}",
-    "fundamental": "null | {营收, 净利, 营收增速, 净利增速, ROE, 毛利率, 净利率, 负债率}",
+                "bias20, vol_ratio, vol_state, " + _VINTAGE_DOC + "(=最后一根K线bar日)}",
+    "valuation": "null | {pe_ttm, pb, mktcap_yi(亿), 报告期, pe_valid:bool, ..., "
+                 "报告期滞后:bool(与披露日锚定的 financial.报告期 交叉核对;True=整块估值滞后一个"
+                 "报告期,PE/市值按旧报告期口径,量级可能完全不同), " + _VINTAGE_DOC
+                 + "(=fundamental raw 命中的分区日)}",
+    "fundamental": "null | {营收, 净利, 营收增速, 净利增速, ROE, 毛利率, 净利率, 负债率, "
+                   + _VINTAGE_DOC + "(同 valuation,同源)}",
     "financial": "null | {报告期, 报告类型, 披露日, is_forecast, quality_score:0~100, "
                  "评级∈财报评级, five_dims{成长,质量,健康,运营,回报}, "
                  "利润表摘要{营业总收入,归母净利润,扣非归母净利润,营收增速,...}, "
@@ -69,7 +99,12 @@ RECORD_SCHEMA = {
     "financing": "null | {as_of, 固定一问{有存续可转债:bool, 有推进中定增:bool, 有临近解禁_90日:bool}, "
                  "可转债{只数, 存续规模_亿, 潜在摊薄_pct, 明细[]{债券代码,债券简称,状态∈未上市/存续/已摘牌/已到期,"
                  "发行规模_亿,转股价,转股起始日,已进入转股期:bool,到期日,强赎触发价,回售触发价,潜在摊薄_pct,披露日}}, "
-                 "定增{推进中, 已实施_锁定中, 最近推进中披露日, 明细[]{阶段∈推进中/已实施,发行方式,发行价格,"
+                 # TODO(A 线 · equity_financing 定增阶段修复,待其回执定稿后由集成方补齐取值):
+                 #   阶段将从二值扩为三值以上 —— 需区分 **已实施**(股份已发出、摊薄已发生)与
+                 #   **已终止**(从未发出、摊薄永不发生):两者对摊薄压力含义相反,不可同桶。
+                 #   本行取值故意**不猜**;A 线取值定稿后同步此处(否则又成"声明与实际不一致")。
+                 "定增{推进中, 已实施_锁定中, 最近推进中披露日, 明细[]{阶段(取值见 collectors."
+                 "equity_financing;区分 已实施=摊薄已发生 与 已终止=摊薄永不发生),发行方式,发行价格,"
                  "发行总数,上市日期,锁定期,解锁日,标题,披露日}}, "
                  "解禁{未来次数, 未来90日次数, 未来90日占流通_pct, 下一次{解禁日,距今日,解禁数量_股,"
                  "占流通市值_pct,限售股类型,披露日}, 明细[]}, "
@@ -103,10 +138,33 @@ RECORD_SCHEMA = {
                  "持续性∈持续性|缺失(仅公司行为根源消息且分类成功时写),印证强度∈印证强度|缺失,"
                  "持续性方向∈影响方向|缺失,持续性依据:str}}"
                  "(新鲜度/采集日期/锁定日期/持续性研判/事件级持续性字段均为附加可选,旧记录无此字段仍合规)",
-    "fundflow": "null | {今日主力净流入(元), 今日主力净占比, 近5日主力合计(元), 主力连续净流入天数}",
+    "fundflow": "null | {今日主力净流入(元), 今日主力净占比, 近5日主力合计(元), 主力连续净流入天数, "
+                + _VINTAGE_DOC + "}"
+                "(⚠️ 字段名里的「今日」指 **口径日期那天**,不是 meta.as_of。源采集失败时底层缓存会"
+                "回退到更早分区,实测回退过 13 天且方向与当日真实值相反——务必先读 新鲜度/口径日期"
+                "再用这几个数,标「陈旧」即不可当当日资金流)",
+    "chip": "null | {获利比例, 平均成本, 成本区间, 集中度90, ... , " + _VINTAGE_DOC
+            + "}(筹码分布;由 ≤as_of 的 K线本地推演 → 口径日期 = 最后一根 bar 日)",
+    "consensus": "null | {预期EPS当年, 预期EPS次年, 预期增速, 覆盖机构数, ... , " + _VINTAGE_DOC
+                 + "}(一致预期;点数据、源无历史快照,只 date-pin 到 ≤as_of 最近采集分区 → "
+                   "口径日期常早于 as_of 而标「陈旧」,这是如实反映采集频率,不是错误)",
+    "holder": "null | {最新股东户数, 户数环比, 连续减少期数, " + _VINTAGE_DOC
+              + "}(股东户数趋势;季度级披露,同 consensus 的点数据局限)",
+    "tick": "null | {主买占比, 净主动买量, 大单, ... , " + _VINTAGE_DOC
+            + "}(盘口微观结构摘要;date-pin 到 ≤as_of 分区)",
     "events": "list[{date, type, impact∈公告方向, title}](公告)",
     "timeseries_refs": "{kline, fundflow, announcements}(文件路径指针)",
-    "provenance": "{tech:bool, fundamental:bool, announcements:int, fundflow:bool}",
+    "provenance": "{tech:bool, fundamental:bool, announcements:int, fundflow:bool, chip:bool, "
+                  "consensus:bool, holder:bool, tick:bool, financing:bool, "
+                  "口径:{<维>:{口径日期:date|null, 新鲜度:新鲜/陈旧/无数据}}}"
+                  "(布尔位 = **该维实际是否拿到可用数据**,不是对块做 bool()——只剩"
+                  "「源不可得/降级」标记的空块必须报 False,否则等于撒谎说有数据。"
+                  "`口径` 子字典给每个源的口径日期 + 新鲜度三态:**无数据**(该维什么都没有)与"
+                  "**陈旧**(有值但是旧的)严格区分,下游处置不同。维:tech/fundamental/valuation/"
+                  "fundflow/chip/consensus/holder/tick/announcements/financial/financing/sentiment"
+                  "(sentiment 原样镜像其自身的 采集日期/新鲜度——它有自己的新鲜度窗口策略,"
+                  "不用本层的尺子重判,否则一个块会挂两个矛盾结论)。"
+                  "向后兼容:既有布尔键类型不变,新信息只挂在 `口径` 下)",
 }
 
 _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}")
@@ -135,6 +193,38 @@ def validate_record(rec: dict) -> list[str]:
         errs.append("meta.name 缺失或非字符串")
     if meta.get("as_of") and not _DATE_RE.match(str(meta.get("as_of"))):
         errs.append(f"meta.as_of 非日期: {meta.get('as_of')!r}")
+
+    # —— 口径日期 / 新鲜度(会过期的块必须自证是哪天的口径)——
+    # 附加可选:块缺这两个字段仍合规(旧记录);但**一旦出现就必须合法**——
+    # 新鲜度只能取三态之一(不许冒出第四种说法),口径日期只能是 YYYY-MM-DD。
+    # 并且锁住语义红线:标了「陈旧」就必须说清**旧在哪** —— 要么给真实口径日期,要么给口径提示
+    # (如"报告期整体滞后一个报告期",此时旧在报告期这条轴上、未必判得出采集分区日)。
+    # 光说"陈旧"不说旧在哪,下游照样无法判断,那就回到了本轮要修的那个 bug。
+    for bk in VINTAGE_BLOCKS:
+        blk = rec.get(bk)
+        if not isinstance(blk, dict):
+            continue
+        fv = blk.get(FRESHNESS)
+        if not _enum_ok(fv, "新鲜度"):
+            errs.append(f"{bk}.{FRESHNESS} 非法: {fv!r}")
+        dv = blk.get(VINTAGE_DATE)
+        if dv is not None and not _DATE_RE.match(str(dv)):
+            errs.append(f"{bk}.{VINTAGE_DATE} 非日期: {dv!r}")
+        if fv == "陈旧" and dv is None and not blk.get(VINTAGE_NOTE):
+            errs.append(f"{bk} 标了「陈旧」却既无 {VINTAGE_DATE} 也无 {VINTAGE_NOTE}"
+                        f"(陈旧必须说清旧在哪:哪天的口径,或哪个报告期滞后)")
+
+    prov = rec.get("provenance")
+    if isinstance(prov, dict) and isinstance(prov.get("口径"), dict):
+        for dim, ent in prov["口径"].items():
+            if not isinstance(ent, dict):
+                errs.append(f"provenance.口径.{dim} 非 dict: {type(ent).__name__}")
+                continue
+            if not _enum_ok(ent.get(FRESHNESS), "新鲜度"):
+                errs.append(f"provenance.口径.{dim}.{FRESHNESS} 非法: {ent.get(FRESHNESS)!r}")
+            dv = ent.get(VINTAGE_DATE)
+            if dv is not None and not _DATE_RE.match(str(dv)):
+                errs.append(f"provenance.口径.{dim}.{VINTAGE_DATE} 非日期: {dv!r}")
 
     sig = rec.get("signals")
     if isinstance(sig, dict):

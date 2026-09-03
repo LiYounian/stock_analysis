@@ -22,6 +22,11 @@ def _yi(x):
     return None if x is None else round(x / 1e8, 2)
 
 
+def _vint(block) -> str | None:
+    """块的口径日期(块缺失 / 旧记录无该字段 → None,不报错)。"""
+    return (block or {}).get("口径日期")
+
+
 def _row(rec: dict) -> dict:
     m = rec.get("meta") or {}
     snap = rec.get("snapshot") or {}
@@ -77,7 +82,35 @@ def _row(rec: dict) -> dict:
         "近支撑": sup[0] if sup else None, "近压力": res[0] if res else None,
         # 事件
         "公告数": len(rec.get("events") or []),
+        # —— 口径日期(修「一行里各列不同龄却看不出来」)——
+        # 实证的混龄:某票 收盘=09-02 口径,而同一行的 PE/市值是按 08-31 收盘价折算的
+        # (市值/股本反推的价格恰好等于 08-31 收盘价,PE 比值与价格比值完全相等)。
+        # 根因不在 panel:panel 只是把 record 的块拍平,**record 内部各块本来就不同龄**
+        # (价量来自 K线最后一根 bar,估值来自 fundamental 缓存命中的分区),
+        # 而 record 过去没有任何字段暴露这一点。故:
+        #   ① 各块口径日期已由 serialize 盖在块内(单一真源,panel 不自己另算);
+        #   ② panel 只把它们拍平成列,并给一个一眼可见的 `混龄` 标记;
+        #   ③ 另加 `记录日期`(=meta.as_of):panel 走 load_record(date="latest"),
+        #      各票的最新记录日可能不同,这是**第二条**混龄轴,同样必须可见。
+        "记录日期": m.get("as_of"),
+        "价格日期": _vint(snap), "估值日期": _vint(val),
+        "资金流日期": _vint(flow), "资金流新鲜度": (flow or {}).get("新鲜度"),
+        "报告期滞后": val.get("报告期滞后"),
+        "混龄": _mixed_vintage(_vint(snap), _vint(val), _vint(flow)),
     }
+
+
+def _mixed_vintage(*dates) -> bool | None:
+    """同一行的**数据列之间**出现两个以上不同口径日期 → True(横向比较需当心)。
+
+    只比数据列彼此,**不把 meta.as_of 算进来**:as_of 与价格日期差一天在盘前/盘中是常态,
+    混进来会让这一列天天为 True(报警疲劳)。「块 vs as_of」那条轴由各块自己的 新鲜度 表达。
+    全部判不出(旧记录无口径字段)→ None,不假装 False(那会把"不知道"说成"没问题")。
+    """
+    present = {str(d)[:10] for d in dates if d}
+    if not present:
+        return None
+    return len(present) > 1
 
 
 def build_panel(codes: list[str] | None = None) -> pd.DataFrame:
