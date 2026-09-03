@@ -16,7 +16,7 @@ import logging
 
 import pandas as pd
 
-from tools.config import settings
+from tools.config import settings, units
 
 logger = logging.getLogger("collectors.tushare_daily")
 
@@ -76,6 +76,10 @@ def fetch_daily_all(trade_date: str) -> pd.DataFrame:
             out["turnover"] = out["code"].map(tmap)
     except Exception as e:  # 换手补齐失败不致命
         logger.warning("Tushare daily_basic(%s) 换手率取失败(不致命,置 NA):%s", day, e)
+    # turnover 口径声明:daily_basic.turnover_rate 是**百分数** → to_percent 无操作。
+    # (无 token 未实调,按 Tushare 文档 + 与免费源同口径的既有假设登记;若真实为小数,
+    #  put_master_kline 的单位护栏会把整段异常刷成 ERROR 并写进 meta,不会静默混进主档。)
+    out = units.to_percent(out, "tushare_daily")
     out = out.dropna(subset=["code", "open", "high", "low", "close"])
     if out.empty:
         raise ConnectionError(f"Tushare daily({day}) 无有效 OHLC 行")

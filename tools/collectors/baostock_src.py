@@ -15,7 +15,7 @@ from __future__ import annotations
 import logging
 from contextlib import contextmanager
 
-from tools.config import exchange
+from tools.config import exchange, units
 
 import pandas as pd
 
@@ -92,4 +92,7 @@ def fetch_one(code: str, start: str, end: str, adjust: str = "qfq") -> pd.DataFr
     for c in _STD_COLS:
         if c not in df.columns:
             df[c] = pd.NA
+    # turnover 口径声明:baostock 的 turn 本已是**百分数** → to_percent 无操作。
+    # 走单一真源(tools.config.units)而不是"这里注释一句"——新增源必须在口径表登记。
+    df = units.to_percent(df, "baostock")
     return df[_STD_COLS]

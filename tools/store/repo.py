@@ -375,14 +375,50 @@ def get_master_kline(code: str):
 def put_master_kline(code: str, df, meta: dict | None = None) -> str:
     """全量覆盖写单票主档(原子写)+ meta sidecar。df 需含 date 列。
 
-    写入前按 date 去重(保留最后一条)+ 升序,保证主档规整。返回数据文件路径。
+    写入前按 date 去重(同日**逐列**取最后一个非空值)+ 升序,保证主档规整。
+    写入前还跑一次 **turnover 单位护栏**(见 `_guard_turnover_unit`)。返回数据文件路径。
     """
     import pandas as pd
     df = _dedup_sort_by_date(df)
+    anomaly = _guard_turnover_unit(code, df)
     p = _master_path(code)
     data_path = _write_parquet(p, df)
-    _write_master_meta(code, df, meta)
+    _write_master_meta(code, df, meta, anomaly=anomaly)
     return data_path
+
+
+class TurnoverUnitError(ValueError):
+    """主档 turnover 单位混用(百分数/小数混存)。严格模式下写入即抛。"""
+
+
+def _guard_turnover_unit(code: str, df) -> dict | None:
+    """写主档前的**自动化**单位护栏:检出 turnover 与本票 volume 不自洽的行。
+
+    为什么必须是自动断言而不是人工巡检:本项目已被同类问题咬过一次——单位混用在
+    2335 只票 × 2 个交易日上静默落盘 4669 行,靠人扫 parquet 不可能发现;
+    只有在**唯一写入闸门**上加检查才拦得住(判据见 `tools.config.units` 模块 docstring)。
+
+    行为:检出 → logger.error + 计入 meta sidecar 的 `turnover_unit_anomaly` 字段(可被
+    巡检脚本/测试消费);`STRICT_TURNOVER_UNIT=1` 时**直接抛** `TurnoverUnitError`
+    (供单测/CI 把"混用"变成硬失败,而不是只记一行日志)。
+    默认不抛、不改数据:store 层静默改数会掩盖新源的口径 bug——治本在采集层归一。
+    """
+    from tools.config import units
+    try:
+        res = units.scan_turnover_unit(df, code)
+    except Exception as e:                       # 护栏自身不得拖垮写入
+        logger.warning("主档 %s turnover 单位护栏跳过(检测异常,不影响落盘): %s", code, e)
+        return None
+    if not res.get("rows"):
+        return None
+    dates = res["dates"]
+    logger.error("主档 %s turnover 单位异常 %d 行(疑小数当百分数存,相差 100 倍): %s"
+                 "(口径单一真源 tools/config/units.py;一次性修历史用 "
+                 "ops/fix_turnover_unit.py)", code, res["rows"], dates[:10])
+    if os.getenv("STRICT_TURNOVER_UNIT", "").lower() in ("1", "true", "yes"):
+        raise TurnoverUnitError(
+            f"{code} turnover 单位异常 {res['rows']} 行: {dates[:10]}")
+    return {"rows": res["rows"], "dates": dates[:20]}
 
 
 def append_master_kline(code: str, df_new, meta: dict | None = None) -> str:
@@ -402,16 +438,30 @@ def append_master_kline(code: str, df_new, meta: dict | None = None) -> str:
 
 
 def _dedup_sort_by_date(df):
-    """按 date 去重(保留最后一条,即同日新覆盖旧)+ 升序 + 重置索引。"""
+    """按 date 去重(同日**逐列**取最后一个非空值,即新数据覆盖旧)+ 升序 + 重置索引。
+
+    为什么是"逐列"而不是整行 `drop_duplicates(keep="last")`:主档的写入源**列不齐**——
+    腾讯 fqkline 端点不返回 amount/turnover(该两列为 NaN)。整行 keep="last" 会让这种
+    "列少的源"把已有的好值**擦成 NaN**:实测 603161/2026-08-13 的 amount/turnover 已由
+    baostock 正确落过,又被回退路径(meta.source=fallback_advance)的 tencent bar 整行覆盖
+    成 NaN,近端换手覆盖率因此塌到 0.04%。逐列取"最后一个非空"后,缺列的源只更新它真正
+    带的列,**永不擦除**别的源已落好的值(NaN 不携带信息,不该有覆盖权)。
+    """
     import pandas as pd
     out = df.copy()
     out["date"] = pd.to_datetime(out["date"])
-    out = (out.drop_duplicates(subset=["date"], keep="last")
-              .sort_values("date").reset_index(drop=True))
-    return out
+    if out["date"].duplicated().any():
+        cols = list(out.columns)
+        # groupby.last() 逐列取最后一个**非空**值(pandas 语义),恰好即"新非空覆盖旧、
+        # 新空值不擦旧值";同日全空的列仍为 NaN。稳定排序保证"后写入的行"在后。
+        out = (out.sort_values("date", kind="mergesort")
+                  .groupby("date", as_index=False, sort=True).last())
+        out = out[cols]
+    return out.sort_values("date").reset_index(drop=True)
 
 
-def _write_master_meta(code: str, df, meta: dict | None) -> None:
+def _write_master_meta(code: str, df, meta: dict | None,
+                       anomaly: dict | None = None) -> None:
     m = {"fetched_at": _now_iso(), "code": code}
     try:
         m["rows"] = int(len(df))
@@ -424,6 +474,9 @@ def _write_master_meta(code: str, df, meta: dict | None) -> None:
         pass
     if meta:
         m.update(meta)
+    # turnover 单位护栏结论进 meta:巡检脚本/测试能"读 meta 就知道这票脏没脏",
+    # 不必重跑检测;干净时显式写 0,便于区分"检过是干净"与"没检过"。
+    m["turnover_unit_anomaly"] = anomaly or {"rows": 0, "dates": []}
     _write_json(_master_meta_path(code), m)
 
 

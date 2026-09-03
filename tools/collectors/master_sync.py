@@ -85,7 +85,7 @@ def _advance_master_from_raw(fetched: dict) -> int:
     除权场景(前复权锚点漂移导致新旧 bar 拼接失真)不在此路径处理——由
     "覆盖不足/太旧 → backfill 全量重算"兜底(_MIN_COVERAGE / _MAX_GAP_DAYS),此处不改那套判定。
     """
-    advanced = 0
+    tails: dict[str, pd.DataFrame] = {}
     for code, df in fetched.items():
         try:
             if df is None or len(df) == 0 or "date" not in getattr(df, "columns", []):
@@ -102,6 +102,15 @@ def _advance_master_from_raw(fetched: dict) -> int:
             # 主档不存在:tail 保持全量(首次落地)
             if len(tail) == 0:
                 continue
+            tails[code] = tail
+        except Exception as e:
+            logger.error("回退推进主档失败 %s: %s(仅跳过该票,不影响其余)", code, e)
+
+    _enrich_turnover_amount(tails)   # 回退源不带额/换手 → 补齐(best-effort,不抛)
+
+    advanced = 0
+    for code, tail in tails.items():
+        try:
             store.append_master_kline(code, tail, meta={"source": "fallback_advance"})
             advanced += 1
         except Exception as e:
@@ -109,6 +118,76 @@ def _advance_master_from_raw(fetched: dict) -> int:
     if advanced:
         logger.info("回退已推进主档:%d 只(尾部增量 append)", advanced)
     return advanced
+
+
+# 回退路径补齐 amount/turnover 的开关(默认开;=0 关掉可让回退完全不触 baostock)
+def _enrich_enabled() -> bool:
+    return os.getenv("FALLBACK_ENRICH_TURNOVER", "1").lower() not in ("0", "false", "no")
+
+
+_ENRICH_COLS = ("amount", "turnover")
+
+
+def _lacks_amount_turnover(tail) -> bool:
+    """该 tail 是否缺 amount/turnover(整列缺或有空值)。"""
+    for c in _ENRICH_COLS:
+        if c not in getattr(tail, "columns", []):
+            return True
+        if pd.to_numeric(tail[c], errors="coerce").isna().any():
+            return True
+    return False
+
+
+def _enrich_turnover_amount(tails: dict) -> int:
+    """回退源不带 amount/turnover 时,用 baostock 按日期对齐补齐这两列。返回补齐票数。
+
+    为什么必须补(而不是"缺就缺、全交给下游现算"):回退主源是腾讯 fqkline 端点,
+    该端点**不返回**成交额/换手率,于是每次走回退的交易日在主档里都是 amount/turnover
+    整段 NaN——实测近端连续 13 个交易日全缺,`反转低换手` 的换手覆盖率现算前塌到 0.04%。
+
+    为什么选"换源补齐"而不是"volume × 均价 / volume ÷ 流通股 现算":
+      · 现算换手需要**流通股**,而流通股本身要另一套数据(且有解禁/增发的阶跃),
+        等于为了补一个数再引入一个不可自证的数——这正是本 bug 的成因模式;
+      · baostock 是本项目**已在用**的全量主档源(backfill_master 就走它),给的是权威
+        百分数换手 + 真实成交额,不封、无 sleep,tail 只查几天 → 增量成本很低;
+      · 下游已上线的现算兜底(反转低换手覆盖率熔断)**保留不动**,退化为纵深防御:
+        baostock 也拿不到时才现算,契约不变、熔断阈值无需调整。
+
+    best-effort:整体或单票失败都只记日志、保持 NaN,绝不让回退路径崩(回退本身就是降级路径)。
+    """
+    from tools.config import stock_pool
+    need = {c: t for c, t in tails.items()
+            if not stock_pool.is_hk(c) and _lacks_amount_turnover(t)}
+    if not need or not _enrich_enabled():
+        return 0
+    from tools.collectors import baostock_src
+    filled = 0
+    try:
+        with baostock_src.session():
+            for code, tail in need.items():
+                try:
+                    s = pd.to_datetime(tail["date"]).min().strftime("%Y-%m-%d")
+                    e = pd.to_datetime(tail["date"]).max().strftime("%Y-%m-%d")
+                    b = baostock_src.fetch_one(code, s, e, adjust=settings.KLINE_ADJUST)
+                    bd = pd.to_datetime(b["date"]).dt.normalize()
+                    for c in _ENRICH_COLS:
+                        m = dict(zip(bd, pd.to_numeric(b[c], errors="coerce")))
+                        src = pd.to_datetime(tail["date"]).map(m)
+                        if c in tail.columns:
+                            tail[c] = pd.to_numeric(tail[c], errors="coerce").fillna(src)
+                        else:
+                            tail[c] = src
+                    filled += 1
+                except Exception as ex:
+                    logger.warning("回退补齐额/换手失败 %s: %s(保持 NaN,交下游现算兜底)",
+                                   code, ex)
+    except Exception as ex:
+        logger.warning("回退补齐额/换手整体跳过(baostock 不可用: %s);"
+                       "amount/turnover 保持 NaN,交下游现算兜底", ex)
+        return 0
+    if filled:
+        logger.info("回退补齐 amount/turnover:%d/%d 只(源 baostock)", filled, len(need))
+    return filled
 
 
 def _fallback(codes: list[str], workers: int | None, reason: str) -> dict:
