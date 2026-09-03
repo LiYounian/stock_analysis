@@ -38,3 +38,10 @@ docs/需求沟通/
 data/master/
 scratch_diag_out.txt
 data/analysis/backtest/finval/
+
+# 定时任务运行期产物（护栏锁 / OS级盘中快照），纯滚存不入库
+data/task_locks/
+data/intraday/
+
+# 运行日志不入库
+logs/
