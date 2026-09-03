@@ -12,6 +12,12 @@
 
 涨停线启发式(无 ST 名单时):按代码前缀路由板块主限价;主板另用 5% 带兜住 ST,
 即"封板 + pct 落在某板块允许限价的容差带内"→ 记涨停/跌停。见 §说明。
+
+⚠️ **横截面口径单一真源**(2026-09-03 抽出):`classify_pct` / `equal_weight_mean_pct` /
+`cross_section_stats` / `is_limit_hit` 是"全A等权(mean_pct=proxy)/中位数/涨跌家数/净广度/分位/
+涨跌停"的**唯一定义处**。历史回测(本模块 `compute_breadth` → `features.build_proxy_index`)与
+当日收盘节点(`tools.pipeline.market_breadth`)都必须调这几个函数,不许各写一份——否则
+"全A等权"会出现两个互相漂移的定义,大盘预测的基准与盘尾 α 记分的基准对不上账。
 """
 from __future__ import annotations
 
@@ -74,6 +80,92 @@ def _hit_limit(pct: np.ndarray, close: np.ndarray, high: np.ndarray,
     return sealed & near
 
 
+def is_limit_hit(code: str, pct: float, close: float, high: float, low: float,
+                 *, up: bool = True, cfg: dict | None = None) -> bool:
+    """标量版涨/跌停判定(单票单日):`_hit_limit` 的对外包装,供实时报价逐票调用。
+
+    与历史广度聚合走**同一**启发式(板块限价路由 + 封板 + 容差带),故两侧涨跌停家数同口径。
+    任一入参缺失(None/NaN)→ False(缺失就是缺失,不猜)。
+    """
+    cfg = cfg or _CFG
+    vals = [pct, close, high, low]
+    if any(v is None for v in vals):
+        return False
+    arr = [np.array([float(v)], dtype=float) for v in vals]
+    if any(np.isnan(a[0]) for a in arr):
+        return False
+    return bool(_hit_limit(arr[0], arr[1], arr[2], arr[3],
+                           allowed_limits(code, cfg), float(cfg["涨停容差"]),
+                           float(cfg["封板容差"]), up=up)[0])
+
+
+# ————————————————————————— 横截面口径(单一真源) —————————————————————————
+#: 全市场涨幅分位的默认切点(P10/P25/P75/P90)——盘尾 α 记分看分布厚尾用。
+PCT_QUANTILES: tuple[float, ...] = (0.10, 0.25, 0.75, 0.90)
+
+#: 供产出 meta 标注"口径出处",下游/复盘据此确认两侧同源。
+CROSS_SECTION_SOURCE = "tools.analysis.market_forecast.breadth.cross_section_stats"
+
+
+def classify_pct(pct) -> dict[str, np.ndarray]:
+    """涨幅数组 → 涨/跌/平的布尔掩码(**涨跌平的唯一定义**:pct>0 / <0 / ==0)。
+
+    NaN(停牌/上市首日无涨幅)在三类里**都是 False**——既不算涨也不算跌也不算平。
+    """
+    arr = np.asarray(pct, dtype=float)
+    return {"adv": arr > 0, "dec": arr < 0, "flat": arr == 0}
+
+
+def equal_weight_mean_pct(pct, total: int | float | None = None) -> float:
+    """**全A等权(mean_pct / proxy)的唯一定义**:横截面涨幅的算术平均。
+
+    · 分子 = Σpct(跳过 NaN);分母 = `total`,缺省 = 序列长度(=当日在市家数)。
+      NaN 项**计入分母不计入分子**——与历史聚合 `pct_sum / listed` 逐日口径一致。
+    · 单位:百分点(与源方 pct_chg 同单位),不做 /100。
+    · `features.build_proxy_index` 就是把本函数的逐日结果累乘成代理指数。
+    """
+    arr = np.asarray(pct, dtype=float)
+    n = float(arr.size if total is None else total)
+    if n <= 0:
+        return float("nan")
+    return float(np.nansum(arr) / n)
+
+
+def net_breadth(adv_n: int | float, dec_n: int | float,
+                total_n: int | float) -> float:
+    """净广度(净涨占比)的唯一定义:(涨家数 − 跌家数) / 总家数;总家数 0 → NaN。"""
+    total_n = float(total_n)
+    if total_n <= 0:
+        return float("nan")
+    return float((float(adv_n) - float(dec_n)) / total_n)
+
+
+def cross_section_stats(pct, *, total: int | None = None,
+                        quantiles: tuple[float, ...] = PCT_QUANTILES) -> dict:
+    """一日全市场涨幅横截面 → 聚合口径 dict(**历史回测与当日节点共用**)。
+
+    入参 `pct` 为该日全市场个股涨幅(%)序列(允许含 NaN);`total` 缺省 = 序列长度。
+    返回:total / mean_pct(全A等权) / median_pct / adv,dec,flat / net_adv(净广度) /
+          quantiles{P10,P25,...}。空序列 → 计数 0、比率 NaN(不假造 0)。
+    """
+    arr = np.asarray(pct, dtype=float)
+    n = int(arr.size if total is None else total)
+    m = classify_pct(arr)
+    adv, dec, flat = int(m["adv"].sum()), int(m["dec"].sum()), int(m["flat"].sum())
+    valid = arr[~np.isnan(arr)]
+    med = float(np.median(valid)) if valid.size else float("nan")
+    qs = {f"P{int(round(q * 100))}": (float(np.quantile(valid, q)) if valid.size
+                                      else float("nan")) for q in quantiles}
+    return {
+        "total": n,
+        "mean_pct": equal_weight_mean_pct(arr, total=n),
+        "median_pct": med,
+        "adv": adv, "dec": dec, "flat": flat,
+        "net_adv": net_breadth(adv, dec, n),
+        "quantiles": qs,
+    }
+
+
 # ————————————————————————— 单票 → 逐日指标 —————————————————————————
 def _per_stock_indicators(df: pd.DataFrame, code: str,
                           cfg: dict | None = None) -> pd.DataFrame | None:
@@ -101,9 +193,8 @@ def _per_stock_indicators(df: pd.DataFrame, code: str,
     seal = float(cfg["封板容差"])
     lims = allowed_limits(code, cfg)
 
-    up = pct > 0
-    dn = pct < 0
-    flat = pct == 0
+    masks = classify_pct(pct)                     # 涨跌平走单一真源(与当日节点同口径)
+    up, dn, flat = masks["adv"], masks["dec"], masks["flat"]
     lu = _hit_limit(pct, c, h, lo, lims, tol, seal, up=True)
     ld = _hit_limit(pct, c, h, lo, lims, tol, seal, up=False)
 
@@ -152,8 +243,7 @@ def compute_breadth(codes: list[str] | None = None, data_root=None,
         count_cols += [f"nh{w}", f"nl{w}"]
 
     acc_counts: pd.DataFrame | None = None      # 计数列逐块相加
-    pct_sum: pd.Series | None = None            # 涨幅和(算均值)
-    pct_lists: dict = {}                        # date -> list(pct)(算中位数)
+    pct_lists: dict = {}                        # date -> list(pct)(算均值/中位数/分位)
 
     buf = []
     n_used = 0
@@ -173,8 +263,6 @@ def compute_breadth(codes: list[str] | None = None, data_root=None,
             g = block.groupby("date")
             cnt = g[count_cols].sum()
             acc_counts = cnt if acc_counts is None else acc_counts.add(cnt, fill_value=0)
-            psum = g["pct"].sum()
-            pct_sum = psum if pct_sum is None else pct_sum.add(psum, fill_value=0)
             for dt, sub in block.groupby("date")["pct"]:
                 pct_lists.setdefault(dt, []).append(sub.to_numpy())
 
@@ -194,10 +282,11 @@ def compute_breadth(codes: list[str] | None = None, data_root=None,
     ma_valid = res[f"ma{maw}_valid"].replace(0, np.nan)
     res["above_ma20_ratio"] = res[f"above_ma{maw}"] / ma_valid
     res["below_ma20_ratio"] = res[f"below_ma{maw}"] / ma_valid   # 破位广度
-    # 均值 / 中位涨幅
-    res["mean_pct"] = (pct_sum.sort_index() / total)
-    med = {dt: float(np.nanmedian(np.concatenate(v))) for dt, v in pct_lists.items()}
-    res["median_pct"] = pd.Series(med).sort_index()
+    # 均值 / 中位涨幅:走横截面单一真源 cross_section_stats(与当日收盘节点同一函数)
+    day_stats = {dt: cross_section_stats(np.concatenate(v), total=int(res.loc[dt, "listed"]))
+                 for dt, v in pct_lists.items()}
+    res["mean_pct"] = pd.Series({d: s["mean_pct"] for d, s in day_stats.items()}).sort_index()
+    res["median_pct"] = pd.Series({d: s["median_pct"] for d, s in day_stats.items()}).sort_index()
 
     res.attrs["n_stocks_used"] = n_used
     logger.info("广度聚合完成:%d 票 · %d 交易日", n_used, len(res))
