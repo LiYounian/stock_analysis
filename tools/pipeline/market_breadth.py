@@ -117,10 +117,16 @@ def resolve_universe(include_bj: bool = True) -> tuple[list[str], dict]:
         "bj_n": len(bj),
         "include_bj": bool(include_bj),
         "n": len(codes),
-        "note": ("含北交所(与 compute_breadth 历史票池完全一致)" if include_bj else
-                 "排除北交所(gtimg 前缀推断不支持 920xxx;与 09-03 现场复算口径一致);"
-                 "历史侧 compute_breadth 票池含北交所,差约 %d/%d 只"
+        "note": ("含北交所(默认;与 compute_breadth / 大盘预测 proxy 同一票池)" if include_bj else
+                 "排除北交所(仅用于对账 2026-09-03 及更早的旧口径数字);"
+                 "历史侧 compute_breadth 票池含北交所,差 %d/%d 只"
                  % (len(bj), len(all_codes))),
+        # 口径切换留痕:防止下次复盘把 0.1pp 量级的口径差当成策略效应
+        "口径变更": ("2026-09-04 起票池含北交所(%d 只 = %.1f%% 票池)。2026-09-03 及更早的盘尾现场复算"
+                     "因 920 段前缀 bug 整段丢数、实为'排除北交所'口径(09-03 实测 mean_pct -0.305%% vs "
+                     "含北交所 -0.422%%,差 0.117pp)。**跨这条线的 α 数字不可直接相减**——对账旧口径请用 "
+                     "--exclude-bj 重算,或明确标注口径切换点。"
+                     % (len(bj), 100.0 * len(bj) / max(len(all_codes), 1))),
     }
     return codes, meta
 
