@@ -18,7 +18,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import pandas as pd
 
 from tools.collectors import baostock_src
-from tools.config import settings
+from tools.config import exchange, settings
 from tools.store import repo as store
 
 logger = logging.getLogger("collectors.market")
@@ -35,20 +35,12 @@ DEFAULT_SOURCES = ("tencent", "sina", "eastmoney")
 
 
 def market_prefix(code: str) -> str:
-    """6 位代码 → 带交易所前缀(sh/sz/bj)。腾讯/新浪接口需带前缀。
+    """6 位代码 → 带交易所前缀符号(如 `sh600000`/`bj920002`)。腾讯/新浪日K接口需带前缀。
 
-    ⚠️ **920 段必须先判**:北交所现行代码段是 920xxx(主档 338 只),落到"9 开头→sh"会整段取不到数据;
-    900xxx 是沪市B股仍归 sh。故按前缀长度精确匹配,不能只看首位。
+    判据在 `tools.config.exchange`(**单一真源**),这里只定本源的兜底口径:判不出的
+    代码**原样透传**(历史行为),让下游接口自己报错,而不是硬贴一个可能错的前缀。
     """
-    if code.startswith("920"):                    # 北交所现行代码段(先于 9→sh)
-        return f"bj{code}"
-    if code[0] in ("6", "9"):
-        return f"sh{code}"
-    if code[0] in ("0", "2", "3"):
-        return f"sz{code}"
-    if code[0] in ("8", "4"):
-        return f"bj{code}"
-    return code
+    return exchange.prefixed(code) or code
 
 
 def _normalize(df: pd.DataFrame) -> pd.DataFrame:
