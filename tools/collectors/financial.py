@@ -122,7 +122,7 @@ def _em_symbol(code: str) -> str:
     c = str(code).zfill(6)
     if c[0] == "6":
         return "SH" + c
-    if c[0] in ("4", "8"):                        # 北交所
+    if c.startswith("920") or c[0] in ("4", "8"):  # 北交所(920 段为现行代码段,须先于 0/3 兜底)
         return "BJ" + c
     return "SZ" + c                               # 0/3 开头(深主板/创业板)
 

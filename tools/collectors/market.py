@@ -35,7 +35,13 @@ DEFAULT_SOURCES = ("tencent", "sina", "eastmoney")
 
 
 def market_prefix(code: str) -> str:
-    """6 位代码 → 带交易所前缀(sh/sz/bj)。腾讯/新浪接口需带前缀。"""
+    """6 位代码 → 带交易所前缀(sh/sz/bj)。腾讯/新浪接口需带前缀。
+
+    ⚠️ **920 段必须先判**:北交所现行代码段是 920xxx(主档 338 只),落到"9 开头→sh"会整段取不到数据;
+    900xxx 是沪市B股仍归 sh。故按前缀长度精确匹配,不能只看首位。
+    """
+    if code.startswith("920"):                    # 北交所现行代码段(先于 9→sh)
+        return f"bj{code}"
     if code[0] in ("6", "9"):
         return f"sh{code}"
     if code[0] in ("0", "2", "3"):

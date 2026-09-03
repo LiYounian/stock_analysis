@@ -138,3 +138,37 @@ def test_fetch_tencent_filters_by_start(monkeypatch):
     monkeypatch.setattr("requests.get", lambda *a, **k: _FakeResp(_fq_payload("sz300001", rows)))
     df = market._fetch_tencent("300001", "20260801", "20260811", "qfq")
     assert list(df["date"]) == ["2026-08-10", "2026-08-11"]   # 2025 那根被裁掉
+
+
+# ————————————————————————————————————————————————
+# 北交所 920 段路由(2026-09-03)
+#
+# 为什么有这组断言:北交所现行代码段是 920xxx(主档 338 只 = 6.1% 票池,且主档里北交所**全部**在这一段,
+# 没有 43/83/87 段)。若按"9 开头→沪市"路由,这 338 只会**整段静默取不到数据**——实测 gtimg
+# `sh920002` 返回空、`bj920002` 正常。而 900xxx 是沪市B股仍归沪市,所以判据必须是前缀长度精确匹配、
+# 不能只看首位。这个 bug 曾让全市场收盘口径节点的票池比历史 compute_breadth 少 6%,导致"同一个
+# 等权函数、两个不同票池"——等权基准仍是两条互相漂移的序列。
+# ————————————————————————————————————————————————
+
+def test_北交所920段路由到bj_而900段沪B仍归sh():
+    from tools.collectors import gtimg_quote
+    from tools.collectors import financial
+
+    # ① 实时报价前缀
+    assert gtimg_quote.market_prefix("920002") == "bj", "920 段是北交所,判成 sh 会整段取不到数"
+    assert gtimg_quote.market_prefix("900901") == "sh", "900 段是沪市B股,不能被 920 规则带走"
+    assert gtimg_quote.market_prefix("430047") == "bj"
+    assert gtimg_quote.market_prefix("831010") == "bj"
+    assert gtimg_quote.market_prefix("600000") == "sh"
+    assert gtimg_quote.market_prefix("300001") == "sz"
+
+    # ② K线/新浪腾讯带前缀符号
+    assert market.market_prefix("920002") == "bj920002"
+    assert market.market_prefix("900901") == "sh900901"
+    assert market.market_prefix("600000") == "sh600000"
+
+    # ③ 东财财报接口符号(北交所必须 BJ,否则落到 SZ 兜底)
+    assert financial._em_symbol("920002") == "BJ920002"
+    assert financial._em_symbol("430047") == "BJ430047"
+    assert financial._em_symbol("600000") == "SH600000"
+    assert financial._em_symbol("000001") == "SZ000001"
