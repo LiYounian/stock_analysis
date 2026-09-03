@@ -90,6 +90,10 @@ class TrackedAnalysisWrite(BaseException):
     的降级兜底(生产上正确——单源失败不该中止闭环),Exception 会被它们**静默吞掉**,
     护栏就退化成"悄悄不写"而不是"报出这个测试不 hermetic"。BaseException 能穿过这些兜底,
     pytest 照样按失败报告,污染才会被当场看见。
+
+    边界(别当它密不透风):`except BaseException` / 裸 `except:` 仍会吞掉本异常。
+    2026-09-03 全量扫过 tools/ web/ ops/ —— 当时**零处**这两种写法,故护栏当时是严的;
+    将来谁新增了这类兜底,那条路径上的污染会重新变静默,记得同步排查。
     """
 
 
