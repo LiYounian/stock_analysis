@@ -18,7 +18,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import pandas as pd
 
 from tools.collectors import baostock_src
-from tools.config import exchange, settings
+from tools.config import exchange, settings, units
 from tools.store import repo as store
 
 logger = logging.getLogger("collectors.market")
@@ -43,14 +43,21 @@ def market_prefix(code: str) -> str:
     return exchange.prefixed(code) or code
 
 
-def _normalize(df: pd.DataFrame) -> pd.DataFrame:
-    """统一列名/类型/排序,补算 pct_chg。"""
+def _normalize(df: pd.DataFrame, source: str | None = None) -> pd.DataFrame:
+    """统一列名/类型/排序 + **turnover 单位归一**,补算 pct_chg。
+
+    `source` 必传实际命中源:各源 turnover 原始口径**本来就不一致**(sina 走
+    akshare `stock_zh_a_daily`,其 turnover = volume/流通股 是**小数**;baostock /
+    东财 / spot 是**百分数**),口径表与归一在 `tools.config.units`(单一真源)。
+    不传 source(口径未知,如测试直接构造规整帧)则不动 turnover。
+    """
     df = df.rename(columns=_EM_COL_MAP)
     df["date"] = pd.to_datetime(df["date"])
     df = df.sort_values("date").reset_index(drop=True)
     for c in ("open", "high", "low", "close", "volume", "amount", "turnover"):
         if c in df.columns:
             df[c] = pd.to_numeric(df[c], errors="coerce")
+    df = units.to_percent(df, source)          # master.turnover 一律百分数
     if "pct_chg" not in df.columns or df["pct_chg"].isna().all():
         df["pct_chg"] = df["close"].pct_change() * 100  # 首行 NaN,正常
     for c in _STD_COLS:
@@ -163,7 +170,7 @@ def fetch_one_hk(code: str, start: str, end: str, adjust: str = "",
             df = _HK_FETCHERS[src](code, start, end, adjust)
             if df is None or len(df) == 0:
                 raise ValueError("空数据")
-            out = _normalize(df)
+            out = _normalize(df, src)
             logger.debug("港股K线 %s 命中源 %s", code, src)
             return out
         except Exception as e:
@@ -184,7 +191,7 @@ def _fetch_one_with_source(code: str, start: str, end: str, adjust: str,
             df = _FETCHERS[src](code, start, end, adjust)
             if df is None or len(df) == 0:
                 raise ValueError("空数据")
-            out = _normalize(df)
+            out = _normalize(df, src)
             logger.debug("K线 %s 命中源 %s", code, src)
             return out, src
         except Exception as e:  # 换下一个源
@@ -347,7 +354,7 @@ def fetch_spot_all() -> pd.DataFrame:
         if c != "code":
             df[c] = pd.to_numeric(df[c], errors="coerce")
     df["code"] = df["code"].astype(str).str.zfill(6)
-    return df
+    return units.to_percent(df, "akshare_spot")   # 口径声明(spot 本已是百分数 → 无操作)
 
 
 def update_master_from_spot(codes: list[str] | None = None, date: str | None = None,
