@@ -10,52 +10,26 @@ from __future__ import annotations
 
 import time
 
-import requests
-
+from tools.collectors import gtimg_quote
 from tools.config import stock_pool
 from tools.store import repo as store
 
 # 实时报价用腾讯 gtimg(非东财:本机对东财 spot 有 TLS 指纹墙;腾讯是 collectors 一直用的备用源)。
 # 只拉自选十几只、一次批量调用,10s TTL 缓存(多标签页/多轮询共享,不频打)。
+# 抓取与字段解析已上提到 `tools.collectors.gtimg_quote`(单一事实源,与盘中快照节点共用);
+# 本层只留缓存与展示口径,下面两个名字保留为**薄委托**(调用方/单测的既有入口不变)。
 _QUOTE_TTL_S = 10.0
 _quote_cache: dict = {"ts": 0.0, "by_code": None}
-_GTIMG_URL = "http://qt.gtimg.cn/q="
 
 
 def _gtimg_prefix(code: str) -> str:
-    """6位A股代码 → 腾讯 gtimg 市场前缀。"""
-    c0 = code[:1]
-    if c0 in ("6", "9"):
-        return "sh"
-    if c0 in ("4", "8"):
-        return "bj"
-    return "sz"                                    # 0/2/3 开头 → 深市/创业板
+    """6位A股代码 → 腾讯 gtimg 市场前缀(委托 collectors.gtimg_quote)。"""
+    return gtimg_quote.market_prefix(code)
 
 
 def _fetch_quotes(codes: list[str]) -> dict[str, dict]:
-    """腾讯 gtimg 批量拉现价/涨跌幅/成交额(万)。返回 {code: {price,pct_chg,amount_wan}}。"""
-    if not codes:
-        return {}
-    url = _GTIMG_URL + ",".join(f"{_gtimg_prefix(c)}{c}" for c in codes)
-    r = requests.get(url, timeout=8)
-    r.encoding = "gbk"
-    out: dict[str, dict] = {}
-    for line in r.text.strip().split("\n"):
-        parts = line.split("~")
-        if len(parts) < 38:                        # 空/异常行(如停牌返回 v_xxx="";)跳过
-            continue
-
-        def _num(x):
-            try:
-                return float(x)
-            except (TypeError, ValueError):
-                return None
-        out[parts[2]] = {                          # parts[2]=6位代码
-            "price": _num(parts[3]),               # 现价
-            "pct_chg": _num(parts[32]),            # 涨跌幅%
-            "amount_wan": _num(parts[37]),         # 成交额(万元)
-        }
-    return out
+    """腾讯 gtimg 批量拉报价。返回 {code: {price,pct_chg,amount_wan,...}}(本页只用前三个)。"""
+    return gtimg_quote.fetch_quotes(codes)
 
 
 def _quotes_cached(codes: list[str]) -> dict[str, dict]:
