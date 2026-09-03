@@ -270,7 +270,20 @@ def test_redflag_veto_mode_sinks_to_bottom(monkeypatch):
 
 
 def test_redflag_noop_when_no_financial_regression(monkeypatch):
-    """回归:无财报块(financial=None)→ 排序分==综合分、财报风险=None,与旧「综合分降序」一致。"""
+    """回归:无财报块(financial=None)→ 财报风险=None、红旗层零罚分(排序分==入排序基准分)。
+
+    为什么断言的是「排序分 == 综合分_收缩」而不是「== 综合分」(锁"为什么改"):
+      本测试锁的语义是**红旗接入排序的 no-op**——没有高危红旗就不应该被红旗层扣一分钱。
+      排序分的公式是 `排序分 = 入排序基准分 − Σ罚分`,而**入排序基准分不是综合分**:
+      自 1a37f6f「弃权软收缩接入策略0排序」起,基准分改成了 `综合分_收缩`
+      (config『合议.弃权置信度标注.收缩启用』,诊断源 docs/每日分析/策略建议/合议专家
+      弃权置信度标注.md)——发声专家 < 收缩门槛 的票,综合分先向中性软收缩再进排序。
+      本用例两票只有技术类专家发声(参与2 < 门槛3)→ 必然被收缩,于是老写法
+      `排序分 == 综合分` 从那次接入起**恒假**、与红旗层无关;继续这么写等于用一条必红的
+      断言掩盖真正要保护的 no-op 语义。
+      → 现在:红旗层 no-op 用「排序分 == 综合分_收缩 且 罚分层未发声(财报风险=None)」锁,
+        收缩层是否生效由下面单独一条断言显式承认(而不是混进红旗层断言里)。
+    """
     kmap = {"000001": _kline(trend=0.15, seed=2),
             "000002": _kline(trend=-0.15, seed=3)}
     monkeypatch.setattr(sc.market, "load_kline", lambda code: kmap[code])
@@ -279,7 +292,11 @@ def test_redflag_noop_when_no_financial_regression(monkeypatch):
     v = sc.run_council_screen(["000001", "000002"], as_of="2026-08-08", fetch=False)
     assert v["财报覆盖"] == 0 and v["命中高危红旗"] == 0
     for r in v["top"]:
-        assert r["财报风险"] is None
-        assert r["排序分"] == pytest.approx(r["综合分"], abs=1e-9)
+        assert r["财报风险"] is None                              # 两轴都没发声 → 无风险标注
+        # 红旗层 no-op:排序分 == 入排序基准分(= 综合分_收缩),一分钱罚分都没扣
+        assert r["排序分"] == pytest.approx(r["综合分_收缩"], abs=1e-9)
+        # 收缩层确实是唯一造成「排序分 != 综合分」的层:两票均因发声专家过少被标低置信度
+        if r["排序分"] != pytest.approx(r["综合分"], abs=1e-9):
+            assert r["低合议置信度"] is True and r["参与专家数"] < 3
     scores = [r["综合分"] for r in v["top"]]
     assert scores == sorted(scores, reverse=True)    # 与旧降序一致
