@@ -126,7 +126,13 @@ def resolve_universe(include_bj: bool = True) -> tuple[list[str], dict]:
 
 
 def _symbols_for(codes: list[str]) -> list[str]:
-    """代码 → gtimg symbol。北交所(92/83/87/43…)强制 bj 前缀,其余走采集层的前缀推断。"""
+    """代码 → gtimg symbol。北交所(92/83/87/43…)强制 bj 前缀,其余走采集层的前缀推断。
+
+    注:`gtimg_quote.market_prefix` 已收拢到 `tools.config.exchange` 单一真源、920 段判对,
+    这层 `board_of` 强制已**基本冗余**。有意保留:两者对 `92xxxx` 中**非 920** 的假想段
+    判法不同(board_of→北交所,真源→按 9 归沪),去掉即口径变更,而北交所现行只发 920 段、
+    实际无差异。等确认无 92x 非 920 代码后再摘。
+    """
     out = []
     for c in codes:
         pre = "bj" if B.board_of(c) == "北交所" else gtimg_quote.market_prefix(c)

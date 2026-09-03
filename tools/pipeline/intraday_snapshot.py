@@ -86,7 +86,13 @@ def _known_codes() -> set[str]:
 
 
 def _looks_like_a_code(code: str) -> bool:
-    """6 位串是否长得像 A 股代码(0/2/3/6/8/4 开头);排除指数代码。"""
+    """6 位串是否长得像 A 股代码(0/2/3/6/8/4 开头);排除指数代码。
+
+    ⚠️ **已知缺口(2026-09-03,有意未修)**:漏 9 开头 → 920 段(北交所现行)与 900 段
+    (沪B)会被判成非 A 股。实际影响有限:本函数只是 `_known_codes()` 拿不到
+    `config/code_name.json` 时的兜底路径。改了会让 920 票开始进早盘快照(口径变更),
+    故本轮不动,另开任务拍板。届时应改成委托 `tools.config.exchange.is_a_code` 再剔指数。
+    """
     return len(code) == 6 and code[:1] in ("0", "2", "3", "6", "8", "4") and code not in INDEX_CODES
 
 
