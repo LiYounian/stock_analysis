@@ -31,6 +31,7 @@ import logging
 import os
 import socket
 import sys
+import time
 
 import pandas as pd
 
@@ -342,11 +343,32 @@ def run_financial_text(codes: list[str], as_of: str) -> None:
 # ————————————————————————————————————————————————
 # 候选定向富集:保证"会被深度分析/推荐的候选票"一定有系统全套消息面+财报+资金流
 # ————————————————————————————————————————————————
-def _dim_status(loader, code: str) -> str:
+def _nonempty(d) -> bool:
+    """载荷是否非空(DataFrame/list/dict/str 统一判定)。"""
+    if d is None:
+        return False
+    try:
+        import pandas as _pd
+        if isinstance(d, _pd.DataFrame):
+            return not d.empty
+    except Exception:
+        pass
+    if isinstance(d, (list, dict, str)):
+        return len(d) > 0
+    return True
+
+
+def _dim_status(loader, code: str, *, kind: str | None = None, as_of: str | None = None) -> str:
     """单票单维数据落地状态(供富集覆盖报告 + 降级标记,绝不静默):
-      - 'ok'      本地已有非空数据(dict/list/DataFrame 非空);
+      - 'ok'      本地已有**当日(as_of)**非空数据;
+      - 'stale'   有数据但命中的是**更早日期**的分区(采过≠当日新鲜);
       - 'empty'   已尝试落盘但内容为空(数据源当日确无该票数据——合法降级、非错误);
       - 'missing' 无缓存(采集失败/未采到——需引起注意的降级)。
+
+    **为什么要分出 'stale'**:skip-if-cached 的判据是"这票历史上采过没"(date="latest"),
+    因此**连续入选的老候选会被跳过采集、新闻永不刷新**。若报告把它计入 'ok',新鲜度问题
+    就被遮住了——本函数只负责**如实报告**,不改变采集行为(成本账不变)。
+    传 kind+as_of 才能判陈旧;不传则退化为二态(ok/empty/missing),兼容老调用。
     """
     try:
         d = loader(code)
@@ -354,50 +376,75 @@ def _dim_status(loader, code: str) -> str:
         return "missing"
     except Exception:
         return "missing"
-    if d is None:
+    if not _nonempty(d):
         return "empty"
-    try:
-        import pandas as _pd
-        if isinstance(d, _pd.DataFrame):
-            return "ok" if not d.empty else "empty"
-    except Exception:
-        pass
-    if isinstance(d, (list, dict, str)):
-        return "ok" if len(d) > 0 else "empty"
+    # loader 始终是载荷的真源;新鲜度只做 **best-effort 叠加层**——判不出就照旧报 ok,绝不比现状更差
+    if kind and as_of and _resolved_before(kind, code, as_of):
+        return "stale"
     return "ok"
 
 
-def _enrich_report(codes: list[str], no_llm: bool) -> dict:
+def _resolved_before(kind: str, code: str, as_of: str) -> bool:
+    """该票该维本地命中的分区日是否**早于** as_of(复用 store 的 date-pin 解析,不另造新鲜度判据)。"""
+    try:
+        _payload, resolved, _fetched = store.get_raw_resolved(kind, code, date=as_of)
+    except Exception:
+        return False                              # 判不出(无 date 分区/解析失败)→ 不降级为 stale
+    return bool(resolved) and str(resolved) < as_of
+
+
+def _sentiment_status(code: str) -> str:
+    """情绪维状态:直接复用情绪层已有的新鲜度三态(event.FRESH/STALE/NODATA),别另造判据。"""
+    from tools.analysis import event
+    try:
+        v = event.load_sentiment(code)
+    except FileNotFoundError:
+        return "missing"
+    except Exception:
+        return "missing"
+    if not _nonempty(v):
+        return "empty"
+    fresh = (v or {}).get("新鲜度")
+    if fresh == event.STALE:
+        return "stale"
+    if fresh == event.NODATA:
+        return "empty"
+    return "ok"
+
+
+def _enrich_report(codes: list[str], no_llm: bool, as_of: str) -> dict:
     """富集后逐票核验四维(news/sentiment/financial/fundflow)落地状态,产出覆盖报告 + 降级明细。
 
     缺数据一律显式标 'empty'(源无数据)/'missing'(采集失败)/'skipped_no_llm'(数据模式跳过 LLM),
     绝不静默当作已覆盖——呼应"缺数据时降级标记不静默"的验收口径。
     """
-    from tools.analysis import event
     from tools.collectors import financial as fin
     from tools.collectors import fundflow as ff
     from tools.collectors import news
     per_code: dict[str, dict] = {}
-    counts = {d: {"ok": 0, "empty": 0, "missing": 0, "skipped_no_llm": 0}
+    counts = {d: {"ok": 0, "stale": 0, "empty": 0, "missing": 0, "skipped_no_llm": 0}
               for d in ("news", "sentiment", "financial", "fundflow")}
     for c in codes:
         st = {
-            "news": _dim_status(news.load_news, c),
-            "financial": _dim_status(fin.load_financial, c),
-            "fundflow": _dim_status(ff.load_fundflow, c),
+            "news": _dim_status(news.load_news, c, kind="news", as_of=as_of),
+            "financial": _dim_status(fin.load_financial, c, kind="financial_report", as_of=as_of),
+            "fundflow": _dim_status(ff.load_fundflow, c, kind="fundflow", as_of=as_of),
         }
         if no_llm:
             st["sentiment"] = "skipped_no_llm"
         else:
-            st["sentiment"] = _dim_status(event.load_sentiment, c)
+            st["sentiment"] = _sentiment_status(c)
         per_code[c] = st
         for d, v in st.items():
             counts[d][v] = counts[d].get(v, 0) + 1
-    degraded = {c: {d: v for d, v in st.items() if v in ("missing", "empty")}
+    # 'stale' 同样算降级:采过≠当日新鲜,必须让它可见而不是并进 ok
+    degraded = {c: {d: v for d, v in st.items() if v in ("missing", "empty", "stale")}
                 for c, st in per_code.items()
-                if any(v in ("missing", "empty") for v in st.values())}
+                if any(v in ("missing", "empty", "stale") for v in st.values())}
     summary = "; ".join(
-        f"{d}: ok{counts[d]['ok']}/empty{counts[d]['empty']}/missing{counts[d]['missing']}"
+        f"{d}: ok{counts[d]['ok']}"
+        + (f"/stale{counts[d]['stale']}" if counts[d]['stale'] else "")
+        + f"/empty{counts[d]['empty']}/missing{counts[d]['missing']}"
         + (f"/no_llm{counts[d]['skipped_no_llm']}" if counts[d]['skipped_no_llm'] else "")
         for d in ("news", "sentiment", "financial", "fundflow"))
     return {"candidates": len(codes), "counts": counts, "per_code": per_code,
@@ -436,14 +483,42 @@ def enrich_candidates(codes: list[str], as_of: str, no_llm: bool = False) -> dic
     # 1) 新闻/舆情(网络;政策全局)——只补缺失票
     if need_news:
         collect_message(need_news)
-    # 2) 资金流——只补缺失票(修"候选票缺 fundflow"),走短超时快速失败降级
+    # 2) 资金流——只补缺失票(修"候选票缺 fundflow"),走短超时快速失败降级 + **批级再扫**。
+    #    为什么要再扫:上游连接层限流的失败是**成簇**的(一段冷却窗内整批全挂,窗过后又整批可用),
+    #    单票级 retry 的退避只有数秒、整批容易全落在同一个簇内 → 单趟采完仍大面积缺 fundflow
+    #    (即"买入候选 provenance.fundflow=false"这一硬伤的实际成因)。故按趟重试:每趟只对
+    #    **上一趟真的没采到**的票,趟间冷却跨过失败簇;整体受墙钟预算封顶,源全挂时不把闭环
+    #    拖长。仍缺的票由覆盖报告标 missing(显式降级不静默)。
     if need_ff:
+        sweeps = max(1, int(os.getenv("ENRICH_FF_SWEEPS", "3")))
+        cooldown = float(os.getenv("ENRICH_FF_COOLDOWN", "10"))
+        budget = float(os.getenv("ENRICH_FF_BUDGET", "240"))
+        t0 = time.monotonic()
+        pending = list(need_ff)
         _old = socket.getdefaulttimeout()
         socket.setdefaulttimeout(FETCH_TIMEOUT)
         try:
-            _safe("候选资金流富集", lambda: ff.fetch_fundflow(need_ff))
+            for sweep in range(1, sweeps + 1):
+                got = _safe(f"候选资金流富集(第{sweep}趟)",
+                            lambda batch=pending: ff.fetch_fundflow(batch)) or {}
+                # 采到判定:fetch 返回值命中,或该票落盘后已可读(need_ff 本就全无任何缓存,
+                # 故这里的 _load_ok 只会因"本轮刚写入"而为真,不会被历史日期回退误判)
+                pending = [c for c in pending
+                           if c not in got and not _load_ok(ff.load_fundflow, c)]
+                logger.info("候选资金流富集 第%d/%d 趟:采到 %d,仍缺 %d",
+                            sweep, sweeps, len(got), len(pending))
+                if not pending or sweep >= sweeps:
+                    break
+                if time.monotonic() - t0 + cooldown >= budget:
+                    logger.warning("候选资金流富集:墙钟预算 %.0fs 用尽,停止再扫(仍缺 %d 只,"
+                                   "覆盖报告将标 missing)", budget, len(pending))
+                    break
+                time.sleep(cooldown)
         finally:
             socket.setdefaulttimeout(_old)
+        if pending:
+            logger.warning("候选资金流富集:%d 趟后仍缺 %d 只(源限流/无数据):%s",
+                           sweeps, len(pending), pending[:20])
     # 3) 财报三大表 + 年报 PDF(无 LLM)——只补缺失票
     if need_fin:
         run_financial_collect(need_fin)
@@ -454,7 +529,7 @@ def enrich_candidates(codes: list[str], as_of: str, no_llm: bool = False) -> dic
         run_sentiment(codes)               # 三层情绪 + news_ai 视图(cached extract,只对新票计费)
         run_financial_text(codes, as_of)   # 财报文本层(缓存免重烧)
     # 5) 覆盖报告:逐票核验四维落地,缺数据显式降级标记(不静默)
-    report = _enrich_report(codes, no_llm)
+    report = _enrich_report(codes, no_llm, as_of)
     logger.info("候选定向富集完成(%d 只):%s;降级 %d 只",
                 report["candidates"], report["summary"], len(report["degraded"]))
     return report
