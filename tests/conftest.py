@@ -1,7 +1,7 @@
 """tests 共享 fixtures。
 
-hermetic_experts:让**依赖磁盘数据**的专家在单测中确定性弃权,使 council/experts 的
-红线测试对本地 `data/analysis/<date>/` 缓存免疫(hermetic)。
+hermetic_experts:让**依赖磁盘数据**的专家在单测中确定性弃权/不发声,使 council/experts 的
+红线测试对本地 `data/analysis/<date>/`、`data/raw/<date>/` 缓存免疫(hermetic)。
 
 背景:板块轮动(RRG)/多因子/事件驱动三位专家的数据不在单票 record 字段里,而是从
 store 读盘(RRG 读行业/基准 K 线、多因子读横截面 code_view、事件驱动按 code+as_of 汇总)。
@@ -9,9 +9,17 @@ store 读盘(RRG 读行业/基准 K 线、多因子读横截面 code_view、事�
 这类记录的综合分往 0 稀释,使"弃权不稀释 / 分母一致 / 全空看空"等红线断言**时灵时不灵**
 (干净环境通过、有缓存环境挂)。这是测试对环境数据的隐式依赖,**不是 council 业务逻辑问题**。
 
-做法:只切断这三位专家的**数据加载入口**(置空/置缺),强制它们走各自真实的
-"缺数据 → 弃权(中性+强度0+置信度0+数据充分度=缺失)"分支。**不改任何业务逻辑**,
-断言仍真正锁"弃权不稀释"语义;只是让"谁弃权"不再取决于磁盘上恰好有没有缓存。
+同类第二例(资金流):expert_资金流 自「资金流融资盘甄别」接生产起,会去读 `data/raw/*/margin/`
+的两融明细做「主力净流入 vs 融资买入」背离甄别——本地采过两融的机器上,任何 code 恰好有两融
+数据且命中判据时,看多强度会被软降级(1.0→0.3),使"净流入→顶格看多"这类断言在有缓存环境挂。
+同样只切数据入口(load_margin_asof 恒 None),让"有没有融资盘证据"由测试**显式注入**、
+而不是由磁盘上恰好采过谁决定;需要锁降级语义的测试自己覆盖回来(见
+tests/test_experts.py::test_fundflow_direction_and_streak)。
+
+做法:只切断这些专家的**数据加载入口**(置空/置缺),强制它们走各自真实的
+"缺数据 → 弃权(中性+强度0+置信度0+数据充分度=缺失)" / "无证据 → 不甄别(现状)"分支。
+**不改任何业务逻辑**,断言仍真正锁"弃权不稀释"语义;只是让"谁弃权"不再取决于磁盘上恰好
+有没有缓存。
 """
 from __future__ import annotations
 
@@ -20,7 +28,8 @@ import pytest
 
 @pytest.fixture
 def hermetic_experts(monkeypatch):
-    """强制 板块轮动/多因子/事件驱动 在无显式 record 数据时确定性弃权(去磁盘依赖)。"""
+    """强制 板块轮动/多因子/事件驱动 弃权、资金流不做两融甄别(去磁盘依赖)。"""
+    from tools.analysis import margin_divergence as md
     from tools.analysis import rrg
     from tools.analysis.event_driven import summary as event_summary
     from tools.store import repo as store
@@ -42,6 +51,10 @@ def hermetic_experts(monkeypatch):
 
     # 事件驱动:事件汇总恒空 → expert_事件驱动 走"近期无相关事件"弃权分支
     monkeypatch.setattr(event_summary, "summarize", lambda *a, **k: None)
+
+    # 资金流:两融 as-of 读取恒空 → expert_资金流 走"无两融数据 → 不甄别"现状分支。
+    # (只切 IO 入口,纯判据函数 divergence_verdict 不动;要锁甄别语义的测试自行注入证据。)
+    monkeypatch.setattr(md, "load_margin_asof", lambda code, as_of: None)
 
     yield
     rrg.clear_cache()

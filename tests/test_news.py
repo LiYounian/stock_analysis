@@ -8,6 +8,14 @@
 - 单源抛异常时另一源结果仍正常(隔离);
 - meta.source 反映实际贡献源(如 "eastmoney+新浪");
 - 两并集源皆空 → 回落财联社电报(降级保底)。
+
+时间基准(hermetic,防"时间炸弹"):fetch_news 的窗口下界 cutoff 由
+`pd.Timestamp.today() - days` **现算**,所以桩数据里写死的绝对日期会随真实日历
+慢慢漂出窗口 —— 一条今天还在窗内的桩,过几天就被 cutoff 静默丢掉,测试从绿变红,
+而被"证伪"的其实是日历、不是并集逻辑(本文件 test_union_dedup_and_backfill 就这样
+在 2026-09-02 之后挂掉:桩里 2026-08-03 的东财独有条已距今 >30 天)。
+→ 凡是用**有限窗口**(days 较小)的用例,桩日期一律用 `_ago(n)` 相对今天生成;
+  要锁"超窗被丢"就用明确超出窗口的 `_ago(days+k)`,让窗口关系恒定、与运行日期无关。
 """
 import sys
 import types
@@ -17,6 +25,20 @@ import pytest
 
 from tools.collectors import news as nw
 from tools.store import repo as store
+
+_TODAY = pd.Timestamp.today().normalize()
+
+
+def _ago(days: int, hhmmss: str = "10:00:00") -> str:
+    """相对今天的"N 天前"时间串(YYYY-MM-DD HH:MM:SS)。见模块头「时间基准」。"""
+    return (_TODAY - pd.Timedelta(days=days)).strftime("%Y-%m-%d ") + hhmmss
+
+
+def _empty_cls_df() -> pd.DataFrame:
+    """财联社电报空桩。不装它 → 假 akshare 缺 stock_info_global_cls → _fetch_cls 抛
+    AttributeError 被 fetch_news 吞成 WARNING;虽不影响并集结果,但会掩盖真实的源故障
+    信号,且让"这批用例只由东财+新浪两源构成"这件事不可见。显式置空,源构成才确定。"""
+    return pd.DataFrame({"标题": [], "内容": [], "发布日期": [], "发布时间": []})
 
 
 def _fake_df():
@@ -30,8 +52,9 @@ def _fake_df():
 
 
 def _install(monkeypatch, df):
-    """装东财假 akshare;新浪源默认置空(不触网),各测按需覆盖 nw._fetch_sina。"""
-    fake = types.SimpleNamespace(stock_news_em=lambda symbol: df)
+    """装东财假 akshare(含财联社空桩);新浪源默认置空(不触网),各测按需覆盖 nw._fetch_sina。"""
+    fake = types.SimpleNamespace(stock_news_em=lambda symbol: df,
+                                 stock_info_global_cls=_empty_cls_df)
     monkeypatch.setitem(sys.modules, "akshare", fake)
     monkeypatch.setattr(nw, "_fetch_sina", lambda code, cutoff: [])
 
@@ -50,23 +73,31 @@ def test_fetch_normalizes_filters_sorts(monkeypatch, tmp_path):
 
 
 def test_union_dedup_and_backfill(monkeypatch, tmp_path):
-    """东财 + 新浪并集:重叠(同 url)只留一条,两源独有都在,新浪更近日期补召回。"""
+    """东财 + 新浪并集:重叠(同 url)只留一条,两源独有都在,新浪更近日期补召回。
+
+    桩日期用 `_ago()` 相对今天生成(见模块头「时间基准」):三条桩分别落在窗口内的
+    第 20/19/5 天,与 days=30 的窗口关系恒定 —— 锁的是**并集/去重/补召回**语义本身,
+    不该因为跑测试的日历日期变了而红。财联社源显式置空,确保结果只由东财+新浪构成
+    (meta.source == "eastmoney+新浪" 这条断言才有意义)。
+    """
     monkeypatch.setattr(store, "_RAW_DIR", tmp_path)
-    # 东财:稀疏票,只到 08-04,含一条与新浪重叠(同 url u_dup)
+    t_em_only, t_dup, t_sina_only = _ago(20, "09:00:00"), _ago(19), _ago(5, "15:36:00")
+    # 东财:稀疏票,最近只到 19 天前,含一条与新浪重叠(同 url u_dup)
     em_df = pd.DataFrame({
         "关键词": ["300209"] * 2,
         "新闻标题": ["东财独有旧闻", "重叠新闻"],
         "新闻内容": ["ec0", "edup"],
-        "发布时间": ["2026-08-03 09:00:00", "2026-08-04 10:00:00"],
+        "发布时间": [t_em_only, t_dup],
         "文章来源": ["em", "em"], "新闻链接": ["u_em_only", "u_dup"],
     })
-    fake = types.SimpleNamespace(stock_news_em=lambda symbol: em_df)
+    fake = types.SimpleNamespace(stock_news_em=lambda symbol: em_df,
+                                 stock_info_global_cls=_empty_cls_df)
     monkeypatch.setitem(sys.modules, "akshare", fake)
-    # 新浪:覆盖到 08-10(补召回),含同 url u_dup 的重叠条 + 独有更近条
+    # 新浪:覆盖到 5 天前(补召回),含同 url u_dup 的重叠条 + 独有更近条
     sina = [
-        {"title": "重叠新闻(新浪抓到)", "content": "sdup", "time": "2026-08-04 10:30:00",
+        {"title": "重叠新闻(新浪抓到)", "content": "sdup", "time": _ago(19, "10:30:00"),
          "source": "新浪", "url": "u_dup"},
-        {"title": "新浪独有近日新闻", "content": "s1", "time": "2026-08-10 15:36:00",
+        {"title": "新浪独有近日新闻", "content": "s1", "time": t_sina_only,
          "source": "新浪", "url": "u_sina_only"},
     ]
     monkeypatch.setattr(nw, "_fetch_sina", lambda code, cutoff: sina)
@@ -77,30 +108,35 @@ def test_union_dedup_and_backfill(monkeypatch, tmp_path):
     assert urls.count("u_dup") == 1
     dup = next(it for it in items if it["url"] == "u_dup")
     assert dup["title"] == "重叠新闻"          # 主源在前,去重留东财先到版本(非新浪版)
-    # 两源各自独有条目都在
+    # 两源各自独有条目都在(东财独有条不能被并集漏掉 —— 这是本用例的核心红线)
     assert "u_em_only" in urls and "u_sina_only" in urls
     # 新浪独有的更近日期条目进入结果(补召回),且倒序在最前
-    assert items[0]["url"] == "u_sina_only" and items[0]["time"][:10] == "2026-08-10"
+    assert items[0]["url"] == "u_sina_only" and items[0]["time"][:10] == t_sina_only[:10]
     # meta.source 反映两源贡献
     assert store.get_raw_meta("news", "300209")["source"] == "eastmoney+新浪"
 
 
 def test_cutoff_drops_out_of_window(monkeypatch, tmp_path):
-    """超窗条目(无论来自哪源)被 cutoff 过滤掉。"""
+    """超窗条目(无论来自哪源)被 cutoff 过滤掉。
+
+    窗内/超窗都用 `_ago()` 相对今天生成(见模块头「时间基准」):窗内取第 5/6 天、
+    超窗取第 40/60 天,与 days=30 的窗口关系恒定 —— 锁的是**过滤规则**,不是日历。
+    """
     monkeypatch.setattr(store, "_RAW_DIR", tmp_path)
     em_df = pd.DataFrame({
         "关键词": ["300209"] * 2,
         "新闻标题": ["窗内", "太旧"],
         "新闻内容": ["a", "b"],
-        "发布时间": ["2026-08-09 10:00:00", "2020-01-01 10:00:00"],
+        "发布时间": [_ago(6), _ago(60)],
         "文章来源": ["em", "em"], "新闻链接": ["u_in", "u_old_em"],
     })
-    fake = types.SimpleNamespace(stock_news_em=lambda symbol: em_df)
+    fake = types.SimpleNamespace(stock_news_em=lambda symbol: em_df,
+                                 stock_info_global_cls=_empty_cls_df)
     monkeypatch.setitem(sys.modules, "akshare", fake)
     sina = [
-        {"title": "新浪窗内", "content": "x", "time": "2026-08-10 09:00:00",
+        {"title": "新浪窗内", "content": "x", "time": _ago(5, "09:00:00"),
          "source": "新浪", "url": "u_sina_in"},
-        {"title": "新浪太旧", "content": "y", "time": "2019-05-05 09:00:00",
+        {"title": "新浪太旧", "content": "y", "time": _ago(40, "09:00:00"),
          "source": "新浪", "url": "u_old_sina"},
     ]
     monkeypatch.setattr(nw, "_fetch_sina", lambda code, cutoff: sina)
@@ -117,9 +153,9 @@ def test_source_isolation_em_fails_sina_survives(monkeypatch, tmp_path):
     def _boom(symbol):
         raise ConnectionError("东财挂了")
 
-    fake = types.SimpleNamespace(stock_news_em=_boom)
+    fake = types.SimpleNamespace(stock_news_em=_boom, stock_info_global_cls=_empty_cls_df)
     monkeypatch.setitem(sys.modules, "akshare", fake)
-    sina = [{"title": "新浪照常", "content": "z", "time": "2026-08-10 09:00:00",
+    sina = [{"title": "新浪照常", "content": "z", "time": _ago(5, "09:00:00"),
              "source": "新浪", "url": "u_sina"}]
     monkeypatch.setattr(nw, "_fetch_sina", lambda code, cutoff: sina)
 
@@ -134,10 +170,11 @@ def test_source_isolation_sina_fails_em_survives(monkeypatch, tmp_path):
     em_df = pd.DataFrame({
         "关键词": ["300209"],
         "新闻标题": ["东财照常"], "新闻内容": ["c"],
-        "发布时间": ["2026-08-09 10:00:00"],
+        "发布时间": [_ago(6)],
         "文章来源": ["em"], "新闻链接": ["u_em"],
     })
-    fake = types.SimpleNamespace(stock_news_em=lambda symbol: em_df)
+    fake = types.SimpleNamespace(stock_news_em=lambda symbol: em_df,
+                                 stock_info_global_cls=_empty_cls_df)
     monkeypatch.setitem(sys.modules, "akshare", fake)
 
     def _boom(code, cutoff):

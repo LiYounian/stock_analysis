@@ -170,8 +170,50 @@ def test_clean_uptrend_passes_base():
 
 
 # ———————————————————— regime 打标 ————————————————————
-def test_regime_tag_values():
-    hs = C.load_hs300()
-    feat = C._hs300_regime_series(hs)
-    tag = C.regime_tag(feat, feat["date"].iloc[-1])
-    assert tag in {"牛", "熊", "震荡", "未知"}
+def _hs300_parquet(tmp_path, closes, start="2020-01-01") -> str:
+    """把一条收盘序列落成最小 HS300 parquet(只需 date/close 两列供 regime 打标)。"""
+    dates = pd.bdate_range(start, periods=len(closes))
+    df = pd.DataFrame({"date": dates, "close": [float(c) for c in closes]})
+    path = tmp_path / "hs300.parquet"
+    df.to_parquet(path)
+    return str(path)
+
+
+def test_regime_tag_values(monkeypatch, tmp_path):
+    """regime 打标四分支:牛/熊/震荡/未知,判据 = HS300 收盘 vs MA200 + 60 日收益 ±5%。
+
+    为什么这么改(锁"为什么改"):
+      旧写法 `C.load_hs300()` 直接读 `data/backtest_local/hs300.parquet` —— 那个目录在
+      .gitignore 里(回测本地产物,可复现重生成、不入库),所以任何没跑过回测的检出上这条
+      直接 FileNotFoundError;更要命的是它唯一的断言 `tag in {牛,熊,震荡,未知}` 是**恒真**的
+      (regime_tag 的返回值域就是这四个),即便真实机器上有数据、它也没保护任何东西。
+      → 现在改成:用最小合成 parquet 喂 load_hs300(monkeypatch HS300_LOCAL,顺带把
+        "读 parquet → 排序 → date 转 Timestamp"的 IO 契约也一起锁上),再逐条锁**判据本身**
+        —— 牛/熊各自的两个条件必须同时满足才成立、只满足一半必须落"震荡"、MA200/ret60 还没
+        算出来(前 200 根内)必须是"未知"(不能拿 NaN 冒充某个 regime)。
+      不加 skipif:这个函数是纯判据 + 一次 parquet 读,没有任何理由依赖本地回测产物。
+    """
+    # 牛:200 日后仍在 MA200 上方,且近 60 日 +30% ≫ +5%
+    closes = [100.0 * (1.004 ** i) for i in range(300)]
+    monkeypatch.setattr(C, "HS300_LOCAL", _hs300_parquet(tmp_path, closes))
+    feat = C._hs300_regime_series(C.load_hs300())
+    assert C.regime_tag(feat, feat["date"].iloc[-1]) == "牛"
+    # 未知:MA200/ret60 窗口未满(第 100 根)→ 不得冒充任何 regime
+    assert C.regime_tag(feat, feat["date"].iloc[100]) == "未知"
+    # 早于全部样本 → 无可用行 → 未知
+    assert C.regime_tag(feat, feat["date"].iloc[0] - pd.Timedelta(days=1)) == "未知"
+
+    # 熊:同样长度但持续下行 → 收盘在 MA200 下方且近 60 日 −20% ≪ −5%
+    closes = [100.0 * (0.996 ** i) for i in range(300)]
+    monkeypatch.setattr(C, "HS300_LOCAL", _hs300_parquet(tmp_path, closes))
+    feat = C._hs300_regime_series(C.load_hs300())
+    assert C.regime_tag(feat, feat["date"].iloc[-1]) == "熊"
+
+    # 震荡:先涨到 MA200 上方(close>MA200 成立),但近 60 日横盘(|ret60| < 5%)
+    # → 只满足"位置"不满足"动量",必须落震荡而不是牛(两条件是「与」不是「或」)
+    closes = [100.0 * (1.004 ** i) for i in range(240)] + [100.0 * (1.004 ** 239)] * 60
+    monkeypatch.setattr(C, "HS300_LOCAL", _hs300_parquet(tmp_path, closes))
+    feat = C._hs300_regime_series(C.load_hs300())
+    last = feat.iloc[-1]
+    assert last["close"] > last["ma200"] and abs(last["ret60"]) < 0.05   # 前提:确实只满足一半
+    assert C.regime_tag(feat, feat["date"].iloc[-1]) == "震荡"

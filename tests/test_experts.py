@@ -41,11 +41,40 @@ def test_reversal_bullish_only():
     assert n.方向 == "中性" and n.强度 == 0.0
 
 
-def test_fundflow_direction_and_streak():
+def test_fundflow_direction_and_streak(monkeypatch):
+    """资金流:净流入符号定方向、连续天数抬强度;**有融资盘证据时必须降级**。
+
+    为什么拆成两段断言(锁"为什么改"):
+      自「资金流融资盘甄别」接生产(config『资金流融资盘甄别』,提议见
+      docs/每日分析/策略建议/资金流融资盘甄别.md §3.1)起,看多强度**不再只由**净流入
+      符号 + 连续天数决定——还要看当日「融资买入额 / 主力净流入」能否解释掉大部分流入
+      (能解释 → 更像杠杆资金追高而非主力吸筹 → 软降级)。
+      旧写法只有"净流入 3 天 → 强度 1.0"一条,且**不隔离两融数据源**:本地采过两融的
+      机器上 000001 恰好有数据并命中判据,断言就挂;换句话说这条断言从甄别上线那天起
+      既保护不了原语义、又会随磁盘内容时红时绿。
+    现在:hermetic_experts 把两融读取入口置空(见 tests/conftest.py)→ 第一段锁的是
+      「**无**融资盘证据 → 顶格看多 1.0(甄别不误伤现状,不回归)」;第二段**显式注入**
+      融资盘证据 → 锁「融资解释比 ≥ 阈值 → 必须降级 + 依据里带 ⚠告警 + 原始留审计字段」。
+    只锁"降级发生"不锁具体系数:降级系数是 config 可调项,精确口径由
+      tests/test_margin_divergence.py 单独锁,此处避免重复锁死数值。
+    第二段同时兜住 kill-switch:若「资金流融资盘甄别.启用」被误关成 False,强度会退回
+      1.0 → 本断言失败(这正是要防的静默失效)。
+    """
     inflow = ex.expert_资金流(_rec(fundflow={"今日主力净流入": 1e8, "主力连续净流入天数": 3}))
-    assert inflow.方向 == "看多" and inflow.强度 == 1.0
+    assert inflow.方向 == "看多" and inflow.强度 == 1.0     # 无融资盘证据 → 现状顶格
+    assert "融资盘背离" not in inflow.原始
     outflow = ex.expert_资金流(_rec(fundflow={"今日主力净流入": -1e8, "主力连续净流入天数": 0}))
     assert outflow.方向 == "看空" and outflow.强度 < 0
+
+    # —— 注入融资盘证据:融资买入 0.8 亿 / 主力净流入 1.0 亿 = 80% ≥ 融资解释比阈值(0.5)——
+    from tools.analysis import margin_divergence as md
+    monkeypatch.setattr(md, "load_margin_asof",
+                        lambda code, as_of: {"融资买入额": 8e7, "融资余额": 5e9})
+    hit = ex.expert_资金流(_rec(fundflow={"今日主力净流入": 1e8, "主力连续净流入天数": 3}))
+    assert hit.方向 == "看多"                                # 默认「降级」模式:不翻方向
+    assert 0.0 < hit.强度 < 1.0                              # 必须被降级(挤出顶格看多档)
+    assert any("疑似融资盘" in d for d in hit.依据)          # 依据里必须带 ⚠告警(人读归因)
+    assert hit.原始["融资盘背离"]["融资解释比"] == pytest.approx(0.8)   # 审计字段留痕
 
 
 def test_sentiment_thresholds_and_sample_confidence():
