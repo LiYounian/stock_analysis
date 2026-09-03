@@ -29,7 +29,15 @@ _COLS = ["date", "主力净流入", "小单净流入", "中单净流入", "大�
 
 
 def _secid(code: str) -> str:
-    """代码 → 东财 secid。沪(6/9)= 1.code;深/京(0/2/3/4/8)= 0.code;港股(5位)= 116.code。"""
+    """代码 → 东财 secid。沪(6/9)= 1.code;深/京(0/2/3/4/8)= 0.code;港股(5位)= 116.code。
+
+    ⚠️ **疑似缺口,但本轮无实证故不改(2026-09-03)**:北交所现行 920 段按"9 开头"落到
+    `1.`(沪市),疑应为 `0.`。本机 `push2his.eastmoney.com` 全部 `curl (56) Connection
+    closed abruptly` —— 连对照组 `1.600000`/`0.000001` 也挂,是已知的东财路径墙
+    (问题台账 B2),不是 secid 写错。**没实证不据猜改**;等东财路径可用后实测再定。
+    注意 secid 的 `1./0.` 是东财市场编号,与 sh/sz/bj 并非一对一,不能直接套
+    `tools.config.exchange` 的输出。
+    """
     from tools.config import stock_pool
     if stock_pool.is_hk(code):
         return f"116.{code}"

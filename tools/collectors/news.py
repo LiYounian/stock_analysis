@@ -24,7 +24,7 @@ import time
 
 import pandas as pd
 
-from tools.config import settings
+from tools.config import exchange, settings
 from tools.store import repo as store
 
 logger = logging.getLogger("collectors.news")
@@ -71,9 +71,26 @@ def _parse_em(df: pd.DataFrame, cutoff: str) -> list[dict]:
     return items
 
 
-def _sina_sym(code: str) -> str:
-    """A 股代码 → 新浪 symbol 前缀:6 开头沪市 sh,其余深市 sz。"""
-    return ("sh" if code.startswith("6") else "sz") + code
+def _sina_sym(code: str) -> str | None:
+    """A 股代码 → 新浪个股新闻页 symbol(如 `sh600000`/`bj920002`);判不出返回 `None`。
+
+    判据在 `tools.config.exchange`(**单一真源**)。本源**没有兜底前缀可用**——必须
+    判不出就返回 None、由调用方跳过。
+
+    ⚠️ 为什么不能猜前缀(2026-09-03 实测 `vCB_AllNewsStock.php`):
+
+        bj920002  200 / datelist 有 / 40 条 → ✅ 万达轴承本股新闻
+        sz920002  200 / datelist 有 / 40 条 → ❌ 新浪**全站泛资讯流**
+        sh920002  200 / datelist 有 / 40 条 → ❌ 同一批,与 sz920002 前三条完全相同
+        sz430047  200 / datelist 有 / 40 条 → ❌ 同一批默认流
+        920002    200 / datelist 无 / 0 条  → 空
+
+    错前缀**不是取不到数,而是 HTTP 200 + 40 条别人的资讯**,上层从状态码/条数/非空
+    完全看不出异常,北交所票会被挂上无关新闻再喂进情绪 LLM——比拉不到糟得多。
+    另外 `<title>` 由 symbol 里的数字段解析,前缀错了仍显示"万达轴承(920002)",
+    **不能用 title 匹配来验真**,唯一判据是前缀本身正确。
+    """
+    return exchange.prefixed(code)
 
 
 def _fetch_sina_html(sym: str, page: int) -> str:
@@ -112,6 +129,9 @@ def _fetch_sina(code: str, cutoff: str) -> list[dict]:
     单页解析空即停(无更多);已早于窗口的页停翻。返回时间窗内条目(倒序由上层统一排)。
     """
     sym = _sina_sym(code)
+    if sym is None:                  # 判不出交易所 → 显式降级跳过,绝不用兜底前缀去拉(会拉到泛资讯流)
+        logger.warning("新闻 %s 新浪源降级跳过:代码判不出交易所,不猜前缀(错前缀会静默返回全站泛资讯)", code)
+        return []
     out: list[dict] = []
     for page in range(1, _SINA_MAX_PAGES + 1):
         items = _parse_sina(_fetch_sina_html(sym, page))

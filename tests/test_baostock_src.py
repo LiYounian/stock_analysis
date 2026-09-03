@@ -14,10 +14,19 @@ from tools.store import repo as store
 
 
 def test_bs_code():
+    """判据已收到 `tools.config.exchange` 单一真源,这里只锁 baostock 侧的协议形式。
+
+    ⚠️ 北交所从"映射成 bj./sh. 前缀"改成 **None(源不支持)**。2026-09-03 真调实测:
+    baostock 协议只认 `sh.`/`sz.`,`bj.830799` 报 error 10004011「股票代码未标识sh或sz」,
+    而 `sh.920002`/`sz.920002` 更坏 —— error_code 0 **success 但 0 行**,调用方会误读成
+    "这只票没有历史数据"。故显式表达"该源不覆盖北交所",由调用方记降级。
+    全段路由与降级语义见 tests/test_exchange_single_source.py。
+    """
     assert baostock_src.bs_code("600519") == "sh.600519"
     assert baostock_src.bs_code("000021") == "sz.000021"
     assert baostock_src.bs_code("300750") == "sz.300750"
-    assert baostock_src.bs_code("830799") == "bj.830799"
+    assert baostock_src.bs_code("830799") is None      # 北交所:baostock 不覆盖
+    assert baostock_src.bs_code("920002") is None      # 北交所现行段,同上
 
 
 class _FakeRS:

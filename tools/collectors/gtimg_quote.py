@@ -25,6 +25,7 @@ import logging
 import requests
 
 from tools.collectors._retry import retry_call
+from tools.config import exchange
 
 logger = logging.getLogger("collectors.gtimg_quote")
 
@@ -35,20 +36,13 @@ _MIN_PARTS = 50                  # 少于此段数视为异常/空行(停牌返�
 
 
 def market_prefix(code: str) -> str:
-    """6 位 A 股代码 → 腾讯 gtimg 市场前缀(6→sh,920→bj,9(其余)→sh沪B,4/8→bj,其余(0/2/3)→sz)。
+    """6 位 A 股代码 → 腾讯 gtimg 市场前缀 `sh`/`sz`/`bj`。
 
-    ⚠️ **920 段必须先判**:北交所现行代码段是 920xxx,若落到"9 开头→sh"会取不到任何数据
-    (实测 `sh920002` 返回空、`bj920002` 正常)。而 900xxx 是沪市B股,仍归 sh——故按前缀长度精确匹配,
-    不能只看首位。这段整体是 338 只(占主档 6.1%),判错等于整段票池静默丢失。
+    判据在 `tools.config.exchange`(**单一真源**),这里只定本源的兜底口径:判不出的
+    代码回落 `sz`——与历史行为一致(gtimg 对不存在的 symbol 返空行,上层已按缺失处理)。
+    920 段为什么必须先于 9→sh、900 沪B 为什么仍归 sh,见真源模块 docstring。
     """
-    if code.startswith("920"):
-        return "bj"
-    c0 = code[:1]
-    if c0 in ("6", "9"):
-        return "sh"
-    if c0 in ("4", "8"):
-        return "bj"
-    return "sz"
+    return exchange.exchange_of(code) or "sz"
 
 
 def _num(x):

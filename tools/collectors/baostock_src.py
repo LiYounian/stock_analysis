@@ -15,6 +15,8 @@ from __future__ import annotations
 import logging
 from contextlib import contextmanager
 
+from tools.config import exchange
+
 import pandas as pd
 
 logger = logging.getLogger("collectors.baostock")
@@ -25,15 +27,24 @@ _BS_FIELDS = "date,open,high,low,close,volume,amount,turn,pctChg"
 _STD_COLS = ["date", "open", "high", "low", "close", "volume", "amount", "turnover", "pct_chg"]
 
 
-def bs_code(code: str) -> str:
-    """6 位代码 → baostock 代码 sh.xxxxxx / sz.xxxxxx / bj.xxxxxx。"""
-    if code[0] in ("6", "9"):
-        return f"sh.{code}"
-    if code[0] in ("0", "2", "3"):
-        return f"sz.{code}"
-    if code[0] in ("8", "4"):
-        return f"bj.{code}"
-    return code
+def bs_code(code: str) -> str | None:
+    """6 位代码 → baostock 代码 `sh.600000` / `sz.000001`;**北交所与判不出的返回 `None`**。
+
+    判据在 `tools.config.exchange`(**单一真源**)。
+
+    ⚠️ baostock **不覆盖北交所**(2026-09-03 实测 query_history_k_data_plus):
+
+        sh.600000  error_code 0 success       11 行 ✅
+        bj.920002  error_code 10004011「股票代码未标识sh或sz」  0 行
+        bj.430047  error_code 10004011        0 行
+        sz.920002  error_code 0 **success**   **0 行** ← 静默空
+        sh.920002  error_code 0 **success**   **0 行** ← 静默空
+
+    协议只认 `sh.`/`sz.`。原实现把 920 段按"9 开头"映到 `sh.920002` → success + 0 行,
+    调用方看到的是"这只票没有历史数据",而不是"这个源不支持北交所"。故这里显式返回
+    None 表达"源不支持",由调用方记降级。
+    """
+    return exchange.dotted(code)
 
 
 @contextmanager
@@ -57,9 +68,13 @@ def fetch_one(code: str, start: str, end: str, adjust: str = "qfq") -> pd.DataFr
     返回归一化 df(_STD_COLS);空数据抛 ValueError,接口错误抛 ConnectionError。
     """
     import baostock as bs
+    sym = bs_code(code)
+    if sym is None:                    # 北交所/判不出 → 源不支持,显式降级(不静默返回空 df)
+        logger.warning("baostock %s 降级跳过:该源不覆盖北交所(实测 sz./sh. 前缀返 success+0行)", code)
+        raise ValueError(f"baostock 不支持该代码(北交所或非A股): {code}")
     flag = _ADJUST_FLAG.get(adjust, "2")
     rs = bs.query_history_k_data_plus(
-        bs_code(code), _BS_FIELDS,
+        sym, _BS_FIELDS,
         start_date=start, end_date=end, frequency="d", adjustflag=flag)
     if rs.error_code != "0":
         raise ConnectionError(f"baostock {code} error {rs.error_code}: {rs.error_msg}")

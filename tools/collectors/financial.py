@@ -25,7 +25,7 @@ import time
 
 import pandas as pd
 
-from tools.config import settings
+from tools.config import exchange, settings
 from tools.store import repo as store
 
 logger = logging.getLogger("collectors.financial")
@@ -118,13 +118,16 @@ def _to_float(v):
 
 
 def _em_symbol(code: str) -> str:
-    """6 位代码 → 东财 by_report 接口所需带市场前缀符号(SH/SZ/BJ)。"""
-    c = str(code).zfill(6)
-    if c[0] == "6":
-        return "SH" + c
-    if c.startswith("920") or c[0] in ("4", "8"):  # 北交所(920 段为现行代码段,须先于 0/3 兜底)
-        return "BJ" + c
-    return "SZ" + c                               # 0/3 开头(深主板/创业板)
+    """6 位代码 → 东财 by_report 接口所需带市场前缀符号(`SH`/`SZ`/`BJ` + 代码)。
+
+    判据在 `tools.config.exchange`(**单一真源**)。本源兜底口径:判不出的回落 `SZ`(历史行为)。
+
+    ⚠️ 迁真源顺带修掉一处潜在错:原实现只把首位 `6` 判 SH,900xxx 沪B 落到 SZ 兜底 →
+    `SZ900901`。实测(2026-09-03)`stock_balance_sheet_by_report_em("SH900901")` 返 121 期
+    (云赛B股),`"SZ900901"` 直接报错。当前主档 5539 只里 9 开头**全是 920 段(333 只)、
+    无 900 沪B**,故真实票池上此改动零影响。
+    """
+    return exchange.upper_prefixed(str(code).zfill(6)) or ("SZ" + str(code).zfill(6))
 
 
 def _norm_date(v) -> str | None:
