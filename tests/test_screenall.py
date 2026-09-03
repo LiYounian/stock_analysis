@@ -9,8 +9,22 @@
 
 hermetic:全程 monkeypatch,在产 run_*_screen 返回小假 view,阶段②重活替换为计数桩,不触网。
 """
+import pytest
+
 from tools import run
-from tools.pipeline import screen_council, screen_momentum, screen_s02
+from tools.pipeline import (screen_conditional_rank, screen_council, screen_max_range,
+                            screen_momentum, screen_reversal_turnover, screen_s02,
+                            screen_semi_factor, screen_strong, screen_volume)
+
+
+@pytest.fixture(autouse=True)
+def _isolate_analysis(analysis_tmpdir):
+    """本文件所有测试:analysis 落盘根切到 tmp_path(见 conftest.analysis_tmpdir)。
+
+    为什么必须有:run_screen_all 是**真编排**,收尾还挂着 多策略命中闸门 / 龙虎榜记分卡 等
+    落盘步。桩接再全也难保未来新增的收尾步不落盘,而 data/analysis 是 git 跟踪目录——
+    这条 fixture 是"只切 IO 入口"的兜底,产物进临时目录、跑完即弃。
+    """
 
 
 def _stub_stage2(monkeypatch, calls):
@@ -19,6 +33,11 @@ def _stub_stage2(monkeypatch, calls):
     候选定向富集 enrich_candidates 也桩接为计数桩(额外记录 no_llm),并返回合法覆盖报告 dict
     (run_screen_all 收尾会读 report['candidates']/['summary']),其内部 news/LLM 分维由
     test_enrich_candidates.py 独立锁语义。
+
+    收尾三步(多策略命中闸门 / 当日龙虎榜采集 / 龙虎榜前向记分卡)同样桩掉:它们会真触网、
+    并把 `多策略命中闸门.json` 与 `data/analysis/backtest/lhb_forward_scorecard.csv` 落进
+    **git 跟踪**的 data/analysis(记分卡那条走模块常量路径,不经 _ANALYSIS_DIR,只能桩)。
+    本文件锁的是"贵活只对 llm_subset"的编排语义,这三步各有独立单测,在此不需要真跑。
     """
     monkeypatch.setattr(run.master_sync, "sync_master", lambda codes, as_of=None: {"mode": "test", "ok": len(codes)})
     monkeypatch.setattr(run.stock_pool, "get_codes", lambda: ["WATCH1", "WATCH2"])
@@ -36,8 +55,10 @@ def _stub_stage2(monkeypatch, calls):
 
     for fn in ("collect_values_missing", "collect_market_context",
                "collect_ticks", "run_serialize", "run_events", "run_factor",
-               "run_council", "run_panel", "run_screen"):
+               "run_council", "run_panel", "run_screen",
+               "collect_lhb", "_update_lhb_scorecard"):
         monkeypatch.setattr(run, fn, rec(fn))
+    monkeypatch.setattr(run, "run_multi_gate", lambda picks_by_view, as_of: {})
     monkeypatch.setattr(run, "enrich_candidates", _enrich)
 
 
@@ -46,7 +67,12 @@ def _stub_screeners(monkeypatch, picks_by_strategy, raise_for=None):
 
     picks_by_strategy: {"council":[...], "s02":[...], "momentum":[...]}
     council 落 `top`(打分型),其余落 `入选清单`(规则型)——与真实脚本字段一致。
-    (S01/箱体3 已下线,不再桩接;其余未桩接的 screener 在假 codes 上经 _safe 隔离贡献空。)
+    (S01/箱体3 已下线,不再桩接。)
+
+    **9 条在产 screener 全部桩接**:只桩这 3 条时,其余 6 条会在假 codes 上真跑——半导体多因子
+    还带 fetch=True(触网),且各自把 view 落进 git 跟踪的 data/analysis/<as_of>/。它们在
+    本文件里的语义贡献恒为"选出 0 只"(假 codes 选不出票),故桩成空 view 后断言完全等价,
+    只是不再触网/不再落盘。各 screener 自身的选股语义由其独立单测锁。
     """
     def mk(view_key, codes, raising):
         def _f(codes_all, as_of=None, fetch=True, **k):
@@ -63,6 +89,14 @@ def _stub_screeners(monkeypatch, picks_by_strategy, raise_for=None):
                         mk("入选清单", picks_by_strategy["s02"], "s02" in raise_for))
     monkeypatch.setattr(screen_momentum, "run_momentum_screen",
                         mk("入选清单", picks_by_strategy["momentum"], "momentum" in raise_for))
+    # 其余在产 screener:桩成"选出 0 只"的空 view(与它们在假 codes 上的真实贡献一致)
+    for mod, fname in ((screen_semi_factor, "run_semi_factor_screen"),
+                       (screen_max_range, "run_max_range_screen"),
+                       (screen_volume, "run_volume_screen"),
+                       (screen_strong, "run_strong_screen"),
+                       (screen_reversal_turnover, "run_reversal_turnover_screen"),
+                       (screen_conditional_rank, "run_conditional_rank_screen")):
+        monkeypatch.setattr(mod, fname, mk("入选清单", [], False))
 
 
 def test_llm_subset_is_union_of_picks_and_watchlist(monkeypatch):

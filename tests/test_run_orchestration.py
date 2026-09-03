@@ -23,6 +23,9 @@ def test_cmd_all_step_order(monkeypatch):
     monkeypatch.setattr(run, "_prep", lambda argv: (["000001", "000002"], "2026-08-08"))
     monkeypatch.setattr(run, "collect_values", rec("collect_values"))
     monkeypatch.setattr(run, "collect_message", rec("collect_message"))
+    # 网络采集步也桩掉:本测试只锁步骤顺序,真去拉当日龙虎榜/逐笔既慢又非确定(hermetic)
+    monkeypatch.setattr(run, "collect_lhb", rec("collect_lhb"))
+    monkeypatch.setattr(run, "collect_ticks", rec("collect_ticks"))
     monkeypatch.setattr(run, "run_sentiment", rec("run_sentiment"))
     monkeypatch.setattr(run, "run_serialize", rec("run_serialize"))
     monkeypatch.setattr(run, "run_events", rec("run_events"))
@@ -67,6 +70,7 @@ def test_backtest_step_degrades_no_crash(monkeypatch):
     noop = lambda *a, **k: None
     monkeypatch.setattr(run, "_prep", lambda argv: (["000001"], "2026-08-08"))
     for name in ("collect_values", "collect_message", "collect_market_context",
+                 "collect_lhb", "collect_ticks",          # 网络步桩掉(hermetic:只测回测步降级)
                  "run_sentiment", "run_serialize", "run_events", "run_factor",
                  "run_council", "run_panel", "run_screen"):
         monkeypatch.setattr(run, name, noop)
@@ -78,19 +82,28 @@ def test_backtest_step_degrades_no_crash(monkeypatch):
     run.cmd_all([])                              # 回测炸,但闭环不应抛
 
 
-def test_two_stage_runs_backtest_at_tail(monkeypatch):
-    """两阶段流水线收尾也调回测步(在 screen 之后)。"""
+def test_two_stage_runs_backtest_at_tail(monkeypatch, analysis_tmpdir):
+    """两阶段流水线收尾也调回测步(在 screen 之后)。
+
+    hermetic 两处要点:
+    ① 阶段①的 run_pattern_screen 必须桩在**模块属性**上。run_two_stage 里是
+       `from tools.pipeline import screen_pattern`,取的是包 tools.pipeline 上**已绑定的属性**,
+       塞 sys.modules 假模块对它无效(旧写法就这么漏的)——真形态筛照跑,把「形态选股」view
+       落进 git 跟踪的 data/analysis/2026-08-08/。
+    ② 网络步 collect_lhb/collect_ticks 也桩掉;analysis_tmpdir 把 analysis 落盘根切到
+       tmp_path 兜底(将来编排新增落盘步时产物不进版本库)。
+    本测试只锁"回测步在 screen 之后"的编排顺序,阶段①/②的真实产出由各自单测锁。
+    """
     calls = []
     monkeypatch.setattr(run.master_sync, "sync_master", lambda c, **k: {"mode": "spot", "ok": 0})
 
-    class _SP:
-        @staticmethod
-        def run_pattern_screen(codes, as_of=None, fetch=False):
-            return {"达标清单": [], "接近达标": {}, "有效样本": 0, "候选数": 0}
-
-    monkeypatch.setitem(__import__("sys").modules, "tools.pipeline.screen_pattern", _SP)
+    from tools.pipeline import screen_pattern
+    monkeypatch.setattr(screen_pattern, "run_pattern_screen",
+                        lambda codes, as_of=None, fetch=False: {
+                            "达标清单": [], "接近达标": {}, "有效样本": 0, "候选数": 0})
     monkeypatch.setattr(run.stock_pool, "get_codes", lambda: [])
     for name in ("collect_values_missing", "collect_message", "collect_market_context",
+                 "collect_lhb", "collect_ticks",
                  "run_sentiment", "run_serialize", "run_events", "run_factor",
                  "run_council", "_enrich_near_miss", "run_panel"):
         monkeypatch.setattr(run, name, lambda *a, **k: 0)

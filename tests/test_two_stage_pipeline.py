@@ -102,7 +102,13 @@ def test_collect_values_missing_skips_cached(monkeypatch):
 
 # ———————————— OPT-2:run_two_stage 顺序 + 双子集(LLM 子集 vs 合议集)————————————
 def _stub_pipeline(monkeypatch, calls, near=None):
-    """stub 掉阶段②所有重活为记录调用;screen 返回达标 QUAL1 + 可选接近达标。"""
+    """stub 掉阶段②所有重活为记录调用;screen 返回达标 QUAL1 + 可选接近达标。
+
+    hermetic:主档同步 / 龙虎榜 / 逐笔 / 收尾回测 也一并桩掉——它们会真触网,且收尾的
+    run_backtest 会把 backtest.json 落进**git 跟踪**的 data/analysis/<最近达标日>/
+    (哪怕只改"生成时间"字段也算脏工作区)。本文件锁的是两阶段的子集划分与步骤顺序,
+    这几步各有独立单测。
+    """
     from tools.pipeline import screen_pattern
 
     def fake_screen(codes, as_of, fetch=True):
@@ -120,12 +126,15 @@ def _stub_pipeline(monkeypatch, calls, near=None):
         return _f
 
     for fn in ("collect_values_missing", "collect_message", "collect_market_context",
+               "collect_lhb", "collect_ticks",
                "run_sentiment", "run_serialize", "run_events", "run_factor",
-               "run_council", "run_panel", "run_screen"):
+               "run_council", "run_panel", "run_screen", "run_backtest"):
         monkeypatch.setattr(run, fn, rec(fn))
+    monkeypatch.setattr(run.master_sync, "sync_master",
+                        lambda codes, **k: {"mode": "test", "ok": len(codes)})
 
 
-def test_run_two_stage_llm_subset_vs_analysis_set(monkeypatch):
+def test_run_two_stage_llm_subset_vs_analysis_set(monkeypatch, analysis_tmpdir):
     """便宜筛先于 LLM;新闻/LLM 只对达标∪自选;组装/合议对 +接近达标(接近达标不进 LLM)。"""
     calls: list[tuple] = []
     near = {"电子": [{"code": "NEAR1", "行业": "电子", "合议分": None}]}
@@ -148,7 +157,7 @@ def test_run_two_stage_llm_subset_vs_analysis_set(monkeypatch):
     assert next(arg for n, arg in calls if n == "run_serialize") == ["QUAL1", "WATCH1", "WATCH2", "NEAR1"]
 
 
-def test_run_two_stage_dedups_qualified_in_watchlist(monkeypatch):
+def test_run_two_stage_dedups_qualified_in_watchlist(monkeypatch, analysis_tmpdir):
     """达标票已在自选池时,子集去重不重复。"""
     from tools.pipeline import screen_pattern
     monkeypatch.setattr(screen_pattern, "run_pattern_screen",
@@ -157,10 +166,14 @@ def test_run_two_stage_dedups_qualified_in_watchlist(monkeypatch):
                             "有效样本": len(codes), "候选数": 2, "达标数": 2, "接近达标": {}})
     monkeypatch.setattr(run.stock_pool, "get_codes", lambda: ["WATCH1", "WATCH2"])
     monkeypatch.setattr(run, "_enrich_near_miss", lambda as_of: 0)
+    # 同 _stub_pipeline 的 hermetic 口径:网络步 + 收尾回测(会落 backtest.json 到跟踪目录)全桩掉
     for fn in ("collect_values_missing", "collect_message", "collect_market_context",
+               "collect_lhb", "collect_ticks",
                "run_sentiment", "run_serialize", "run_events", "run_factor",
-               "run_council", "run_panel", "run_screen"):
+               "run_council", "run_panel", "run_screen", "run_backtest"):
         monkeypatch.setattr(run, fn, lambda *a, **k: None)
+    monkeypatch.setattr(run.master_sync, "sync_master",
+                        lambda codes, **k: {"mode": "test", "ok": len(codes)})
 
     out = run.run_two_stage(["X"], "2026-08-08")
     assert out["llm_subset"] == ["WATCH1", "QUAL2", "WATCH2"]   # WATCH1 只出现一次
