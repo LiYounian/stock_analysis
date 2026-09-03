@@ -113,6 +113,22 @@ def build_record(code: str, as_of: str) -> dict:
     except Exception:
         tick_block = None
 
+    # 存量融资与解禁(D · 固定一问):有无存续可转债 / 在推进的定增 / 临近限售解禁。
+    # 需 run.py financing 先采集(低频,30天缓存);缺采集 → None(优雅降级,不阻断)。
+    # 防未来函数:load 走 ≤as_of 分区 + 逐条「披露日 ≤ as_of」闸门(见 collectors.equity_financing)。
+    # 总股本由 总市值(亿)/ 现价 反算,供转债潜在摊薄%;缺任一 → 摊薄字段 None(不猜)。
+    financing_block = None
+    try:
+        from tools.collectors import equity_financing as efin
+        _cap_yi = (fund or {}).get("总市值")
+        _close = (tech.get("last") or {}).get("close") if tech else None
+        _shares = (float(_cap_yi) * 1e8 / float(_close)
+                   if (_cap_yi and _close) else None)
+        financing_block = _safe(lambda: efin.build_financing_block(
+            code, as_of=as_of, 总股本=_shares))
+    except Exception:
+        financing_block = None
+
     has_tech = "signal" in tech
     snapshot = None
     signals = None
@@ -192,6 +208,7 @@ def build_record(code: str, as_of: str) -> dict:
         "holder": holder_block,         # 股东户数趋势摘要(多因子「主力」)
         "tick": tick_block,             # 盘口微观结构摘要(逐笔;主买占比/净主动买量/大单)
         "lhb_veto": lhb_veto_block,     # 龙虎榜入选否决 as-of 裁决(风控微结构轴;缺→None)
+        "financing": financing_block,   # 存量融资与解禁固定一问(存续可转债/定增/解禁;缺→None)
         "events": events,
         "timeseries_refs": {
             "kline": f"data/raw/kline/{code}.parquet",
@@ -201,7 +218,8 @@ def build_record(code: str, as_of: str) -> dict:
         "provenance": {"tech": bool(has_tech), "fundamental": bool(fund),
                        "announcements": len(anns), "fundflow": bool(flow),
                        "chip": bool(chip_block), "consensus": bool(consensus_block),
-                       "holder": bool(holder_block), "tick": bool(tick_block)},
+                       "holder": bool(holder_block), "tick": bool(tick_block),
+                       "financing": bool(financing_block)},
     }
 
     # 多策略合议(F5·D7):后端预算各专家信封 + 默认组合议结果 + config(tau/权重),随记录落库。

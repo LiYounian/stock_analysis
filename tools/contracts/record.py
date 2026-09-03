@@ -48,7 +48,7 @@ CONVENTIONS = {
 # 记录顶层块(12);核心必需 + 可空块
 REQUIRED_TOP = ("schema_version", "meta", "events", "timeseries_refs", "provenance")
 OPTIONAL_TOP = ("snapshot", "valuation", "fundamental", "signals",
-                "prediction", "sentiment", "fundflow", "financial")
+                "prediction", "sentiment", "fundflow", "financial", "financing")
 TOP_LEVEL_KEYS = REQUIRED_TOP[:2] + OPTIONAL_TOP + REQUIRED_TOP[2:]
 
 # 人读 + 机读 schema(字段 → 说明)。详尽结构见各生产者;此处固化契约要点。
@@ -66,6 +66,17 @@ RECORD_SCHEMA = {
                  "利润表摘要{营业总收入,归母净利润,扣非归母净利润,营收增速,...}, "
                  "flags[信号名], derived{增速/质量/健康/运营/回报衍生}, verdict:null(LLM层留口)}"
                  "(财报 P0 数值层最新已披露期摘要;多期明细见 code_view financial_report;披露日锚定无未来函数)",
+    "financing": "null | {as_of, 固定一问{有存续可转债:bool, 有推进中定增:bool, 有临近解禁_90日:bool}, "
+                 "可转债{只数, 存续规模_亿, 潜在摊薄_pct, 明细[]{债券代码,债券简称,状态∈未上市/存续/已摘牌/已到期,"
+                 "发行规模_亿,转股价,转股起始日,已进入转股期:bool,到期日,强赎触发价,回售触发价,潜在摊薄_pct,披露日}}, "
+                 "定增{推进中, 已实施_锁定中, 最近推进中披露日, 明细[]{阶段∈推进中/已实施,发行方式,发行价格,"
+                 "发行总数,上市日期,锁定期,解锁日,标题,披露日}}, "
+                 "解禁{未来次数, 未来90日次数, 未来90日占流通_pct, 下一次{解禁日,距今日,解禁数量_股,"
+                 "占流通市值_pct,限售股类型,披露日}, 明细[]}, "
+                 "约束提示[str], 剔除{披露日晚于as_of:int, 无披露日:int}, 源状态{可转债,定增,解禁}, 降级[str]}"
+                 "(D·存量融资与解禁固定一问;collectors.equity_financing。**防未来函数**:每条明细带"
+                 "`披露日`,只保留 披露日 ≤ as_of 的记录,被剔除条数进 `剔除`(显式降级不静默);"
+                 "解禁日本身可以是未来日期——那是已披露的未来安排,不是未来价格。旧记录无此块/null 仍合规)",
     "signals": "null | {trend{评级∈趋势评级,得分,依据[]}, "
                "reversal{拐点标签∈拐点标签,拐点评分,...}, ob_os{verdict∈超买超卖,resonance,per_indicator}}",
     "prediction": "null | {现价, atr, atr_pct, 近三次放量[], 支撑位[], 压力位[], "
@@ -188,6 +199,28 @@ def validate_record(rec: dict) -> list[str]:
     fin = rec.get("financial")
     if isinstance(fin, dict) and not _enum_ok(fin.get("评级"), "财报评级"):
         errs.append(f"financial.评级 非法: {fin.get('评级')!r}")
+
+    # 存量融资与解禁(附加可选块):**防未来函数红线**在契约层也复查一遍 ——
+    # 任何明细的 披露日 都不得晚于 meta.as_of(解禁日/到期日可以是未来,披露日不行)。
+    fcg = rec.get("financing")
+    if isinstance(fcg, dict):
+        asof = str(meta.get("as_of") or "")
+        for sec in ("可转债", "定增", "解禁"):
+            blk = fcg.get(sec)
+            rows = blk.get("明细") if isinstance(blk, dict) else blk
+            for i, r in enumerate(rows or []):
+                if not isinstance(r, dict):
+                    continue
+                dv = r.get("披露日")
+                if dv is None:
+                    errs.append(f"financing.{sec}.明细[{i}] 缺披露日(未过 as-of 闸门)")
+                elif not _DATE_RE.match(str(dv)):
+                    errs.append(f"financing.{sec}.明细[{i}].披露日 非日期: {dv!r}")
+                elif asof and str(dv) > asof:
+                    errs.append(f"financing.{sec}.明细[{i}] 披露日 {dv} 晚于 as_of {asof}(未来函数)")
+        drop = fcg.get("剔除")
+        if drop is not None and not isinstance(drop, dict):
+            errs.append(f"financing.剔除 非 dict: {type(drop).__name__}")
 
     return errs
 

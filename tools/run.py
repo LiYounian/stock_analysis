@@ -39,6 +39,7 @@ from tools.analysis import technical as ta
 from tools.collectors import announcement as an
 from tools.collectors import baidu_news
 from tools.collectors import chip, consensus
+from tools.collectors import equity_financing as efin
 from tools.collectors import fundamental as fd
 from tools.collectors import fundflow as ff
 from tools.collectors import industry_history as ih
@@ -121,6 +122,14 @@ def collect_values(codes: list[str]) -> None:
         need_ih = [c for c in codes if not _load_ok(ih.load_industry_history, c)]
         if need_ih:
             logger.info("行业变迁:补缺 %d", len(_safe("行业变迁", lambda: ih.fetch_industry_history(need_ih)) or {}))
+        # 存量融资与解禁(D·固定一问)月级变 → 新鲜度门控(默认 30 天),只对陈旧/无缓存的票逐票拉
+        need_fin = [c for c in codes
+                    if store.is_stale("equity_financing", c, efin.FINANCING_STALE_DAYS)]
+        if need_fin:
+            logger.info("存量融资:%d/%d 陈旧待拉,成功 %d", len(need_fin), len(codes),
+                        len(_safe("存量融资", lambda: efin.fetch_financing(need_fin)) or {}))
+        else:
+            logger.info("存量融资:全部缓存新鲜(≤%s 天),跳过", efin.FINANCING_STALE_DAYS)
     finally:
         socket.setdefaulttimeout(_old)
 
@@ -150,10 +159,11 @@ def collect_values_missing(codes: list[str]) -> None:
     need_sm = [c for c in codes if not _load_ok(sm.load_lhb, c)]
     need_cs = [c for c in codes if not _load_ok(consensus.load_consensus, c)]
     need_ih = [c for c in codes if not _load_ok(ih.load_industry_history, c)]
+    need_fin = [c for c in codes if not _load_ok(efin.load_financing, c)]
     logger.info("数值面补缺(%d 候选,已缓存跳过):K线 %d / 基本面 %d / 公告 %d / 资金流 %d / "
-                "筹码 %d / 主力行为 %d / 一致预期 %d / 行业变迁 %d",
+                "筹码 %d / 主力行为 %d / 一致预期 %d / 行业变迁 %d / 存量融资 %d",
                 len(codes), len(need_k), len(need_f), len(need_a), len(need_ff),
-                len(need_chip), len(need_sm), len(need_cs), len(need_ih))
+                len(need_chip), len(need_sm), len(need_cs), len(need_ih), len(need_fin))
     _old = socket.getdefaulttimeout()
     socket.setdefaulttimeout(FETCH_TIMEOUT)
     try:
@@ -173,6 +183,8 @@ def collect_values_missing(codes: list[str]) -> None:
             _safe("一致预期", lambda: consensus.fetch_consensus(need_cs))
         if need_ih:
             _safe("行业变迁", lambda: ih.fetch_industry_history(need_ih))
+        if need_fin:
+            _safe("存量融资", lambda: efin.fetch_financing(need_fin))
     finally:
         socket.setdefaulttimeout(_old)
 

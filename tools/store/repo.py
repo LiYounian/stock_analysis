@@ -51,6 +51,8 @@ _JSON_KINDS = ("fundamental", "announcement", "news", "ugc", "policy", "llm_cach
                "margin",               # 个股两融明细(融资买入额/融资余额;collectors.margin,按票累积日序列)
                "industry_history",     # 行业变迁史(collectors.industry_history)
                "baidu_news",           # 百度个股新闻情绪(collectors.baidu_news;带真实发布时间+利好/利空标签)
+               "equity_financing",     # 存量融资与解禁(存续可转债/定增/限售解禁;collectors.equity_financing,
+                                       # 每条带披露日供 as_of 闸门;伪 code "_market" 存市场级共享名单)
                "tick_summary")         # 逐笔微观结构摘要(小 json,供 as_of 无未来函数读;明细在 tick parquet)
 _RAW_KINDS = _PARQUET_KINDS + _JSON_KINDS
 _FLAT_KINDS = ("llm_cache",)   # 不按日期分区的 raw kind
