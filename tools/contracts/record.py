@@ -29,6 +29,17 @@ ENUMS = {
     "新鲜度": ("新鲜", "陈旧", "无数据"),           # sentiment(顶层/三层).新鲜度:date-pin 采集新鲜度三态
     "持续性": ("结构性持续", "短暂事件", "中性"),    # sentiment.events[].持续性:根源消息(公司行为)结构性 vs 短暂
     "印证强度": ("强", "中", "弱"),                 # sentiment.events[].印证强度 / 持续性研判.最强结构印证
+    # provenance.口径.<维>.缺失原因:「无数据」再分两态。为什么必须分 —— 处置完全不同:
+    # 未采集要去补采/查采集失败(我们的问题);源无数据是合法降级(补采也没有,别重试烧额度)。
+    # 与 tools/run.py:_dim_status 的 'missing' / 'empty' 同一套区分,不另造第三种说法。
+    "缺失原因": ("未采集", "源无数据"),
+    # —— 以下三个原先只写在 RECORD_SCHEMA 的描述文本里、无登记也无校验(声明与实际无闸门)。
+    # 本轮登记进单一真源并接上校验:已核过全池 934 条在产记录,实际取值 100% 落在下列值域内
+    # (方向:中性/看跌;置信度:高;放宽层级:精确;审计意见闸门:通过/不通过/null),故不会引爆既有产出。
+    "预测方向": ("看涨", "看跌", "中性", "数据不足"),   # prediction.指标条件化预测.方向 / 方向_修正
+    "预测置信度": ("高", "中", "低"),                   # prediction.指标条件化预测.置信度
+    "放宽层级": ("精确", "放宽1", "放宽2", "退回"),      # prediction.指标条件化预测.放宽层级
+    "审计闸门": ("通过", "不通过"),                     # financial.审计意见闸门
 }
 HOLD_PERIODS = ("1日", "5日", "10日")
 
@@ -43,6 +54,7 @@ HOLD_PERIODS = ("1日", "5日", "10日")
 VINTAGE_DATE = "口径日期"
 FRESHNESS = "新鲜度"
 VINTAGE_NOTE = "口径提示"
+MISSING_REASON = "缺失原因"      # 仅 provenance.口径.<维>,且仅当 新鲜度=无数据 时出现
 # 应自证口径日期的块。附加可选:旧记录无这些字段仍合规,只在字段存在且非 null 时校验。
 VINTAGE_BLOCKS = ("snapshot", "valuation", "fundamental", "fundflow",
                   "chip", "consensus", "holder", "tick")
@@ -99,13 +111,19 @@ RECORD_SCHEMA = {
     "financing": "null | {as_of, 固定一问{有存续可转债:bool, 有推进中定增:bool, 有临近解禁_90日:bool}, "
                  "可转债{只数, 存续规模_亿, 潜在摊薄_pct, 明细[]{债券代码,债券简称,状态∈未上市/存续/已摘牌/已到期,"
                  "发行规模_亿,转股价,转股起始日,已进入转股期:bool,到期日,强赎触发价,回售触发价,潜在摊薄_pct,披露日}}, "
-                 # TODO(A 线 · equity_financing 定增阶段修复,待其回执定稿后由集成方补齐取值):
-                 #   阶段将从二值扩为三值以上 —— 需区分 **已实施**(股份已发出、摊薄已发生)与
-                 #   **已终止**(从未发出、摊薄永不发生):两者对摊薄压力含义相反,不可同桶。
-                 #   本行取值故意**不猜**;A 线取值定稿后同步此处(否则又成"声明与实际不一致")。
-                 "定增{推进中, 已实施_锁定中, 最近推进中披露日, 明细[]{阶段(取值见 collectors."
-                 "equity_financing;区分 已实施=摊薄已发生 与 已终止=摊薄永不发生),发行方式,发行价格,"
-                 "发行总数,上市日期,锁定期,解锁日,标题,披露日}}, "
+                 # 定增按**笔**聚合(A 线 2026-09-03):公告是证据、笔才是主体。
+                 # 关键区分 —— **已实施**(股份已发出→摊薄已发生)与 **已终止**(从未发出→
+                 # 摊薄不会发生)对摊薄压力含义相反,**严格不同桶**;`终态公告` 是中性名,
+                 # 只表示"这条公告是关笔证据",不表达摊薄方向(方向看 阶段信号)。
+                 "定增{推进中, 已实施_锁定中, 最近推进中披露日, "
+                 "笔数{推进中, 已实施, 已终止}, 推进中公告条数, "
+                 "笔[](按笔聚合的**主体**;固定一问.有推进中定增 **只认笔级推进中**)"
+                 "{序号, 状态∈推进中/已实施/已终止, 起始披露日, 首个标题, 最新披露日, 最新标题, "
+                 "公告条数, 终结披露日, 终结标题, 终结依据}, "
+                 "明细[](公告级证据){阶段∈推进中/已实施/终态公告, 阶段信号∈完成/终止"
+                 "(仅 阶段=终态公告 时有意义), 笔序号(回写:该公告归属哪一笔), "
+                 "笔状态∈推进中/已实施/已终止(回写:该笔的最终状态), "
+                 "发行方式,发行价格,发行总数,上市日期,锁定期,解锁日,标题,披露日}}, "
                  "解禁{未来次数, 未来90日次数, 未来90日占流通_pct, 下一次{解禁日,距今日,解禁数量_股,"
                  "占流通市值_pct,限售股类型,披露日}, 明细[]}, "
                  "约束提示[str], 剔除{披露日晚于as_of:int, 无披露日:int}, 源状态{可转债,定增,解禁}, 降级[str]}"
@@ -156,11 +174,14 @@ RECORD_SCHEMA = {
     "timeseries_refs": "{kline, fundflow, announcements}(文件路径指针)",
     "provenance": "{tech:bool, fundamental:bool, announcements:int, fundflow:bool, chip:bool, "
                   "consensus:bool, holder:bool, tick:bool, financing:bool, "
-                  "口径:{<维>:{口径日期:date|null, 新鲜度:新鲜/陈旧/无数据}}}"
+                  "口径:{<维>:{口径日期:date|null, 新鲜度:新鲜/陈旧/无数据, "
+                  "缺失原因:未采集/源无数据|缺失(**仅当新鲜度=无数据时出现**;判不出则不写)}}}"
                   "(布尔位 = **该维实际是否拿到可用数据**,不是对块做 bool()——只剩"
                   "「源不可得/降级」标记的空块必须报 False,否则等于撒谎说有数据。"
                   "`口径` 子字典给每个源的口径日期 + 新鲜度三态:**无数据**(该维什么都没有)与"
-                  "**陈旧**(有值但是旧的)严格区分,下游处置不同。维:tech/fundamental/valuation/"
+                  "**陈旧**(有值但是旧的)严格区分,下游处置不同;「无数据」再由 `缺失原因` 分成"
+                  "**未采集**(没落过盘 → 该去补采/查采集失败,是我们的问题)与 **源无数据**"
+                  "(落了但源里确实没这票 → 合法降级,补采也没有,别重试烧额度)。维:tech/fundamental/valuation/"
                   "fundflow/chip/consensus/holder/tick/announcements/financial/financing/sentiment"
                   "(sentiment 原样镜像其自身的 采集日期/新鲜度——它有自己的新鲜度窗口策略,"
                   "不用本层的尺子重判,否则一个块会挂两个矛盾结论)。"
@@ -225,6 +246,13 @@ def validate_record(rec: dict) -> list[str]:
             dv = ent.get(VINTAGE_DATE)
             if dv is not None and not _DATE_RE.match(str(dv)):
                 errs.append(f"provenance.口径.{dim}.{VINTAGE_DATE} 非日期: {dv!r}")
+            if not _enum_ok(ent.get(MISSING_REASON), "缺失原因"):
+                errs.append(f"provenance.口径.{dim}.{MISSING_REASON} 非法: "
+                            f"{ent.get(MISSING_REASON)!r}")
+            # 缺失原因只在「无数据」时有意义:标了新鲜/陈旧却还给缺失原因 = 自相矛盾
+            if ent.get(MISSING_REASON) is not None and ent.get(FRESHNESS) != "无数据":
+                errs.append(f"provenance.口径.{dim} 非「无数据」却带 {MISSING_REASON}"
+                            f"(新鲜度={ent.get(FRESHNESS)!r})")
 
     sig = rec.get("signals")
     if isinstance(sig, dict):
@@ -243,6 +271,17 @@ def validate_record(rec: dict) -> list[str]:
         for hp in (pred.get("持有期建议") or {}):
             if hp not in HOLD_PERIODS:
                 errs.append(f"prediction.持有期建议 含非法持有期: {hp!r}")
+        # 指标条件化预测:方向/置信度/放宽层级 原先只写在 schema 描述文本里、无人校验
+        # (声明一套、实产另一套也不会红)。已核全池 934 条实际取值全部合法,故接上闸门。
+        cond = pred.get("指标条件化预测")
+        if isinstance(cond, dict):
+            for hp, v in cond.items():
+                if not isinstance(v, dict):
+                    continue
+                for fk, ek in (("方向", "预测方向"), ("方向_修正", "预测方向"),
+                               ("置信度", "预测置信度"), ("放宽层级", "放宽层级")):
+                    if not _enum_ok(v.get(fk), ek):
+                        errs.append(f"prediction.指标条件化预测.{hp}.{fk} 非法: {v.get(fk)!r}")
 
     sent = rec.get("sentiment")
     if isinstance(sent, dict):
@@ -287,8 +326,12 @@ def validate_record(rec: dict) -> list[str]:
             errs.append(f"events[{i}].impact 非法: {e.get('impact')!r}")
 
     fin = rec.get("financial")
-    if isinstance(fin, dict) and not _enum_ok(fin.get("评级"), "财报评级"):
-        errs.append(f"financial.评级 非法: {fin.get('评级')!r}")
+    if isinstance(fin, dict):
+        if not _enum_ok(fin.get("评级"), "财报评级"):
+            errs.append(f"financial.评级 非法: {fin.get('评级')!r}")
+        # 审计意见闸门:同上,原先只在描述文本里声明、无校验
+        if not _enum_ok(fin.get("审计意见闸门"), "审计闸门"):
+            errs.append(f"financial.审计意见闸门 非法: {fin.get('审计意见闸门')!r}")
 
     # 存量融资与解禁(附加可选块):**防未来函数红线**在契约层也复查一遍 ——
     # 任何明细的 披露日 都不得晚于 meta.as_of(解禁日/到期日可以是未来,披露日不行)。

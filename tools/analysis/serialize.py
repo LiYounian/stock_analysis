@@ -42,6 +42,32 @@ FRESH, STALE, NODATA = _ENUMS["新鲜度"]
 VINTAGE_DATE = "口径日期"        # 该块数据实际来自哪一天(序列块=最后一根 bar 日;分区块=命中的分区日)
 FRESHNESS = "新鲜度"             # ∈ FRESH/STALE/NODATA
 VINTAGE_NOTE = "口径提示"        # 仅在需要提醒时出现的人读/LLM 可读说明
+MISSING_REASON = "缺失原因"      # 仅在「无数据」时出现,∈ UNCOLLECTED/SOURCE_EMPTY
+
+# 「无数据」再分两态:**没采到** vs **采到了但源里确实没有**。
+# 为什么必须分:处置完全不同 —— 未采集要去补采/查采集失败(是我们的问题);
+# 源无数据是合法降级(补采也没有,别浪费额度重试)。过去 provenance 只有一个布尔 False,
+# 两者永远分不开。判据与 tools/run.py:_dim_status 的 'missing' / 'empty' **同一套**
+# (有没有落过盘 vs 落了但内容为空),不另造第三种说法。
+UNCOLLECTED, SOURCE_EMPTY = _ENUMS["缺失原因"]
+
+# 各维的 raw kind + 探针日期语义。**日期语义必须与真正取载荷的 loader 一致**,否则判错:
+#   "latest" —— loader 走 get_raw(..., "latest")(全局最新,可能晚于 as_of);
+#   "as_of"  —— loader 已 date-pin 到 ≤as_of。
+_DIM_KIND = {
+    "fundamental": ("fundamental", "latest"),
+    "valuation": ("fundamental", "latest"),
+    "fundflow": ("fundflow", "latest"),
+    "announcements": ("announcement", "latest"),
+    "consensus": ("consensus", "as_of"),
+    "holder": ("holder_num", "as_of"),
+    "tick": ("tick_summary", "as_of"),
+    "financial": ("financial_report", "as_of"),
+    "financing": ("equity_financing", "as_of"),
+}
+# tech(价量)与 chip(由同一段 K 线本地推演)都源自 data/master 的滚动 K 线主档,
+# 主档**不按日期分区** → 用 has_master_kline 判"采过没有",不能走 get_raw_resolved。
+_MASTER_DIMS = ("tech", "chip")
 
 # provenance 里除数据外的**元信息**键:判「该维实际有无数据」时必须排除,
 # 否则「只剩源不可得标记的空块」会被 bool() 误报成 True(= 明确撒谎说有数据)。
@@ -176,14 +202,41 @@ def _has_data(block) -> bool:
     return bool(block)
 
 
-def _provenance_dim(block, vintage: str | None, as_of: str) -> dict:
-    """单维 provenance 口径条目 {口径日期, 新鲜度}。
+def _missing_reason(dim: str, code: str, as_of: str) -> str | None:
+    """该维「无数据」到底是 **未采集**(没落过盘)还是 **源无数据**(落了但源里确实没有)。
+
+    判不出(未知维 / 探针异常)→ None,不硬塞一个说法。
+    判据同 tools/run.py:_dim_status 的 'missing' / 'empty',不另造。
+    """
+    from tools.store import repo as store
+    try:
+        if dim in _MASTER_DIMS:
+            return SOURCE_EMPTY if store.has_master_kline(code) else UNCOLLECTED
+        spec = _DIM_KIND.get(dim)
+        if spec is None:
+            return None                   # 如 sentiment:新鲜度由情绪层自己给,不在这里判
+        kind, mode = spec
+        store.get_raw_resolved(kind, code, date=(as_of if mode == "as_of" else "latest"))
+    except FileNotFoundError:
+        return UNCOLLECTED                # 任何日期分区都没有这份 raw → 压根没采到
+    except Exception:
+        return None                       # 探针本身失败(被 mock / 读坏)→ 不猜
+    return SOURCE_EMPTY                   # raw 在,但块里没有可用值 → 源确实没这票的数据
+
+
+def _provenance_dim(block, vintage: str | None, as_of: str,
+                    *, dim: str | None = None, code: str | None = None) -> dict:
+    """单维 provenance 口径条目 {口径日期, 新鲜度} (+ 无数据时的 缺失原因)。
 
     该维**无可用数据** → 新鲜度 = 无数据(与「有旧数据但陈旧」严格区分:前者什么都没有、
-    后者有值只是旧的,下游的处置完全不同)。
+    后者有值只是旧的,下游的处置完全不同),并进一步给出 缺失原因 区分「未采集」/「源无数据」。
     """
     if not _has_data(block):
-        return {VINTAGE_DATE: None, FRESHNESS: NODATA}
+        ent = {VINTAGE_DATE: None, FRESHNESS: NODATA}
+        why = _missing_reason(dim, code, as_of) if (dim and code) else None
+        if why:
+            ent[MISSING_REASON] = why
+        return ent
     fresh, _note = _classify(vintage, as_of)
     return {VINTAGE_DATE: vintage, FRESHNESS: fresh}
 
@@ -428,29 +481,39 @@ def build_record(code: str, as_of: str) -> dict:
                        "holder": _has_data(holder_block), "tick": _has_data(tick_block),
                        "financing": _has_data(financing_block),
                        "口径": {
-                           "tech": _provenance_dim(snapshot, price_vintage, as_of),
-                           "fundamental": _provenance_dim(fundamental_block, fund_vintage, as_of),
-                           "valuation": _provenance_dim(valuation_block, fund_vintage, as_of),
-                           "fundflow": _provenance_dim(flow, flow_vintage, as_of),
-                           "chip": _provenance_dim(chip_block, price_vintage, as_of),
-                           "consensus": _provenance_dim(consensus_block, consensus_vintage, as_of),
-                           "holder": _provenance_dim(holder_block, holder_vintage, as_of),
-                           "tick": _provenance_dim(tick_block, tick_vintage, as_of),
+                           "tech": _provenance_dim(snapshot, price_vintage, as_of,
+                                                    dim="tech", code=code),
+                           "fundamental": _provenance_dim(fundamental_block, fund_vintage, as_of,
+                                                           dim="fundamental", code=code),
+                           "valuation": _provenance_dim(valuation_block, fund_vintage, as_of,
+                                                         dim="valuation", code=code),
+                           "fundflow": _provenance_dim(flow, flow_vintage, as_of,
+                                                        dim="fundflow", code=code),
+                           "chip": _provenance_dim(chip_block, price_vintage, as_of,
+                                                    dim="chip", code=code),
+                           "consensus": _provenance_dim(consensus_block, consensus_vintage, as_of,
+                                                         dim="consensus", code=code),
+                           "holder": _provenance_dim(holder_block, holder_vintage, as_of,
+                                                      dim="holder", code=code),
+                           "tick": _provenance_dim(tick_block, tick_vintage, as_of,
+                                                    dim="tick", code=code),
                            # 公告是列表(无处盖块级戳)→ 口径只在这里给:命中的采集分区日
                            "announcements": _provenance_dim(
                                anns, _raw_vintage("announcement", code, "latest") if anns else None,
-                               as_of),
+                               as_of, dim="announcements", code=code),
                            # 下面三块**块内已自证**,这里只做镜像,便于下游在一处读全部口径。
                            # financial/financing 用各自 raw 的分区日(= 采集日),与 consensus/holder
                            # 同一把尺子;块内的 披露日/报告期/as_of 仍是更细的业务口径,原样保留。
                            "financial": _provenance_dim(
                                financial_block,
                                _raw_vintage("financial_report", code, as_of)
-                               if financial_block else None, as_of),
+                               if financial_block else None, as_of,
+                               dim="financial", code=code),
                            "financing": _provenance_dim(
                                financing_block,
                                _raw_vintage("equity_financing", code, as_of)
-                               if financing_block else None, as_of),
+                               if financing_block else None, as_of,
+                               dim="financing", code=code),
                            # sentiment 有**自己的**新鲜度窗口策略(SENTIMENT_MAX_STALE_DAYS /
                            # FRESHNESS_MODE),这里原样镜像它的结论,绝不用本模块的尺子重判——
                            # 否则一个块会同时挂两个互相矛盾的新鲜度。

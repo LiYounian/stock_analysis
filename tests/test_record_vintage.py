@@ -130,8 +130,47 @@ def test_资金流无数据_标无数据而非陈旧(only_fundflow):
     rec = sz.build_record(CODE, AS_OF)          # tmp_path 下没落过任何 fundflow
     assert rec["fundflow"] is None
     assert rec["provenance"]["fundflow"] is False
-    assert rec["provenance"]["口径"]["fundflow"] == {"口径日期": None, "新鲜度": sz.NODATA}
+    assert rec["provenance"]["口径"]["fundflow"] == {
+        "口径日期": None, "新鲜度": sz.NODATA, "缺失原因": sz.UNCOLLECTED}
     assert sz.NODATA != sz.STALE                # 两态不可混同
+
+
+def test_无数据再分未采集与源无数据(only_fundflow):
+    """「无数据」不是一种,而是两种:**未采集**(没落过盘)vs **源无数据**(落了但源里确实没有)。
+
+    锁的语义:处置完全不同 —— 未采集要去补采/查采集失败(是我们的问题);源无数据是合法降级
+    (补采也没有,别重试烧额度)。过去 provenance 只有一个布尔 False,这两者永远分不开。
+    判据与 run._dim_status 的 'missing'/'empty' 同一套(有没有落过盘 vs 落了但内容为空)。
+    """
+    # (a) 压根没采过 → 未采集
+    rec = sz.build_record(CODE, AS_OF)
+    ent = rec["provenance"]["口径"]["fundflow"]
+    assert ent["新鲜度"] == sz.NODATA and ent["缺失原因"] == sz.UNCOLLECTED
+
+    # (b) 采过了(分区在),但源返回空序列 → 源无数据
+    store.set_active_date(AS_OF)
+    try:
+        store.put_raw("fundflow", CODE, _flow_df(AS_OF).iloc[0:0], meta={"source": "test"})
+    finally:
+        store.set_active_date(None)
+    rec2 = sz.build_record(CODE, AS_OF)
+    ent2 = rec2["provenance"]["口径"]["fundflow"]
+    assert rec2["fundflow"] is None and rec2["provenance"]["fundflow"] is False
+    assert ent2["新鲜度"] == sz.NODATA and ent2["缺失原因"] == sz.SOURCE_EMPTY
+    assert sz.UNCOLLECTED != sz.SOURCE_EMPTY
+    assert rc.validate_record(rec2) == []
+
+
+def test_有数据的维不带缺失原因(only_fundflow):
+    """缺失原因只在「无数据」时有意义;新鲜/陈旧还挂缺失原因是自相矛盾,契约会拦。"""
+    _put_flow(CODE, AS_OF, AS_OF)
+    ent = sz.build_record(CODE, AS_OF)["provenance"]["口径"]["fundflow"]
+    assert "缺失原因" not in ent
+
+    bad = _bare_record()
+    bad["provenance"] = {"口径": {"fundflow": {"口径日期": AS_OF, "新鲜度": "新鲜",
+                                              "缺失原因": "未采集"}}}
+    assert any("缺失原因" in e for e in rc.validate_record(bad))
 
 
 def test_分区日与bar日不一致时以bar日为准(only_fundflow):
@@ -290,6 +329,31 @@ def test_契约校验provenance口径子字典():
     assert any("provenance.口径.fundflow" in e for e in rc.validate_record(rec))
     rec["provenance"]["口径"]["fundflow"] = {"口径日期": "08/19", "新鲜度": "陈旧"}
     assert any("非日期" in e for e in rc.validate_record(rec))
+
+
+def test_原先只写在描述文本里的枚举现在有闸门():
+    """方向/置信度/放宽层级/审计意见闸门 原先只声明在 schema 描述串里、**校验器不管**。
+
+    锁的语义:声明与实产不一致却零告警,和本轮修的"不自证口径日期"是同一种病 ——
+    有声明、没闸门。这四个已登记进 ENUMS(单一真源)并接上校验。
+    登记前核过全池 934 条在产记录,实际取值 100% 落在值域内,故不会引爆既有产出。
+    """
+    rec = _bare_record()
+    rec["prediction"] = {"指标条件化预测": {"5日": {"方向": "暴涨", "置信度": "高"}}}
+    assert any("方向" in e for e in rc.validate_record(rec))
+    rec["prediction"]["指标条件化预测"]["5日"] = {"方向": "看涨", "置信度": "极高"}
+    assert any("置信度" in e for e in rc.validate_record(rec))
+    rec["prediction"]["指标条件化预测"]["5日"] = {"方向": "看涨", "置信度": "高",
+                                                "放宽层级": "放宽3"}
+    assert any("放宽层级" in e for e in rc.validate_record(rec))
+    rec["prediction"] = None
+    rec["financial"] = {"评级": "良", "审计意见闸门": "待定"}
+    assert any("审计意见闸门" in e for e in rc.validate_record(rec))
+    # 合法取值 + null 一律放行(旧记录/未判定)
+    rec["financial"] = {"评级": "良", "审计意见闸门": None}
+    rec["prediction"] = {"指标条件化预测": {"5日": {"方向": "数据不足", "置信度": "低",
+                                                  "放宽层级": "退回", "方向_修正": "中性"}}}
+    assert rc.validate_record(rec) == []
 
 
 def _bare_record() -> dict:
