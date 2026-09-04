@@ -2,7 +2,8 @@
 
 数据源(本机实测可用,避开被指纹墙的东财):
   - 同花顺 `stock_financial_abstract`:营收/净利/增速/ROE/毛利率/净利率/负债率。
-  - 百度 `stock_zh_valuation_baidu`:PE(TTM)/PB/总市值 + PE 近一年分位(供护栏判高估)。
+  - 百度 `stock_zh_valuation_baidu`:PE(TTM)/PB/总市值 + PE 分位(窗口见 settings.PE_PCTL_PERIOD,
+    默认全历史;供护栏判高估。记录旁记 `PE分位窗口` 口径)。
   - baostock `query_dividend_data`:近 12 个月(按除权除息日)累计**每股现金分红(税前)**,
     供多因子「股息率」= 每股股利 / 最新收盘价(股息率的价格分母在分析层用 K线算,见 factor.py)。
     baostock 是数据 API(非爬虫、不封),本机实测可用。**无分红票 → 每股股利 = 0.0(真 0,非缺失)**;
@@ -69,15 +70,17 @@ def _percentile(vals: list[float], x: float) -> float | None:
 def _fetch_baidu(code: str) -> dict:
     """百度估值,取各 indicator 时间序列最新值。单项失败该字段 None。
 
-    额外产出 `PE分位`:最新 PE(TTM) 在近一年序列中的分位(0~1),供护栏判"极度高估",
-    复用同一次 PE 序列拉取、无额外网络。
+    额外产出 `PE分位`:最新 PE(TTM) 在 `settings.PE_PCTL_PERIOD` 窗口序列中的分位(0~1),
+    供护栏判"极度高估",复用同一次 PE 序列拉取、无额外网络。窗口口径记入 `PE分位窗口`,
+    供下游报告/护栏标注(#32:默认全历史,不再硬编码近一年)。
     """
     import akshare as ak
 
-    out = {}
+    period = settings.PE_PCTL_PERIOD
+    out = {"PE分位窗口": period}
     for key, ind in _BAIDU_MAP.items():
         try:
-            df = ak.stock_zh_valuation_baidu(symbol=code, indicator=ind, period="近一年")
+            df = ak.stock_zh_valuation_baidu(symbol=code, indicator=ind, period=period)
             vals = [v for v in (_to_float(x) for x in df["value"].tolist())
                     if v is not None] if len(df) else []
             out[key] = vals[-1] if vals else None
@@ -187,11 +190,13 @@ def _fetch_hk_fundamental(code: str) -> dict:
             rec["每股股利"] = _to_float(row.get("每股股息TTM(港元)"))
     except Exception as e:
         logger.warning("港股 %s 东财财务指标失败: %s", code, e)
-    # 百度港股估值
+    # 百度港股估值(PE 分位窗口同 A 股口径,见 settings.PE_PCTL_PERIOD,#32)
     _HK_BAIDU_MAP = {"PE_TTM": "市盈率(TTM)", "PB": "市净率", "总市值": "总市值"}
+    period = settings.PE_PCTL_PERIOD
+    rec["PE分位窗口"] = period
     for key, ind in _HK_BAIDU_MAP.items():
         try:
-            df = ak.stock_hk_valuation_baidu(symbol=code, indicator=ind, period="近一年")
+            df = ak.stock_hk_valuation_baidu(symbol=code, indicator=ind, period=period)
             vals = [v for v in (_to_float(x) for x in df["value"].tolist())
                     if v is not None] if len(df) else []
             rec[key] = vals[-1] if vals else None

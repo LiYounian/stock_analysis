@@ -26,9 +26,21 @@ DAILY_KLINE_ROWS = 500
 TUSHARE_TOKEN = os.getenv("TUSHARE_TOKEN", "")
 TUSHARE_ENABLED = bool(TUSHARE_TOKEN)
 
+# —— 估值:PE 分位窗口口径(#32)——
+# 百度估值 stock_zh_valuation_baidu 的 period 口径,决定 PE(TTM) 分位在多长历史里算。
+# 默认「全部」(全历史):仅「近一年」窗口太短,低分位常是 TTM 利润增速快于股价所致、
+# 对「便宜/贵」无解释力,且护栏据此判「极度高估」易误判。可选 近一年/近三年/近五年/近十年/全部。
+PE_PCTL_PERIOD = os.getenv("PE_PCTL_PERIOD", "全部")
+
 # —— 舆情/新闻采集参数 ——
 NEWS_LOOKBACK_DAYS = 7      # 新闻/公告回看窗口
 UGC_LIMIT = 50             # 每票 UGC 抓取条数上限
+
+# —— 业绩快报/预告 与 正式定期报告 同源去重(#30)——
+# 同一票的业绩快报/预告与正式定期报告是「同一件事的两个口径」,不应被当两条独立利好。
+# 二者时间相距 ≤ 窗口天数则判同一业绩事件,保留正式报、丢弃快报/预告(见 collectors.news)。
+EARNINGS_SAME_EVENT_DEDUP = os.getenv("EARNINGS_SAME_EVENT_DEDUP", "true").lower() in ("1", "true", "yes")
+EARNINGS_SAME_EVENT_WINDOW_DAYS = int(os.getenv("EARNINGS_SAME_EVENT_WINDOW_DAYS", "45"))
 
 # —— 新闻扩召回 + LLM 相关性初筛(collectors.news_recall；仅调用方 fetch_news(recall=True) 时生效)——
 # 默认关:只在 screenall/pool 的 collect_message 那批(选出并集∪自选，~125 只)由调用方开，

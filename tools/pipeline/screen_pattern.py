@@ -85,13 +85,14 @@ def _guardrail_inputs(code: str, fetch: bool) -> dict:
     读本地缓存;缺失且 fetch=True 时采集。任一源失败降级为缺数据(None/[]),
     由 guardrail 决定"缺数据不误杀"。返回 {pe_percentile, 净利增速, ann_titles, 有数据}。
     """
-    pe_pct = growth = None
+    pe_pct = growth = pe_window = None
     try:
         fund = fundamental.load_fundamental(code)
     except FileNotFoundError:
         fund = fundamental.fetch_fundamental([code]).get(code) if fetch else None
     if fund:
         pe_pct, growth = fund.get("PE分位"), fund.get("净利增速")
+        pe_window = fund.get("PE分位窗口")
 
     try:
         anns = announcement.load_announcements(code)
@@ -100,7 +101,7 @@ def _guardrail_inputs(code: str, fetch: bool) -> dict:
     titles = [a.get("title", "") for a in (anns or [])]
 
     has_data = fund is not None or anns is not None
-    return {"pe_percentile": pe_pct, "净利增速": growth,
+    return {"pe_percentile": pe_pct, "净利增速": growth, "pe_window": pe_window,
             "ann_titles": titles, "有数据": has_data}
 
 
@@ -284,7 +285,7 @@ def run_pattern_screen(codes: list[str], as_of: str | None = None,
         r = ps.is_qualified(
             kdf, rs_stock_vs_board=rs_sb, rs_board_vs_hs300=rs_bh,
             pe_percentile=grd["pe_percentile"], net_profit_growth=grd["净利增速"],
-            ann_titles=grd["ann_titles"], cfg=cfg)
+            ann_titles=grd["ann_titles"], cfg=cfg, pe_window=grd.get("pe_window"))
         results[code] = r
         if not r.get("达标"):
             nm = _near_miss(code, membership, pat, r)                    # 达标接近(仅差护栏/正向确认)

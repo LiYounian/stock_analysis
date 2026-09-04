@@ -117,7 +117,16 @@ def test_guardrail_rejects_negative_growth(monkeypatch, tmp_path):
 
 def test_guardrail_rejects_extreme_pe(monkeypatch, tmp_path):
     v = _guard(monkeypatch, tmp_path, {"净利增速": 10.0, "PE分位": 0.97}, [])
-    assert v["达标数"] == 0                      # PE 近一年分位 >0.90 被剔除
+    assert v["达标数"] == 0                      # PE 分位 >0.90 被剔除
+
+
+def test_guardrail_reason_labels_pe_window():
+    """#32:PE 极端剔除原因必须标出分位的历史窗口口径(供解释力可见);无窗口则不标。"""
+    from tools.analysis.pattern_screener import screen as ps
+    _, r_win = ps.guardrail(0.97, 10.0, pe_window="全部")
+    assert any("PE分位" in x and "全部窗口" in x for x in r_win)
+    _, r_none = ps.guardrail(0.97, 10.0)
+    assert any("PE分位" in x for x in r_none) and all("窗口" not in x for x in r_none)
 
 
 def test_guardrail_rejects_regulatory_announcement(monkeypatch, tmp_path):
