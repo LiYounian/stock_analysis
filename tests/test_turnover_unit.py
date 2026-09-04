@@ -354,3 +354,66 @@ def test_enrich_switch_off(monkeypatch):
                         lambda: (_ for _ in ()).throw(AssertionError("不该触网")))
     tail = pd.DataFrame({"date": pd.to_datetime(["2026-09-03"]), "volume": [1e6]})
     assert master_sync._enrich_turnover_amount({"000001": tail}) == 0
+
+
+# ————————————————————————————————————————————————
+# turnover 近端整段缺失(NaN)的 volume÷流通股 回填(backfill_turnover_from_volume)
+# 锁死语义:①用本票自身正常行 ratio × volume 还原,回填值是百分数、口径不二义;
+#          ②volume 缺 / 无参考 → refuse,诚实留 NaN 不猜;③流通股阶跃(解禁)行 refuse。
+# ————————————————————————————————————————————————
+def _kline_with_gap(float_shares=1.9e8, turn_pct=3.0, n=40, gap=12):
+    """造一段流通股恒定的 K线:前 n-gap 行 turnover 正常,末 gap 行 turnover=NaN(volume 在位)。
+    恒等式 turnover% = 100 * volume / 流通股 ⇒ volume = turnover% * 流通股 / 100。"""
+    dates = pd.bdate_range(end="2026-09-03", periods=n)
+    vol = np.full(n, turn_pct * float_shares / 100.0)     # 每日 volume 对应 turn_pct%
+    turn = np.full(n, turn_pct, dtype=float)
+    turn[n - gap:] = np.nan                                # 末 gap 行缺失
+    return pd.DataFrame({"date": dates, "volume": vol, "turnover": turn})
+
+
+def test_backfill_restores_missing_from_own_ratio():
+    """末段 turnover 缺失、volume 在位 → 用本票 ratio 还原,值≈原真值、全部回填。"""
+    df = _kline_with_gap(turn_pct=3.0, n=40, gap=12)
+    out, rep = units.backfill_turnover_from_volume(df)
+    assert rep["filled"] == 12 and rep["refused"] == 0
+    filled = pd.to_numeric(out["turnover"], errors="coerce")
+    assert filled.notna().all()                            # 缺口补齐
+    assert np.allclose(filled.tail(12).to_numpy(), 3.0, rtol=1e-6)  # 还原到真值
+
+
+def test_backfill_value_is_percent_not_fraction():
+    """回填值是百分数(与 MASTER_TURNOVER_UNIT=percent 一致),不是小数(相差 100 倍)。"""
+    df = _kline_with_gap(turn_pct=5.0, n=30, gap=8)
+    out, _ = units.backfill_turnover_from_volume(df)
+    assert 4.9 < float(pd.to_numeric(out["turnover"], errors="coerce").iloc[-1]) < 5.1
+
+
+def test_backfill_refuses_when_volume_missing():
+    """缺失行连 volume 也没有 → 无从还原,refuse 且保持 NaN(不猜)。"""
+    df = _kline_with_gap(n=30, gap=6)
+    df.loc[df.index[-3:], "volume"] = np.nan               # 末 3 行 volume 也缺
+    out, rep = units.backfill_turnover_from_volume(df)
+    assert rep["refused"] >= 3
+    assert pd.to_numeric(out["turnover"], errors="coerce").tail(3).isna().all()
+
+
+def test_backfill_refuses_on_float_share_step():
+    """参考窗内流通股阶跃(解禁)→ ratio 非常数,refuse 该行而非用错 ratio 外推。"""
+    # 前半流通股 1e8、后半(仍有正常 turnover 的参考行)跳到 3e8,末尾再缺失
+    n, gap = 40, 6
+    dates = pd.bdate_range(end="2026-09-03", periods=n)
+    fs = np.where(np.arange(n) < n - 15, 1e8, 3e8).astype(float)
+    turn = np.full(n, 3.0)
+    vol = turn * fs / 100.0
+    turn[n - gap:] = np.nan
+    df = pd.DataFrame({"date": dates, "volume": vol, "turnover": turn})
+    out, rep = units.backfill_turnover_from_volume(df)
+    # 参考窗横跨阶跃 → CV 超阈值 → 拒填(诚实留 NaN),不产生错值
+    assert rep["refused"] >= 1
+
+
+def test_backfill_noop_when_full():
+    """无缺失 → 不动数据、filled=refused=0。"""
+    df = _kline_with_gap(n=30, gap=0)
+    out, rep = units.backfill_turnover_from_volume(df)
+    assert rep["filled"] == 0 and rep["refused"] == 0

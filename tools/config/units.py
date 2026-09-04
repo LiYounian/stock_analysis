@@ -80,6 +80,14 @@ _ANOMALY_REL = 0.05    # rel < 此 → 判为单位异常(真值 rel ≥ 0.30,�
 _REPAIR_NEIGHBORS = 5  # 修复时取最近 N 个"未被标记"的比值点做参考
 _REPAIR_TOL = 2.0      # ×100 后 rel 必须落进 [1/tol, tol] 才认为"×100 假设成立"
 
+# —— turnover 整段缺失(NaN)的 volume÷流通股 回填参数 ——
+# 恒等式 turnover% = 100 × volume / 流通股 ⇒ ratio = turnover%/volume 在流通股不变的窗口
+# 近似常数。回填时用本票自身**最近的正常行** ratio × 当日 volume 还原 turnover(见
+# backfill_turnover_from_volume);无需外部流通股源,恒等式即口径,回填值本就是百分数。
+_BACKFILL_REF = 10       # 每个缺失行取最近 N 个"turnover 非空"参考 ratio(居中取最近)
+_BACKFILL_MIN_REF = 3    # 参考点不足此数 → 该票整体不回填(参考不可靠,宁缺毋滥)
+_BACKFILL_MAX_CV = 0.25  # 参考 ratio 的变异系数 > 此 → 判流通股在参考窗内阶跃,refuse 该行
+
 
 def turnover_unit(source: str | None) -> str | None:
     """返回该采集源 turnover 的原始口径;未登记返回 None。"""
@@ -225,4 +233,73 @@ def repair_turnover_unit(df, *, blank_unresolved: bool = True) -> tuple[object, 
                 out.at[ix, "turnover"] = np.nan
             rep["refused"] += 1
             rep["refused_dates"].append(_label(ix))
+    return out, rep
+
+
+def backfill_turnover_from_volume(df) -> tuple[object, dict]:
+    """用 `volume ÷ 流通股` 回填 turnover 整段缺失(NaN)的行(返回 (新 df, 报告))。
+
+    背景:回退采集源(腾讯 fqkline)不返回 turnover,近端整段 NaN,而 volume 在位。
+    流通股**无需外部源**——由本票自身正常行经恒等式自证:
+    `turnover% = 100 × volume / 流通股` ⇒ `ratio = turnover%/volume` 在流通股不变的窗口
+    近似常数。故对每个缺失行,取时间上**最近的** `_BACKFILL_REF` 个非空参考 ratio,其
+    中位数 × 当日 volume 即还原 turnover。回填值直接是百分数(参考取自百分数),不经
+    `to_percent`、无口径二义,契合 `MASTER_TURNOVER_UNIT=PERCENT`。
+
+    **只回填能被自证的行**,其余诚实留 NaN(交下游有声降级),绝不猜:
+      · volume 缺失 / ≤0                          → refuse(无从还原);
+      · 全票非空参考点 < `_BACKFILL_MIN_REF`      → 整票不回填(参考不可靠);
+      · 参考窗 ratio 变异系数 > `_BACKFILL_MAX_CV` → refuse 该行(流通股在参考窗内阶跃,
+        如解禁/增发,单一 ratio 会算错);此时 ratio 已不是常数,不该外推。
+
+    与单位修复 `repair_turnover_unit` 互补:那个改「小数当百分数存」的**错值**;这个补
+    「整段没写」的**缺值**。两者都只动能证明的行。
+    """
+    import numpy as np
+    import pandas as pd
+    out = df.copy()
+    rep = {"filled": 0, "refused": 0, "dates": [], "refused_dates": []}
+    cols = getattr(out, "columns", [])
+    if len(out) == 0 or "turnover" not in cols or "volume" not in cols:
+        return out, rep
+
+    t = pd.to_numeric(out["turnover"], errors="coerce")
+    v = pd.to_numeric(out["volume"], errors="coerce")
+    ratio = (t / v).replace([np.inf, -np.inf], np.nan).mask((v <= 0) | (t <= 0))
+    good = ratio.dropna()                          # 正常行的 turnover%/volume 参考池
+    miss = t.isna()                                # 所有 turnover 缺失行(候选)
+
+    def _label(ix):
+        return (pd.Timestamp(out.at[ix, "date"]).strftime("%Y-%m-%d")
+                if "date" in out.columns else str(ix))
+
+    def _refuse(ix):
+        rep["refused"] += 1
+        rep["refused_dates"].append(_label(ix))
+
+    if not miss.any():
+        return out, rep
+    if len(good) < _BACKFILL_MIN_REF:              # 参考不足 → 整票放弃,全记 refused
+        for ix in out.index[miss]:
+            _refuse(ix)
+        return out, rep
+
+    pos = {ix: i for i, ix in enumerate(out.index)}
+    good_pos = np.array([pos[ix] for ix in good.index])
+    good_val = good.to_numpy()
+    for ix in out.index[miss]:
+        vi = v[ix]
+        if not (pd.notna(vi) and vi > 0):          # volume 缺/≤0 → 无从还原,诚实留 NaN
+            _refuse(ix)
+            continue
+        order = np.argsort(np.abs(good_pos - pos[ix]))[:_BACKFILL_REF]
+        refs = good_val[order]
+        r_ref = float(np.median(refs))
+        cv = float(np.std(refs) / abs(np.mean(refs))) if np.mean(refs) else np.inf
+        if r_ref > 0 and cv <= _BACKFILL_MAX_CV:
+            out.at[ix, "turnover"] = float(vi) * r_ref
+            rep["filled"] += 1
+            rep["dates"].append(_label(ix))
+        else:                                       # 参考窗内流通股阶跃 → 不外推
+            _refuse(ix)
     return out, rep
