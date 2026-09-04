@@ -414,21 +414,31 @@ def ugc_sentiment(code: str, client=None, n: int = UGC_SAMPLE_N,
                   posts: list[dict] | None = None) -> dict:
     """读 UGC 缓存 → 取前 n 帖批量给 LLM 判整体情绪(经缓存)。
 
-    返回 {净情绪(-1~1), 多空, 样本数, 依据}。无 UGC 缓存 / LLM 失败 → 降级为
+    返回 {净情绪(-1~1), 多空, 样本数, 依据, status}。无 UGC 缓存 / LLM 失败 → 降级为
     中性 + degraded 标记(不抛,约法第5条)。
     posts:可传入已由上层 date-pin 解析好的帖子列表(analyze_stock 走此路);
     缺省 None → 自读 ug.load_ugc(code)(向后兼容既有调用方/测试)。
+
+    三态契约(见 docs/计划/2026-09-04_情绪打分失败三态_设计.md §二):此处是「失败静默兜底成
+    中性0」的活体入口——degraded 时 净情绪=0.0 与「真中性 0.0」不可区分。故每个返回都带显式
+    `status`,让下游 B 能判「此 0.0 是否可信」:
+      - status="ok":LLM 判分成功,0.0 是真中性;
+      - status="unknown":LLM 调用失败/降级(Connection error 等),0.0 不可信 → B 触发折价;
+      - status="missing":本就无 UGC 输入(无缓存/空),该层应退出加权。
+    ⚠️ C 只保证失败在返回结构里显式可见(加 status),不在此改聚合/把 0.0 改成 null——那是 B。
     """
     if posts is None:
         try:
             posts = ug.load_ugc(code)[:n]
         except FileNotFoundError as e:
             logger.warning("%s UGC 缓存缺失,舆情层降级:%s", code, e)
-            return {"净情绪": 0.0, "多空": "中性", "样本数": 0, "degraded": "no_ugc_cache"}
+            return {"净情绪": 0.0, "多空": "中性", "样本数": 0,
+                    "degraded": "no_ugc_cache", "status": "missing"}
     else:
         posts = posts[:n]
     if not posts:
-        return {"净情绪": 0.0, "多空": "中性", "样本数": 0, "degraded": "empty_ugc"}
+        return {"净情绪": 0.0, "多空": "中性", "样本数": 0,
+                "degraded": "empty_ugc", "status": "missing"}
 
     name, _ = resolve_name(code)          # 同新闻层:给 LLM 真名而非代码
     text = "\n".join(f"{i + 1}. {p.get('text', '')}" for i, p in enumerate(posts))
@@ -438,13 +448,14 @@ def ugc_sentiment(code: str, client=None, n: int = UGC_SAMPLE_N,
         r = _cached_extract(client, text, instr, prompts.UGC_SENTIMENT_SCHEMA)
     except Exception as e:
         logger.warning("%s UGC 情感 LLM 失败,降级:%s", code, str(e)[:80])
-        return {"净情绪": 0.0, "多空": "中性", "样本数": len(posts), "degraded": str(e)[:80]}
+        return {"净情绪": 0.0, "多空": "中性", "样本数": len(posts),
+                "degraded": str(e)[:80], "status": "unknown"}
     try:
         net = max(-1.0, min(1.0, float(r.get("净情绪") or 0.0)))
     except (TypeError, ValueError):
         net = 0.0
     return {"净情绪": round(net, 3), "多空": r.get("多空", "中性"),
-            "样本数": len(posts), "依据": r.get("依据", "")}
+            "样本数": len(posts), "依据": r.get("依据", ""), "status": "ok"}
 
 
 # ---------- 三层加权 ----------
