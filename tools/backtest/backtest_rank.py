@@ -119,8 +119,10 @@ def _spearman(a: np.ndarray, b: np.ndarray) -> float:
     """无 scipy 依赖的 Spearman:对排名做 Pearson。"""
     if len(a) < 3:
         return float("nan")
-    ra = pd.Series(a).rank().to_numpy()
-    rb = pd.Series(b).rank().to_numpy()
+    # copy=True:pandas 3.0 的 rank().to_numpy() 返回只读视图,原地 -= 会 ValueError(只读);
+    # 拷成可写副本,语义不变(修 pandas 3.0 下 rank-IC 引擎的隐性破裂)。
+    ra = pd.Series(a).rank().to_numpy(copy=True)
+    rb = pd.Series(b).rank().to_numpy(copy=True)
     ra -= ra.mean(); rb -= rb.mean()
     d = np.sqrt((ra ** 2).sum() * (rb ** 2).sum())
     return float((ra * rb).sum() / d) if d > 0 else float("nan")

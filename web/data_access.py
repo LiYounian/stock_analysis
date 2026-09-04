@@ -604,11 +604,12 @@ def selection_page(date: str = "latest") -> dict:
     strategy_strong = _strategy_strong_section(recs, date)  # S05 最强(PR#15,Tushare-only)
     strategy_rt = _strategy_reversal_turnover_section(recs, date)  # 策略10 反转低换手(候选·前向观测中)
     strategy_cr = _strategy_conditional_rank_section(recs, date)   # 策略11 指标条件化状态排序(状态参考·非alpha)
+    strategy_kf = _strategy_deduct_quality_section(recs, date)     # 策略12 扣非质量(#31 纯质量横截面召回)
     combined = _combined_section(strategy0, strategy2,
                                  strategy4, strategy6, recs,
                                  strategy_mr=strategy_mr, strategy_vol=strategy_vol,
                                  strategy_strong=strategy_strong, strategy_rt=strategy_rt,
-                                 strategy_cr=strategy_cr)
+                                 strategy_cr=strategy_cr, strategy_kf=strategy_kf)
 
     # 财报高危红旗风险层(WI-6):先给各展示行挂 risk 标注(风险/警示层)。
     _attach_risk(pool_rows, recs)
@@ -616,7 +617,8 @@ def selection_page(date: str = "latest") -> dict:
     # 注:strategy0 不入本循环——它的 risk/risk_adjust 已由 _strategy0_section 从 view 权威透传
     #     (覆盖全A;走 recs 重推会丢全A票徽标,即本次修复的断点)。其余策略 picks 均在 recs 内,照常。
     for _sec in (strategy2, strategy4, strategy6,
-                 strategy_mr, strategy_vol, strategy_strong, strategy_rt, strategy_cr):
+                 strategy_mr, strategy_vol, strategy_strong, strategy_rt, strategy_cr,
+                 strategy_kf):
         if isinstance(_sec, dict):
             _attach_risk(_sec.get("rows"), recs)
 
@@ -628,7 +630,7 @@ def selection_page(date: str = "latest") -> dict:
     # (走 recs 重推会把全A票的 risk_adjust 覆盖成 None → 丢降权/否决沉底。这是本次修复的断点)。
     combined["rows"] = _demote_flagged(combined.get("rows"), recs)    # 综合选股并集:高危沉底
     for _sec in (strategy2, strategy4, strategy6,
-                 strategy_mr, strategy_vol, strategy_strong, strategy_rt):
+                 strategy_mr, strategy_vol, strategy_strong, strategy_rt, strategy_kf):
         if isinstance(_sec, dict) and isinstance(_sec.get("rows"), list):
             _sec["rows"] = _demote_flagged(_sec["rows"], recs)        # 各在产策略入选清单:高危沉底
 
@@ -638,7 +640,7 @@ def selection_page(date: str = "latest") -> dict:
             "strategy6": strategy6,
             "strategy_mr": strategy_mr, "strategy_vol": strategy_vol,
             "strategy_strong": strategy_strong, "strategy_rt": strategy_rt,
-            "strategy_cr": strategy_cr,
+            "strategy_cr": strategy_cr, "strategy_kf": strategy_kf,
             "config": config or {}, "as_of": as_of(date)}
 
 
@@ -839,6 +841,48 @@ def _strategy_reversal_turnover_section(recs: dict, date: str = "latest", cap: i
     }
 
 
+def _strategy_deduct_quality_section(recs: dict, date: str = "latest", cap: int = 30) -> dict:
+    """策略「扣非质量」(#31)区块:读全A screener view「扣非质量」(screen_deduct_quality 产出)——
+    纯扣非质量横截面排序召回(与位置型策略正交)。入选清单带 5 维明细(扣非增速/扣非占归母/
+    现金含量/毛利率/质量领先度 + 各维 z + 综合分 + 参与维数)。
+
+    schema:{as_of, 扫描数, 有效样本, 跳过, 入选数, 入选清单:[{code, name, 组合, 明细}], 权重, 参数}。
+    view 缺失 → present=False(前端「扣非质量 待运行」)。⚠️ 非投资建议,研究模拟。
+    """
+    empty = {"present": False, "as_of": as_of(date), "扫描数": None, "有效": None,
+             "入选数": None, "rows": [], "picks": []}
+    try:
+        v = store.get_view("扣非质量", date=date)
+    except FileNotFoundError:
+        return empty
+    if not isinstance(v, dict):
+        return empty
+    rows, picks = [], []
+    for item in v.get("入选清单", []) or []:
+        if not isinstance(item, dict):
+            continue
+        code = item.get("code")
+        if not code or len(rows) >= cap:
+            continue
+        det = item.get("明细") or {}
+        picks.append(code)
+        rows.append({
+            "code": code, "name": item.get("name") or _name(recs, code),
+            "industry": _industry(recs, code),
+            "综合分": det.get("综合分"), "参与维数": det.get("参与维数"),
+            "扣非增速": det.get("扣非增速"), "扣非占归母": det.get("扣非占归母"),
+            "现金含量": det.get("现金含量"), "毛利率": det.get("毛利率"),
+            "质量领先度": det.get("质量领先度"),
+        })
+    return {
+        "present": True, "as_of": v.get("as_of") or as_of(date),
+        "扫描数": v.get("扫描数"), "有效": v.get("有效样本", v.get("有效")),
+        "入选数": v.get("入选数", len(v.get("入选清单", []) or [])),
+        "rows": rows, "picks": picks,
+        "权重": v.get("权重"), "参数": v.get("参数"),
+    }
+
+
 def _strategy_conditional_rank_section(recs: dict, date: str = "latest", cap: int = 10) -> dict:
     """策略11「指标条件化状态排序」区块(状态参考·非alpha):读全A screener view「指标条件化状态排序」
     (screen_conditional_rank 产出),1/5/10 日三维度各 Top10。
@@ -1029,7 +1073,8 @@ def _combined_section(strategy0: dict, strategy2: dict,
                       strategy_vol: dict | None = None,
                       strategy_strong: dict | None = None,
                       strategy_rt: dict | None = None,
-                      strategy_cr: dict | None = None) -> dict:
+                      strategy_cr: dict | None = None,
+                      strategy_kf: dict | None = None) -> dict:
     """【综合选股】:各在产策略入选代码的并集(去重),每票标注命中来源(被哪几个策略选中)。
 
     后端产出**全并集**(所有可用策略入选代码);前端按勾选的策略实时过滤 + 重算命中来源
@@ -1051,6 +1096,7 @@ def _combined_section(strategy0: dict, strategy2: dict,
     s9_codes = list((strategy_strong or {}).get("picks") or [])  # S05 最强(Tushare-only)
     s10_codes = list((strategy_rt or {}).get("picks") or [])     # 策略10 反转低换手(候选·前向观测中)
     s11_codes = list((strategy_cr or {}).get("picks") or [])     # 策略11 指标条件化状态排序(1日榜;状态参考·非alpha)
+    s12_codes = list((strategy_kf or {}).get("picks") or [])     # 策略12 扣非质量(#31 纯质量横截面召回)
     # 行业 hint:策略0 view 自带行业(全A票多无中心记录)
     s0_industry = {r["code"]: r.get("industry") for r in strategy0.get("rows", [])}
 
@@ -1059,7 +1105,8 @@ def _combined_section(strategy0: dict, strategy2: dict,
     for key, codes in (("策略0", s0_codes), ("策略2", s2_codes),
                        ("策略4", s4_codes),
                        ("策略6", s6_codes), ("策略7", s7_codes), ("策略8", s8_codes),
-                       ("策略9", s9_codes), ("策略10", s10_codes), ("策略11", s11_codes)):
+                       ("策略9", s9_codes), ("策略10", s10_codes), ("策略11", s11_codes),
+                       ("策略12", s12_codes)):
         for c in codes:
             if c not in sources:
                 sources[c] = []
@@ -1122,6 +1169,12 @@ def _combined_section(strategy0: dict, strategy2: dict,
                   "上涨概率%/置信度为**指标状态格级**(同状态票取值相同),Top 由近20日成交额均值(流动性)破并列——"
                   "即『最强历史状态格里挑流动性好的票』,非个股涨跌排名。回测聚合无显著超额、方向多中性、"
                   "1日弱区分/5-10日近噪声;不作胜率/涨跌承诺。全A筛选,读预落盘 view。"},
+        {"key": "策略12", "label": "扣非质量", "codes": s12_codes,
+         "available": bool((strategy_kf or {}).get("present")),
+         "title": "#31 纯扣非质量横截面排序(与位置型策略正交互补):全A按利润质量召回——"
+                  "扣非增速 / 扣非占归母 / 现金含量(CFO比净利)/ 毛利率 / 质量领先度(扣非快于归母,"
+                  "跨期均值),各维 winsor+zscore、缺维重归一等权复合取 TopK;可交易性门=剔 ST/停牌/次新 + "
+                  "成交额或流通市值下限。⚠️ 非投资建议,研究模拟;回测达标前作候选召回口径。全A筛选,读预落盘 view。"},
     ]
     return {"strategies": strategies, "rows": rows}
 
