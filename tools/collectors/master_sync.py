@@ -70,7 +70,7 @@ def _fetch_timeout() -> float:
     return float(os.getenv("FETCH_TIMEOUT", "10"))
 
 
-def _advance_master_from_raw(fetched: dict) -> int:
+def _advance_master_from_raw(fetched: dict) -> tuple[int, dict]:
     """回退抓到数据后,把每只票严格晚于主档 last_date 的尾部 bar 增量推进主档。
 
     根治的 bug:market.fetch_kline 只写 raw 分区、从不推进滚动主档,而分析层
@@ -84,6 +84,8 @@ def _advance_master_from_raw(fetched: dict) -> int:
 
     除权场景(前复权锚点漂移导致新旧 bar 拼接失真)不在此路径处理——由
     "覆盖不足/太旧 → backfill 全量重算"兜底(_MIN_COVERAGE / _MAX_GAP_DAYS),此处不改那套判定。
+
+    返回 (推进票数, turnover 补齐聚合)。补齐聚合供 _fallback 并入返回 dict、上层落盘/熔断消费。
     """
     tails: dict[str, pd.DataFrame] = {}
     for code, df in fetched.items():
@@ -106,7 +108,8 @@ def _advance_master_from_raw(fetched: dict) -> int:
         except Exception as e:
             logger.error("回退推进主档失败 %s: %s(仅跳过该票,不影响其余)", code, e)
 
-    _enrich_turnover_amount(tails)   # 回退源不带额/换手 → 补齐(best-effort,不抛)
+    # 回退源不带额/换手 → 补齐(best-effort,不抛);聚合统计上抛供落盘/熔断,失败有声不再静默。
+    enrich = _enrich_turnover_amount(tails)
 
     advanced = 0
     for code, tail in tails.items():
@@ -117,7 +120,7 @@ def _advance_master_from_raw(fetched: dict) -> int:
             logger.error("回退推进主档失败 %s: %s(仅跳过该票,不影响其余)", code, e)
     if advanced:
         logger.info("回退已推进主档:%d 只(尾部增量 append)", advanced)
-    return advanced
+    return advanced, enrich
 
 
 # 回退路径补齐 amount/turnover 的开关(默认开;=0 关掉可让回退完全不触 baostock)
@@ -126,6 +129,16 @@ def _enrich_enabled() -> bool:
 
 
 _ENRICH_COLS = ("amount", "turnover")
+
+# 补齐后仍整段缺失(NaN)的票占「需补票」比例超过此阈值 → 升级 error(而非 warning):
+# 补齐网连续多日整体失败正是本 bug 的静默源头,这条让日常巡检/告警能抓到。
+_ENRICH_STILL_MISSING_ALERT = 0.5
+
+
+def _empty_enrich_stats() -> dict:
+    """无需补齐 / 开关关闭时的空聚合(占位,便于上层无脑消费,不用判 None)。"""
+    return {"need": 0, "filled": 0, "failed": 0, "session_failed": False,
+            "still_missing": 0, "ratio": 0.0}
 
 
 def _lacks_amount_turnover(tail) -> bool:
@@ -138,8 +151,8 @@ def _lacks_amount_turnover(tail) -> bool:
     return False
 
 
-def _enrich_turnover_amount(tails: dict) -> int:
-    """回退源不带 amount/turnover 时,用 baostock 按日期对齐补齐这两列。返回补齐票数。
+def _enrich_turnover_amount(tails: dict) -> dict:
+    """回退源不带 amount/turnover 时,用 baostock 按日期对齐补齐这两列。返回聚合统计 dict。
 
     为什么必须补(而不是"缺就缺、全交给下游现算"):回退主源是腾讯 fqkline 端点,
     该端点**不返回**成交额/换手率,于是每次走回退的交易日在主档里都是 amount/turnover
@@ -153,15 +166,20 @@ def _enrich_turnover_amount(tails: dict) -> int:
       · 下游已上线的现算兜底(反转低换手覆盖率熔断)**保留不动**,退化为纵深防御:
         baostock 也拿不到时才现算,契约不变、熔断阈值无需调整。
 
-    best-effort:整体或单票失败都只记日志、保持 NaN,绝不让回退路径崩(回退本身就是降级路径)。
+    best-effort:整体或单票失败都不抛,绝不让回退路径崩(回退本身就是降级路径)。
+    但**不再静默**:失败按严重度升级日志级别(整体失败 / 补齐 0 只 / 仍大面积缺 → error),
+    并返回聚合统计({need, filled, failed, session_failed, still_missing, ratio})供上层
+    落盘/熔断消费——本 bug 的根因正是补齐网连续多日整体失败却只留单票 warning、无人可见。
     """
     from tools.config import stock_pool
     need = {c: t for c, t in tails.items()
             if not stock_pool.is_hk(c) and _lacks_amount_turnover(t)}
     if not need or not _enrich_enabled():
-        return 0
+        return _empty_enrich_stats()
+    n = len(need)
     from tools.collectors import baostock_src
-    filled = 0
+    filled = failed = 0
+    session_failed = False
     try:
         with baostock_src.session():
             for code, tail in need.items():
@@ -179,15 +197,39 @@ def _enrich_turnover_amount(tails: dict) -> int:
                             tail[c] = src
                     filled += 1
                 except Exception as ex:
+                    failed += 1
                     logger.warning("回退补齐额/换手失败 %s: %s(保持 NaN,交下游现算兜底)",
                                    code, ex)
     except Exception as ex:
-        logger.warning("回退补齐额/换手整体跳过(baostock 不可用: %s);"
-                       "amount/turnover 保持 NaN,交下游现算兜底", ex)
-        return 0
-    if filled:
-        logger.info("回退补齐 amount/turnover:%d/%d 只(源 baostock)", filled, len(need))
-    return filled
+        # baostock 会话整体失败:need 里的票一个都没补上,全部记为 failed(区别于单票失败)。
+        session_failed = True
+        failed = n
+        logger.error("回退补齐额/换手整体失败(baostock 不可用: %s);%d 只需补票 turnover/amount "
+                     "全部保持 NaN,交下游现算兜底——补齐网整体失效,请排查 baostock 会话", ex, n)
+
+    # 补齐后仍整段缺失(NaN)的票:这才是真正会污染下游(chip 集中度 / S04 单日放量)的口子。
+    still_missing = sum(1 for t in need.values() if _lacks_amount_turnover(t))
+    ratio = still_missing / n if n else 0.0
+    stats = {"need": n, "filled": filled, "failed": failed,
+             "session_failed": session_failed, "still_missing": still_missing,
+             "ratio": round(ratio, 4)}
+
+    # 按严重度升级日志级别,让日常巡检/告警能抓到"补齐网静默失败"这类根因。
+    if session_failed:
+        pass  # 已在上面 error 过,避免重复刷屏
+    elif filled == 0:
+        logger.error("回退补齐额/换手:需补 %d 只但成功 0 只(全部单票失败);turnover/amount "
+                     "仍整段 NaN,下游换手类信号将大面积降级", n)
+    elif ratio > _ENRICH_STILL_MISSING_ALERT:
+        logger.error("回退补齐额/换手:补齐后仍有 %d/%d 只(%.0f%%)turnover/amount 整段缺失 "
+                     "(>%.0f%% 阈值),下游换手类信号将大面积降级",
+                     still_missing, n, ratio * 100, _ENRICH_STILL_MISSING_ALERT * 100)
+    elif still_missing:
+        logger.warning("回退补齐额/换手:%d/%d 只已补,仍有 %d 只 turnover/amount 整段缺失(交下游现算兜底)",
+                       filled, n, still_missing)
+    else:
+        logger.info("回退补齐 amount/turnover:%d/%d 只全部补齐(源 baostock)", filled, n)
+    return stats
 
 
 def _fallback(codes: list[str], workers: int | None, reason: str) -> dict:
@@ -204,9 +246,9 @@ def _fallback(codes: list[str], workers: int | None, reason: str) -> dict:
         out = market.fetch_kline(codes, workers=workers)
     finally:
         socket.setdefaulttimeout(_old)
-    advanced = _advance_master_from_raw(out)
+    advanced, turnover_enrich = _advance_master_from_raw(out)
     return {"mode": "fallback", "ok": len(out), "failed": len(codes) - len(out),
-            "advanced": advanced, "reason": reason}
+            "advanced": advanced, "turnover_enrich": turnover_enrich, "reason": reason}
 
 
 def sync_master(codes: list[str], as_of: str | None = None, *,

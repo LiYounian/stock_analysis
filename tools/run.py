@@ -99,6 +99,18 @@ def collect_values(codes: list[str]) -> None:
     logger.info("采集数值面 %d 只(K线/基本面/公告/资金流)...", len(codes))
     r = _safe("K线主档同步", lambda: master_sync.sync_master(codes)) or {}
     logger.info("K线主档同步:模式=%s 成功 %d", r.get("mode"), r.get("ok", 0))
+    # 回退路径的 turnover/amount 补齐聚合落盘按日期视图(便于回溯/验收/告警):补齐网整体失败
+    # 曾连续多日静默——本 bug 的根因,这里让"需补/成功/失败/仍缺"可见、可被巡检消费。
+    te = r.get("turnover_enrich")
+    if te and te.get("need"):
+        (logger.error if (te.get("session_failed") or te.get("filled") == 0
+                          or te.get("ratio", 0) > 0.5) else logger.info)(
+            "回退 turnover 补齐:需补 %d / 补齐 %d / 失败 %d / 仍整段缺失 %d(%.0f%%)",
+            te["need"], te["filled"], te["failed"], te["still_missing"], te.get("ratio", 0) * 100)
+        try:
+            store.put_view("turnover_enrich", te)
+        except Exception as e:
+            logger.warning("turnover_enrich 视图落盘失败(不阻断):%s", str(e)[:80])
     _old = socket.getdefaulttimeout()
     socket.setdefaulttimeout(FETCH_TIMEOUT)          # 采集期快速失败;finally 还原
     try:
