@@ -76,3 +76,24 @@ def test_low_volume_no_cross_when_already_above():
 def test_history_short_not_selected():
     c = _rising(n=150)                         # < 201 → 历史不足
     assert sv.screen_latest(_frame(c))["SELECT"] is False
+
+
+def test_single_volume_degrade_marked_loud():
+    """换手 NA:单日放量不进组合(不误选),但明细**明确标降级**(不静默"不适用")。
+    锁死 #20:94/94 换手=None 时必须可见,不能哑火无痕。"""
+    c = _rising()
+    c[-1] = c[-2] * 1.04
+    r = sv.screen_latest(_frame(c, turnover=None))
+    assert "单日放量" not in r["组合"]
+    assert r["明细"]["单日放量"].get("降级")           # 明细带降级标记
+
+
+def test_run_screen_counts_single_degrade(monkeypatch):
+    """run_volume_screen 汇总「单日放量降级数(换手缺失)」,让整批哑火可见。"""
+    c = _rising()
+    c[-1] = c[-2] * 1.04
+    kdf = _frame(c, turnover=None)                      # 全 NA → 单日放量降级
+    monkeypatch.setattr(sv, "_load_or_fetch_kline", lambda code, fetch: kdf)
+    monkeypatch.setattr(sv.store, "put_view", lambda name, view: "stub")  # 不落盘
+    view = sv.run_volume_screen(["AAA", "BBB"], fetch=False)
+    assert view["单日放量降级数(换手缺失)"] == 2
