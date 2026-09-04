@@ -256,6 +256,53 @@ def test_attach_persistence_all_degraded_returns_empty(monkeypatch):
     assert all("持续性" not in e for e in events)
 
 
+# ---------- 舆情层失败三态:status 显式可见(C1)----------
+def _ugc_posts(k=3):
+    return [{"text": f"帖{i}"} for i in range(k)]
+
+
+def test_ugc_sentiment_llm_error_status_unknown(monkeypatch, tmp_path):
+    """LLM 抛错(Connection error 类)→ status='unknown' + degraded,净情绪 0.0
+    仍在但被显式标不可信;绝不把失败伪装成可信中性(scored/status 可区分)。"""
+    monkeypatch.setattr(ev.settings, "LLM_CACHE", tmp_path)
+
+    class _Boom:
+        def extract(self, text, schema, *, instruction, temperature=0.0):
+            raise RuntimeError("Connection error.")
+
+    r = ev.ugc_sentiment("000001", client=_Boom(), posts=_ugc_posts())
+    assert r["status"] == "unknown"                 # 失败态,非真中性
+    assert "degraded" in r and r["净情绪"] == 0.0    # 0.0 存在但由 status 标为不可信
+    assert r["样本数"] == 3
+
+
+def test_ugc_sentiment_no_cache_status_missing(monkeypatch):
+    """无 UGC 缓存 → status='missing'(本就无输入,该层应退出加权,非打分失败)。"""
+    monkeypatch.setattr(ev.ug, "load_ugc",
+                        lambda code: (_ for _ in ()).throw(FileNotFoundError("no ugc")))
+    r = ev.ugc_sentiment("000001", client=object())
+    assert r["status"] == "missing" and r["degraded"] == "no_ugc_cache"
+
+
+def test_ugc_sentiment_empty_status_missing():
+    """空帖列表 → status='missing'。"""
+    r = ev.ugc_sentiment("000001", client=object(), posts=[])
+    assert r["status"] == "missing" and r["degraded"] == "empty_ugc"
+
+
+def test_ugc_sentiment_ok_status(monkeypatch, tmp_path):
+    """打分成功 → status='ok';真中性(净情绪0.0)也是 ok,与失败态字段可区分。"""
+    monkeypatch.setattr(ev.settings, "LLM_CACHE", tmp_path)
+
+    class _Neutral:
+        def extract(self, text, schema, *, instruction, temperature=0.0):
+            return {"净情绪": 0.0, "多空": "中性", "依据": "无明显倾向"}
+
+    r = ev.ugc_sentiment("000001", client=_Neutral(), posts=_ugc_posts())
+    assert r["status"] == "ok"                       # 真中性:成功打分
+    assert r["净情绪"] == 0.0 and "degraded" not in r
+
+
 @pytest.mark.skipif(not lc.is_configured(), reason="LLM env 未配置")
 def test_live_extract_news():
     c = lc.get_client()

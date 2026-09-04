@@ -289,15 +289,39 @@ def attach_persistence(news_events: list[dict], news_items: list[dict],
 
 
 # ---------- L2 情感聚合(代码)----------
+def _news_scored(e: dict) -> bool:
+    """单条新闻事件是否「打分成功」(三态 ok/partial 的可信条目)。
+
+    三态契约(见设计 §二·条目级):区分「打分失败兜底」与「真的中性」。
+      - 显式 `scored` 字段(C 前向写入 / ai 注入)存在 → 直接取用;
+      - 否则回退启发式:带 `error` ⇒ 失败;有明确 `影响方向` ⇒ 成功;
+        两者皆无(抽取空壳,等价「评论+原因都空」)⇒ 失败。
+    """
+    if "scored" in e:
+        return bool(e["scored"])
+    if "error" in e:
+        return False
+    return "影响方向" in e
+
+
 def aggregate_sentiment(events: list[dict]) -> dict:
-    """把单票多条事件聚合成情绪分。无关条目按关系权重 0 剔除。"""
-    total, bull, bear, n = 0.0, 0, 0, 0
+    """把单票多条事件聚合成情绪分,并显式区分「打分失败」与「真中性」(三态)。
+
+    无关条目按关系权重 0 剔除(**不计失败**——那是成功打分只是与本股无关)。
+    净情绪只吃「打分成功」条目;`失败数` 计打分失败(scored:false/error/空壳)条数;
+    层 `status`:无新闻输入→missing,全失败→unknown,部分失败→partial,全成功→ok。
+    `样本数` 语义不变(= 进净情绪加权的成功且相关条数),旧消费方兼容。
+    """
+    total, bull, bear, n, fail = 0.0, 0, 0, 0, 0
     for e in events:
-        if "影响方向" not in e or "error" in e:
+        if not _news_scored(e):
+            fail += 1                       # 打分失败:不混入净情绪、单独计数(三态可见)
+            continue
+        if "影响方向" not in e:              # 防御:成功却无方向(理论不至,保守跳过不计失败)
             continue
         rel = _REL_W.get(e.get("与本股关系"), 0.5)
         if rel == 0:
-            continue
+            continue                        # 成功打分但与本股无关:剔除,不算失败
         sign = _DIR_SIGN.get(e.get("影响方向"), 0)
         try:
             strength = float(e.get("影响强度") or 1)
@@ -309,8 +333,18 @@ def aggregate_sentiment(events: list[dict]) -> dict:
             bull += 1
         elif sign < 0:
             bear += 1
+    scored_ok = sum(1 for e in events if _news_scored(e))
+    if not events:
+        status = "missing"                  # 无新闻输入
+    elif scored_ok == 0:
+        status = "unknown"                  # 有输入但全部打分失败
+    elif fail > 0:
+        status = "partial"                  # 部分失败
+    else:
+        status = "ok"
     return {"净情绪分": round(total / n, 3) if n else 0.0,
-            "利好数": bull, "利空数": bear, "样本数": n}
+            "利好数": bull, "利空数": bear, "样本数": n,
+            "失败数": fail, "status": status}
 
 
 # ---------- 政策层:逐条 LLM 打分(舆情三层之「政策」)----------
@@ -414,21 +448,31 @@ def ugc_sentiment(code: str, client=None, n: int = UGC_SAMPLE_N,
                   posts: list[dict] | None = None) -> dict:
     """读 UGC 缓存 → 取前 n 帖批量给 LLM 判整体情绪(经缓存)。
 
-    返回 {净情绪(-1~1), 多空, 样本数, 依据}。无 UGC 缓存 / LLM 失败 → 降级为
+    返回 {净情绪(-1~1), 多空, 样本数, 依据, status}。无 UGC 缓存 / LLM 失败 → 降级为
     中性 + degraded 标记(不抛,约法第5条)。
     posts:可传入已由上层 date-pin 解析好的帖子列表(analyze_stock 走此路);
     缺省 None → 自读 ug.load_ugc(code)(向后兼容既有调用方/测试)。
+
+    三态契约(见 docs/计划/2026-09-04_情绪打分失败三态_设计.md §二):此处是「失败静默兜底成
+    中性0」的活体入口——degraded 时 净情绪=0.0 与「真中性 0.0」不可区分。故每个返回都带显式
+    `status`,让下游 B 能判「此 0.0 是否可信」:
+      - status="ok":LLM 判分成功,0.0 是真中性;
+      - status="unknown":LLM 调用失败/降级(Connection error 等),0.0 不可信 → B 触发折价;
+      - status="missing":本就无 UGC 输入(无缓存/空),该层应退出加权。
+    ⚠️ C 只保证失败在返回结构里显式可见(加 status),不在此改聚合/把 0.0 改成 null——那是 B。
     """
     if posts is None:
         try:
             posts = ug.load_ugc(code)[:n]
         except FileNotFoundError as e:
             logger.warning("%s UGC 缓存缺失,舆情层降级:%s", code, e)
-            return {"净情绪": 0.0, "多空": "中性", "样本数": 0, "degraded": "no_ugc_cache"}
+            return {"净情绪": 0.0, "多空": "中性", "样本数": 0,
+                    "degraded": "no_ugc_cache", "status": "missing"}
     else:
         posts = posts[:n]
     if not posts:
-        return {"净情绪": 0.0, "多空": "中性", "样本数": 0, "degraded": "empty_ugc"}
+        return {"净情绪": 0.0, "多空": "中性", "样本数": 0,
+                "degraded": "empty_ugc", "status": "missing"}
 
     name, _ = resolve_name(code)          # 同新闻层:给 LLM 真名而非代码
     text = "\n".join(f"{i + 1}. {p.get('text', '')}" for i, p in enumerate(posts))
@@ -438,25 +482,60 @@ def ugc_sentiment(code: str, client=None, n: int = UGC_SAMPLE_N,
         r = _cached_extract(client, text, instr, prompts.UGC_SENTIMENT_SCHEMA)
     except Exception as e:
         logger.warning("%s UGC 情感 LLM 失败,降级:%s", code, str(e)[:80])
-        return {"净情绪": 0.0, "多空": "中性", "样本数": len(posts), "degraded": str(e)[:80]}
+        return {"净情绪": 0.0, "多空": "中性", "样本数": len(posts),
+                "degraded": str(e)[:80], "status": "unknown"}
     try:
         net = max(-1.0, min(1.0, float(r.get("净情绪") or 0.0)))
     except (TypeError, ValueError):
         net = 0.0
     return {"净情绪": round(net, 3), "多空": r.get("多空", "中性"),
-            "样本数": len(posts), "依据": r.get("依据", "")}
+            "样本数": len(posts), "依据": r.get("依据", ""), "status": "ok"}
 
 
 # ---------- 三层加权 ----------
-def _weighted_net(layers: dict[str, tuple[float, int]]) -> float:
-    """三层加权净情绪。layers: {层名: (净情绪, 样本数)}。仅对有样本的层加权并重归一。"""
-    num, den = 0.0, 0.0
-    for name, (net, cnt) in layers.items():
-        if cnt > 0:
-            w = _LAYER_W.get(name, 0.0)
+def _weighted_net(layers: dict[str, tuple[float, int, str]],
+                  min_coverage: float | None = None) -> tuple[float | None, float, str]:
+    """三层加权净情绪 + 覆盖率 + 顶层质量三态(核心修复:失败/缺失不再冒充中性 0.0)。
+
+    layers: {层名: (净情绪, 样本数, status)},status ∈ {ok, partial, unknown, missing}。
+    区分「该层无数据」与「该层打分失败」:
+      - **missing**(无输入):该层退出加权、**不入覆盖率分母**(合法缺失,不拉低质量);
+      - **unknown**(打分失败):其 0.0 **绝不作为真中性混入加权**——退出加权,但**计入覆盖率
+        分母**,把覆盖率拉低 → 触发顶层质量降级;
+      - **ok/partial**:正常参与加权(partial 层已在层内只用成功条目)。
+    覆盖率 = Σ(可用层权重) / Σ(可用层 + unknown 层权重);其余(missing/空)层不入分母。
+    质量:覆盖率 < 阈值 → **unknown**(净情绪=None,绝不写 0.0);否则有 unknown/partial 层 →
+          partial;否则 ok。若既无可用层也无失败层(全 missing/空)→ **missing**(净情绪=None)。
+    返回 (净情绪分|None, 覆盖率, 质量)。
+    """
+    if min_coverage is None:
+        min_coverage = getattr(settings, "SENTIMENT_MIN_COVERAGE", 0.3)
+    num, den = 0.0, 0.0                      # 可用层(ok/partial 且有样本)加权分子/分母
+    w_unknown = 0.0                          # 打分失败层权重(入覆盖率分母,不入加权)
+    has_partial = has_unknown = False
+    for name, tup in layers.items():
+        net, cnt, status = tup
+        w = _LAYER_W.get(name, 0.0)
+        if status == "unknown":
+            has_unknown = True
+            w_unknown += w                    # 失败:其 0.0 不混入加权,只拉低覆盖率
+            continue
+        if status == "missing":
+            continue                          # 无数据:退出加权、不入覆盖率分母(重归一)
+        if status == "partial":
+            has_partial = True
+        if cnt > 0 and status in ("ok", "partial"):
             num += w * net
             den += w
-    return round(num / den, 3) if den else 0.0
+    net_val = round(num / den, 3) if den else None
+    cover_den = den + w_unknown
+    覆盖率 = round(den / cover_den, 3) if cover_den else 0.0
+    if den <= 0 and w_unknown <= 0:
+        return None, 0.0, "missing"           # 全 missing/空:无可用也无失败
+    if 覆盖率 < min_coverage:
+        return None, 覆盖率, "unknown"         # 失败层主导 → 净情绪 null(不写 0.0)
+    质量 = "partial" if (has_unknown or has_partial) else "ok"
+    return net_val, 覆盖率, 质量
 
 
 # ---------- 编排 + 落盘 ----------
@@ -506,12 +585,20 @@ def analyze_stock(code: str, client=None, limit: int | None = None,
     pol_net, pol_n = _policy_layer_net(pol_items)
     pol_fresh, pol_asof = _policy_freshness(locked, max_stale_days, mode)
 
+    # 政策层状态:无命中条目→missing;有条目但无有效样本→unknown(打分失败);否则 ok。
+    if not pol_items:
+        pol_status = "missing"
+    elif pol_n <= 0:
+        pol_status = "unknown"
+    else:
+        pol_status = "ok"
     layers = {
-        "新闻": (news_agg["净情绪分"], news_agg["样本数"]),
-        "舆情": (float(ugc.get("净情绪") or 0.0), int(ugc.get("样本数") or 0)),
-        "政策": (pol_net, pol_n),
+        "新闻": (news_agg["净情绪分"], news_agg["样本数"], news_agg.get("status", "ok")),
+        "舆情": (float(ugc.get("净情绪") or 0.0), int(ugc.get("样本数") or 0),
+                 ugc.get("status", "ok")),
+        "政策": (pol_net, pol_n, pol_status),
     }
-    total = _weighted_net(layers)
+    total, 覆盖率, 质量 = _weighted_net(layers)
 
     # 政策条目并入 events(标注层=政策),使 events 覆盖三层来源
     pol_events = [{
@@ -529,9 +616,15 @@ def analyze_stock(code: str, client=None, limit: int | None = None,
     top_asof = _aggregate_asof([news_asof, ugc_asof, pol_asof])
 
     sentiment = {
-        **news_agg,                       # 兼容旧字段(利好数/利空数/样本数 为新闻口径)
-        "净情绪分": total,                # 三层加权后总分
+        # 兼容旧字段(利好数/利空数/样本数/失败数 均为**新闻口径**);顶层 status 用「质量」表达,
+        # 故此处不透传 news_agg 的层级 status(避免与顶层质量混淆),新闻层 status 见「三层.新闻」。
+        "利好数": news_agg["利好数"], "利空数": news_agg["利空数"],
+        "样本数": news_agg["样本数"], "失败数": news_agg.get("失败数", 0),
+        "净情绪分": total,                # 三层加权后总分;质量=unknown/missing 时为 None(不写 0.0)
         "口径": "三层加权 新闻0.5/政策0.3/舆情0.2,缺层重归一",
+        # —— 情绪三态(核心):质量 ∈ {ok,partial,unknown,missing},覆盖率 = 成功层加权占比 ——
+        "质量": 质量,
+        "覆盖率": 覆盖率,
         # —— 新增(附加、可选):顶层聚合新鲜度 ——
         "采集日期": top_asof,
         "新鲜度": top_fresh,
@@ -539,9 +632,10 @@ def analyze_stock(code: str, client=None, limit: int | None = None,
         "三层": {
             "新闻": {"净情绪": news_agg["净情绪分"], "样本数": news_agg["样本数"],
                      "利好数": news_agg["利好数"], "利空数": news_agg["利空数"],
+                     "失败数": news_agg.get("失败数", 0), "status": news_agg.get("status"),
                      "采集日期": news_asof, "新鲜度": news_fresh},
             "舆情": {**ugc, "采集日期": ugc_asof, "新鲜度": ugc_fresh},
-            "政策": {"净情绪": pol_net, "样本数": pol_n,
+            "政策": {"净情绪": pol_net, "样本数": pol_n, "status": pol_status,
                      "采集日期": pol_asof, "新鲜度": pol_fresh},
         },
     }

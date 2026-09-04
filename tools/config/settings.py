@@ -47,9 +47,16 @@ LLM_BASE_URL = os.getenv("LLM_BASE_URL", "")
 LLM_API_KEY = os.getenv("LLM_API_KEY", "")
 LLM_MODEL = "deepseek-v4-pro"   # 写死(env 不再设 LLM_MODEL;要换模型改这里)
 LLM_TIMEOUT = 60
-LLM_MAX_RETRY = 3
+LLM_MAX_RETRY = 3               # JSON 解析失败重试次数(client.extract 内)
+# —— LLM 瞬时故障重试(连接错误/超时/429限流/5xx,指数退避)——
+# 09-03 条目级 66% 失败疑并发打爆/限流:对瞬时错误重试而非直接降级成 scored:false,
+# 显著压低失败率;仍失败的才走 C1 显式失败标记。重试次数/退避基数单一出处在此,不硬编散落。
+LLM_RETRY_MAX = int(os.getenv("LLM_RETRY_MAX", "3"))               # 瞬时错误重试次数(初次外额外几次)
+LLM_RETRY_BACKOFF_BASE = float(os.getenv("LLM_RETRY_BACKOFF_BASE", "0.5"))  # 退避基数秒(第k次退避 base*2^k)
 # —— LLM 抽取提速(I/O 型,有界并发 + 送 LLM 条数上限)——
-LLM_EXTRACT_WORKERS = int(os.getenv("LLM_EXTRACT_WORKERS", "8"))   # 逐条抽取并发度(ThreadPool)
+# 并发度 09-03 由 8 下调到 4:高并发把内部网关打爆导致条目级 66% 失败(Connection error),
+# 4 是稳妥值——仍并行提速但不打爆端点;需要更快可经 env 覆盖但注意端点承压。
+LLM_EXTRACT_WORKERS = int(os.getenv("LLM_EXTRACT_WORKERS", "4"))   # 逐条抽取并发度(ThreadPool)
 NEWS_EXTRACT_MAX = int(os.getenv("NEWS_EXTRACT_MAX", "40"))        # 单票送 LLM 抽取的最近条数上限(原文仍全量落盘)
 # 关思考模式开关:实测对当前 deepseek-v4-pro 中性(网关本就不花时间思考),
 # 为将来换带思考模型自动生效预留;走 extra_body={"enable_thinking": False}。
@@ -91,6 +98,10 @@ BAIDU_NEWS_COLLECT = os.getenv("BAIDU_NEWS_COLLECT", "1") == "1"
 SENTIMENT_FRESHNESS_MODE = os.getenv("SENTIMENT_FRESHNESS_MODE", "A2")
 # A2 允许回退的窗口(以 raw 分区/采集周期为「交易日」代理计数);超此距离标「无数据」。
 SENTIMENT_MAX_STALE_DAYS = int(os.getenv("SENTIMENT_MAX_STALE_DAYS", "3"))
+# —— 情绪三态:顶层「有效层覆盖率」下限(见 docs/计划/2026-09-04_情绪打分失败三态_设计.md §二)——
+# 覆盖率 = 成功(ok/partial)层加权 / (成功层 + 打分失败(unknown)层)加权。低于此阈值判「质量=unknown」
+# → 净情绪分置 null(不写 0.0,避免打分失败被冒充成真中性)。无数据(missing)层不入分母、不拉低覆盖。
+SENTIMENT_MIN_COVERAGE = float(os.getenv("SENTIMENT_MIN_COVERAGE", "0.3"))
 # —— 新闻关系判定 prompt 名字兜底(防「name 缺失静默翻转成无关」)——
 # 开:当传入 LLM 的公司名与代码相等 / 形如纯数字 / 为空时,不生成「主体并非{name}即无关」
 # 那句约束(避免拿代码当公司名致本股新闻被误判无关),改用「以是否讲述该代码对应公司为准」。

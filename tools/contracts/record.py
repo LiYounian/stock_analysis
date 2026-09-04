@@ -27,6 +27,11 @@ ENUMS = {
     "与本股关系": ("直接", "间接", "无关"),        # sentiment.events[].与本股关系
     "财报评级": ("优", "良", "中", "差", "风险"),   # financial.评级(质地评分映射)
     "新鲜度": ("新鲜", "陈旧", "无数据"),           # sentiment(顶层/三层).新鲜度:date-pin 采集新鲜度三态
+    # 情绪**打分质量**三态(≠ 新鲜度):sentiment.质量 / 三层.<层>.status / provenance.sentiment。
+    # ok=打分成功可信(含真中性0.0);partial=部分层/条目失败;unknown=打分失败(净情绪已置 null,
+    # 不可信,别当中性);missing=无情绪输入。为什么与「新鲜度」分开——新鲜度问「数据多旧」,
+    # 质量问「这个数是不是打分失败冒充出来的」,处置完全不同(unknown 触发折价+门控弃权)。
+    "情绪质量": ("ok", "partial", "unknown", "missing"),
     "持续性": ("结构性持续", "短暂事件", "中性"),    # sentiment.events[].持续性:根源消息(公司行为)结构性 vs 短暂
     "印证强度": ("强", "中", "弱"),                 # sentiment.events[].印证强度 / 持续性研判.最强结构印证
     # provenance.口径.<维>.缺失原因:「无数据」再分两态。为什么必须分 —— 处置完全不同:
@@ -144,12 +149,16 @@ RECORD_SCHEMA = {
                   "买卖倾向{结论∈买卖倾向,得分,依据[]}, "
                   "消息面提示:str|null(第二步·保守版:纯文本提示看涨/看跌/中性,不改任何预测数字;旧记录无此字段/null 仍合规), "
                   "免责}",
-    "sentiment": "null | {净情绪分:-1~1, 利好数, 利空数, 样本数, "
+    "sentiment": "null | {净情绪分:-1~1|null(⚠️ 质量=unknown/missing 时为 **null**,绝不写 0.0——"
+                 "打分失败/无数据 ≠ 真中性), 利好数, 利空数, 样本数(成功且相关的新闻条数), 失败数(新闻打分失败条数), "
+                 "质量∈ok/partial/unknown/missing(情绪**打分质量**三态,≠新鲜度:ok=可信含真中性0.0,"
+                 "unknown=打分失败净情绪已置null,partial=部分层失败,missing=无输入), "
+                 "覆盖率:0~1(成功层加权 / (成功层+失败层)加权;<阈值 SENTIMENT_MIN_COVERAGE→质量unknown), "
                  "口径:str, "
                  "采集日期:date|null(顶层聚合=三层最旧层日期), "
                  "新鲜度:新鲜/陈旧/无数据|null(顶层聚合=最坏优先:任一层陈旧则陈旧,全无数据则无数据,否则新鲜), "
                  "锁定日期:date|null(本次运行锁定的交易日 active_date,诊断回退用:≠采集日期即回退), "
-                 "三层{新闻,舆情,政策}{...原字段, 采集日期:date|null, 新鲜度:新鲜/陈旧/无数据|null}, "
+                 "三层{新闻,舆情,政策}{...原字段, status∈ok/partial/unknown/missing, 采集日期:date|null, 新鲜度:新鲜/陈旧/无数据|null}, "
                  "持续性研判:null|{结构性利好数:int,结构性利空数:int,短暂事件数:int,已分类数:int,最强结构印证∈印证强度|null}"
                  "(附加可选;仅当有可分类的公司行为根源消息时出现;供下游倾斜结构性信号快速读), "
                  "events[]{影响方向∈影响方向,影响强度:1~5,与本股关系∈与本股关系,层∈情绪三层,标题,time, "
@@ -174,6 +183,8 @@ RECORD_SCHEMA = {
     "timeseries_refs": "{kline, fundflow, announcements}(文件路径指针)",
     "provenance": "{tech:bool, fundamental:bool, announcements:int, fundflow:bool, chip:bool, "
                   "consensus:bool, holder:bool, tick:bool, financing:bool, "
+                  "sentiment:ok/partial/unknown/missing(情绪**打分质量**三态,取自 sentiment.质量;"
+                  "**不再是隐式布尔/仅镜像新鲜度**——unknown=打分失败,下游据此折价/门控弃权), "
                   "口径:{<维>:{口径日期:date|null, 新鲜度:新鲜/陈旧/无数据, "
                   "缺失原因:未采集/源无数据|缺失(**仅当新鲜度=无数据时出现**;判不出则不写)}}}"
                   "(布尔位 = **该维实际是否拿到可用数据**,不是对块做 bool()——只剩"
@@ -236,6 +247,10 @@ def validate_record(rec: dict) -> list[str]:
                         f"(陈旧必须说清旧在哪:哪天的口径,或哪个报告期滞后)")
 
     prov = rec.get("provenance")
+    # provenance.sentiment:情绪打分质量三态(附加可选;旧记录无此键→None 宽容,一旦出现须合法)
+    if isinstance(prov, dict) and prov.get("sentiment") is not None \
+            and not _enum_ok(prov.get("sentiment"), "情绪质量"):
+        errs.append(f"provenance.sentiment 非法(应为情绪质量三态): {prov.get('sentiment')!r}")
     if isinstance(prov, dict) and isinstance(prov.get("口径"), dict):
         for dim, ent in prov["口径"].items():
             if not isinstance(ent, dict):
@@ -288,6 +303,13 @@ def validate_record(rec: dict) -> list[str]:
         # 新增(附加可选):新鲜度三态枚举 + 采集/锁定日期格式;null/缺失一律宽容(旧记录兼容)
         if not _enum_ok(sent.get("新鲜度"), "新鲜度"):
             errs.append(f"sentiment.新鲜度 非法: {sent.get('新鲜度')!r}")
+        # 情绪打分质量三态(附加可选):质量=unknown/missing 时净情绪分应为 null(不得为 0.0)——
+        # 锁住「打分失败/无数据 ≠ 真中性 0.0」这条语义红线。
+        if not _enum_ok(sent.get("质量"), "情绪质量"):
+            errs.append(f"sentiment.质量 非法: {sent.get('质量')!r}")
+        if sent.get("质量") in ("unknown", "missing") and sent.get("净情绪分") is not None:
+            errs.append(f"sentiment.质量={sent.get('质量')!r} 却给出净情绪分"
+                        f"{sent.get('净情绪分')!r}(打分失败/无数据必须为 null,不得冒充中性)")
         for dk in ("采集日期", "锁定日期"):
             dv = sent.get(dk)
             if dv is not None and not _DATE_RE.match(str(dv)):
@@ -299,6 +321,8 @@ def validate_record(rec: dict) -> list[str]:
                     continue
                 if not _enum_ok(lval.get("新鲜度"), "新鲜度"):
                     errs.append(f"sentiment.三层.{lname}.新鲜度 非法: {lval.get('新鲜度')!r}")
+                if not _enum_ok(lval.get("status"), "情绪质量"):
+                    errs.append(f"sentiment.三层.{lname}.status 非法: {lval.get('status')!r}")
                 av = lval.get("采集日期")
                 if av is not None and not _DATE_RE.match(str(av)):
                     errs.append(f"sentiment.三层.{lname}.采集日期 非日期: {av!r}")

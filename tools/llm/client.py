@@ -9,11 +9,48 @@ from __future__ import annotations
 import json
 import logging
 import re
+import time
 from typing import Protocol
 
 from tools.config import settings
 
 logger = logging.getLogger("llm.client")
+
+# 瞬时错误关键词兜底:网关有时抛裸 Exception(非 openai 异常类型),按消息识别可重试类。
+_TRANSIENT_KEYWORDS = (
+    "connection error", "connection aborted", "connection reset",
+    "timeout", "timed out", "rate limit", "too many requests",
+    "temporarily", "try again", "429", "500", "502", "503", "504",
+    "service unavailable", "bad gateway", "gateway timeout",
+)
+
+
+def _is_transient_error(exc: Exception) -> bool:
+    """判断异常是否瞬时可重试(连接/超时/限流/5xx)。
+
+    优先按 openai SDK 异常类型判(APIConnectionError/APITimeoutError/RateLimitError/
+    InternalServerError + APIStatusError 的 429/5xx);openai 未装或裸 Exception 时按消息
+    关键词兜底(09-03 大面积 `Connection error.` 即 openai.APIConnectionError 的 str)。
+    """
+    try:
+        import openai
+        typed = tuple(
+            t for t in (
+                getattr(openai, "APIConnectionError", None),
+                getattr(openai, "APITimeoutError", None),
+                getattr(openai, "RateLimitError", None),
+                getattr(openai, "InternalServerError", None),
+            ) if isinstance(t, type)
+        )
+        if typed and isinstance(exc, typed):
+            return True
+        status = getattr(exc, "status_code", None)
+        if isinstance(status, int) and (status == 429 or status >= 500):
+            return True
+    except Exception:               # openai 未装/导入异常:退回关键词兜底
+        pass
+    msg = str(exc).lower()
+    return any(k in msg for k in _TRANSIENT_KEYWORDS)
 
 
 class LLMClient(Protocol):
@@ -61,14 +98,39 @@ class OpenAICompatClient:
             temperature=temperature, max_tokens=max_tokens, **extra)
         return r.choices[0].message.content or ""
 
+    def _chat_with_retry(self, messages, *, temperature) -> str:
+        """chat + 瞬时错误(连接/超时/429/5xx)指数退避重试。
+
+        非瞬时错误(如鉴权 401、请求体错误)立即抛出不重试;瞬时错误重试
+        settings.LLM_RETRY_MAX 次(第 k 次退避 base*2^k 秒),仍失败则抛出最后一个异常——
+        由上层 event._one/ugc_sentiment 捕获转成 C1 的显式失败标记,绝不冒充成功。
+        """
+        last_err = None
+        for attempt in range(settings.LLM_RETRY_MAX + 1):
+            try:
+                return self.chat(messages, temperature=temperature)
+            except Exception as e:                    # noqa: BLE001 需按类型/消息二次判定
+                if not _is_transient_error(e) or attempt >= settings.LLM_RETRY_MAX:
+                    raise
+                last_err = e
+                delay = settings.LLM_RETRY_BACKOFF_BASE * (2 ** attempt)
+                logger.warning("LLM 瞬时错误(第%d/%d次重试,退避%.2fs):%s",
+                               attempt + 1, settings.LLM_RETRY_MAX, delay, str(e)[:60])
+                time.sleep(delay)
+        raise last_err                                # 理论到不了(循环内已 return/raise)
+
     def extract(self, text, schema, *, instruction, temperature=0.0) -> dict:
-        """结构化抽取:强制 JSON + 解析失败重试;超次数抛错(不静默返空,约法第5条)。"""
+        """结构化抽取:强制 JSON + 解析失败重试;超次数抛错(不静默返空,约法第5条)。
+
+        底层 chat 调用带瞬时错误(连接/超时/限流/5xx)指数退避重试(_chat_with_retry),
+        与此处的 JSON 解析重试分层:瞬时故障先被重试压低失败率,仍失败才上抛。
+        """
         sys = (f"{instruction}\n"
                f"只输出一个 JSON,不要任何多余文字/解释。JSON 字段与含义:"
                f"{json.dumps(schema, ensure_ascii=False)}")
         last_err = None
         for attempt in range(settings.LLM_MAX_RETRY):
-            content = self.chat(
+            content = self._chat_with_retry(
                 [{"role": "system", "content": sys}, {"role": "user", "content": text}],
                 temperature=temperature)
             try:

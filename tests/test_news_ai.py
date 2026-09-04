@@ -58,9 +58,11 @@ def test_enrich_news_merges_ai(monkeypatch):
     assert a["title"] == "A利好公告" and a["content"] == "正文A"
     assert a["source"] == "东财" and a["url"] == "http://a"
     assert a["ai"] == {"方向": "利好", "强度": 4, "与本股关系": "直接",
-                       "评论": "看好A", "原因": "获政府补贴"}
+                       "评论": "看好A", "原因": "获政府补贴", "scored": True}
+    assert a["ai"]["scored"] is True                       # 打分成功(三态 ok)
     assert b["ai"]["方向"] == "利空" and b["ai"]["强度"] == 3
     assert b["ai"]["评论"] == "暂无"                        # 摘要空 → 暂无
+    assert b["ai"]["scored"] is True                       # 有影响方向 → 成功,真中性另说
 
 
 def test_enrich_news_degrades_on_llm_error(monkeypatch):
@@ -76,7 +78,9 @@ def test_enrich_news_degrades_on_llm_error(monkeypatch):
     assert len(out) == 2
     for o in out:
         assert o["ai"] == {"方向": "中性", "强度": 0, "与本股关系": "",
-                           "评论": "", "原因": ""}
+                           "评论": "", "原因": "", "scored": False}
+        # 失败态显式标 scored:false —— 与「真中性(scored:true)」字段可区分,不可再合并
+        assert o["ai"]["scored"] is False
 
 
 def test_enrich_news_degrades_bad_item(monkeypatch):
@@ -92,7 +96,9 @@ def test_enrich_news_degrades_bad_item(monkeypatch):
 
     out = news_ai.enrich_news("000021")
     assert out[0]["ai"]["方向"] == "利好" and out[0]["ai"]["原因"] == ""   # 无原因字段 → 空串
+    assert out[0]["ai"]["scored"] is True                          # 成功条
     assert out[1]["ai"]["方向"] == "中性" and out[1]["ai"]["强度"] == 0
+    assert out[1]["ai"]["scored"] is False                         # error 条 → 失败态
 
 
 def test_enrich_news_no_raw_returns_empty(monkeypatch):
@@ -131,8 +137,9 @@ def test_enrich_news_extract_capped_at_budget(monkeypatch):
     assert seen["n_extracted"] == cap              # 实际只对 cap 条送 LLM(不泄漏)
     assert len(out) == n_items                     # 原文全量落盘,输出长度对齐
     assert out[0]["ai"]["方向"] == "利好"           # 前 cap 条拿到真实抽取
+    assert out[0]["ai"]["scored"] is True
     assert out[cap]["ai"] == {"方向": "中性", "强度": 0, "与本股关系": "",
-                              "评论": "", "原因": ""}  # 超限条降级中性
+                              "评论": "", "原因": "", "scored": False}  # 超限条降级(失败态)
 
 
 def test_write_news_ai_persists(store, monkeypatch):
