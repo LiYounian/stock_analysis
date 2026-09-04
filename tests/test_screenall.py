@@ -62,10 +62,12 @@ def _stub_stage2(monkeypatch, calls):
     monkeypatch.setattr(run, "enrich_candidates", _enrich)
 
 
-def _stub_screeners(monkeypatch, picks_by_strategy, raise_for=None):
+def _stub_screeners(monkeypatch, picks_by_strategy, raise_for=None, edges_by_strategy=None):
     """monkeypatch 在产 run_*_screen 返回小假 view;raise_for 指定的策略抛错(测 _safe 隔离)。
 
     picks_by_strategy: {"council":[...], "s02":[...], "momentum":[...]}
+    edges_by_strategy(#23,可选): {"council":[...], ...} → 给该 view 加 `边缘候选`(排序型才落此字段);
+      默认 None → 不加(退回旧行为,analysis_set==llm_subset)。
     council 落 `top`(打分型),其余落 `入选清单`(规则型)——与真实脚本字段一致。
     (S01/箱体3 已下线,不再桩接。)
 
@@ -74,21 +76,29 @@ def _stub_screeners(monkeypatch, picks_by_strategy, raise_for=None):
     本文件里的语义贡献恒为"选出 0 只"(假 codes 选不出票),故桩成空 view 后断言完全等价,
     只是不再触网/不再落盘。各 screener 自身的选股语义由其独立单测锁。
     """
-    def mk(view_key, codes, raising):
+    edges_by_strategy = edges_by_strategy or {}
+
+    def mk(view_key, codes, raising, edges=None):
         def _f(codes_all, as_of=None, fetch=True, **k):
             if raising:
                 raise RuntimeError("screener boom")
             items = [{"code": c} for c in codes]
-            return {view_key: items}
+            view = {view_key: items}
+            if edges:
+                view["边缘候选"] = list(edges)
+            return view
         return _f
 
     raise_for = raise_for or set()
     monkeypatch.setattr(screen_council, "run_council_screen",
-                        mk("top", picks_by_strategy["council"], "council" in raise_for))
+                        mk("top", picks_by_strategy["council"], "council" in raise_for,
+                           edges_by_strategy.get("council")))
     monkeypatch.setattr(screen_s02, "run_s02_screen",
-                        mk("入选清单", picks_by_strategy["s02"], "s02" in raise_for))
+                        mk("入选清单", picks_by_strategy["s02"], "s02" in raise_for,
+                           edges_by_strategy.get("s02")))
     monkeypatch.setattr(screen_momentum, "run_momentum_screen",
-                        mk("入选清单", picks_by_strategy["momentum"], "momentum" in raise_for))
+                        mk("入选清单", picks_by_strategy["momentum"], "momentum" in raise_for,
+                           edges_by_strategy.get("momentum")))
     # 其余在产 screener:桩成"选出 0 只"的空 view(与它们在假 codes 上的真实贡献一致)
     for mod, fname in ((screen_semi_factor, "run_semi_factor_screen"),
                        (screen_max_range, "run_max_range_screen"),
@@ -155,6 +165,94 @@ def test_enrich_topk_bounds_candidate_set(monkeypatch):
     # serialize 仍对全 llm_subset(不因富集集收窄而缩记录)
     ser_arg = next(a for n, a, *_ in calls if n == "run_serialize")
     assert ser_arg == out["llm_subset_codes"]
+
+
+# ———————————— #23 深采分层门控:边缘候选拿数值面深采,新闻/LLM 不扩 ————————————
+def _numeric_face_calls(calls):
+    """6 类数值面深采 + 组装/合议/横表 的入参(应对 analysis_set,含边缘候选)。"""
+    return ("collect_values_missing", "collect_ticks", "run_serialize",
+            "run_events", "run_factor", "run_council", "run_panel", "run_screen")
+
+
+def test_edge_candidates_get_numeric_face_but_not_llm(monkeypatch):
+    """#23 核心语义(守则6):边缘候选进 analysis_set 拿 6 类数值面深采(fundflow/chip/holder_num/
+    block_trade/tick/consensus + serialize/事件/因子/合议/横表);新闻/LLM 情绪(enrich_candidates)
+    坚决**不扩**、仍只对 llm_subset(cand_set)。断开"未选中→缺数据→弃权→软收缩降权→更不选中"的环。"""
+    monkeypatch.setattr(run.settings, "SCREENALL_EDGE_MAX", 300)
+    calls: list[tuple] = []
+    _stub_stage2(monkeypatch, calls)
+    _stub_screeners(monkeypatch, {
+        "council": ["C1", "C2"], "s02": [], "momentum": ["M1"],
+    }, edges_by_strategy={
+        "council": ["E1", "E2", "C1"],   # C1 已入选 → 去重不重复计入边缘
+        "momentum": ["E2", "E3"],        # E2 与 council 边缘重叠 → 去重
+    })
+
+    out = run.run_screen_all(["A"], "2026-08-11")
+
+    # llm_subset = union ∪ 自选(不含边缘候选)
+    assert out["llm_subset_codes"] == ["C1", "C2", "M1", "WATCH1", "WATCH2"]
+    # 边缘候选 = 各策略边缘并集去重、剔除已在 llm_subset 的(C1)→ E1/E2/E3
+    assert out["edge_candidates"] == ["E1", "E2", "E3"]
+    # analysis_set = llm_subset ∪ 边缘候选
+    assert out["analysis_set_codes"] == ["C1", "C2", "M1", "WATCH1", "WATCH2", "E1", "E2", "E3"]
+
+    # 数值面深采 + 组装/合议/横表 全对 analysis_set(含边缘候选)
+    for name in _numeric_face_calls(calls):
+        arg = next(a for n, a, *_ in calls if n == name)
+        assert arg == out["analysis_set_codes"], f"{name} 应对 analysis_set(含边缘),实际 {arg}"
+        assert "E1" in arg and "E2" in arg and "E3" in arg, f"{name} 缺边缘候选"
+
+    # 新闻/LLM(enrich_candidates)坚决不扩:只对 cand_set(==llm_subset),边缘候选一个不进
+    enrich_arg = next(a for n, a, *_ in calls if n == "enrich_candidates")
+    assert enrich_arg == out["llm_subset_codes"]
+    for e in ("E1", "E2", "E3"):
+        assert e not in enrich_arg, "新闻/LLM 情绪不得扩到边缘候选(控成本)"
+
+
+def test_edge_set_bounded_by_global_cap(monkeypatch):
+    """#23 成本硬约束:边缘候选全局受 SCREENALL_EDGE_MAX 封顶(防对全A深采)。"""
+    monkeypatch.setattr(run.settings, "SCREENALL_EDGE_MAX", 2)     # 全局只留 2 只边缘
+    calls: list[tuple] = []
+    _stub_stage2(monkeypatch, calls)
+    _stub_screeners(monkeypatch, {
+        "council": ["C1"], "s02": [], "momentum": [],
+    }, edges_by_strategy={"council": ["E1", "E2", "E3", "E4", "E5"]})
+
+    out = run.run_screen_all(["A"], "2026-08-11")
+
+    # 5 只边缘候选被全局上界砍到 2 只
+    assert out["edge_candidates"] == ["E1", "E2"]
+    assert out["analysis_set_codes"] == ["C1", "WATCH1", "WATCH2", "E1", "E2"]
+    ser_arg = next(a for n, a, *_ in calls if n == "run_serialize")
+    assert ser_arg == out["analysis_set_codes"]
+
+
+def test_edge_cap_zero_disables_tiered_gate(monkeypatch):
+    """SCREENALL_EDGE_MAX=0 → 分层门控关闭,analysis_set 退回 llm_subset(旧行为,一键回退)。"""
+    monkeypatch.setattr(run.settings, "SCREENALL_EDGE_MAX", 0)
+    calls: list[tuple] = []
+    _stub_stage2(monkeypatch, calls)
+    _stub_screeners(monkeypatch, {
+        "council": ["C1"], "s02": [], "momentum": [],
+    }, edges_by_strategy={"council": ["E1", "E2"]})
+
+    out = run.run_screen_all(["A"], "2026-08-11")
+
+    assert out["edge_candidates"] == []
+    assert out["analysis_set_codes"] == out["llm_subset_codes"]
+    for name in _numeric_face_calls(calls):
+        arg = next(a for n, a, *_ in calls if n == name)
+        assert arg == out["llm_subset_codes"]
+
+
+def test_edges_from_view_extractor():
+    """_edges_from_view 兼容有/无 边缘候选 字段;None/非 list 安全返回空。"""
+    assert run._edges_from_view({"边缘候选": ["A", "B"]}) == ["A", "B"]
+    assert run._edges_from_view({"入选清单": [{"code": "X"}]}) == []   # 信号型无此字段
+    assert run._edges_from_view({"边缘候选": [1, "B", None, ""]}) == ["B"]  # 脏元素过滤
+    assert run._edges_from_view(None) == []
+    assert run._edges_from_view({"边缘候选": "notlist"}) == []
 
 
 def test_one_screener_failure_isolated(monkeypatch):

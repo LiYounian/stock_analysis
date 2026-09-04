@@ -1012,6 +1012,21 @@ def _picks_from_view(view: dict | None) -> list[str]:
     return []
 
 
+def _edges_from_view(view: dict | None) -> list[str]:
+    """从单个 screener view 抽出「边缘候选」code(#23 深采分层门控)。
+
+    排序型 screener(council/momentum/半导体/反转)在 view 里落 `边缘候选`(入选之外前 K 只 code,
+    见 tools.pipeline.edge.edge_slice);信号型/未接入的 screener 无此字段 → 返回空(优雅降级,
+    首版只覆盖排序型,信号型「差一个条件」口径见设计 §六 开放项)。view 为 None/字段缺失 → 空。
+    """
+    if not isinstance(view, dict):
+        return []
+    e = view.get("边缘候选")
+    if not isinstance(e, list):
+        return []
+    return [c for c in e if isinstance(c, str) and c]
+
+
 def run_screen_all(codes_all: list[str], as_of: str, no_llm: bool = False,
                    no_fetch: bool = False) -> dict:
     """全A 多策略选股 → 只对(各策略选出并集 ∪ 自选)做新闻/LLM/合议。
@@ -1027,10 +1042,17 @@ def run_screen_all(codes_all: list[str], as_of: str, no_llm: bool = False,
       ②  跑各在产全A screener(council/s02/momentum/半导体/S03/S04/最强/反转/条件化;
           S01 趋势深跌反包 与 箱体3 已因显著负下线摘除),均 fetch=False 读步骤①主档,不重采;
           各 _safe 隔离——单个 screener 失败降级跳过,不中止其余。
-      ③  union_picks = 各 screener picks 并集(去重保序)。
-      ④  llm_subset = union_picks ∪ 自选池(去重)——新闻/LLM 只对这批。
-      ⑤  补缺数值面(skip-if-cached)→ 新闻(no_llm 跳过)→ 板块指数 → LLM 情绪(no_llm 跳过)→
-          组装/事件/多因子/合议 → 横表/选股视图,全对 llm_subset。
+      ③  union_picks = 各 screener picks 并集(去重保序);edge_union = 各排序型 screener「边缘候选」并集。
+      ④  llm_subset = union_picks ∪ 自选池(去重)——新闻/LLM 只对这批(最贵,坚决不扩);
+          analysis_set = llm_subset ∪ 边缘候选(有界,#23 深采分层门控)——6 类数值面深采扩到这批。
+      ⑤  补缺数值面/逐笔/组装/事件/多因子/合议/横表/选股视图 对 analysis_set(边缘票拿数值面公允合议分);
+          新闻(no_llm 跳过)→ LLM 情绪(no_llm 跳过)→ 财报文本 只对 cand_set(⊆ llm_subset)。
+
+    #23 深采分层门控(docs/计划/2026-09-04_深采分层门控_设计.md):原深采票池二值门控(∈选出∪自选→
+    全套深采,否则 0 文件)造成循环盲区——未选中→数值面缺→合议专家弃权→软收缩降权→更不被选中。
+    移植 two_stage 三层门控:新增「边缘候选」层(紧挨入选之外的票,各排序型 screener 落 view.边缘候选)
+    拿 6 类**数值面**深采(fundflow/chip/holder_num/block_trade/tick/consensus),破环;新闻/LLM 情绪
+    (最贵)坚决不扩、仍限 llm_subset。边缘集有界(每策略 SCREENALL_EDGE_TOPK、全局 SCREENALL_EDGE_MAX)。
     """
     # 注:screen_s01(趋势深跌反包)/ screen_box(箱体3)已因全史深诊断显著负下线,
     # 不再进本编排(代码存档保留,见各文件顶部说明)。
@@ -1090,17 +1112,22 @@ def run_screen_all(codes_all: list[str], as_of: str, no_llm: bool = False,
     }
     from tools.sync.upload import VIEW_SHARD_PREFIX as _VPREFIX
     union: list[str] = []
+    edge_union: list[str] = []                       # #23 各排序型策略「边缘候选」并集(供 analysis_set 数值面深采)
     strategy_picks: list[list[str]] = []            # 各策略有序选出票(供候选集按每策略前 M 切片)
     per_strategy: dict[str, int] = {}
+    per_strategy_edge: dict[str, int] = {}
     picks_by_view: dict[str, list[str]] = {}        # view 名 → picks(供多策略命中闸门归族/计数)
     for label, fn in screeners:
         view = _safe(f"{label} 全A筛选", fn)
         picks = _picks_from_view(view)
+        edges = _edges_from_view(view)
         per_strategy[label] = len(picks)
+        per_strategy_edge[label] = len(edges)
         union.extend(picks)
+        edge_union.extend(edges)
         strategy_picks.append(picks)
         picks_by_view[_screener_view.get(label, label)] = picks
-        logger.info("  %s 入选 %d", label, len(picks))
+        logger.info("  %s 入选 %d(边缘候选 %d)", label, len(picks), len(edges))
         # 流式增量推:该策略 view 落盘后立即推(抗断点——某策略/网络失败不影响已推的;末尾兜底补漏)
         vname = _screener_view.get(label)
         if view is not None and vname:
@@ -1108,39 +1135,51 @@ def run_screen_all(codes_all: list[str], as_of: str, no_llm: bool = False,
 
     union_picks = _dedup(union)                     # 各策略选出票并集(去重保序)
     watch = stock_pool.get_codes()
-    llm_subset = _dedup(union_picks + watch)         # 数值/serialize/因子/合议/横表 对这批(无 LLM,覆盖全并集,记录/网页不缩)
-    # —— 候选定向富集集:默认= llm_subset(所有被 serialize 成 record 的票,airtight);
-    #    SCREENALL_ENRICH_TOPK=M>0 时收窄为 每策略前 M ∪ 自选(限成本)。见 enrich_topk 注释。
+    llm_subset = _dedup(union_picks + watch)         # 新闻/LLM 情绪 对这批(最贵,坚决不扩,控成本)
+    # —— #23 深采分层门控:analysis_set = llm_subset ∪ 边缘候选(有界)——
+    #    6 类**数值面**深采(fundflow/chip/holder_num/block_trade/tick/consensus)+ serialize/事件/因子/
+    #    合议/横表 扩到 analysis_set,让紧挨入选之外的边缘票拿到数值面公允合议分、不因无数据弃权被软收缩
+    #    降权,断开"未选中→缺数据→降权→更不选中"的环。新闻/LLM 情绪**不扩**(仍限 llm_subset)。
+    #    成本硬约束:边缘集每策略前 SCREENALL_EDGE_TOPK(edge.edge_slice 封顶)、全局 SCREENALL_EDGE_MAX
+    #    二次封顶;吃缓存跳采(consensus 5 天/holder 28 天新鲜度门控)。上界=0 → 边缘集空 → 退回旧行为。
+    edge_cap = int(getattr(settings, "SCREENALL_EDGE_MAX", 0) or 0)
+    edge_only = [c for c in _dedup(edge_union) if c not in set(llm_subset)]
+    edge_candidates = edge_only[:edge_cap] if edge_cap > 0 else []
+    analysis_set = _dedup(llm_subset + edge_candidates)
+    # —— 候选定向富集集(新闻/LLM/财报,最贵):默认= llm_subset(所有被 serialize 成 record 的选出票,airtight);
+    #    SCREENALL_ENRICH_TOPK=M>0 时收窄为 每策略前 M ∪ 自选(限成本)。见 enrich_topk 注释。**不含边缘候选**。
     if enrich_topk > 0:
         cand_set = _dedup([c for ps in strategy_picks for c in ps[:enrich_topk]] + watch)
     else:
         cand_set = llm_subset
-    logger.info("各策略入选:%s;union=%d,分析集(∪自选)=%d,候选富集集(%s)=%d",
-                per_strategy, len(union_picks), len(llm_subset),
+    logger.info("各策略入选:%s;各策略边缘:%s;union=%d,llm_subset(∪自选)=%d,"
+                "边缘候选(封顶%d)=%d,analysis_set=%d,候选富集集(%s)=%d",
+                per_strategy, per_strategy_edge, len(union_picks), len(llm_subset),
+                edge_cap, len(edge_candidates), len(analysis_set),
                 f"每策略前{enrich_topk}∪自选" if enrich_topk > 0 else "= llm_subset", len(cand_set))
 
-    # —— 阶段②:数值面补缺 对 llm_subset ——
-    collect_values_missing(llm_subset)               # 补 K线/基本面/公告/资金流(无 LLM,skip-if-cached)
+    # —— 阶段②:数值面深采 对 analysis_set(含边缘候选,#23)——
+    collect_values_missing(analysis_set)             # 补 K线/基本面/公告/资金流/筹码/一致预期(无 LLM,skip-if-cached)
     collect_market_context()                         # 全市场指数(每轮一次、非逐票)→ RRG 专家
     # —— 候选定向富集:对候选集**确保**新闻→LLM情绪→财报(三表+年报+文本)→资金流,
     #    使任何可能成为深度分析/买入候选的票都有系统全套数据(修"买入候选反而无数据"硬伤)。
     #    幂等/skip-if-cached/优雅降级/防未来函数;须在 serialize 前(serialize 读这批已采数据组装 record)。
+    #    只对 cand_set(⊆ llm_subset)——新闻/LLM 情绪坚决不扩到边缘候选(最贵,控成本)。
     if no_llm:
         logger.info("数据-only 模式:候选富集跳过 LLM 情绪 + 财报文本层(情绪三层专家将弃权)")
     enrich_report = enrich_candidates(cand_set, as_of, no_llm=no_llm)
     # 逐笔盘口归档(collect_ticks):须在 serialize 前——serialize 的 tick 块按 as_of date-pin 读当日摘要,
-    # 先采后组装才进 record/个股页卡片。只对 llm_subset(选出并集∪自选,票池级、量可控),
-    # 不进全A codes_all(逐笔量大)——与合作者「票池级、不进全A」设计一致,让逐笔在生产 screenall 闭环自动采。
-    collect_ticks(llm_subset)
-    run_serialize(llm_subset, as_of)
-    run_events(llm_subset, as_of)
-    run_factor(llm_subset, as_of)
-    run_council(llm_subset, as_of)
+    # 先采后组装才进 record/个股页卡片。对 analysis_set(含边缘候选,票池级、有界)——逐笔是 6 类数值面之一。
+    collect_ticks(analysis_set)
+    run_serialize(analysis_set, as_of)
+    run_events(analysis_set, as_of)
+    run_factor(analysis_set, as_of)
+    run_council(analysis_set, as_of)                 # 边缘票获数值面公允合议分(情绪/新闻专家因无数据自然弃权)
     # 流式增量推:record 含完整 council 后按批推(分片 key=code;抗断点——某批/网络失败不影响其余,末尾兜底补漏)
-    for _b in _chunks(llm_subset, settings.STREAM_RECORD_BATCH):
+    for _b in _chunks(analysis_set, settings.STREAM_RECORD_BATCH):
         _push_incremental(as_of, set(_b))
-    run_panel(llm_subset)
-    run_screen(llm_subset)
+    run_panel(analysis_set)
+    run_screen(analysis_set)
     # —— 多策略命中「同源信号闸门」(选股汇总层·统一一处):独立口径命中数替代命中数 +
     #    游资情绪过热多轴前置闸 + 统一风控 veto 汇聚复用。kill-switch(config 多策略命中闸门.启用)。
     #    只读已落盘的 picks/财报/龙虎榜/K线,失败降级不中止闭环;产物落 view 供选股/SOP 消费。
@@ -1153,13 +1192,16 @@ def run_screen_all(codes_all: list[str], as_of: str, no_llm: bool = False,
     # —— 前向观察:龙虎榜轴命中票逐日滚存记分卡(降权前后排名 + K线到期自动回填 T+1/T+5 与见光死标记)。
     #    persist=False 复算全票排名不覆盖闭环已落 view;仅观察、不影响选股;失败降级不中止。
     _safe("龙虎榜前向记分卡", lambda: _update_lhb_scorecard(as_of))
-    logger.info("===== 全A多策略选股完成 → data/analysis/%s/;union=%d,llm_subset=%d 只含完整合议;"
-                "候选富集 %d 只(%s)=====",
-                as_of, len(union_picks), len(llm_subset),
+    logger.info("===== 全A多策略选股完成 → data/analysis/%s/;union=%d,llm_subset=%d,analysis_set=%d 只含完整合议"
+                "(边缘候选 %d 只拿数值面深采);候选富集 %d 只(%s)=====",
+                as_of, len(union_picks), len(llm_subset), len(analysis_set), len(edge_candidates),
                 enrich_report.get("candidates", 0), enrich_report.get("summary", ""))
     return {"as_of": as_of, "扫描": len(codes_all), "各策略入选": per_strategy,
+            "各策略边缘": per_strategy_edge,
             "union": len(union_picks), "llm_subset": len(llm_subset),
+            "边缘候选": len(edge_candidates), "analysis_set": len(analysis_set),
             "union_picks": union_picks, "llm_subset_codes": llm_subset,
+            "edge_candidates": edge_candidates, "analysis_set_codes": analysis_set,
             "候选富集": enrich_report}
 
 
