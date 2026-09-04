@@ -12,6 +12,8 @@
 - **扩召回(可选,fetch_news(recall=True))**:按**行业主题词**召回未挂到个股的行业/宏观/管制
   消息 → LLM 宁严相关性初筛只留直接相关 → 并入(见 collectors.news_recall)。仅调用方开启时生效。
 三/四源正交去重合并,meta.source 记实际贡献源(如 "eastmoney+新浪+财联社电报+扩召回")。
+- **同源去重(#30)**:合并后再跑「业绩快报/预告 → 正式定期报告」同源去重——同一份报告的两次
+  披露(快报在前、正式报在后)是同一件事的两个口径,窗口内保留正式报、丢弃快报,不当两条独立利好。
 落盘:走 store 层(kind="news",json,原始新闻保留供 L1 抽取)。
 契约见 docs/计划/P2C_新闻情绪LLM.md。
 """
@@ -161,6 +163,61 @@ def _dedup_merge(*sources: list[dict]) -> list[dict]:
     return merged
 
 
+# —— 业绩快报/预告 与 正式定期报告 同源去重(#30)——
+# 「业绩快报/预告」是定期报告的先行口径,同一份报告的两次披露(快报→正式报)不应被当两条
+# 独立利好。用「时间窗」代替脆弱的报告期文本解析:同一票快报与正式报相距通常远小于窗口天数,
+# 跨报告期的两份正式报相距约 90 天,45 天窗口不会误并跨期事件。
+_PRELIM_KW = ("业绩快报", "快报", "业绩预告", "预告", "业绩预增", "业绩预减", "预盈", "预亏")
+_FORMAL_RPT_KW = ("半年报", "半年度报告", "中报", "中期报告", "年报", "年度报告",
+                  "一季报", "三季报", "季报", "季度报告", "定期报告")
+
+
+def _earnings_kind(title: str) -> str | None:
+    """判新闻的业绩披露口径:'preliminary'(快报/预告)/ 'formal'(正式定期报告)/ None(非业绩)。
+
+    先行口径(含「快报」「预告」等)优先判为 preliminary;否则命中正式定期报告词判 formal。
+    仅据标题子串,拿不准(无任何关键词)→ None,不参与同源去重(保守,不误删)。
+    """
+    t = title or ""
+    if any(k in t for k in _PRELIM_KW):
+        return "preliminary"
+    if any(k in t for k in _FORMAL_RPT_KW):
+        return "formal"
+    return None
+
+
+def _dedup_earnings_same_event(items: list[dict], window_days: int) -> list[dict]:
+    """同源去重:业绩快报/预告 与 window_days 内的正式定期报告判为同一业绩事件,只留正式报。
+
+    - 保留全部正式报(权威、终值)与全部非业绩新闻,原序不动。
+    - 每条 preliminary 若存在时间相距 ≤ window_days 的 formal → 丢弃(被正式报吸收);
+      窗口内无 formal(正式报尚未披露)→ 保留(彼时它就是最新信息)。
+    纯函数、不触网、与 url/title 去重正交(在其之后跑)。时间取 time[:10] 按日比较。
+    """
+    def _day(it: dict):
+        d = str(it.get("time", ""))[:10]
+        try:
+            return pd.Timestamp(d)
+        except (ValueError, TypeError):
+            return None
+
+    formals = [d for d in (_day(it) for it in items
+                           if _earnings_kind(it.get("title", "")) == "formal") if d is not None]
+    if not formals:
+        return items                         # 无正式报,无可吸收,原样返回
+    win = pd.Timedelta(days=window_days)
+    out: list[dict] = []
+    for it in items:
+        if _earnings_kind(it.get("title", "")) == "preliminary":
+            d = _day(it)
+            if d is not None and any(abs(d - f) <= win for f in formals):
+                logger.debug("同源去重:业绩快报/预告『%s』被 %d 天内正式报吸收",
+                             str(it.get("title", ""))[:40], window_days)
+                continue                     # 被正式报吸收,丢弃
+        out.append(it)
+    return out
+
+
 def _fetch_cls(code: str, cutoff: str) -> list[dict]:
     """备源:财联社电报(全市场)按股票名过滤成个股新闻。
 
@@ -263,6 +320,10 @@ def fetch_news(codes: list[str], days: int | None = None,
         # 多源去重合并(东财→新浪→财联社→扩召回,先到者留)→ 统一按 cutoff 过滤 → 倒序
         items = [it for it in _dedup_merge(em_items, sina_items, cls_items, recall_items)
                  if str(it.get("time", ""))[:10] >= cutoff]
+        # 业绩快报/预告 与正式定期报告同源去重(#30:同一份报告两次披露不当两条独立利好)
+        if getattr(settings, "EARNINGS_SAME_EVENT_DEDUP", True):
+            items = _dedup_earnings_same_event(
+                items, getattr(settings, "EARNINGS_SAME_EVENT_WINDOW_DAYS", 45))
         items.sort(key=lambda x: x["time"], reverse=True)
         src = "+".join(contributors) if contributors else _SOURCE
         store.put_raw("news", code, items, meta={"source": src})
