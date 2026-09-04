@@ -98,6 +98,10 @@ BAIDU_NEWS_COLLECT = os.getenv("BAIDU_NEWS_COLLECT", "1") == "1"
 SENTIMENT_FRESHNESS_MODE = os.getenv("SENTIMENT_FRESHNESS_MODE", "A2")
 # A2 允许回退的窗口(以 raw 分区/采集周期为「交易日」代理计数);超此距离标「无数据」。
 SENTIMENT_MAX_STALE_DAYS = int(os.getenv("SENTIMENT_MAX_STALE_DAYS", "3"))
+# —— 情绪三态:顶层「有效层覆盖率」下限(见 docs/计划/2026-09-04_情绪打分失败三态_设计.md §二)——
+# 覆盖率 = 成功(ok/partial)层加权 / (成功层 + 打分失败(unknown)层)加权。低于此阈值判「质量=unknown」
+# → 净情绪分置 null(不写 0.0,避免打分失败被冒充成真中性)。无数据(missing)层不入分母、不拉低覆盖。
+SENTIMENT_MIN_COVERAGE = float(os.getenv("SENTIMENT_MIN_COVERAGE", "0.3"))
 # —— 新闻关系判定 prompt 名字兜底(防「name 缺失静默翻转成无关」)——
 # 开:当传入 LLM 的公司名与代码相等 / 形如纯数字 / 为空时,不生成「主体并非{name}即无关」
 # 那句约束(避免拿代码当公司名致本股新闻被误判无关),改用「以是否讲述该代码对应公司为准」。
