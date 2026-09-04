@@ -621,7 +621,7 @@ def analyze_stock(code: str, client=None, limit: int | None = None,
         "利好数": news_agg["利好数"], "利空数": news_agg["利空数"],
         "样本数": news_agg["样本数"], "失败数": news_agg.get("失败数", 0),
         "净情绪分": total,                # 三层加权后总分;质量=unknown/missing 时为 None(不写 0.0)
-        "口径": "三层加权 新闻0.5/政策0.3/舆情0.2,缺层重归一;失败层退出加权且拉低覆盖率",
+        "口径": "三层加权 新闻0.5/政策0.3/舆情0.2,缺层重归一",
         # —— 情绪三态(核心):质量 ∈ {ok,partial,unknown,missing},覆盖率 = 成功层加权占比 ——
         "质量": 质量,
         "覆盖率": 覆盖率,
