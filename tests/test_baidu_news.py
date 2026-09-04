@@ -181,3 +181,51 @@ def test_load_roundtrip_and_missing(monkeypatch, tmp_path):
     assert isinstance(bn.load_baidu_news("000001"), list)
     with pytest.raises(FileNotFoundError):
         bn.load_baidu_news("999999")
+
+
+# ———— #27 条目级新鲜度:看最新条目发布日(非采集时刻),陈旧显式标记 + 告警 ————
+import logging  # noqa: E402
+
+_NOW = 1788000000                          # 2026-08-29 附近的一个固定"当前"时间戳
+_OLD = _NOW - 60 * 86400                    # 60 天前(> 14 天阈值)→ 陈旧
+
+
+def test_newest_item_ts_and_stale_days():
+    items = [{"publish_ts": _OLD}, {"publish_ts": _OLD - 86400}]
+    assert bn.newest_item_ts(items) == _OLD                 # 取最新(最大)
+    assert bn.newest_item_ts([]) is None
+    assert round(bn.content_stale_days(items, now_ts=_NOW), 0) == 60
+    assert bn.content_stale_days([], now_ts=_NOW) is None    # 无有效条目 → None(不静默当 0)
+
+
+def test_content_freshness_meta_boundary():
+    fresh = bn._content_freshness_meta([{"publish_ts": int(bn.datetime.now(bn._CST).timestamp())}], 14.0)
+    assert fresh["content_stale"] is False and fresh["newest_item_date"]
+    stale = bn._content_freshness_meta([{"publish_ts": _OLD}], 14.0)
+    assert stale["content_stale"] is True and stale["item_stale_days"] > 14
+    empty = bn._content_freshness_meta([], 14.0)
+    assert empty == {"newest_item_date": None, "item_stale_days": None, "content_stale": False}
+
+
+def test_fetch_marks_and_warns_content_stale(monkeypatch, tmp_path, caplog):
+    """最新条目落后超阈值 → meta.content_stale=True 且 warning(采到但陈旧不再静默当有效)。"""
+    monkeypatch.setattr(store, "_RAW_DIR", tmp_path)
+    _install_fetch(monkeypatch, [_raw_item("old", "陈旧", _OLD)])
+    with caplog.at_level(logging.WARNING, logger="collectors.baidu_news"):
+        bn.fetch_baidu_news(["000001"])
+    meta = store.get_raw_meta("baidu_news", "000001")
+    assert meta["content_stale"] is True and meta["item_stale_days"] > 14
+    assert meta["newest_item_date"]                          # 落了最新条目日期
+    assert any("内容陈旧" in r.message for r in caplog.records)
+
+
+def test_skip_fresh_still_flags_stale_content(monkeypatch, tmp_path, caplog):
+    """核心:采集时刻新鲜(fetched_at 新)但条目陈旧,跳过重拉时仍告警(旧门控此处永不报)。"""
+    monkeypatch.setattr(store, "_RAW_DIR", tmp_path)
+    _install_fetch(monkeypatch, [_raw_item("old", "陈旧", _OLD)])
+    bn.fetch_baidu_news(["000001"])                          # 首采,fetched_at=now(新鲜)
+    monkeypatch.setattr(bn, "_fetch_raw",
+                        lambda code, rn: (_ for _ in ()).throw(AssertionError("不该触网")))
+    with caplog.at_level(logging.WARNING, logger="collectors.baidu_news"):
+        bn.fetch_baidu_news(["000001"], skip_fresh=True, max_days=5)   # 采集时刻新鲜 → 跳过
+    assert any("缓存新鲜跳过,但内容陈旧" in r.message for r in caplog.records)

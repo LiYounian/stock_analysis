@@ -273,3 +273,53 @@ def test_load_roundtrip_missing(monkeypatch, tmp_path):
     assert isinstance(nw.load_news("000021"), list)
     with pytest.raises(FileNotFoundError):
         nw.load_news("999999")
+
+
+# ———— #29 财联社漏召:让"0 条"从静默变有声(盲区 / 覆盖不足) ————
+import logging  # noqa: E402
+
+
+def _install_cls(monkeypatch, cls_df):
+    fake = types.SimpleNamespace(stock_info_global_cls=lambda: cls_df)
+    monkeypatch.setitem(sys.modules, "akshare", fake)
+
+
+def test_cls_blind_spot_when_name_missing(monkeypatch, caplog):
+    """票不在 stock_pool(name 空)→ 无法按名过滤,warning 盲区,不静默返回 []。"""
+    from tools.config import stock_pool
+    monkeypatch.setattr(stock_pool, "get", lambda code: None)     # 不在池
+    _install_cls(monkeypatch, pd.DataFrame({"标题": ["某快讯"], "内容": ["x"],
+                                            "发布日期": ["2026-09-04"], "发布时间": ["10:00:00"]}))
+    with caplog.at_level(logging.WARNING, logger="collectors.news"):
+        got = nw._fetch_cls("300857", "2026-08-28")
+    assert got == []
+    assert any("盲区" in r.message for r in caplog.records)
+
+
+def test_cls_thin_coverage_zero_hit_warns(monkeypatch, caplog):
+    """快照覆盖下界晚于 cutoff 且 0 命中 → warning(覆盖太薄,0 条≠确无),不静默。"""
+    from tools.config import stock_pool
+    monkeypatch.setattr(stock_pool, "get",
+                        lambda code: types.SimpleNamespace(code=code, name="中际旭创"))
+    # 快照仅今天的两条(均不含目标名),cutoff 却在几天前 → 覆盖不到整窗
+    _install_cls(monkeypatch, pd.DataFrame({
+        "标题": ["无关快讯A", "无关快讯B"], "内容": ["宏观", "行业"],
+        "发布日期": ["2026-09-04", "2026-09-04"], "发布时间": ["09:00:00", "10:00:00"]}))
+    with caplog.at_level(logging.WARNING, logger="collectors.news"):
+        got = nw._fetch_cls("300308", "2026-08-28")
+    assert got == []
+    assert any("覆盖不足" in r.message for r in caplog.records)
+
+
+def test_cls_name_match_strips_and_hits(monkeypatch, caplog):
+    """名字归一(strip)后子串命中 → 正常召回;命中时不发覆盖不足告警。"""
+    from tools.config import stock_pool
+    monkeypatch.setattr(stock_pool, "get",
+                        lambda code: types.SimpleNamespace(code=code, name="  中际旭创 "))
+    _install_cls(monkeypatch, pd.DataFrame({
+        "标题": ["中际旭创签大单", "无关宏观"], "内容": ["公告", "美联储"],
+        "发布日期": ["2026-09-04", "2026-09-04"], "发布时间": ["09:00:00", "10:00:00"]}))
+    with caplog.at_level(logging.WARNING, logger="collectors.news"):
+        got = nw._fetch_cls("300308", "2026-08-28")
+    assert len(got) == 1 and "中际旭创" in got[0]["title"]
+    assert not any("覆盖不足" in r.message for r in caplog.records)

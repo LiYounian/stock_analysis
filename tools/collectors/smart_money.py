@@ -87,14 +87,73 @@ def _lhb_rows_of(df: pd.DataFrame, code: str) -> list[dict]:
 # ————————————————————————————————————————————————
 # 大宗交易
 # ————————————————————————————————————————————————
-def _fetch_block_market(start: str, end: str) -> pd.DataFrame:
-    """东财大宗交易每日明细(全市场 A股)。返回原始 df,失败抛错。瞬时网络错误退避重试。"""
+# akshare stock_dzjy_mrmx 硬编码 pageSize=5000、pageNumber=1、sortColumns=SECURITY_CODE:
+# 命中 5000 即**静默截断**(只留代码排序靠前的 5000 行,高位代码被切掉,窗越宽越易命中)。
+# 无法从 akshare 侧翻页 → 按日期二分缩窗重取,使每段 < 上限即完整,拼接得全量。
+_BLOCK_PAGE_CAP = 5000
+_BLOCK_MAX_DEPTH = 12          # 二分深度上限(90 天窗折到单日绰绰有余;兜底防病态递归)
+
+
+def _fetch_block_window(start: str, end: str) -> pd.DataFrame:
+    """单个日期窗的大宗明细(全市场 A股)。空返回空 df;瞬时网络错误退避重试。"""
     import akshare as ak
 
     from tools.collectors._retry import retry_call
     df = retry_call(ak.stock_dzjy_mrmx, symbol="A股", start_date=start, end_date=end, label="大宗交易")
-    if df is None or len(df) == 0:
+    return df if df is not None else pd.DataFrame()
+
+
+def _split_window(start: str, end: str) -> tuple[tuple[str, str], tuple[str, str]] | None:
+    """把 [start,end] 日期窗二分成两个**互斥**子窗(YYYYMMDD)。单日不可再分返回 None。"""
+    a = pd.Timestamp(start)
+    b = pd.Timestamp(end)
+    if a >= b:
+        return None
+    mid = a + (b - a) / 2
+    mid = pd.Timestamp(mid.date())
+    if mid <= a:                                   # 相邻两日:左=a,右=b
+        mid = a
+    left = (a.strftime("%Y%m%d"), mid.strftime("%Y%m%d"))
+    right = ((mid + pd.Timedelta(days=1)).strftime("%Y%m%d"), b.strftime("%Y%m%d"))
+    return left, right
+
+
+def _fetch_block_recursive(start: str, end: str, depth: int) -> tuple[list[pd.DataFrame], bool]:
+    """递归缩窗拉全窗大宗明细。返回 (frames, truncated_flag)。
+
+    命中 5000 行上限 → 二分日期窗分别重取(有声:warning);单日仍命中上限=不可再分 →
+    error 告警并标截断(接受当日截断但绝不静默)。子窗按日期互斥,拼接即全量、无需去重。
+    """
+    df = _fetch_block_window(start, end)
+    if len(df) < _BLOCK_PAGE_CAP:
+        return ([df] if len(df) else []), False
+    # 命中上限 → 尝试二分缩窗重取
+    split = _split_window(start, end) if depth < _BLOCK_MAX_DEPTH else None
+    if split is None:
+        logger.error("大宗交易 %s~%s 命中 %d 行上限且无法再分(单日截断,数据不完整)",
+                     start, end, _BLOCK_PAGE_CAP)
+        return [df], True                          # 保留当日数据但标截断
+    logger.warning("大宗交易 %s~%s 命中 %d 行上限 → 二分缩窗重取", start, end, _BLOCK_PAGE_CAP)
+    frames: list[pd.DataFrame] = []
+    truncated = False
+    for sub_start, sub_end in split:
+        sub_frames, sub_trunc = _fetch_block_recursive(sub_start, sub_end, depth + 1)
+        frames.extend(sub_frames)
+        truncated = truncated or sub_trunc
+    return frames, truncated
+
+
+def _fetch_block_market(start: str, end: str) -> pd.DataFrame:
+    """东财大宗交易每日明细(全市场 A股)。返回原始 df,失败抛错。
+
+    命中数据源 5000 行单页上限时**按日期二分缩窗重取**(非静默截断);不可再分的单日
+    截断响亮告警并在 df.attrs['truncated'] 打标(供上层感知不完整)。空数据抛 ValueError。
+    """
+    frames, truncated = _fetch_block_recursive(start, end, depth=0)
+    if not frames:
         raise ValueError("大宗交易明细为空")
+    df = pd.concat(frames, ignore_index=True) if len(frames) > 1 else frames[0]
+    df.attrs["truncated"] = truncated
     return df
 
 
@@ -240,7 +299,10 @@ def _safe_market(fn, start: str, end: str, name: str) -> pd.DataFrame | None:
     """全市场区间拉取兜底:失败记 warning 返 None(该源整体降级,不炸整批)。"""
     try:
         df = fn(start, end)
-        logger.info("%s 全市场区间明细:%d 行", name, len(df))
+        if df.attrs.get("truncated"):
+            logger.error("%s 全市场区间明细:%d 行(⚠️ 含不可再分的单日截断,数据不完整)", name, len(df))
+        else:
+            logger.info("%s 全市场区间明细:%d 行", name, len(df))
         return df
     except Exception as e:
         logger.warning("%s 全市场拉取失败(该源整体降级): %s", name, e)
