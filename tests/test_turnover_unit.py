@@ -292,7 +292,7 @@ def test_enrich_skipped_when_columns_complete():
     tail = pd.DataFrame({"date": pd.to_datetime(["2026-09-03"]), "volume": [1e6],
                          "amount": [1e7], "turnover": [1.0]})
     assert master_sync._lacks_amount_turnover(tail) is False
-    assert master_sync._enrich_turnover_amount({"000001": tail}) == 0
+    assert master_sync._enrich_turnover_amount({"000001": tail})["need"] == 0
 
 
 def test_enrich_detects_missing_columns():
@@ -326,14 +326,18 @@ def test_enrich_fills_from_baostock(monkeypatch):
                          "close": [16.24, 16.48], "volume": [5161200.0, 5228100.0],
                          "amount": [np.nan, np.nan], "turnover": [np.nan, np.nan]})
     tails = {"603161": tail}
-    assert master_sync._enrich_turnover_amount(tails) == 1
+    stats = master_sync._enrich_turnover_amount(tails)
+    assert stats["filled"] == 1 and stats["need"] == 1
+    assert stats["failed"] == 0 and stats["still_missing"] == 0 and stats["session_failed"] is False
     got = tails["603161"]
     assert got["turnover"].tolist() == pytest.approx([2.7058, 2.7408])
     assert got["volume"].tolist() == pytest.approx([5161200.0, 5228100.0]), "volume 不该被改"
 
 
-def test_enrich_is_best_effort_on_source_failure(monkeypatch):
-    """baostock 不可用时:保持 NaN、返回 0、**不抛**(回退本身已是降级路径,不许再崩)。"""
+def test_enrich_is_best_effort_on_source_failure(monkeypatch, caplog):
+    """baostock 会话整体失败:保持 NaN、filled=0、**不抛**;且聚合里 failed>0/session_failed
+    且升 **error** 级日志——补齐网整体失效正是本 bug 的静默根因,必须有声可巡检。"""
+    import logging
     from tools.collectors import baostock_src, master_sync
 
     def _boom():
@@ -342,18 +346,50 @@ def test_enrich_is_best_effort_on_source_failure(monkeypatch):
     monkeypatch.setattr(baostock_src, "session", _boom)
     tail = pd.DataFrame({"date": pd.to_datetime(["2026-09-03"]), "volume": [1e6],
                          "amount": [np.nan], "turnover": [np.nan]})
-    assert master_sync._enrich_turnover_amount({"000001": tail}) == 0
+    with caplog.at_level(logging.ERROR, logger="collectors.master_sync"):
+        stats = master_sync._enrich_turnover_amount({"000001": tail})
+    assert stats["filled"] == 0
+    assert stats["failed"] == 1 and stats["session_failed"] is True
+    assert stats["still_missing"] == 1 and stats["ratio"] == 1.0
     assert pd.isna(tail["turnover"].iloc[0])
+    # 有声:整体失败必须落 error(不再是单票 warning 静默淹没)。
+    assert any(r.levelno >= logging.ERROR for r in caplog.records), "补齐网整体失败必须升 error"
+
+
+def test_enrich_all_single_failures_escalate_error(monkeypatch, caplog):
+    """会话通、但每只票补齐都失败(需补 N 但成功 0)→ 聚合 failed==need、filled==0,升 error。"""
+    import logging
+    from contextlib import contextmanager
+    from tools.collectors import baostock_src, master_sync
+
+    @contextmanager
+    def _fake_session():
+        yield None
+
+    def _fetch_boom(code, start, end, adjust="qfq"):
+        raise RuntimeError("no data for %s" % code)
+
+    monkeypatch.setattr(baostock_src, "session", _fake_session)
+    monkeypatch.setattr(baostock_src, "fetch_one", _fetch_boom)
+    tails = {c: pd.DataFrame({"date": pd.to_datetime(["2026-09-03"]), "volume": [1e6],
+                              "amount": [np.nan], "turnover": [np.nan]})
+             for c in ("000001", "600000")}
+    with caplog.at_level(logging.ERROR, logger="collectors.master_sync"):
+        stats = master_sync._enrich_turnover_amount(tails)
+    assert stats["need"] == 2 and stats["filled"] == 0 and stats["failed"] == 2
+    assert stats["session_failed"] is False and stats["still_missing"] == 2
+    assert any(r.levelno >= logging.ERROR for r in caplog.records), "补齐 0 只必须升 error"
 
 
 def test_enrich_switch_off(monkeypatch):
-    """开关:FALLBACK_ENRICH_TURNOVER=0 → 完全不走 baostock。"""
+    """开关:FALLBACK_ENRICH_TURNOVER=0 → 完全不走 baostock,聚合为空(need=0)。"""
     from tools.collectors import baostock_src, master_sync
     monkeypatch.setenv("FALLBACK_ENRICH_TURNOVER", "0")
     monkeypatch.setattr(baostock_src, "session",
                         lambda: (_ for _ in ()).throw(AssertionError("不该触网")))
     tail = pd.DataFrame({"date": pd.to_datetime(["2026-09-03"]), "volume": [1e6]})
-    assert master_sync._enrich_turnover_amount({"000001": tail}) == 0
+    stats = master_sync._enrich_turnover_amount({"000001": tail})
+    assert stats["need"] == 0 and stats["filled"] == 0
 
 
 # ————————————————————————————————————————————————
