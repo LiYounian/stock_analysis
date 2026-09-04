@@ -9,6 +9,8 @@
   两源各拉一遍 → 去重合并(url 优先,无 url 则 title+日期)→ 统一时间窗过滤 → 倒序。
 - **财联社电报 `stock_info_global_cls`(全市场快讯,按名过滤)**:改为**总是查并入**(不再
   只在两源皆空时兜底)——管制/宏观/突发类快讯常不进东财/新浪个股 feed,财联社能补盲区。
+  ⚠️ akshare 该接口硬编码 rn=20,只给**最近 20 条**快照 → 覆盖薄,对具体票命中≈0;故
+  `_fetch_cls` 让"0 条"有声(盲区/覆盖不足告警),**绝不把 0 条当"无快讯风险"**。
 - **扩召回(可选,fetch_news(recall=True))**:按**行业主题词**召回未挂到个股的行业/宏观/管制
   消息 → LLM 宁严相关性初筛只留直接相关 → 并入(见 collectors.news_recall)。仅调用方开启时生效。
 三/四源正交去重合并,meta.source 记实际贡献源(如 "eastmoney+新浪+财联社电报+扩召回")。
@@ -161,35 +163,59 @@ def _dedup_merge(*sources: list[dict]) -> list[dict]:
     return merged
 
 
-def _fetch_cls(code: str, cutoff: str) -> list[dict]:
-    """备源:财联社电报(全市场)按股票名过滤成个股新闻。
-
-    电报无个股维度,只能按 stock_pool 里的股票名做子串命中(召回低,属降级)。
-    命中条目归一成新闻契约(source=财联社电报,url 缺置空)。取不到名/无命中返回 []。
-    """
-    from tools.config import stock_pool
-    s = stock_pool.get(code)
-    name = s.name if s else ""
-    if not name:
-        return []
+def _cls_feed() -> pd.DataFrame:
+    """财联社电报快照(akshare 硬编码 rn=20,仅**最近 20 条**全市场快讯)。失败/空返回空 df。"""
     pd.set_option("future.infer_string", False)
     import akshare as ak
     df = ak.stock_info_global_cls()
+    return df if df is not None else pd.DataFrame()
+
+
+def _cls_feed_floor(df: pd.DataFrame) -> str:
+    """快照覆盖的**最旧日期**(YYYY-MM-DD);空返回 ""。用于判"0 条"是确无还是覆盖不足。"""
+    if df is None or not len(df) or "发布日期" not in df.columns:
+        return ""
+    dates = [str(d)[:10] for d in df["发布日期"].tolist() if str(d).strip()]
+    return min(dates) if dates else ""
+
+
+def _fetch_cls(code: str, cutoff: str) -> list[dict]:
+    """备源:财联社电报(全市场)按股票名过滤成个股新闻。
+
+    电报无个股维度,只能按 stock_pool 里的股票名做子串命中(召回低,属降级);且 akshare
+    只给最近 20 条快照 → 覆盖薄。命中条目归一成新闻契约(source=财联社电报,url 缺置空)。
+
+    **让漏召有声(不把"0 条"当"无快讯风险")**:
+      - 取不到名(不在池/无名)→ warning(盲区:无法按名过滤),返回 [];
+      - 快照覆盖下界晚于 cutoff(没覆盖到整个回看窗)且 0 命中 → warning(覆盖不足,
+        0 条≠确无);名字做 strip 归一后子串匹配。
+    """
+    from tools.config import stock_pool
+    s = stock_pool.get(code)
+    name = (s.name if s else "").strip()
+    if not name:
+        logger.warning("新闻 %s 财联社盲区:该票不在 stock_pool 或无名称,无法按名过滤(0 条≠无风险)", code)
+        return []
+    df = _cls_feed()
+    floor = _cls_feed_floor(df)
     items: list[dict] = []
-    if df is not None and len(df):
-        for _, r in df.iterrows():
-            title = str(r.get("标题", ""))
-            content = str(r.get("内容", ""))
-            if name not in title and name not in content:
-                continue
-            d = str(r.get("发布日期", ""))
-            if d and d < cutoff:
-                continue
-            items.append({"title": title or content[:30],
-                          "content": content[:2000],
-                          "time": f"{d} {str(r.get('发布时间', ''))}".strip(),
-                          "source": _SOURCE_CLS, "url": ""})
-        items.sort(key=lambda x: x["time"], reverse=True)
+    for _, r in df.iterrows():
+        title = str(r.get("标题", ""))
+        content = str(r.get("内容", ""))
+        if name not in title and name not in content:
+            continue
+        d = str(r.get("发布日期", ""))[:10]
+        if d and d < cutoff:
+            continue
+        items.append({"title": title or content[:30],
+                      "content": content[:2000],
+                      "time": f"{d} {str(r.get('发布时间', ''))}".strip(),
+                      "source": _SOURCE_CLS, "url": ""})
+    items.sort(key=lambda x: x["time"], reverse=True)
+    # 覆盖不足 + 0 命中 → 有声:快照只到 floor,没覆盖到 cutoff,不能据此断"无快讯"
+    if not items and floor and floor > cutoff:
+        logger.warning("新闻 %s 财联社覆盖不足:快照仅到 %s(cutoff=%s),0 条系覆盖窗太薄非确无",
+                       code, floor, cutoff)
     return items
 
 
