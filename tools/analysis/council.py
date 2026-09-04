@@ -223,7 +223,10 @@ def _bias_experts(tech: dict, fundflow: dict | None, sentiment: dict | None) -> 
             elif zhu < 0:
                 _add("资金流", W["主力净流出"], "主力净流出-1")
 
-    if sentiment:
+    # 情绪三态门控(与 predict.bias_recommendation 逐字对齐,F4 等价红线):
+    # 质量=unknown(打分失败)/missing(无输入)→ 情绪专家**干净弃权**,绝不把失败的 0.0/null 当中性票
+    # 或按 net>0 判(那正是本次要修的病)。旧记录无「质量」字段 → 回退原 net/样本数 判据(向后兼容)。
+    if sentiment and sentiment.get("质量") not in ("unknown", "missing"):
         net = sentiment.get("净情绪分")
         n = sentiment.get("样本数") or 0
         if isinstance(net, (int, float)) and n > 0:
@@ -293,9 +296,15 @@ def build_council_block(record: dict, kline=None) -> dict:
     """
     names = list(_C["默认专家组"])
     experts_env = [experts.build(n, record, kline).to_dict() for n in names]
+    # 情绪质量三态可见(B3):让下游/选股 agent 看到「本票综合分是否在情绪 unknown 下得出」。
+    # 取自 B1 写入的 sentiment.质量;unknown=情绪打分失败(情绪专家已弃权、未污染综合分,但仍应
+    # 打置信度折价/表态封顶——硬封顶由 workflow 纪律层做,此处只保证「标记可见 + 不污染」)。
+    sent = (record or {}).get("sentiment")
+    情绪质量 = sent.get("质量") if isinstance(sent, dict) else None
     return {
         "experts": experts_env,                 # 各专家信封(供前端勾选重合成 D7)
         "default": convene_default(record, kline),   # 复用 convene → 与合议口径同一真源(含新分母)
+        "情绪质量": 情绪质量,                    # ok/partial/unknown/missing|None(旧记录无情绪块)
         # config 是前端重合成的口径真源:必须带「分母模式」,否则前端无从判分母 → 前后端漂移
         "config": {"tau": _C["tau"], "conflict_epsilon": _C["conflict_epsilon"],
                    "分母模式": _C.get("分母模式", "置信度加权"),

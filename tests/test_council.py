@@ -132,7 +132,7 @@ def test_attribution_sorted_by_abs_contrib():
 
 def test_build_council_block_shape():
     blk = council.build_council_block(_all_bull_rec())
-    assert set(blk) == {"experts", "default", "config"}
+    assert set(blk) == {"experts", "default", "config", "情绪质量"}  # 情绪质量:B3 三态可见标记
     assert len(blk["experts"]) == len(_C["默认专家组"])
     from tools.contracts.expert import validate_verdict
     assert all(validate_verdict(e) == [] for e in blk["experts"])

@@ -197,7 +197,10 @@ def bias_recommendation(tech: dict, fundflow: dict | None, sentiment: dict | Non
             elif zhu < 0:
                 score -= 1; reasons.append("主力净流出-1")
 
-    if sentiment:
+    # 情绪三态门控(与 council._bias_experts 逐字对齐,F4 等价红线):
+    # 质量=unknown(打分失败)/missing(无输入)→ 情绪干净弃权,绝不把失败的 0.0/null 当中性票。
+    # 旧记录无「质量」字段 → 回退原 net/样本数 判据(向后兼容)。
+    if sentiment and sentiment.get("质量") not in ("unknown", "missing"):
         net = sentiment.get("净情绪分")
         n = sentiment.get("样本数") or 0
         if isinstance(net, (int, float)) and n > 0:
