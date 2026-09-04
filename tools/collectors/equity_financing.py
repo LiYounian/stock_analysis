@@ -34,6 +34,10 @@
   · ak.stock_restricted_release_queue_em(symbol)   —— 字段丰富(占总市值比例/占流通市值比例/
                                                      限售股类型/未解禁数量),但**无公告日期**。
   → 以 sina 为主(带披露日),em 按 |解禁日期差| ≤ 7 自然日就近匹配做增强。
+  ⚠ **解禁数量自洽性护栏**:sina 单条解禁数量若超过「现存限售股上限」(em 口径 解禁+未解禁 的峰值,
+    或绝对上界总股本)即为物理不可能(常见成因:资本公积转增/送股致除权前后**口径串号**),标
+    `自洽性="不可采信"`,**不静默采用** —— 消费侧不得据它算摊薄比例,须交叉验证(见 normalize_unlocks /
+    summarize_asof)。呼应复盘:sina 报某批解禁远超现存限售股(数倍),em/cninfo 又无该批记录时不可轻信。
 
 ===== 防未来函数(硬红线)=====
 解禁时间表天然含**未来日期**,这是合法的:它是「已披露的未来安排」,不是未来价格。
@@ -92,6 +96,9 @@ _FETCH_SLEEP = float(os.getenv("FINANCING_FETCH_SLEEP", "0.4"))
 _PLAN_LOOKBACK_DAYS = int(os.getenv("FINANCING_PLAN_LOOKBACK_DAYS", "540"))  # 定增公告检索回看
 _UNLOCK_MATCH_TOL_DAYS = 7              # sina↔em 解禁日就近匹配容差(自然日)
 NEAR_UNLOCK_DAYS = int(os.getenv("FINANCING_NEAR_UNLOCK_DAYS", "90"))    # 「临近解禁」窗口
+# 解禁数量自洽性容差:一批解禁的股数超过「现存限售股上限 × 该系数」即判**不可采信**。
+# >1 是给四舍五入/口径微差留余地;真正的不自洽(如资本公积转增前后口径串号)动辄数倍,远超容差。
+_UNLOCK_CEILING_TOL = float(os.getenv("FINANCING_UNLOCK_CEILING_TOL", "1.05"))
 
 # 「在推进中的定增」标题正则:必须是**向特定对象/非公开发行股票**类,排除可转债类公告
 _PLAN_KEYWORDS = ("向特定对象发行", "非公开发行", "定向增发")
@@ -104,7 +111,11 @@ _PLAN_TITLE_NEG = re.compile(r"(可转换公司债券|可转债|向不特定对�
 #     募集资金专户三方监管协议、股本变动/变更注册资本。这些文件只可能出现在发行完成之后,
 #     标题里却带「审核报告」「方案」字样 → 只按 LIVE 白名单判会把**已完成**的定增误判成推进中
 #     (实测 603161 科华控股:定增 2026-08-07 完成登记托管、08-11 公告发行结果,却报「推进中 12 条」)。
-#   · 进行:预案/受理/问询回复/同意注册等在途过程词。
+#   · 进行:预案/受理/问询回复/同意注册等在途过程词,**含最早的「筹划」首披**。
+#     ⚠ 漏计侧红线:一笔定增的**首次披露**往往是「关于**筹划**向特定对象发行股票的提示性公告」,
+#       它匹配定增标题正则、却**不含**任何预案/受理类在途词 → 若 LIVE 白名单里没有「筹划」,
+#       这条首披会被 plan_stage_signal 判 None 而丢弃,于是「最近推进中披露日」错锚到更晚的预案日,
+#       事件锚点整体后移数周(实测:首披 04-29 被丢,报成 06-27)。故「筹划」必须纳入 LIVE。
 # ⚠ 终止 vs 已实施 **不可同桶**:对摊薄的含义完全相反(已实施=摊薄已发生+通常带锁定期;
 #   终止=摊薄永不发生)。笔级分类必须分开,否则下游问不出「这票有没有既成的摊薄」。
 # ⚠ 有意**不**把「中止」放进终止:审核中止是可恢复的暂停态,不是终局(宁可当在途,不灭真信号)。
@@ -114,7 +125,7 @@ _PLAN_STAGE_DONE = re.compile(
     r"发行过程(和|及)认购对象|认购对象(的)?合规性|验资报告|"
     r"募集资金.*(专户|专项账户).*监管协议|三方监管协议|"
     r"股本变动|变更注册资本|注册资本变更|新增注册资本)")
-_PLAN_STAGE_LIVE = re.compile(r"(预案|方案|议案|申请|受理|问询|回复|审核|过会|同意注册|批复|核准|募集说明书|发行方案|反馈意见)")
+_PLAN_STAGE_LIVE = re.compile(r"(筹划|预案|方案|议案|申请|受理|问询|回复|审核|过会|同意注册|批复|核准|募集说明书|发行方案|反馈意见)")
 
 # 公告级 `阶段` 取值:"推进中"(在途过程公告)/ "终态公告"(该笔已走到终局的证据公告)。
 # **有意用中性名**「终态公告」:它只表示「这条公告是关笔证据」,不表达摊薄方向;
@@ -222,6 +233,34 @@ def _add_months(d: str | None, months: int | None) -> str | None:
         except ValueError:
             continue
     return None
+
+
+def _unlock_self_consistency(qty_shares: float | None,
+                             em_ceiling_shares: float | None = None,
+                             total_shares: float | None = None) -> tuple[bool, str | None]:
+    """解禁数量的**物理自洽性核验** → (可采信?, 不可采信依据)。
+
+    硬物理约束:一批解禁的股数不可能超过「曾经存在的限售股总量」,更不可能超过总股本。
+    一旦越界即为数据不自洽(常见成因:资本公积转增/送股导致解禁公告前后**口径串号**,
+    同一批限售股在除权前后被按不同股数登记),**不可直接拿去算摊薄比例**,须交叉验证。
+
+    参照优先级(取能拿到的最紧上界):
+      · `em_ceiling_shares`:em 解禁队列口径的现存限售股上限(见 normalize_unlocks:
+        取各批 `解禁数量 + 未解禁数量` 的最大值 —— 某时点仍被锁的股数,是限售股池的估计)。
+      · `total_shares`:总股本(绝对物理上界,任何限售股都 ≤ 总股本)。
+    `qty` 缺失或两个上界都拿不到 → 无从判定 → 视为可采信(不猜、不误伤)。
+    """
+    if qty_shares is None:
+        return True, None
+    if total_shares and qty_shares > total_shares:
+        return False, (f"解禁数量 {qty_shares / 1e4:.1f}万股 > 总股本 "
+                       f"{total_shares / 1e4:.1f}万股,物理不可能,需交叉验证")
+    if em_ceiling_shares and qty_shares > em_ceiling_shares * _UNLOCK_CEILING_TOL:
+        ratio = qty_shares / em_ceiling_shares
+        return False, (f"解禁数量 {qty_shares / 1e4:.1f}万股 > em口径现存限售股上限 "
+                       f"{em_ceiling_shares / 1e4:.1f}万股({ratio:.2f}×),"
+                       f"疑似转增前后口径串号,需交叉验证")
+    return True, None
 
 
 # ————————————————————————————————————————————————
@@ -499,10 +538,17 @@ def normalize_unlocks(sina_rows: list[dict], em_rows: list[dict]) -> tuple[list[
     """归一解禁时间表:**sina 为主**(带公告日期=披露日),em 就近匹配做字段增强。
 
     返回 (记录列表, 统计)。统计含 `em_未匹配`(em 有、sina 没有 → **无披露日,不予采纳**,
-    显式计数而不是静默塞进去)。
+    显式计数而不是静默塞进去)、`em_限售股上限_股`(em 口径现存限售股池上界)、
+    `不可采信`(解禁数量与限售股池不自洽、被标 `自洽性="不可采信"` 的条数)。
 
     ⚠ 前瞻字段处理:em 的 `解禁后20日涨跌幅` = 前瞻收益 → **丢弃**(未来函数);
       `解禁前一交易日收盘价` / `实际解禁数量市值` 对未来行是按采集日价折算 → 改名 + 标口径。
+
+    ⚠ 自洽性护栏:sina 单条解禁数量若**超过现存限售股上限**(物理不可能,如转增前后口径串号),
+      标 `自洽性="不可采信"` + `自洽性依据`,**不静默采用**——消费侧不得直接拿它算摊薄比例
+      (见 summarize_asof:不可采信条不进 占比/near_ratio,只显式列出并提示需交叉验证)。
+      此处只用 em 口径上界核「em 未匹配上」的条(匹配上的已被双源一致性背书);
+      总股本这一绝对上界因需外部 `总股本`,在 summarize_asof 补核。
     """
     em_norm = []
     for r in em_rows or []:
@@ -513,6 +559,7 @@ def normalize_unlocks(sina_rows: list[dict], em_rows: list[dict]) -> tuple[list[
             "_d": d,
             "解禁数量_股": _to_float(r.get("实际解禁数量")) or _to_float(r.get("解禁数量")),
             "未解禁数量_股": _to_float(r.get("未解禁数量")),
+            # 下方 em_ceiling 会用到「解禁数量 + 未解禁数量」估现存限售股池
             "占总市值_pct": _to_float(r.get("占总市值比例")),
             "占流通市值_pct": _to_float(r.get("占流通市值比例")),
             "限售股类型": str(r.get("限售股类型") or "") or None,
@@ -521,6 +568,12 @@ def normalize_unlocks(sina_rows: list[dict], em_rows: list[dict]) -> tuple[list[
             "市值口径": "采集日价折算",
             # 有意不搬运:解禁后20日涨跌幅(前瞻收益=未来函数)、解禁前20日涨跌幅(区间跨解禁日)
         })
+
+    # em 口径「现存限售股上限」:各批 (解禁数量 + 未解禁数量) 的最大值 —— 即 em 观察到的
+    # 某时点仍被锁的最大股数,作为限售股池的估计上界。仅在两个量都可解析时纳入,避免低估误伤。
+    _ceil = [e["解禁数量_股"] + e["未解禁数量_股"] for e in em_norm
+             if e.get("解禁数量_股") is not None and e.get("未解禁数量_股") is not None]
+    em_ceiling = max(_ceil) if _ceil else None
 
     used: set[int] = set()
     out: list[dict] = []
@@ -537,6 +590,7 @@ def normalize_unlocks(sina_rows: list[dict], em_rows: list[dict]) -> tuple[list[
             "占总市值_pct": None, "占流通市值_pct": None, "限售股类型": None,
             "未解禁数量_股": None, "折算市值_按采集日价_元": None,
             "折算参考价": None, "市值口径": None, "增强源": None,
+            "自洽性": "可采信", "自洽性依据": None,     # 解禁数量物理自洽性(见下方核验)
         }
         best_i, best_gap = None, None
         for i, e in enumerate(em_norm):
@@ -554,11 +608,19 @@ def normalize_unlocks(sina_rows: list[dict], em_rows: list[dict]) -> tuple[list[
             rec.update({k: v for k, v in e.items() if k != "_d"})
             rec["解禁日_em"] = e["_d"]
             rec["增强源"] = "em"
+        else:
+            # em 无该批次对应记录:拿不到本批自身的限售股上下文,用 em 口径限售股池上限核自洽性。
+            # (若 em 就近匹配上,则该批已被 em 佐证,数量自洽性由双源一致性天然背书,无需再核。)
+            ok, why = _unlock_self_consistency(rec["解禁数量_股"], em_ceiling_shares=em_ceiling)
+            if not ok:
+                rec["自洽性"], rec["自洽性依据"] = "不可采信", why
         out.append(rec)
 
     out.sort(key=lambda x: x["解禁日"])
     return out, {"sina_条数": len(out), "em_条数": len(em_norm),
-                 "em_未匹配": len(em_norm) - len(used)}
+                 "em_未匹配": len(em_norm) - len(used),
+                 "em_限售股上限_股": em_ceiling,
+                 "不可采信": sum(1 for r in out if r["自洽性"] == "不可采信")}
 
 
 # ————————————————————————————————————————————————
@@ -897,25 +959,39 @@ def summarize_asof(payload: dict | None, as_of: str | None = None,
     # —— 解禁 ——
     # em 增强缺失时(em 队列不含该批次,如科创板部分批次),用 解禁数量/总股本 本地折算
     # 「占总股本_pct」补上**规模**维度(与 em 的「占流通市值_pct」口径不同,故另起字段名不混淆)。
+    # 自洽性护栏:先补核「总股本」这一绝对上界(归一阶段拿不到总股本),再对**不可采信**的条
+    # **不算摊薄比例**——解禁数量已被判物理不可能(如转增前后口径串号),据它折算的占比会误导消费方。
     for u in unlocks:
         n = u.get("解禁数量_股")
-        u["占总股本_pct"] = (round(n / 总股本 * 100, 4) if (n and 总股本) else None)
+        if u.get("自洽性") != "不可采信":
+            ok, why = _unlock_self_consistency(n, total_shares=总股本)
+            if not ok:
+                u["自洽性"], u["自洽性依据"] = "不可采信", why
+        trustworthy = u.get("自洽性") != "不可采信"
+        u["占总股本_pct"] = (round(n / 总股本 * 100, 4)
+                            if (n and 总股本 and trustworthy) else None)
     future = [u for u in unlocks if str(u["解禁日"]) > ref]
     near = [u for u in future if _gap_days(ref, u["解禁日"]) <= NEAR_UNLOCK_DAYS]
     nxt = future[0] if future else None
+    # 占比只累加**可采信**的条(不可采信=数量不自洽,不能进摊薄测算)
     near_ratio = sum((u.get("占流通市值_pct") if u.get("占流通市值_pct") is not None
-                      else (u.get("占总股本_pct") or 0)) for u in near)
+                      else (u.get("占总股本_pct") or 0))
+                     for u in near if u.get("自洽性") != "不可采信")
     unlock_block = {
         "未来次数": len(future),
         f"未来{NEAR_UNLOCK_DAYS}日次数": len(near),
         f"未来{NEAR_UNLOCK_DAYS}日占流通_pct": round(near_ratio, 4) if near_ratio else None,
-        "占比口径": "优先 em 占流通市值_pct;em 缺该批次时退回 占总股本_pct(本地按总股本折算)",
+        "不可采信次数": sum(1 for u in unlocks if u.get("自洽性") == "不可采信"),
+        "占比口径": ("优先 em 占流通市值_pct;em 缺该批次时退回 占总股本_pct(本地按总股本折算);"
+                    "**不可采信**的解禁条不计入占比(数量与现存限售股不自洽,需交叉验证)"),
         "下一次": ({"解禁日": nxt["解禁日"], "距今日": _days_between(ref, nxt["解禁日"]),
                    "解禁数量_股": nxt.get("解禁数量_股"),
                    "占流通市值_pct": nxt.get("占流通市值_pct"),
                    "占总市值_pct": nxt.get("占总市值_pct"),
                    "占总股本_pct": nxt.get("占总股本_pct"),
                    "限售股类型": nxt.get("限售股类型"),
+                   "自洽性": nxt.get("自洽性"),
+                   "自洽性依据": nxt.get("自洽性依据"),
                    "披露日": nxt.get("披露日")} if nxt else None),
         "明细": future[:12],
     }
@@ -933,11 +1009,19 @@ def summarize_asof(payload: dict | None, as_of: str | None = None,
         if c.get("回售触发价"):
             notes.append(f"{nm} 回售触发价 {c['回售触发价']}(正股跌破构成现金压力)")
     if nxt and _gap_days(ref, nxt["解禁日"]) <= NEAR_UNLOCK_DAYS:
-        scale = (f"占流通 {round(nxt['占流通市值_pct'], 3)}%"
-                 if nxt.get("占流通市值_pct") is not None else
-                 (f"占总股本 {nxt['占总股本_pct']}%" if nxt.get("占总股本_pct") is not None
-                  else f"{nxt.get('解禁数量_股')} 股(占比源缺)"))
+        if nxt.get("自洽性") == "不可采信":
+            scale = "数量不可采信"                    # 占比不敢给,数量本身存疑
+        else:
+            scale = (f"占流通 {round(nxt['占流通市值_pct'], 3)}%"
+                     if nxt.get("占流通市值_pct") is not None else
+                     (f"占总股本 {nxt['占总股本_pct']}%" if nxt.get("占总股本_pct") is not None
+                      else f"{nxt.get('解禁数量_股')} 股(占比源缺)"))
         notes.append(f"{nxt['解禁日']} 有解禁({nxt.get('限售股类型') or '类型未知'}),{scale}")
+    # 自洽性护栏:任何**不可采信**的未来解禁都要显式提示——不能静默拿去算摊薄,须交叉验证。
+    for u in future:
+        if u.get("自洽性") == "不可采信":
+            notes.append(f"{u['解禁日']} 解禁数量**不可采信**:{u.get('自洽性依据')};"
+                         f"不得直接用于摊薄测算,须交叉验证(em/cninfo/公告)")
     # 定增:把「摊薄已经发生」与「摊薄还没发生」明确写成两句不同的话——
     # 这正是本轮 bug 的消费侧后果所在(把已完成的定增当成「待摊薄压力」会完全反向)。
     for r in live_rounds:
