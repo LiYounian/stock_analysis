@@ -176,6 +176,10 @@ def run_reversal_turnover_screen(codes: list[str], as_of: str | None = None,
 
     selected = [d for d in (out.get("因子明细") or []) if d["code"] in set(out.get("codes") or [])]
     present = gate.get("present", True)
+    # #23 深采分层门控:入选之外前 K 只作「边缘候选」(因子明细为全排名;present=False 无有效排序 → 空)。
+    from tools.pipeline import edge as _edge
+    边缘候选 = (_edge.edge_slice([d["code"] for d in (out.get("因子明细") or [])],
+                                 set(out.get("codes") or [])) if present else [])
     view = {
         "as_of": as_of,
         "策略": "反转低换手组合(策略10·前向观测中)",
@@ -195,6 +199,7 @@ def run_reversal_turnover_screen(codes: list[str], as_of: str | None = None,
         "入选数": (len(out.get("codes") or []) if present else 0),
         "top_k": top_k,
         "入选清单": (selected if present else []),
+        "边缘候选": 边缘候选,                  # #23 入选之外前 K 只 code(供 screenall analysis_set 数值面深采)
         "权重": out.get("权重"),
         "参数": out.get("参数"),
         "复用": "tools.strategy.reversal_turnover.combo_reversal_turnover_screen",

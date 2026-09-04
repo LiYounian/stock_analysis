@@ -190,6 +190,10 @@ def run_council_screen(codes: list[str], as_of: str | None = None,
         x["排序分"] if x["排序分"] is not None else -1e9,
     ), reverse=True)
     top = scored[:top_n]
+    # #23 深采分层门控:入选之外前 K 只作「边缘候选」(供 screenall 拿 6 类数值面深采,破弃权→软收缩→
+    #   更不被选中的循环)。council 是软收缩喂排序的策略(综合分_收缩 驱动 base_score)→ 边缘覆盖最关键。
+    from tools.pipeline import edge as _edge
+    边缘候选 = _edge.edge_slice([x["code"] for x in scored], {x["code"] for x in top})
     命中高危 = sum(1 for x in scored if (x.get("财报风险") or {}).get("高危数"))   # 财报高危红旗票数
     命中龙虎榜 = sum(1 for x in scored                                          # 龙虎榜否决触发票数
                    if ((x.get("财报风险") or {}).get("各轴") or {}).get("龙虎榜", {}).get("应用"))
@@ -208,6 +212,7 @@ def run_council_screen(codes: list[str], as_of: str | None = None,
         "Top内低合议置信度": 低置信数,         # 少数/单口径专家发声(合议置信度<阈)的 Top 票数;越少越健康
         "top_n": len(top),
         "top": top,
+        "边缘候选": 边缘候选,                  # #23 入选之外前 K 只 code(供 screenall analysis_set 数值面深采)
         "口径": ("全A逐票 technical.compute → 合议默认专家组(有财报 raw 的票挂 as_of 财报块,财报质地"
                  "专家发声;资金流/多因子/情绪/事件因无全A数据自然弃权)→ 统一风控 veto 汇聚接入排序"
                  "(财报红旗 + 龙虎榜否决 正交 OR 合成,降权/否决沉底,与 web 同一纯函数)→ Top N;纯数据·非投资建议"),

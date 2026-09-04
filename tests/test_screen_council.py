@@ -96,6 +96,30 @@ def test_run_council_screen_exposes_confidence_and_ranks_by_shrunk(monkeypatch):
     assert "Top内低合议置信度" in v
 
 
+def test_run_council_screen_emits_edge_candidates(monkeypatch):
+    """#23 深采分层门控(守则6·生产者侧):排序型 council 在 view 落 `边缘候选`=入选之外前 K 只 code。
+
+    锁死语义:边缘候选 = scored 排名 [top_n:top_n+EDGE_TOPK] 的 code(紧挨入选之外),与入选不重叠。
+    供 run_screen_all 汇总成有界 analysis_set,让边缘票拿 6 类数值面深采、破弃权→软收缩降权循环。
+    """
+    from tools.config import settings
+    monkeypatch.setattr(settings, "SCREENALL_EDGE_TOPK", 2)
+    kmap = {c: _kline(trend=0.15 - i * 0.05, seed=i + 2)   # 递减趋势 → 综合分递减,排名可分
+            for i, c in enumerate(["000001", "000002", "000003", "000004", "000005"])}
+    monkeypatch.setattr(sc.market, "load_kline", lambda code: kmap[code])
+    monkeypatch.setattr(sc.board, "board_of", lambda code: None)
+    monkeypatch.setattr(sc.store, "set_active_date", lambda d: None)
+    monkeypatch.setattr(sc.store, "put_view", lambda name, obj, date=None: "p")
+    v = sc.run_council_screen(list(kmap), as_of="2026-08-08", fetch=False, top_n=2)
+    assert "边缘候选" in v
+    edge = v["边缘候选"]
+    top_codes = {t["code"] for t in v["top"]}
+    assert len(edge) <= 2                                  # 每策略 EDGE_TOPK 封顶
+    assert not (set(edge) & top_codes), "边缘候选不得与入选重叠"
+    # 有效样本>入选时应真的产出边缘(5 票、top_n=2 → 至少 2 只边缘)
+    assert len(edge) == 2
+
+
 def test_run_council_screen_persist_false_no_write(monkeypatch):
     """persist=False:只算不落盘——前向记分卡复算全票排名时不得覆盖闭环已落的 top-N view。
 
