@@ -47,9 +47,16 @@ LLM_BASE_URL = os.getenv("LLM_BASE_URL", "")
 LLM_API_KEY = os.getenv("LLM_API_KEY", "")
 LLM_MODEL = "deepseek-v4-pro"   # 写死(env 不再设 LLM_MODEL;要换模型改这里)
 LLM_TIMEOUT = 60
-LLM_MAX_RETRY = 3
+LLM_MAX_RETRY = 3               # JSON 解析失败重试次数(client.extract 内)
+# —— LLM 瞬时故障重试(连接错误/超时/429限流/5xx,指数退避)——
+# 09-03 条目级 66% 失败疑并发打爆/限流:对瞬时错误重试而非直接降级成 scored:false,
+# 显著压低失败率;仍失败的才走 C1 显式失败标记。重试次数/退避基数单一出处在此,不硬编散落。
+LLM_RETRY_MAX = int(os.getenv("LLM_RETRY_MAX", "3"))               # 瞬时错误重试次数(初次外额外几次)
+LLM_RETRY_BACKOFF_BASE = float(os.getenv("LLM_RETRY_BACKOFF_BASE", "0.5"))  # 退避基数秒(第k次退避 base*2^k)
 # —— LLM 抽取提速(I/O 型,有界并发 + 送 LLM 条数上限)——
-LLM_EXTRACT_WORKERS = int(os.getenv("LLM_EXTRACT_WORKERS", "8"))   # 逐条抽取并发度(ThreadPool)
+# 并发度 09-03 由 8 下调到 4:高并发把内部网关打爆导致条目级 66% 失败(Connection error),
+# 4 是稳妥值——仍并行提速但不打爆端点;需要更快可经 env 覆盖但注意端点承压。
+LLM_EXTRACT_WORKERS = int(os.getenv("LLM_EXTRACT_WORKERS", "4"))   # 逐条抽取并发度(ThreadPool)
 NEWS_EXTRACT_MAX = int(os.getenv("NEWS_EXTRACT_MAX", "40"))        # 单票送 LLM 抽取的最近条数上限(原文仍全量落盘)
 # 关思考模式开关:实测对当前 deepseek-v4-pro 中性(网关本就不花时间思考),
 # 为将来换带思考模型自动生效预留;走 extra_body={"enable_thinking": False}。
