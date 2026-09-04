@@ -49,10 +49,28 @@ def _quote(code: str, pct: float, *, sealed_up=False, sealed_down=False) -> dict
             "quote_time": "20260903150300"}
 
 
+#: 冻结节点时钟到 2026-09-03 收盘后(15:05)。为什么必须冻结:
+#:   1) `run()` 只有在 `date == 今天` 时才走**实时**报价路径(= 被 mock 的
+#:      `gtimg_quote.fetch_symbols`);否则按"防未来函数"规矩退化成读本地 K线的历史补跑。
+#:      这些用例硬编码 date="2026-09-03" 并 mock 实时源,一旦真实日期越过 09-03,mode 变
+#:      kline、mock 失效,全部标的取数失败——这是与 wall-clock 耦合导致的伪失败,不是实现漂移。
+#:   2) 抓取时点须晚于收盘 15:00,否则会多出"盘中截面"降级理由,污染 degraded 断言。
+FROZEN_NOW = datetime(2026, 9, 3, 15, 5, 0)
+
+
+class _FrozenDatetime(datetime):
+    """`datetime` 子类:`now()` 恒返回 FROZEN_NOW(其余行为不变),让节点的"今天"确定化。"""
+
+    @classmethod
+    def now(cls, tz=None):
+        return FROZEN_NOW if tz is None else FROZEN_NOW.astimezone(tz)
+
+
 @pytest.fixture()
 def env(tmp_path, monkeypatch):
-    """把节点接到 tmp 产出目录 + 假票池 + 假行情源(网络彻底断开)。"""
+    """把节点接到 tmp 产出目录 + 假票池 + 假行情源(网络彻底断开)+ 冻结时钟。"""
     monkeypatch.setattr(M, "OUT_ROOT", tmp_path / "breadth")
+    monkeypatch.setattr(M, "datetime", _FrozenDatetime)
     monkeypatch.setattr(M.cal, "is_trading_day", lambda d=None, **k: True)
 
     from tools.store import repo as store
@@ -275,8 +293,8 @@ def test_history_backfill_never_uses_realtime_quotes(env, tmp_path, monkeypatch)
     assert env["symbols_calls"] == 0                       # 没有拿今天的实时价冒充那天
     assert p["meta"]["mode"] == "kline" and p["meta"]["source"] == M.SOURCE_KLINE
     assert p["mean_pct"] == pytest.approx(np.mean(list(UNIVERSE_PCT.values())))
-    # captured_at 如实是"跑这次补跑"的时刻(不伪装成那天收盘);date 才是口径日
-    assert p["captured_at"][:10] == datetime.now().strftime("%Y-%m-%d")
+    # captured_at 如实是"跑这次补跑"的时刻(节点冻结时钟=09-03),不伪装成那天收盘;date 才是口径日
+    assert p["captured_at"][:10] == FROZEN_NOW.strftime("%Y-%m-%d")
     assert p["date"] == "2026-09-01"
 
 
