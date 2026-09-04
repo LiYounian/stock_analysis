@@ -55,12 +55,15 @@ def _weekly_ma(kdf: pd.DataFrame, t: int, n: int) -> float | None:
 
 
 def _single(kdf, t, close, vol, c) -> tuple[bool, bool, dict]:
-    """单日放量。返回 (适用, 命中, 明细)。换手 NA → 不适用。"""
+    """单日放量。返回 (适用, 命中, 明细)。换手 NA → 不适用,但**明确标降级**(不静默)。"""
     cs = c["单日放量"]
     turn = kdf["turnover"].to_numpy(dtype=float)
     tv, tv_prev = turn[t], turn[t - 1]
     if not (pd.notna(tv) and pd.notna(tv_prev) and tv_prev > 0):
-        return False, False, {"换手": None}
+        # 有声降级:换手缺失时本子信号无从判定。绝不静默返回"不适用"——那会让整批
+        # 「单日放量」哑火而无告警(#20:94/94 全 换手=None、命中 0)。由 run_volume_screen
+        # 汇总降级票数并 warning;近端缺失先跑 ops.backfill_turnover 回填。
+        return False, False, {"换手": None, "降级": "换手缺失(turnover NaN)"}
     ma_up = int(cs["MA上行周期"])
     ma_up_t, ma_up_p = ind.ma(close, t, ma_up), ind.ma(close, t - 1, ma_up)
     ma_fast, ma_slow = ind.ma(close, t, int(cs["MA快"])), ind.ma(close, t, int(cs["MA慢"]))
@@ -179,6 +182,7 @@ def run_volume_screen(codes: list[str], as_of: str | None = None,
     need = min_history()
     selected: list[dict] = []
     scanned = skipped = 0
+    single_degraded = 0                       # 「单日放量」因换手缺失而无法判定的票数(有声降级)
     counts = {s: 0 for s in _SUBS}
     for code in codes:
         kdf = _load_or_fetch_kline(code, fetch)
@@ -187,6 +191,8 @@ def run_volume_screen(codes: list[str], as_of: str | None = None,
             continue
         scanned += 1
         r = screen_latest(kdf)
+        if r.get("明细", {}).get("单日放量", {}).get("降级"):
+            single_degraded += 1
         if r.get("SELECT"):
             for s in r["组合"]:
                 counts[s] += 1
@@ -198,6 +204,7 @@ def run_volume_screen(codes: list[str], as_of: str | None = None,
         "方向": "看多",
         "子信号": list(_SUBS),
         "子信号命中数": counts,
+        "单日放量降级数(换手缺失)": single_degraded,
         "扫描数": len(codes), "有效样本": scanned, "跳过数(历史不足)": skipped,
         "入选数": len(selected),
         "入选清单": selected,
@@ -210,6 +217,11 @@ def run_volume_screen(codes: list[str], as_of: str | None = None,
     logger.info("量价放量:扫描 %d / 有效 %d / 跳过 %d / 入选 %d(单日 %d 低位 %d 连续 %d)→ %s",
                 len(codes), scanned, skipped, len(selected),
                 counts["单日放量"], counts["低位放量"], counts["连续放量"], p)
+    if single_degraded:
+        # 有声降级:换手缺失让「单日放量」子信号整批哑火,必须告警而非静默(#20)
+        lvl = logger.error if scanned and single_degraded >= scanned * 0.5 else logger.warning
+        lvl("量价放量:「单日放量」%d/%d 只因换手缺失无法判定(子信号哑火);"
+            "近端 turnover 缺失请先跑 ops.backfill_turnover 回填", single_degraded, scanned)
     return view
 
 

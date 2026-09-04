@@ -57,8 +57,15 @@ def compute_distribution(df: pd.DataFrame, window: int = _WINDOW) -> tuple[np.nd
         return None
     df = df.tail(window).reset_index(drop=True)
     turn = pd.to_numeric(df["turnover"], errors="coerce")
+    n_missing = int(turn.isna().sum())
     if turn.notna().sum() < len(df) * 0.5:        # 半数以上换手缺失 → 不可信
         return None
+    if n_missing:
+        # 有声降级:缺失日按「无新增筹码」结转(tr=0),会低估近端换手、扭曲集中度/成本;
+        # 绝不静默——静默把 NaN 当 0 正是 #21 的成因(近端整段缺失时集中度失真 34%)。
+        logger.warning("筹码推演:窗口内 %d/%d 日换手缺失,按无新增筹码结转 → 集中度/成本"
+                       "已降级(近端缺失请先跑 ops.backfill_turnover 回填)",
+                       n_missing, len(df))
 
     lo, hi = float(df["low"].min()), float(df["high"].max())
     if not (hi > lo):
@@ -110,10 +117,24 @@ def _cost_range(prices: np.ndarray, chips: np.ndarray, ratio: float) -> tuple[fl
     return lo, hi
 
 
+def _window_missing_turnover(df: pd.DataFrame) -> int:
+    """推演窗口内 turnover 缺失(NaN)的行数。用于有声降级标记(不再静默当 0)。"""
+    if df is None or "turnover" not in getattr(df, "columns", []):
+        return len(df) if df is not None else 0
+    turn = pd.to_numeric(df.tail(_WINDOW)["turnover"], errors="coerce")
+    return int(turn.isna().sum())
+
+
 def summarize(df: pd.DataFrame) -> dict:
-    """派生最新一日筹码因子。无法推演 → 全 None(缺失,交上层降级)。"""
+    """派生最新一日筹码因子。无法推演 → 全 None(缺失,交上层降级)。
+
+    结果恒带 `换手缺失日`(窗口内 turnover NaN 行数)与 `降级`(>0 即为真):缺失日在
+    推演里按「无新增筹码」结转,会扭曲集中度/成本,必须**有声**标记供下游识别(见 #21)。
+    """
+    n_missing = _window_missing_turnover(df)
+    degrade = {"换手缺失日": n_missing, "降级": n_missing > 0}
     null = {"获利比例": None, "平均成本": None, "成本区间下沿": None,
-            "成本区间上沿": None, "集中度90": None, "现价": None}
+            "成本区间上沿": None, "集中度90": None, "现价": None, **degrade}
     dist = compute_distribution(df)
     if dist is None:
         return null
@@ -130,6 +151,7 @@ def summarize(df: pd.DataFrame) -> dict:
         "成本区间上沿": round(hi90, 3),
         "集中度90": round(conc, 4) if conc is not None else None,
         "现价": round(close, 3),
+        **degrade,
     }
 
 
@@ -225,6 +247,9 @@ def _emit(code: str, rec: dict, out: dict, failed: list) -> None:
         return
     store.put_raw("chip", code, rec, meta={"source": _SOURCE})
     out[code] = rec
+    if rec.get("降级"):
+        logger.warning("筹码 %s:换手缺失 %d 日,集中度/成本已降级(先跑 ops.backfill_turnover)",
+                       code, rec.get("换手缺失日", 0))
     logger.info("筹码 %s:获利比例 %.1f%% 平均成本 %.2f",
                 code, rec["获利比例"] * 100, rec["平均成本"])
 
