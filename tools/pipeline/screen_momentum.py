@@ -159,6 +159,12 @@ def run_momentum_screen(codes: list[str], as_of: str | None = None,
             }
         selected.append(item)
 
+    # #23 深采分层门控:入选之外前 K 只作「边缘候选」(供 screenall 拿 6 类数值面深采)。
+    #   ranked 是 (tier, raw, code) 已排序全候选(剔除票已 continue 不在内),取入选外前 K。
+    from tools.pipeline import edge as _edge
+    边缘候选 = _edge.edge_slice([code for _tier, _raw, code in ranked],
+                                {x["code"] for x in selected})
+
     view = {
         "as_of": as_of,
         "策略": "动量组合(策略4·仅A腿/全A口径)",
@@ -168,6 +174,7 @@ def run_momentum_screen(codes: list[str], as_of: str | None = None,
         "扫描数": len(codes), "有效样本": scanned, "跳过数(历史不足)": skipped,
         "入选数": len(selected),
         "top_k": top_k,
+        "边缘候选": 边缘候选,                  # #23 入选之外前 K 只 code(供 screenall analysis_set 数值面深采)
         "适用尺度": "⚠仅 1 日短线尺度有选择性(回测:h=1 Top-N 有超额,持有≥5 日衰减转负);不宜持有>1 日。",
         "入选清单": selected,
         "规则": (f"加权对数动量打分(lookback={LOOKBACK_DAYS})→ R²≥{R2_MIN} + "

@@ -84,6 +84,15 @@ FETCH_SLEEP_SEC = 0.5       # 单次请求间隔(串行兜底路径)
 FETCH_WORKERS = int(os.getenv("FETCH_WORKERS", "1"))
 FETCH_JITTER_SEC = 0.2      # 并发路径每请求前随机抖动上限(秒)
 
+# —— screenall 深采分层门控:边缘候选集上界(#23,防对全A深采)——
+# 分层门控把 6 类数值面深采(fundflow/chip/holder_num/block_trade/tick/consensus)从「选出并集∪自选」
+# 扩到「边缘候选」——各策略入选之外、紧挨着入选的那段票(排序型取 top-(K+M) 的 M 段;信号型取差一
+# 个条件的票)。新闻/LLM 情绪坚决不扩(最贵),仍只对 llm_subset。成本硬约束:数值面串行 0.5s/请求、
+# 单类源全A≈46min,故边缘集**必须设上界**——每策略取入选外前 TOPK 只、全局封顶 MAX 只,吃缓存跳采。
+# TOPK/MAX=0 即关闭分层门控(analysis_set 回退为 llm_subset,行为同旧)。可用环境变量覆盖。
+SCREENALL_EDGE_TOPK = int(os.getenv("SCREENALL_EDGE_TOPK", "20"))   # 每策略入选之外取前 N 只边缘候选(0=关)
+SCREENALL_EDGE_MAX = int(os.getenv("SCREENALL_EDGE_MAX", "300"))    # 全局边缘候选总量上界(墙钟预算封顶)
+
 # —— 数据新鲜度(store 层用)——
 RAW_STALE_DAYS = 3          # raw 缓存超过此天数(或无采集元数据)视为陈旧,促使重采
 

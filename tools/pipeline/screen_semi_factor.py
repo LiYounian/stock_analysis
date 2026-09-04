@@ -176,6 +176,11 @@ def run_semi_factor_screen(codes: list[str], as_of: str | None = None,
             },
         })
 
+    # #23 深采分层门控:入选之外前 K 只作「边缘候选」(因子明细为全排名,取入选外前 K)。
+    from tools.pipeline import edge as _edge
+    边缘候选 = _edge.edge_slice([d["code"] for d in result.get("因子明细", [])],
+                                {x["code"] for x in selected})
+
     view = {
         "as_of": as_of,
         "策略": "半导体多因子(策略5·限申万二级 801081 池)",
@@ -190,6 +195,7 @@ def run_semi_factor_screen(codes: list[str], as_of: str | None = None,
         "top_k": top_k,
         "权重": result.get("权重"),
         "入选清单": selected,
+        "边缘候选": 边缘候选,                  # #23 入选之外前 K 只 code(供 screenall analysis_set 数值面深采)
         "复用": "tools.strategy.semi_factor.combo_semi_factor_screen(records)",
         "防未来函数": "financial.derived / fundamental 均基于已披露报告期 + 当日估值",
     }
