@@ -414,6 +414,47 @@
   {% endif %}
 </section>
 
+<!-- 策略12:扣非质量(#31 纯扣非质量横截面排序召回,与位置型策略正交互补) -->
+<section class="card wide">
+  <h2>策略12 · 扣非质量 <span class="badge wait">质量召回</span>
+    {% if s.strategy_kf.present %}
+    <small>扫描 <b>{{ s.strategy_kf.扫描数 if s.strategy_kf.扫描数 is not none else '—' }}</b> ·
+      有效 <b>{{ s.strategy_kf.有效 if s.strategy_kf.有效 is not none else '—' }}</b> ·
+      入选 <b class="pos">{{ s.strategy_kf.入选数 if s.strategy_kf.入选数 is not none else (s.strategy_kf.rows|length) }}</b> ·
+      数据日期 <b>{{ s.strategy_kf.as_of }}</b></small>
+    {% endif %}</h2>
+  <p class="muted tiny">在全 A 横截面上<b>按利润质量召回</b>(与位置型策略正交互补,让「质量硬、位置弱」的票也进候选并集):
+    扣非增速 / 扣非占归母 / 现金含量(CFO比净利)/ 毛利率 / 质量领先度(扣非快于归母·跨期均值),
+    各维 winsor+zscore、<b>缺维重归一</b>等权复合取 TopK;可交易性门=剔 ST/停牌/次新 + 成交额或流通市值下限。</p>
+  <p class="muted tiny" style="color:#a60">⚠️ 非投资建议,研究模拟。回测(rank-IC 20/60 日 + TopN 超额)<b>达标才接生产</b>;
+    达标前作候选召回口径。全A筛选,读预落盘 view。</p>
+  {% if not s.strategy_kf.present %}
+  <p class="muted">策略12 待运行(<code>python -m tools.pipeline.screen_deduct_quality --no-fetch</code>;需先采财报三大表)。</p>
+  {% elif not s.strategy_kf.rows %}
+  <p class="muted">本日 策略12 无入选标的(缺财报 derived 的票诚实降级不召回)。</p>
+  {% else %}
+  <table>
+    <thead><tr><th>代码</th><th>名称</th><th>行业</th><th>综合分</th><th>扣非增速</th><th>扣非占归母</th><th>现金含量</th><th>毛利率</th><th>质量领先</th><th>参与维</th></tr></thead>
+    <tbody>
+    {% for x in s.strategy_kf.rows %}
+      <tr data-code="{{ x.code }}">
+        <td>{{ x.code }}</td>
+        <td><a href="/stock/{{ x.code }}?date={{ s.as_of }}">{{ x.name }}</a>{{ risk_badge(x) }}</td>
+        <td class="muted">{{ x.industry or '-' }}</td>
+        <td class="pos">{{ x.综合分 if x.综合分 is not none else '—' }}</td>
+        <td class="muted">{% if x.扣非增速 is not none %}{{ '%+.1f'|format(x.扣非增速) }}%{% else %}—{% endif %}</td>
+        <td class="muted">{{ x.扣非占归母 if x.扣非占归母 is not none else '—' }}</td>
+        <td class="muted">{{ x.现金含量 if x.现金含量 is not none else '—' }}</td>
+        <td class="muted">{% if x.毛利率 is not none %}{{ '%.1f'|format(x.毛利率) }}%{% else %}—{% endif %}</td>
+        <td class="muted">{% if x.质量领先度 is not none %}{{ '%+.1f'|format(x.质量领先度) }}{% else %}—{% endif %}</td>
+        <td class="muted tiny">{{ x.参与维数 if x.参与维数 is not none else '—' }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+</section>
+
 <p class="muted tiny">点名称进个股页看完整归因/K线。合议综合分同口径(前端同 councilSynth 公式,勾选专家实时重排)。</p>
 
 <script id="selectionExperts" type="application/json">{{ (s.rows|list)|tojson }}</script>

@@ -164,7 +164,7 @@ def test_combined_union_and_sources(monkeypatch):
     strat = {s["key"]: s for s in combined["strategies"]}
     # 在产策略勾选框:S01/箱体3/自选池小市值 下线后 策略1/策略3/策略5 不再出现,编号 1/3/5 空缺
     assert [s["key"] for s in combined["strategies"]] == [
-        "策略0", "策略2", "策略4", "策略6", "策略7", "策略8", "策略9", "策略10", "策略11"]
+        "策略0", "策略2", "策略4", "策略6", "策略7", "策略8", "策略9", "策略10", "策略11", "策略12"]
     assert "策略1" not in strat and "策略3" not in strat and "策略5" not in strat
     assert strat["策略2"]["label"] == "放量后缩量回踩"
     assert strat["策略4"]["label"] == "动量组合"
@@ -177,6 +177,9 @@ def test_combined_union_and_sources(monkeypatch):
     assert strat["策略10"]["available"] is False and strat["策略10"]["codes"] == []
     assert strat["策略11"]["label"] == "指标条件化状态排序(状态参考)"
     assert strat["策略11"]["available"] is False and strat["策略11"]["codes"] == []
+    # 策略12 扣非质量(#31):view 缺(本测试未注入)→ present=False → available=False、codes=[]
+    assert strat["策略12"]["label"] == "扣非质量"
+    assert strat["策略12"]["available"] is False and strat["策略12"]["codes"] == []
     assert strat["策略0"]["available"] and strat["策略2"]["available"]
     # 策略4 view 缺 → present=False → available=False、codes=[]
     assert strat["策略4"]["available"] is False and strat["策略4"]["codes"] == []

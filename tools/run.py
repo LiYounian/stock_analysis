@@ -1035,8 +1035,9 @@ def run_screen_all(codes_all: list[str], as_of: str, no_llm: bool = False,
     # 注:screen_s01(趋势深跌反包)/ screen_box(箱体3)已因全史深诊断显著负下线,
     # 不再进本编排(代码存档保留,见各文件顶部说明)。
     from tools.pipeline import (screen_conditional_rank, screen_council,
-                                 screen_max_range, screen_momentum, screen_reversal_turnover,
-                                 screen_s02, screen_semi_factor, screen_strong, screen_volume)
+                                 screen_deduct_quality, screen_max_range, screen_momentum,
+                                 screen_reversal_turnover, screen_s02, screen_semi_factor,
+                                 screen_strong, screen_volume)
     store.set_active_date(as_of)
     logger.info("===== 全A多策略选股开始(日期 %s,全A %d 只)%s=====",
                 as_of, len(codes_all), "(数据-only)" if no_llm else "")
@@ -1074,6 +1075,11 @@ def run_screen_all(codes_all: list[str], as_of: str, no_llm: bool = False,
         # 缺池则优雅出空。fetch=False 只读主档。回测聚合无超额、1日弱区分/5-10日近噪声,页面已诚实标注。
         ("策略11·指标条件化状态排序", lambda: screen_conditional_rank.run_conditional_rank_screen(
             codes_all, as_of=as_of, fetch=False)),
+        # 策略12·扣非质量(#31 纯扣非质量横截面排序召回,与位置型正交):读财报三大表 derived,
+        # 需**触网补采**财报(fetch=True,同策略5——主闭环 collect_values 只对 llm_subset,全A票
+        # 大概率无 financial_report raw;skip-if-cached 幂等,只在新披露季实际触网)。缺财报的票诚实降级。
+        ("策略12·扣非质量", lambda: screen_deduct_quality.run_deduct_quality_screen(
+            codes_all, as_of=as_of, fetch=True)),
     ]
     # 候选定向富集口径:每策略取前 M 只并入候选集(∪自选)做全套消息面/财报/资金流富集。
     # M=0(默认)→ 候选集=各策略选出并集∪自选(= llm_subset,即所有被 serialize 成 record 的票),
@@ -1087,6 +1093,7 @@ def run_screen_all(codes_all: list[str], as_of: str, no_llm: bool = False,
         "S03·最大范围选股": "最大范围选股", "S04·量价放量": "量价放量",
         "S05·最强选股": "最强选股", "策略10·反转低换手组合": "反转低换手组合",
         "策略11·指标条件化状态排序": "指标条件化状态排序",
+        "策略12·扣非质量": "扣非质量",
     }
     from tools.sync.upload import VIEW_SHARD_PREFIX as _VPREFIX
     union: list[str] = []
