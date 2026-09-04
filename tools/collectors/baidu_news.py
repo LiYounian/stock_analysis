@@ -195,6 +195,40 @@ def _prev_snapshot(code: str) -> list[dict]:
         return []
 
 
+def newest_item_ts(items: list[dict]) -> int | None:
+    """快照里最新条目的发布时间戳(unix 秒);空/无有效时间戳返回 None。
+
+    条目已按 publish_ts 倒序(_parse/_merge_incremental 保证),取首个即最新;
+    仍防御式扫全量取 max,避免上游未排序时误判。
+    """
+    ts = [t for t in (_to_int(it.get("publish_ts")) for it in items or []) if t and t > 0]
+    return max(ts) if ts else None
+
+
+def content_stale_days(items: list[dict], now_ts: int | None = None) -> float | None:
+    """快照消息面陈旧度 = (当前 - 最新条目发布时间) 天数。无有效条目返回 None。
+
+    看**条目发布日期**(非采集时刻 fetched_at),用于识别"采过但内容陈旧"的静默失效。
+    """
+    newest = newest_item_ts(items)
+    if newest is None:
+        return None
+    ref = now_ts if now_ts is not None else int(datetime.now(tz=_CST).timestamp())
+    return (ref - newest) / 86400.0
+
+
+def _content_freshness_meta(items: list[dict], threshold_days: float) -> dict:
+    """派生条目级新鲜度元信息:最新条目日期 / 陈旧天数 / 是否陈旧(供落盘 meta + 告警)。"""
+    stale_days = content_stale_days(items)
+    newest = newest_item_ts(items)
+    _, newest_str = _ts_to_bjt(newest) if newest is not None else (None, "")
+    return {
+        "newest_item_date": newest_str[:10] if newest_str else None,
+        "item_stale_days": None if stale_days is None else round(stale_days, 2),
+        "content_stale": bool(stale_days is not None and stale_days > threshold_days),
+    }
+
+
 def stale_codes(codes: list[str], max_days: float | None = None) -> list[str]:
     """返回需要重拉的票(缓存陈旧/无缓存)。供编排层 skip-if-cached 过滤用。
 
@@ -241,10 +275,18 @@ def fetch_baidu_news(codes: list[str], rn: int | None = None,
         # 新鲜度门控:已有新鲜快照 → 跳过重拉(沿用既有)
         if skip_fresh and not store.is_stale("baidu_news", code, md):
             try:
-                out[code] = store.get_raw("baidu_news", code)
+                cached = store.get_raw("baidu_news", code)
             except FileNotFoundError:
-                out[code] = []
-            logger.info("[%d/%d] 百度新闻 %s:缓存新鲜,跳过", i, n, code)
+                cached = []
+            out[code] = cached
+            # 采集时刻新鲜≠内容新鲜:跳过重拉时仍核条目发布日,陈旧照样告警(不静默)
+            cstale = content_stale_days(cached)
+            if cstale is not None and cstale > settings.BAIDU_NEWS_ITEM_STALE_DAYS:
+                _, newest_str = _ts_to_bjt(newest_item_ts(cached))
+                logger.warning("[%d/%d] 百度新闻 %s:缓存新鲜跳过,但内容陈旧(最新条目 %s 落后 %.0f 天)",
+                               i, n, code, newest_str[:10] if newest_str else "无", cstale)
+            else:
+                logger.info("[%d/%d] 百度新闻 %s:缓存新鲜,跳过", i, n, code)
             continue
 
         logger.info("[%d/%d] 百度新闻 %s 采集...", i, n, code)
@@ -256,11 +298,18 @@ def fetch_baidu_news(codes: list[str], rn: int | None = None,
             fresh = _parse(_fetch_raw(code, rn))
             # 前向增量并集:与最近快照按 news_id 去重合并,累积不丢旧条(幂等)
             merged = _merge_incremental(fresh, _prev_snapshot(code))
+            # 条目级新鲜度:看**最新条目发布日**(非采集时刻),陈旧显式标记 + 告警(不静默)
+            fresh_meta = _content_freshness_meta(merged, settings.BAIDU_NEWS_ITEM_STALE_DAYS)
             store.put_raw("baidu_news", code, merged,
                           meta={"source": _SOURCE, "new_pulled": len(fresh),
-                                "total": len(merged), "rn": rn})
+                                "total": len(merged), "rn": rn, **fresh_meta})
             out[code] = merged
-            logger.info("百度新闻 %s:新拉 %d 条,累积 %d 条", code, len(fresh), len(merged))
+            logger.info("百度新闻 %s:新拉 %d 条,累积 %d 条(最新条目 %s)",
+                        code, len(fresh), len(merged), fresh_meta["newest_item_date"] or "无")
+            if fresh_meta["content_stale"]:
+                logger.warning("百度新闻 %s 内容陈旧:最新条目 %s 落后 %.0f 天(>%.0f)——勿当有效新数据",
+                               code, fresh_meta["newest_item_date"], fresh_meta["item_stale_days"],
+                               settings.BAIDU_NEWS_ITEM_STALE_DAYS)
         except Exception as e:
             failed.append(code)
             logger.warning("百度新闻 %s 失败(降级跳过): %s", code, e)
