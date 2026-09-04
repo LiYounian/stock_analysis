@@ -169,9 +169,40 @@ def load_membership() -> dict[str, str]:
     return store.get_raw("board_membership", _MEMBERSHIP_CODE)
 
 
+_CODE_INDUSTRY_CACHE: dict[str, str] | None = None
+
+
+def _code_industry_map() -> dict[str, str]:
+    """全A code→申万一级 离线映射(code_industry.json),模块级缓存一次(供 board_of 回退)。
+
+    该表由 code_industry.refresh() 维护(baostock 证监会→申万一级归一,~94% 全A 覆盖),
+    是选股页展示的**同一个**行业源,故 board_of 复用它可消除「board_membership 空 vs
+    code_industry 有值」的行业数据源分裂。缺文件 → 返回空 dict(board_of 退回 None,不抛)。
+    """
+    global _CODE_INDUSTRY_CACHE
+    if _CODE_INDUSTRY_CACHE is None:
+        from tools.collectors import code_industry
+        try:
+            _CODE_INDUSTRY_CACHE = code_industry.load()
+        except FileNotFoundError:
+            logger.warning("code_industry.json 缺失,board_of 回退源不可用;"
+                           "请先 `python -m tools.collectors.code_industry`")
+            _CODE_INDUSTRY_CACHE = {}
+    return _CODE_INDUSTRY_CACHE
+
+
 def board_of(code: str) -> str | None:
-    """查单只股票所属板块;映射缺失或未收录返回 None(advisory,不抛)。"""
+    """查单只股票所属板块(申万一级);映射缺失或未收录返回 None(advisory,不抛)。
+
+    取数顺序:①申万成分 membership(若已采集,细分口径优先)→ ②回退 code_industry 离线映射
+    (全A 覆盖、与选股页同源,已归一到申万一级)。membership 长期为空(东财/THS/申万成分接口
+    本机不可用),故 ② 是常态生效路径——修复板块轮动专家「无所属行业」结构性弃权(见 #24)。
+    """
+    code = str(code)
     try:
-        return load_membership().get(code)
+        hit = load_membership().get(code)
+        if hit:
+            return hit
     except FileNotFoundError:
-        return None
+        pass
+    return _code_industry_map().get(code)
