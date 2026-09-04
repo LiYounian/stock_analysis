@@ -54,10 +54,31 @@ def test_baidu_latest_value(monkeypatch):
 
 
 def test_baidu_source_fail_degrades(monkeypatch):
-    """百度失败 → 估值字段 None(含 PE分位),不抛错。"""
+    """百度失败 → 估值字段 None(含 PE分位),不抛错;窗口口径仍记录。"""
     _install_fake_ak(monkeypatch, baidu_raise=True)
     b = fd._fetch_baidu("000021")
-    assert b == {"PE_TTM": None, "PB": None, "总市值": None, "PE分位": None}
+    assert b == {"PE_TTM": None, "PB": None, "总市值": None, "PE分位": None,
+                 "PE分位窗口": fd.settings.PE_PCTL_PERIOD}
+
+
+def test_baidu_pctl_window_configurable(monkeypatch):
+    """#32:PE 分位窗口取 settings.PE_PCTL_PERIOD(默认全历史)并透传 akshare period;
+    记录旁记 PE分位窗口 供输出标口径,不再硬编码「近一年」。"""
+    seen = {}
+
+    def _baidu(symbol, indicator, period):
+        seen["period"] = period
+        return pd.DataFrame({"date": ["2026-08-04"], "value": [12.0]})
+    monkeypatch.setitem(__import__("sys").modules, "akshare",
+                        types.SimpleNamespace(stock_zh_valuation_baidu=_baidu))
+    assert fd.settings.PE_PCTL_PERIOD == "全部"          # 默认全历史(锁口径,防回退近一年)
+    b = fd._fetch_baidu("000021")
+    assert seen["period"] == "全部"                      # 实际透传给 akshare 的窗口
+    assert b["PE分位窗口"] == "全部"                      # 记录里可见口径
+
+    monkeypatch.setattr(fd.settings, "PE_PCTL_PERIOD", "近三年")
+    b2 = fd._fetch_baidu("000021")
+    assert seen["period"] == "近三年" and b2["PE分位窗口"] == "近三年"
 
 
 def test_percentile_pure():

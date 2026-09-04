@@ -19,15 +19,19 @@ _CFG = THRESHOLDS["形态选股"]
 
 # ———————————————————— 护栏(F2.3,仅负向剔除)————————————————————
 def guardrail(pe_percentile: float | None, net_profit_growth: float | None,
-              ann_titles: list[str] | None = None, cfg: dict = None) -> tuple[bool, list[str]]:
+              ann_titles: list[str] | None = None, cfg: dict = None,
+              pe_window: str | None = None) -> tuple[bool, list[str]]:
     """三条负向护栏(各有开关):PE分位极端 / 净利增速为负 / 近期合规风险公告。
 
     返回 (是否通过, 剔除原因列表)。缺数据(None)不主动剔除(避免误杀)。
+    pe_window:PE 分位的历史窗口口径(见 fundamental `PE分位窗口`),有则在剔除原因里标出
+    (#32:分位是多长窗口算的直接影响解释力,须随剔除理由可见)。
     """
     g = (cfg or _CFG)["护栏"]
     reasons: list[str] = []
     if g.get("启用PE护栏") and pe_percentile is not None and pe_percentile > g["PE分位剔除"]:
-        reasons.append(f"PE分位{pe_percentile:.2f}>{g['PE分位剔除']}(极度高估)")
+        win = f",{pe_window}窗口" if pe_window else ""
+        reasons.append(f"PE分位{pe_percentile:.2f}>{g['PE分位剔除']}(极度高估{win})")
     if g.get("启用净利增速护栏") and net_profit_growth is not None \
             and net_profit_growth < g["净利增速下限%"]:
         reasons.append(f"净利增速{net_profit_growth}%<{g['净利增速下限%']}%")
@@ -75,7 +79,8 @@ def volume_ok(kline_df, cfg: dict = None) -> bool:
 # ———————————————————— 硬规则 AND 达标(F2.4)————————————————————
 def is_qualified(kline_df, rs_stock_vs_board: float, rs_board_vs_hs300: float | None = None,
                  pe_percentile: float | None = None, net_profit_growth: float | None = None,
-                 ann_titles: list[str] | None = None, cfg: dict = None) -> dict:
+                 ann_titles: list[str] | None = None, cfg: dict = None,
+                 pe_window: str | None = None) -> dict:
     """单票硬规则 AND 达标判定。五项全过才达标(形态/RS/量能/负向护栏/正向确认);
     不达标给可追溯剔除原因。正向确认体现"突破不裸用"纪律(见模块 docstring)。
 
@@ -92,7 +97,7 @@ def is_qualified(kline_df, rs_stock_vs_board: float, rs_board_vs_hs300: float | 
     else:
         rs_ok = rs.is_strong(rs_stock_vs_board, "个股vs板块")   # 单层:个股 vs 沪深300
     vol_ok = volume_ok(kline_df, cfg)
-    grd_ok, grd_reasons = guardrail(pe_percentile, net_profit_growth, ann_titles, cfg)
+    grd_ok, grd_reasons = guardrail(pe_percentile, net_profit_growth, ann_titles, cfg, pe_window)
     pos_ok, pos_confirms = positive_confirm(net_profit_growth, ann_titles, cfg)
 
     reasons: list[str] = []

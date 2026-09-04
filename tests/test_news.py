@@ -200,6 +200,52 @@ def test_dedup_by_title_date_when_no_url():
     assert merged[0]["source"] == "eastmoney"     # 主源先到者留
 
 
+# ---------- #30:业绩快报/预告 与 正式定期报告 同源去重 ----------
+def _n(title, day):
+    return {"title": title, "content": "", "time": f"{day} 10:00:00",
+            "source": "eastmoney", "url": ""}
+
+
+def test_earnings_kind_classifies():
+    """快报/预告 → preliminary;正式定期报告 → formal;普通新闻 → None。"""
+    assert nw._earnings_kind("XX公司发布上半年业绩快报 净利同比+331%") == "preliminary"
+    assert nw._earnings_kind("XX公司业绩预告：预增") == "preliminary"
+    assert nw._earnings_kind("XX公司2026年半年度报告 净利+325%") == "formal"
+    assert nw._earnings_kind("XX公司2026年半年报点评") == "formal"
+    assert nw._earnings_kind("XX公司签订日常经营合同") is None
+
+
+def test_same_event_dedup_prelim_absorbed_by_formal():
+    """快报与 45 天内的正式半年报判同一事件 → 只留正式报,快报被吸收。"""
+    items = [_n("XX业绩快报 营收126.41亿 净利+331.11%", "2026-08-13"),
+             _n("XX2026年半年报 营收125.23亿 净利+325.51%", "2026-08-28"),
+             _n("XX获得政府补助", "2026-08-20")]
+    out = nw._dedup_earnings_same_event(items, 45)
+    titles = [it["title"] for it in out]
+    assert not any("快报" in t for t in titles)          # 快报被正式报吸收
+    assert any("半年报" in t for t in titles)             # 正式报保留
+    assert any("补助" in t for t in titles)               # 非业绩新闻不动
+
+
+def test_same_event_dedup_prelim_kept_when_no_formal_yet():
+    """正式报尚未披露(窗口内无 formal)→ 快报保留(彼时它就是最新信息)。"""
+    items = [_n("XX业绩快报 营收126.41亿 净利+331.11%", "2026-08-13"),
+             _n("XX签订战略合作协议", "2026-08-15")]
+    out = nw._dedup_earnings_same_event(items, 45)
+    assert any("快报" in it["title"] for it in out)
+
+
+def test_same_event_dedup_no_cross_period_merge():
+    """跨报告期两份正式报(相距约半年)互不吸收;窗外快报也不被吸收。"""
+    items = [_n("XX业绩快报(一季度)", "2026-01-05"),      # 距任一正式报均 >45 天
+             _n("XX2025年年度报告", "2026-03-30"),
+             _n("XX2026年半年度报告", "2026-08-28")]
+    out = nw._dedup_earnings_same_event(items, 45)
+    assert len(out) == 3                                   # 无一被误并
+    formals = [it["title"] for it in out if nw._earnings_kind(it["title"]) == "formal"]
+    assert len(formals) == 2
+
+
 def test_parse_sina_normalizes_contract():
     """新浪 HTML 解析归一到契约字段(title/content/time/source/url),time 补 :00 秒。"""
     # 用 &nbsp; 分隔(真实页面格式),锁住解析前必须做实体替换
