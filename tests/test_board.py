@@ -60,7 +60,48 @@ def test_membership_default_source_empty(monkeypatch, tmp_path):
 
 def test_board_of_missing_returns_none(monkeypatch, tmp_path):
     monkeypatch.setattr(store, "_RAW_DIR", tmp_path)
+    monkeypatch.setattr(board, "_CODE_INDUSTRY_CACHE", {})   # 回退源也空:两源皆空→None
     assert board.board_of("999999") is None       # 映射未落盘→兜底 None,不抛
+
+
+def test_board_of_falls_back_to_code_industry(monkeypatch, tmp_path):
+    """#24 回归:membership 长期为空时,board_of 回退 code_industry(申万一级)而非全 None。
+
+    锁语义——板块轮动专家「无所属行业」结构性弃火的根因是 board_of 全 None;修复后只要
+    code_industry.json 有该票,board_of 必给出申万一级行业名(与 board_kline 键、RRG 口径对齐)。
+    """
+    monkeypatch.setattr(store, "_RAW_DIR", tmp_path)     # membership 未落盘 → FileNotFoundError
+    monkeypatch.setattr(board, "_CODE_INDUSTRY_CACHE",
+                        {"300750": "电力设备", "000001": "银行"})
+    assert board.board_of("300750") == "电力设备"        # 回退命中 code_industry
+    assert board.board_of(300750) == "电力设备"           # 入参 int 也归一(str 化)
+    assert board.board_of("999999") is None              # 回退源也未收录 → None
+
+
+def test_board_of_membership_takes_precedence(monkeypatch, tmp_path):
+    """membership 若已采集则**优先**(细分口径),回退源仅在 membership 缺该票时生效。"""
+    monkeypatch.setattr(store, "_RAW_DIR", tmp_path)
+    board.fetch_membership(cons_fetcher=lambda name: {"半导体": ["300750"]}[name],
+                           boards=[{"name": "半导体", "code": "731"}])
+    monkeypatch.setattr(board, "_CODE_INDUSTRY_CACHE", {"300750": "电力设备"})
+    assert board.board_of("300750") == "半导体"           # membership 命中 → 不走回退
+
+
+def test_rrg_expert_not_abstain_no_industry_after_fix(monkeypatch):
+    """#24 回归(专家层):board_of 能给出行业后,板块轮动专家不再以「无所属行业」弃权。
+
+    stub rrg.industry_row 返回有效行,证明行业经 board_of 流入专家并产出方向票(能发声)。
+    """
+    from tools.analysis import experts, rrg
+    monkeypatch.setattr(board, "load_membership",
+                        lambda: (_ for _ in ()).throw(FileNotFoundError()))
+    monkeypatch.setattr(board, "_CODE_INDUSTRY_CACHE", {"300750": "电力设备"})
+    monkeypatch.setattr(rrg, "industry_row", lambda name: {
+        "方向": "看空", "强度": 0.8, "数据充分度": "充分", "象限": "落后象限",
+        "依据": ["落后象限"], "RS_Ratio": 96.8, "RS_Momentum": 97.3})
+    v = experts.expert_板块轮动({"meta": {"code": "300750"}})
+    assert v.数据充分度 != "缺失" and v.置信度 > 0        # 已发声,非弃权
+    assert v.方向 == "看空" and v.原始["行业"] == "电力设备"
 
 
 class _FakeRS:
