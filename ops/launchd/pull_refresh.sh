@@ -88,8 +88,11 @@ trap 'rmdir "$LOCK" 2>/dev/null' EXIT
   # --no-fetch:不触发 master_sync 回填/重采,直接用现有主档(近史护栏);财报三步在 run_screen_all 内对 news_subset 自然跑
   "$PY" -m tools.run screenall --no-fetch || echo "!! screenall 失败"
   echo "-- ②.6 SEPA+VCP 监控(全A,--no-fetch 读①已推进的主档;纯日K判定,无傍晚发布依赖,15:40就绪) --"
-  # SEPA 三均线合格池落 view(全量),展示层取趋势最强前10;view 随③ upload 自动上传(枚举当天目录)
-  "$PY" -m tools.run sepa --no-fetch || echo "!! sepa 失败(不阻断)"
+  # SEPA 三均线合格池落 view(全量),展示层取趋势最强前10;view 随③ upload 自动上传(枚举当天目录)。
+  # **必须显式 --date "$D"**:SEPA 内部默认用 wall-clock today() 定 as_of,而本脚本是长跑尾部任务——
+  #   机器睡眠唤醒 / 跨午夜续跑时(实测 08-28、09-03 两次),SEPA 会把当日产物写到 D+1 目录导致 $D 当天
+  #   静默零产出(其余尾部步 forecast/upload 都吃 $D,唯独它没钉)。钉死 $D 与全脚本口径一致、免漂移。
+  "$PY" -m tools.run sepa --no-fetch --date "$D" || echo "!! sepa 失败(不阻断)"
   echo "-- ②.5 前瞻记分卡(picks+预测+情绪 配到期实际收益,幂等滚存;消息面回测长期样本源) --"
   # 持久 --out:每天重跑把"新到期"的前瞻收益补进,累积几周后供 backtest_sentiment / PEAD 复验
   "$PY" -m tools.backtest.forward_scorecard --out "$REPO/data/analysis/backtest/forward_scorecard.csv" || echo "!! 记分卡(不阻断)"
@@ -102,6 +105,12 @@ trap 'rmdir "$LOCK" 2>/dev/null' EXIT
   #   让真资金流历史随时间累积;待 hs300 样本够、判别力显著再把权重翻 0.3 激活(见 config['大盘预测']['因子权重'])。
   "$PY" -c "from tools.collectors import market_fundflow as m; m.collect()" || echo "!! 市场级两融采集(资金流维当日缺,不阻断)"
   "$PY" -m tools.analysis.market_forecast.forecast --as-of "$D" --write-analysis || echo "!! 大盘预测(不阻断)"
+  # ②.8 产出缺口护栏:核验当日趋势跟随口径(SEPA 三视图)已落 data/analysis/$D/,缺失即显式告警
+  #   (best-effort:护栏自身异常不阻断闭环;缺口只打 !!! 告警行 + 写 marker,让缺口自证、不被长日志淹没)。
+  #   趋势跟随是本项目唯一趋势策略,曾因日期漂移静默零产出→这里让"没产出"必须留痕、可 grep、可监控。
+  echo "-- ②.8 产出缺口护栏(SEPA 三视图当日必达,否则告警) --"
+  "$PY" -m tools.ops.output_guard --date "$D" --marker \
+    || echo "!!! 护栏告警:当日 $D 趋势跟随口径(SEPA)视图缺失,见上方明细;marker=data/analysis/$D/_GAP_ALARM.json"
   echo "-- ③ 上传远端(先不带 --force:只补未确认分片,规避 ingest 429 限速) --"
   "$PY" -m tools.sync.upload --date "$D" || echo "!! 上传第一轮"
   sleep 65   # 限速窗口(120/60s);分片>120 时首轮部分 429,等窗口重置补齐
