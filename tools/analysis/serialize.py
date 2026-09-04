@@ -202,6 +202,21 @@ def _has_data(block) -> bool:
     return bool(block)
 
 
+def _sentiment_quality(sentiment) -> str:
+    """情绪打分质量三态(provenance.sentiment):{ok|partial|unknown|missing}。
+
+    优先取 B1 写入的 sentiment.质量(单一真源);缺该字段(旧记录)则回退:
+    有可用数据→ok(尽力兼容,旧管线只在有数据时落 sentiment),无→missing。
+    绝不再用「隐式布尔/仅镜像新鲜度」表达——那把「打分失败」与「真中性」混为一谈。
+    """
+    if not isinstance(sentiment, dict):
+        return "missing"
+    q = sentiment.get("质量")
+    if q in ("ok", "partial", "unknown", "missing"):
+        return q
+    return "ok" if _has_data(sentiment) else "missing"
+
+
 def _missing_reason(dim: str, code: str, as_of: str) -> str | None:
     """该维「无数据」到底是 **未采集**(没落过盘)还是 **源无数据**(落了但源里确实没有)。
 
@@ -480,6 +495,10 @@ def build_record(code: str, as_of: str) -> dict:
                        "chip": _has_data(chip_block), "consensus": _has_data(consensus_block),
                        "holder": _has_data(holder_block), "tick": _has_data(tick_block),
                        "financing": _has_data(financing_block),
+                       # 情绪打分**质量三态**(不再是隐式布尔/仅镜像新鲜度):取自 B1 的 sentiment.质量
+                       # {ok|partial|unknown|missing}。unknown=打分失败(净情绪已置 null,不可信);
+                       # missing=无情绪输入;partial=部分层失败;ok=可信。下游据此打置信度折价/门控。
+                       "sentiment": _sentiment_quality(sentiment),
                        "口径": {
                            "tech": _provenance_dim(snapshot, price_vintage, as_of,
                                                     dim="tech", code=code),
