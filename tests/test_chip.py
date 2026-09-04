@@ -48,3 +48,27 @@ def test_distribution_normalized():
     prices, chips = chip.compute_distribution(_synth())
     assert abs(float(chips.sum()) - 1.0) < 1e-6                  # 归一
     assert (chips >= 0).all()
+
+
+def test_missing_turnover_is_loud_not_silent():
+    """近端整段 turnover 缺失时:①summarize 结果带 `降级=True`/`换手缺失日`>0(不静默当 0);
+    ②仍能出值(覆盖率>50%),但被标记降级 —— 锁死 #21(缺失静默当 tr=0 无告警)。"""
+    df = _synth(n=120, up=True)
+    df.loc[df.index[-16:], "turnover"] = np.nan       # 末 16 日换手缺失(仿 fallback 近端)
+    s = chip.summarize(df)
+    assert s["降级"] is True
+    assert s["换手缺失日"] == 16
+    assert s["集中度90"] is not None                  # 覆盖率仍 >50% → 有值但降级
+
+
+def test_full_turnover_not_degraded():
+    """换手完整 → 降级=False、换手缺失日=0(标记默认阴性,不误报)。"""
+    s = chip.summarize(_synth(up=True))
+    assert s["降级"] is False and s["换手缺失日"] == 0
+
+
+def test_degrade_flag_present_even_when_none():
+    """完全无 turnover 列 → 全 None 的降级路径也带 `降级`/`换手缺失日` 键(schema 一致)。"""
+    s = chip.summarize(_synth().drop(columns=["turnover"]))
+    assert s["获利比例"] is None
+    assert s["降级"] is True and s["换手缺失日"] > 0
