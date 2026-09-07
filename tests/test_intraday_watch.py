@@ -123,3 +123,29 @@ def test_load_ref_prices(tmp_path, monkeypatch):
 def test_load_ref_prices_missing_snapshot(tmp_path, monkeypatch):
     monkeypatch.setattr(w, "OUT_ROOT", tmp_path)
     assert w.load_ref_prices("2026-09-07") == {}   # 快照缺 → 空,不报错
+
+
+# ── stop_at 墙钟停止(收盘前自停)──
+
+def test_run_watch_stops_at_wallclock(tmp_path, monkeypatch):
+    from datetime import datetime, timedelta
+    monkeypatch.setattr(w, "OUT_ROOT", tmp_path)
+    t0 = datetime(2026, 9, 7, 14, 56).astimezone()
+    stop = datetime(2026, 9, 7, 14, 57).astimezone()
+    clock = {"t": t0}
+
+    def now_fn():
+        return clock["t"]
+
+    def sleep_fn(_s):
+        clock["t"] += timedelta(seconds=40)   # 每轮推进 40s,越过 14:57 即停
+
+    n_calls = {"i": 0}
+
+    def fetch(codes):
+        n_calls["i"] += 1
+        return {"600519": _q(100, pct=0.0, qt=f"t{n_calls['i']}")}
+
+    w.run_watch(["600519"], date="2026-09-07", stop_at=stop,
+                now_fn=now_fn, quote_fn=fetch, sleep_fn=sleep_fn)
+    assert n_calls["i"] <= 2                  # 到 14:57 就停,不会一直轮询

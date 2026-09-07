@@ -160,13 +160,14 @@ def watch_once(codes: list[str], ref_prices: dict[str, float], cfg: WatchConfig,
 
 def run_watch(codes: list[str], ref_prices: dict[str, float] | None = None, *,
               date: str | None = None, cfg: WatchConfig | None = None,
-              max_iters: int | None = None,
+              max_iters: int | None = None, stop_at: datetime | None = None,
+              now_fn: Callable[[], datetime] = lambda: datetime.now().astimezone(),
               quote_fn: Callable[[list[str]], dict[str, dict]] = gtimg_quote.fetch_quotes,
               sleep_fn: Callable[[float], None] = time.sleep) -> int:
     """观测循环:每 interval 轮询、判定、落新事件。返回累计触发条数。
 
-    `max_iters` 限定轮数(None=直到被外部停;测试传小值);`sleep_fn`/`quote_fn` 可注入(hermetic)。
-    交易时段判定/收盘停由 launchd 排期在外层保证,本函数只管"给我几只、盯几轮"。
+    停止条件(任一):`max_iters` 轮数到 / `stop_at` 墙钟到(如 14:57 收盘前)。两者皆 None=外部停。
+    `now_fn`/`sleep_fn`/`quote_fn` 可注入(hermetic)。交易时段判定由 launchd 排期在外层保证。
     """
     date = date or datetime.now().strftime("%Y-%m-%d")
     cfg = cfg or WatchConfig()
@@ -175,6 +176,9 @@ def run_watch(codes: list[str], ref_prices: dict[str, float] | None = None, *,
     total = 0
     i = 0
     while max_iters is None or i < max_iters:
+        if stop_at is not None and now_fn() >= stop_at:
+            logger.info("到达收盘前停止点 %s,观测结束", stop_at.isoformat(timespec="minutes"))
+            break
         try:
             new = watch_once(codes, ref_prices, cfg, state, quote_fn=quote_fn)
         except Exception as e:                    # 单轮网络异常不终止循环,记日志、下轮再试
@@ -236,29 +240,40 @@ def main(argv: list[str] | None = None) -> int:
     """
     import argparse
 
+    from tools.pipeline import intraday_snapshot as snap
     from tools.pipeline import position_ledger as pl
 
     ap = argparse.ArgumentParser(description="日内实时观测循环(盯候选+持仓,阈值触发倾向信号)")
-    ap.add_argument("--codes", default="", help="午盘候选代码,逗号分隔(与持仓合并去重)")
+    ap.add_argument("--codes", default="", help="午盘候选代码,逗号分隔(缺省时从当日 日内_<date>.md 解析)")
     ap.add_argument("--date", default=None, help="日期 YYYY-MM-DD(默认今天)")
     ap.add_argument("--slot", default="1145", help="午休参考快照 slot(默认 1145)")
     ap.add_argument("--interval", type=float, default=4.0, help="轮询间隔秒(默认 4)")
     ap.add_argument("--max-iters", type=int, default=None, help="最大轮数(默认到外部停)")
+    ap.add_argument("--until", default="14:57", help="收盘前停止点 HH:MM(默认 14:57;空串=不设)")
     args = ap.parse_args(argv)
     _setup_logging()
 
     date = args.date or datetime.now().strftime("%Y-%m-%d")
     cand = [c.strip() for c in args.codes.split(",") if c.strip()]
+    if not cand:                       # 缺省:从当日午盘选股 md 解析候选(launchd 无参起动用)
+        pick_md = snap.PICK_DIR / f"日内_{date}.md"
+        cand = snap.parse_pick_codes(pick_md)
+        if cand:
+            logger.info("从 %s 解析出候选 %d 只", pick_md, len(cand))
     held = pl.list_open_codes(pl.load())
     codes = list(dict.fromkeys([*cand, *held]))
     if not codes:
         logger.warning("无候选也无持仓,观测循环无事可盯,退出")
         return 0
     ref = load_ref_prices(date, args.slot)
-    logger.info("观测启动:%d 只(候选 %d ∪ 持仓 %d),参考价 %d 只,间隔 %ss",
-                len(codes), len(cand), len(held), len(ref), args.interval)
+    stop_at = None
+    if args.until.strip():
+        hh, mm = args.until.split(":")
+        stop_at = datetime.strptime(f"{date} {hh}:{mm}", "%Y-%m-%d %H:%M").astimezone()
+    logger.info("观测启动:%d 只(候选 %d ∪ 持仓 %d),参考价 %d 只,间隔 %ss,停止点 %s",
+                len(codes), len(cand), len(held), len(ref), args.interval, args.until or "无")
     cfg = WatchConfig(interval_s=args.interval)
-    total = run_watch(codes, ref, date=date, cfg=cfg, max_iters=args.max_iters)
+    total = run_watch(codes, ref, date=date, cfg=cfg, max_iters=args.max_iters, stop_at=stop_at)
     logger.info("观测结束:累计触发 %d 条", total)
     return 0
 
