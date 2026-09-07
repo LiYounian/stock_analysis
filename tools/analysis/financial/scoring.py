@@ -84,6 +84,24 @@ def quality_score(derived: dict, flags: list[dict], specs: dict | None = None,
         den += w
     base = round(num / den, 2) if den else None
 
+    # 最小覆盖度闸门:盈利相关维度(成长/质量/回报)全部为 None → 利润表整块未解析,
+    # 无法评估盈利质量。此时禁止仅凭健康/运营(资产负债表/运营效率)给出高分/"优良"评级
+    # → 降级为"不可评"(quality_score 与评级均置 None)。硬语义:盈利三维全缺,不得判优。
+    # 防的是"利润表缺失+资产负债表正常"的票只凭健康维=100 拿满分被误判优。
+    gate = cfg.get("覆盖闸门", {})
+    profit_dims = gate.get("盈利维度", ["成长", "质量", "回报"])
+    盈利全缺 = all(dims.get(d) is None for d in profit_dims)
+    if bool(gate.get("启用", True)) and 盈利全缺:
+        return {
+            "five_dims": dims,
+            "quality_score": None,
+            "评级": None,
+            "红旗扣分": 0,
+            "高危封顶": False,
+            "不可评": True,
+            "不可评原因": "盈利维度(" + "/".join(profit_dims) + ")全缺,无法评估盈利质量",
+        }
+
     # 红旗扣分(提示=0:纯信息标注不压分,如成长期未盈利半导体承接项)
     ded_map = cfg.get("红旗扣分", {"高": 15, "中": 8, "低": 3, "提示": 0})
     deduction = sum(ded_map.get(f.get("严重度", "中"), 8) for f in flags)
