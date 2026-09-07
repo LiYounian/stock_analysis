@@ -283,12 +283,20 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps({"open": led["open"], "scorecard": summarize(led)},
                          ensure_ascii=False, indent=2))
         return 0
+    # --bench 未显式给 → 自动取当日全A等权净值点位(缺该日 breadth → 仍 None,alpha=null)
+    bench = args.bench
+    if bench is None:
+        from tools.analysis import equal_weight_index as ewi
+        bench = ewi.level_at(args.date)
+        if bench is None:
+            logger.warning("%s 无 breadth 等权净值,alpha 记 null(补齐 breadth 后可重算)", args.date)
+
     if args.cmd == "open":
         pos = open_position(led, code=args.code, name=args.name, date=args.date,
-                            price=args.price, bench=args.bench, note=args.note)
+                            price=args.price, bench=bench, note=args.note)
     else:
         pos = close_position(led, code=args.code, date=args.date, price=args.price,
-                             bench=args.bench, reason=args.reason)
+                             bench=bench, reason=args.reason)
     save(led)
     print(json.dumps(pos, ensure_ascii=False, indent=2))
     return 0
