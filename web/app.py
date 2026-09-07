@@ -4,7 +4,6 @@
       /news/{code}/{idx} 新闻详情、/stock/{code} 个股评估。
 所有页面支持 `?date=YYYY-MM-DD` 查看历史(缺省最新);数据只读 data/analysis(离线 run.py 产出)。非投资建议。
 启动:uvicorn web.app:app --reload --port 8801
-页面另含 /sepa SEPA+VCP 监控(只读 view)。
 """
 from __future__ import annotations
 
@@ -73,42 +72,6 @@ def financial_detail(request: Request, code: str, date: str = "latest"):
                             f"<a href='/financial?date={date}'>返回财报榜</a></p>", status_code=404)
     return templates.TemplateResponse(
         request=request, name="financial_detail.html", context={"d": d, **_nav(date)})
-
-
-@app.get("/sepa", response_class=HTMLResponse)
-def sepa(request: Request, date: str = "latest"):
-    """SEPA+VCP 监控:技术合格池 + 重点观察池 + 雷达。只读 view,不重算。"""
-    return templates.TemplateResponse(
-        request=request, name="sepa.html",
-        context={"s": da.sepa_page(date), **_nav(date)})
-
-
-@app.get("/watch", response_class=HTMLResponse)
-def watch(request: Request, date: str = "latest"):
-    """自选池实时盯盘(方案1):自选票实时价/涨跌幅 + 当日SEPA收盘态形态。前端轮询 /api/watch。"""
-    from web import realtime
-    return templates.TemplateResponse(
-        request=request, name="watch.html",
-        context={"w": realtime.watch_quotes(date), **_nav(date)})
-
-
-@app.get("/api/watch", response_class=JSONResponse)
-def api_watch(date: str = "latest"):
-    """自选池实时盯盘 JSON(前端 15s 轮询):行情=盘中快照,形态=每日收盘态。"""
-    from web import realtime
-    return JSONResponse(realtime.watch_quotes(date))
-
-
-@app.get("/sepa/{code}", response_class=HTMLResponse)
-def sepa_detail(request: Request, code: str, date: str = "latest"):
-    """单票收缩结构参考图(不叫 VCP 完成)。"""
-    d = da.sepa_detail(code, date)
-    if d is None:
-        return HTMLResponse(
-            f"<p>{code} 无收缩结构图(该日未入观察池或未跑 sepa)。"
-            f"<a href='/sepa?date={date}'>返回监控</a></p>", status_code=404)
-    return templates.TemplateResponse(
-        request=request, name="sepa_detail.html", context={"d": d, **_nav(date)})
 
 
 @app.get("/selection-analysis", response_class=HTMLResponse)
