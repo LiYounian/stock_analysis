@@ -1,55 +1,94 @@
 {% extends "base.html" %}
 {% block title %}选股分析 · A股策略辅助工具{% endblock %}
 {% block content %}
-<h1>选股分析 <small>定向分析报告(策略提供者指定的股票 → 分析产出 → 此页查看)</small></h1>
+<h1>选股分析 <small>每日盘后 / 盘中 / 盘尾 三时段 · 选股分析 + 复盘结果精简摘要</small></h1>
+<p class="sa-note">仅展示排序表态与记分/经验精简结论,逐票深度分析见原始日志;大盘分析见<a href="/">今日概览</a>。⚠️ 测试环境研究模拟,非投资建议。</p>
 
-{% if not reports %}
-<section class="card wide">
-  <p>暂无分析报告。报告文件放在 <code>data/reports/选股分析/*.md</code>,离线分析产出后即在此列出。</p>
-</section>
-{% else %}
-<div class="sa-layout">
-  <aside class="sa-list">
-    <h3>报告列表</h3>
-    {% for r in reports %}
-    <a class="sa-item {{ 'active' if selected and selected.name == r.name else '' }}"
-       href="/selection-analysis?report={{ r.name }}">
-      <span class="sa-item-title">{{ r.title }}</span>
-      <span class="sa-item-date">{{ r.date or r.name }}</span>
-    </a>
-    {% endfor %}
-  </aside>
+{% macro selection_block(sel) -%}
+  {% if sel %}
+    {% if sel.env_note %}<p class="sa-env"><b>市场环境</b> · {{ sel.env_note }}</p>{% endif %}
+    {% if sel.ranking %}
+    <table class="sa-table">
+      <thead><tr><th>#</th><th>代码</th><th>名称</th><th>表态</th><th>一句话</th></tr></thead>
+      <tbody>
+      {% for r in sel.ranking %}
+        <tr>
+          <td>{{ r.rank }}</td>
+          <td class="mono">{{ r.code }}</td>
+          <td>{{ r.name }}</td>
+          <td class="sa-stance">{{ r.stance }}</td>
+          <td class="sa-oneline">{{ r.note }}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    {% else %}<p class="sa-empty">未解析到买入建议排序表。</p>{% endif %}
+  {% else %}<p class="sa-empty">暂无选股摘要。</p>{% endif %}
+{%- endmacro %}
 
-  <section class="sa-content card wide">
-    {% if selected %}
-    <div class="md-report">{{ selected.html | safe }}</div>
-    {% else %}
-    <p>请从左侧选择一份报告查看。</p>
+{% macro review_block(rev) -%}
+  {% if rev %}
+    {% if rev.direction %}<p class="sa-dir"><b>方向记分</b> · {{ rev.direction }}</p>{% endif %}
+    {% if rev.scorecard %}
+    <table class="sa-table">
+      <thead><tr><th>代码</th><th>名称</th><th>α vs 等权</th></tr></thead>
+      <tbody>
+      {% for r in rev.scorecard %}
+        <tr><td class="mono">{{ r.code }}</td><td>{{ r.name }}</td><td class="sa-alpha">{{ r.alpha }}</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
     {% endif %}
-  </section>
-</div>
-{% endif %}
+    {% if rev.experiences %}
+    <div class="sa-exp"><b>新增/确认经验</b>
+      <ul>{% for e in rev.experiences %}<li>{{ e }}</li>{% endfor %}</ul>
+    </div>
+    {% endif %}
+    {% if not rev.scorecard and not rev.experiences and not rev.direction %}
+      <p class="sa-empty">未解析到复盘记分/经验。</p>
+    {% endif %}
+  {% else %}<p class="sa-empty">暂无复盘摘要。</p>{% endif %}
+{%- endmacro %}
+
+{% macro region(title, data, placeholder) -%}
+<section class="sa-region card wide">
+  <h2>{{ title }}</h2>
+  {% if data %}
+  <div class="sa-cols">
+    <div class="sa-col"><h3>选股分析</h3>{{ selection_block(data.选股) }}</div>
+    <div class="sa-col"><h3>复盘结果</h3>{{ review_block(data.复盘) }}</div>
+  </div>
+  {% else %}
+  <p class="sa-placeholder">{{ placeholder }}</p>
+  {% endif %}
+</section>
+{%- endmacro %}
+
+{{ region("每日盘后选股", sa.盘后, "待接入 —— 盘后选股 + 次日复盘摘要将在闭环产出后展示。") }}
+{{ region("盘中选股", sa.盘中, "待接入 —— 盘中选股数据源(日内循环)尚未落地。") }}
+{{ region("盘尾选股", sa.盘尾, "待接入 —— 盘尾选股数据源(尾盘 positions)尚未落地。") }}
 
 <style>
-.sa-layout { display: flex; gap: 18px; align-items: flex-start; }
-.sa-list { flex: 0 0 240px; display: flex; flex-direction: column; gap: 8px; }
-.sa-list h3 { margin: 4px 0 8px; }
-.sa-item { display: flex; flex-direction: column; padding: 10px 12px; border-radius: 8px;
-  background: rgba(127,127,127,.08); text-decoration: none; border: 1px solid transparent; }
-.sa-item:hover { background: rgba(127,127,127,.16); }
-.sa-item.active { border-color: #d33; background: rgba(221,51,51,.12); }
-.sa-item-title { font-weight: 600; font-size: .92em; }
-.sa-item-date { font-size: .8em; opacity: .7; margin-top: 2px; }
-.sa-content { flex: 1 1 auto; min-width: 0; }
-.md-report { line-height: 1.6; overflow-x: auto; }
-.md-report h1 { font-size: 1.5em; margin-top: 0; }
-.md-report h2 { font-size: 1.2em; margin-top: 1.2em; border-bottom: 1px solid rgba(127,127,127,.2); padding-bottom: 4px; }
-.md-report h3 { font-size: 1.05em; margin-top: 1em; }
-.md-report table { border-collapse: collapse; margin: 10px 0; font-size: .9em; }
-.md-report th, .md-report td { border: 1px solid rgba(127,127,127,.3); padding: 5px 9px; text-align: left; }
-.md-report th { background: rgba(127,127,127,.12); }
-.md-report code { background: rgba(127,127,127,.15); padding: 1px 5px; border-radius: 4px; }
-.md-report blockquote { border-left: 3px solid rgba(221,51,51,.5); margin: 8px 0; padding: 2px 12px; opacity: .85; }
-@media (max-width: 760px) { .sa-layout { flex-direction: column; } .sa-list { flex-basis: auto; width: 100%; } }
+.sa-note { opacity: .75; font-size: .88em; margin: -6px 0 14px; }
+.sa-region { margin-bottom: 18px; }
+.sa-region > h2 { margin: 0 0 10px; font-size: 1.15em; border-bottom: 1px solid rgba(127,127,127,.25); padding-bottom: 6px; }
+.sa-cols { display: flex; gap: 20px; align-items: flex-start; }
+.sa-col { flex: 1 1 0; min-width: 0; }
+.sa-col h3 { font-size: 1em; margin: 4px 0 8px; color: #d33; }
+.sa-env, .sa-dir { font-size: .9em; margin: 4px 0 10px; line-height: 1.5;
+  background: rgba(127,127,127,.06); padding: 6px 10px; border-radius: 6px; }
+.sa-table { border-collapse: collapse; width: 100%; font-size: .84em; margin: 4px 0; }
+.sa-table th, .sa-table td { border: 1px solid rgba(127,127,127,.28); padding: 4px 7px; text-align: left; vertical-align: top; }
+.sa-table th { background: rgba(127,127,127,.12); white-space: nowrap; }
+.sa-table .mono { font-family: ui-monospace, Menlo, monospace; white-space: nowrap; }
+.sa-stance { font-weight: 600; }
+.sa-oneline { opacity: .85; }
+.sa-alpha { font-family: ui-monospace, Menlo, monospace; white-space: nowrap; }
+.sa-exp { font-size: .85em; margin-top: 8px; }
+.sa-exp ul { margin: 4px 0 0; padding-left: 18px; }
+.sa-exp li { margin: 2px 0; }
+.sa-empty { opacity: .6; font-size: .85em; font-style: italic; }
+.sa-placeholder { opacity: .6; font-style: italic; padding: 14px 4px; }
+@media (max-width: 820px) { .sa-cols { flex-direction: column; } }
 </style>
 {% endblock %}

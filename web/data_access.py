@@ -1405,6 +1405,37 @@ def get_analysis_report(name: str) -> dict | None:
             "date": _report_date(name), "html": html}
 
 
+# ———— 每日选股分析视图(selection_analysis:盘后/盘中/盘尾三区,供 /selection-analysis 页)————
+def selection_analysis_view(date: str = "latest") -> dict:
+    """读 `selection_analysis` 池级视图(三区两项摘要)。远端优先读 store 视图;
+    store 缺(如本地开发未入库)时回退到 tools.selection_summary 现抽 docs md。
+    始终返回三区结构(缺数据的区为 None),供模板空态兜底。"""
+    d = as_of(date)
+    view = None
+    try:
+        view = store.get_view("selection_analysis", date=date)
+    except FileNotFoundError:
+        view = None
+    if not view:                                    # 本地兜底:直接从 docs/每日分析 现抽
+        try:
+            from tools import selection_summary
+            # 先按解析日期,再按原始请求日期(docs md 以自然日命名,可能超出 analysis 日期范围)
+            for cand in (d, date if date and date != "latest" else None):
+                if not cand:
+                    continue
+                view = selection_summary.build_selection_view(cand)
+                if view:
+                    break
+        except Exception:
+            view = None
+    if not view:
+        return {"date": d, "盘后": None, "盘中": None, "盘尾": None}
+    view.setdefault("盘后", None)
+    view.setdefault("盘中", None)
+    view.setdefault("盘尾", None)
+    return view
+
+
 def sepa_page(date: str = "latest") -> dict:
     """SEPA+VCP 监控页:只读合格池/观察池/雷达 view。缺视图 → 空表不崩。"""
     def _v(name):
