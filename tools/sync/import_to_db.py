@@ -89,6 +89,17 @@ def collect_date(analysis_dir: Path, date: str) -> dict:
         per_code = {q.stem: _load(q) for q in sorted(sub.glob("*.json")) if _CODE_RE.match(q.stem)}
         if per_code:
             out["code_views"][sub.name] = per_code
+    # 注入 selection_analysis 池级视图:从 docs/每日分析/{选股,复盘}/<date>.md 抽精简摘要,
+    # 随 __view__:selection_analysis 分片上传/入库,供 /selection-analysis 页三区两项展示。
+    # setdefault 语义:日目录已落同名 json 则以其为准(未来盘中/盘尾数据源可覆盖)。
+    if "selection_analysis" not in out["views"]:
+        try:
+            from tools import selection_summary
+            view = selection_summary.build_selection_view(date)
+            if view is not None:
+                out["views"]["selection_analysis"] = view
+        except Exception:
+            logger.warning("selection_analysis 视图构建失败,跳过(不阻断上传)", exc_info=True)
     return out
 
 

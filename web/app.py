@@ -75,17 +75,15 @@ def financial_detail(request: Request, code: str, date: str = "latest"):
 
 
 @app.get("/selection-analysis", response_class=HTMLResponse)
-def selection_analysis(request: Request, report: str = "", date: str = "latest"):
-    """选股分析报告页:列出定向分析报告(data/reports/选股分析/*.md),可选一份查看(markdown 渲染)。
+def selection_analysis(request: Request, date: str = "latest"):
+    """每日选股分析页:三区(每日盘后选股 / 盘中选股 / 盘尾选股)× 两项(选股分析 + 复盘结果)。
 
-    用途:策略提供者给定要定向分析的股票 → 离线分析产出报告落该目录 → 此页选看。
+    数据 = `selection_analysis` 池级视图(远端 store,本地兜底现抽 docs/每日分析);
+    大盘分析归首页"今日概览",本页不重复。盘中/盘尾数据源尚未落地 → 显示"待接入"占位。
     """
-    reports = da.list_analysis_reports()
-    pick = report or (reports[0]["name"] if reports else "")
-    selected = da.get_analysis_report(pick) if pick else None
     return templates.TemplateResponse(
         request=request, name="selection_analysis.html",
-        context={"reports": reports, "selected": selected, **_nav(date)})
+        context={"sa": da.selection_analysis_view(date), **_nav(date)})
 
 
 @app.get("/fund-flow", response_class=HTMLResponse)
