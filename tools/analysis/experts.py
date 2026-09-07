@@ -303,12 +303,21 @@ def expert_财报(record: dict, kline=None) -> ExpertVerdict:
     flags = fin.get("flags") or []
     if flags:
         依据.append("红旗:" + "/".join(flags[:4]))
-    if op_gate == "不通过" or firm_gate == "不通过":   # 审计双闸门:任一不过 → 一票否决看空
+    audit_veto = op_gate == "不通过" or firm_gate == "不通过"
+    if audit_veto:                                   # 审计双闸门:任一不过 → 一票否决看空
         方向, 强度 = "看空", -1.0
         依据.append("审计闸门不通过(" + "/".join(
             g for g, v in [("非标意见", op_gate), ("机构未备案", firm_gate)] if v == "不通过") + ")")
-    conf = 0.6 + (0.0 if fin.get("is_forecast") else 0.2)   # 正式财报比预告置信高
-    充分 = "部分降级" if fin.get("is_forecast") else "充分"
+    # 覆盖度弃权:财报块在、但评级为 None(scoring 覆盖闸门判"不可评":盈利三维全缺)→ 专家弃权。
+    # 置信度反映覆盖度:不可评的块不得让专家输出看多强度 → 中性 + 强度0 + 数据充分度=缺失 + 置信度0。
+    # 审计否决优先(非标/未备案是硬风险,即便盈利维缺也要看空),故置于 audit_veto 之后。
+    if 评级 is None and not audit_veto:
+        方向, 强度 = "中性", 0.0
+        依据.append("盈利维度数据不足·不可评估盈利质量,专家弃权")
+        conf, 充分 = 0.0, "缺失"
+    else:
+        conf = 0.6 + (0.0 if fin.get("is_forecast") else 0.2)   # 正式财报比预告置信高
+        充分 = "部分降级" if fin.get("is_forecast") else "充分"
     return ExpertVerdict(专家="财报", 能力类型="评级", 方向=方向, 强度=强度,
                          置信度=_clamp(conf, 0.0, 1.0), 默认权重=_w("财报"),
                          依据=依据 or ["财报块无评级"], 数据充分度=充分,

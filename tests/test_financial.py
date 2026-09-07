@@ -316,6 +316,42 @@ def test_high_severity_caps_score():
     assert sc["评级"] in ("差", "风险")
 
 
+# ————————————————————— 最小覆盖度闸门(盈利三维全缺 → 不可评)—————————————————————
+def test_coverage_gate_profit_dims_all_none_not_优():
+    """锁根因回归:利润表整块未解析(成长/质量/回报三维全 None)、仅资产负债表正常(健康=100)
+    的票,**不得**只凭健康维=100 被判"优"。硬语义:盈利三维全缺 → 降级"不可评"
+    (quality_score=None、评级=None),绝不判优。"""
+    # 只有健康维三个子指标有数(资产负债率30→100、短债覆盖2→100、商誉占净资产0→100);
+    # 成长/质量/回报/运营的子指标键全缺 → 对应维度 None。
+    derived = {"资产负债率": 30, "短债覆盖": 2, "商誉占净资产": 0}
+    sc = scoring.quality_score(derived, [])
+    dims = sc["five_dims"]
+    assert dims["健康"] == 100.0                       # 健康维确实满分(坐实"只凭健康拿满")
+    assert dims["成长"] is None and dims["质量"] is None and dims["回报"] is None
+    assert sc["评级"] != "优"                          # 核心:绝不判优
+    assert sc["评级"] is None                          # 降级"不可评"
+    assert sc["quality_score"] is None
+    assert sc.get("不可评") is True
+
+
+def test_coverage_gate_full_dims_still_优():
+    """防误伤:五维齐全的优等票仍判"优"(覆盖闸门只拦"盈利三维全缺",不动正常票)。"""
+    derived = {"营收增速": 40, "扣非净利增速": 40, "现金含量_CFO比净利": 1.2,
+               "扣非占归母": 1.0, "毛利率": 60, "资产负债率": 30, "短债覆盖": 2,
+               "商誉占净资产": 0, "应收周转天数": 30, "存货周转天数": 60, "ROE": 20}
+    sc = scoring.quality_score(derived, [])
+    assert sc["评级"] == "优"
+    assert sc["quality_score"] >= 80
+
+
+def test_coverage_gate_partial_profit_dim_survives():
+    """只要盈利三维还有任意一维有数(如仅回报维 ROE 有值)→ 不触发闸门,正常评分。"""
+    derived = {"资产负债率": 30, "短债覆盖": 2, "商誉占净资产": 0, "ROE": 12}
+    sc = scoring.quality_score(derived, [])
+    assert sc.get("不可评") is not True
+    assert sc["评级"] is not None                      # 有盈利维(回报)→ 可评
+
+
 # ————————————————————— 无未来函数 —————————————————————
 def _install_synthetic_raw(monkeypatch):
     payload = {"code": "000001", "name": "测试股", "periods": _synthetic_periods()}
@@ -523,6 +559,27 @@ def test_expert_caibao_direction_and_veto():
     # 无块 → 弃权(中性 + 数据充分度缺失)
     ab = experts.expert_财报({"meta": {"code": "1"}}).to_dict()
     assert ab["方向"] == "中性" and ab["数据充分度"] == "缺失"
+
+
+def test_expert_caibao_abstains_on_uncoverable():
+    """财报块在、但评级为 None(scoring 覆盖闸门判"不可评":盈利三维全缺)→ 专家弃权:
+    中性 + 强度0 + 数据充分度缺失 + 置信度0。核心:不可评的块**绝不**输出看多强度。"""
+    from tools.analysis import experts
+    v = experts.expert_财报({"meta": {"code": "1"},
+                           "financial": {"评级": None, "quality_score": None, "flags": [],
+                                         "审计意见闸门": "通过", "审计机构闸门": "通过",
+                                         "is_forecast": False}}).to_dict()
+    assert v["方向"] == "中性" and v["强度"] == 0.0
+    assert v["数据充分度"] == "缺失" and v["置信度"] == 0.0
+
+
+def test_expert_caibao_uncoverable_but_audit_veto_still_bear():
+    """审计否决优先于覆盖弃权:即便评级 None(不可评),非标/机构未备案仍强制看空(硬风险不放过)。"""
+    from tools.analysis import experts
+    v = experts.expert_财报({"meta": {"code": "1"},
+                           "financial": {"评级": None, "审计意见闸门": "不通过",
+                                         "is_forecast": False}}).to_dict()
+    assert v["方向"] == "看空" and v["强度"] == -1.0
 
 
 def test_expert_caibao_registered_and_in_default_group():
