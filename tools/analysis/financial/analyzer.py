@@ -305,14 +305,87 @@ def analyze(code: str, as_of: str | None = None, persist: bool = True,
     return result
 
 
+def _reuse_fingerprint(code: str, as_of: str | None, raw: dict,
+                       industry: str | None, sector: str | None) -> dict | None:
+    """财报块复用指纹(轻量,不做任何数值重算):决定「报告期是否变化、需否重算」。
+
+    只读 raw / 外源里**影响块内容**的日期与签名:
+      · 最新可见报告期(disclosure_date ≤ as_of 的 report_date + 披露日);
+      · 年报正文披露日(审计闸门1 + 年报节选依赖它,可独立于季报更新);
+      · LLM 文本视图签名(qualitative/verdict 由离线 LLM 步骤单独产出);
+      · 传入行业/板块(人工池口径变更会改专家路由与评分)。
+    任一变化 → 指纹变 → 触发重算;全不变 → 复用上次块,跳过 metrics/flags/scoring/LLM。
+    无可见报告期 → None(同 analyze 的降级)。
+    """
+    periods = raw.get("periods", {}) or {}
+    visible = {p: r for p, r in periods.items()
+               if not (as_of is not None and r.get("disclosure_date") is not None
+                       and r["disclosure_date"] > as_of)}
+    if not visible:
+        return None
+    lp = max(visible)
+    lr = visible[lp]
+    ann_disc = None
+    try:
+        ar = store.get_raw("annual_report_text", code)
+        if as_of is None or (ar.get("disclosure_date") or "") <= as_of:
+            ann_disc = ar.get("disclosure_date")
+    except FileNotFoundError:
+        pass
+    llm_sig = None
+    try:
+        ft = store.get_code_view("financial_text", code)
+        llm_sig = [ft.get("报告期"), bool(ft.get("verdict")), bool(ft.get("qualitative"))]
+    except FileNotFoundError:
+        pass
+    return {"报告期": lr.get("report_date", lp), "披露日": lr.get("disclosure_date"),
+            "年报披露日": ann_disc, "llm": llm_sig,
+            "行业": industry, "板块": sector}
+
+
 def build_financial_block(code: str, as_of: str | None = None,
-                          industry: str | None = None, sector: str | None = None) -> dict | None:
-    """构建中心记录顶层 `financial` 轻量块(仅最新已披露报告期摘要)。
+                          industry: str | None = None, sector: str | None = None,
+                          prev_block: dict | None = None) -> dict | None:
+    """构建中心记录顶层 `financial` 轻量块(仅最新已披露报告期摘要),带**按报告期复用**。
 
     供 panel/screen/web/Agent 直接消费(不塞多期大数组;多期在 code_view)。
     industry:可选行业名(record.meta.industry),用于金融业红旗特判。
     sector:可选市场大类板块(record.meta.sector),用于行业消歧的市场概念标注。无可见报告期 → None。
+    prev_block:上一份中心记录里的 `financial` 块(由编排层 serialize 传入);用于**跨日复用**。
+
+    **复用机制(避免每次选出票都重算/重跑 LLM)**:先算轻量指纹(最新可见报告期 + 披露日 +
+    年报披露日 + LLM 签名 + 行业/板块)——只读 raw/外源日期,不做任何数值重算。若上一份块
+    自带的 `_fingerprint` 与本次一致(即报告期等外源全未变),直接复用上一份块,跳过
+    metrics/flags/scoring 与 LLM 文本读取;任一变化才落到 `_compute_financial_block` 实算。
+    复用不新增任何落盘——块随本日记录由 serialize 正常写出(天然跨日:前日算过、今日报告期
+    没变则复用前日块)。块内 `分析日期` 记录**首次算出该期分析的 as_of**,复用时保持不变
+    (页面据此显示分析未重跑);`_fingerprint` 为复用判据、随块存于记录。
+    未传 prev_block(如单元测试/首次分析)→ 恒实算,行为与旧版一致。
     """
+    code = str(code).zfill(6)
+    try:
+        raw = store.get_raw("financial_report", code)
+    except FileNotFoundError:
+        return None
+    fp = _reuse_fingerprint(code, as_of, raw, industry, sector)
+    if fp is None:
+        return None
+    # —— 复用闸:上一份块指纹与本次一致(报告期等外源未变)→ 直接复用,跳过全部重算 ——
+    if isinstance(prev_block, dict) and prev_block.get("_fingerprint") == fp:
+        return prev_block
+
+    block = _compute_financial_block(code, as_of=as_of, industry=industry, sector=sector)
+    if block is None:
+        return None
+    # 分析日期:首次算出该期分析的 as_of(生成日);复用时不覆盖,只在实算路径写。
+    block["分析日期"] = (as_of[:10] if isinstance(as_of, str) else None)
+    block["_fingerprint"] = fp                              # 复用判据,随块存入记录
+    return block
+
+
+def _compute_financial_block(code: str, as_of: str | None = None,
+                             industry: str | None = None, sector: str | None = None) -> dict | None:
+    """实算财报块(无复用;被 build_financial_block 在报告期变化时调用)。参数同上。"""
     try:
         res = analyze(code, as_of=as_of, persist=False, industry=industry, sector=sector)
     except FileNotFoundError:
