@@ -202,3 +202,98 @@ def close_position(ledger: dict, *, code: str, date: str, price: float,
     })
     ledger.setdefault("closed", []).append(pos)
     return pos
+
+
+# ────────────────────────────── 日内记分卡 ──────────────────────────────
+
+def _median(xs: list[float]) -> float | None:
+    if not xs:
+        return None
+    s = sorted(xs)
+    n = len(s)
+    return s[n // 2] if n % 2 else (s[n // 2 - 1] + s[n // 2]) / 2.0
+
+
+def summarize(ledger: dict, *, min_n: int = 1) -> dict:
+    """已平仓 → 记分卡:笔数/胜率/中位收益/中位超额/盈亏比/平均持有天数。
+
+    · 超额统计只计 `realized_alpha_pct` 非 None 的笔(基准缺失的不掺进来,不假造);
+    · 样本 < min_n → `insufficient=True`(前向积累未够,别过早下结论)。
+    """
+    closed = ledger.get("closed", [])
+    n = len(closed)
+    if n < min_n:
+        return {"n": n, "insufficient": True, "min_n": min_n}
+    pnls = [c["realized_pnl_pct"] for c in closed if c.get("realized_pnl_pct") is not None]
+    alphas = [c["realized_alpha_pct"] for c in closed if c.get("realized_alpha_pct") is not None]
+    wins = [p for p in pnls if p > 0]
+    losses = [p for p in pnls if p < 0]
+    avg_win = sum(wins) / len(wins) if wins else None
+    avg_loss = sum(losses) / len(losses) if losses else None
+    pl_ratio = (avg_win / abs(avg_loss)) if (avg_win is not None and avg_loss) else None
+    days = [c["days_held"] for c in closed if c.get("days_held") is not None]
+    return {
+        "n": n,
+        "insufficient": False,
+        "win_rate": (len(wins) / len(pnls)) if pnls else None,
+        "median_pnl_pct": _median(pnls),
+        "median_alpha_pct": _median(alphas),      # 非 None 超额的中位;无则 None
+        "alpha_n": len(alphas),
+        "profit_loss_ratio": pl_ratio,
+        "avg_days_held": (sum(days) / len(days)) if days else None,
+    }
+
+
+# ────────────────────────────── CLI ──────────────────────────────
+
+def main(argv: list[str] | None = None) -> int:
+    """CLI:查看/记账(尾盘执行写入,复盘读数)。
+
+        python -m tools.pipeline.position_ledger show
+        python -m tools.pipeline.position_ledger summary
+        python -m tools.pipeline.position_ledger open  --code 300308 --name 中际旭创 \
+            --date 2026-09-07 --price 12.34 [--bench 1000.0] [--note 尾盘建仓]
+        python -m tools.pipeline.position_ledger close --code 300308 \
+            --date 2026-09-08 --price 13.00 [--bench 1005.0] [--reason 止盈]
+    """
+    import argparse
+
+    ap = argparse.ArgumentParser(description="模拟持仓账本(日内超短线,研究记账)")
+    sub = ap.add_subparsers(dest="cmd", required=True)
+    sub.add_parser("show", help="打印当前持仓 + 记分卡")
+    sub.add_parser("summary", help="只打印记分卡 JSON")
+    for name in ("open", "close"):
+        sp = sub.add_parser(name, help=f"{name} 一笔(尾盘模拟成交)")
+        sp.add_argument("--code", required=True)
+        sp.add_argument("--date", required=True)
+        sp.add_argument("--price", type=float, required=True)
+        sp.add_argument("--bench", type=float, default=None, help="该时点全A等权净值点位(缺则alpha=null)")
+        if name == "open":
+            sp.add_argument("--name", default="")
+            sp.add_argument("--note", default="")
+        else:
+            sp.add_argument("--reason", default="")
+    args = ap.parse_args(argv)
+
+    led = load()
+    if args.cmd == "summary":
+        print(json.dumps(summarize(led), ensure_ascii=False, indent=2))
+        return 0
+    if args.cmd == "show":
+        print(json.dumps({"open": led["open"], "scorecard": summarize(led)},
+                         ensure_ascii=False, indent=2))
+        return 0
+    if args.cmd == "open":
+        pos = open_position(led, code=args.code, name=args.name, date=args.date,
+                            price=args.price, bench=args.bench, note=args.note)
+    else:
+        pos = close_position(led, code=args.code, date=args.date, price=args.price,
+                             bench=args.bench, reason=args.reason)
+    save(led)
+    print(json.dumps(pos, ensure_ascii=False, indent=2))
+    return 0
+
+
+if __name__ == "__main__":
+    import sys
+    sys.exit(main())

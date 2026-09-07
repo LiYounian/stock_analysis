@@ -106,3 +106,20 @@ def test_run_watch_survives_fetch_error(tmp_path, monkeypatch):
     total = w.run_watch(["600519"], date="2026-09-07", max_iters=2,
                         quote_fn=boom, sleep_fn=lambda s: None)
     assert total == 0
+
+
+# ── 午休参考价加载 ──
+
+def test_load_ref_prices(tmp_path, monkeypatch):
+    monkeypatch.setattr(w, "OUT_ROOT", tmp_path)
+    snap = {"codes": {"300308": {"price": 12.34}, "002234": {"price": None}}}
+    d = tmp_path / "2026-09-07"
+    d.mkdir()
+    (d / "T1145.json").write_text(json.dumps(snap), encoding="utf-8")
+    ref = w.load_ref_prices("2026-09-07")
+    assert ref == {"300308": 12.34}          # price=None 的不进(缺失不假造)
+
+
+def test_load_ref_prices_missing_snapshot(tmp_path, monkeypatch):
+    monkeypatch.setattr(w, "OUT_ROOT", tmp_path)
+    assert w.load_ref_prices("2026-09-07") == {}   # 快照缺 → 空,不报错

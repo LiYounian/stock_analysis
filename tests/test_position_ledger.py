@@ -116,3 +116,27 @@ def test_save_load_roundtrip(tmp_path):
 def test_load_missing_returns_empty(tmp_path):
     led = pl.load(tmp_path / "nope.json")
     assert led["open"] == [] and led["closed"] == []
+
+
+# ── 记分卡 summarize ──
+
+def test_summary_insufficient():
+    assert pl.summarize(pl._empty_ledger(), min_n=3)["insufficient"] is True
+
+
+def test_summary_stats():
+    led = pl._empty_ledger()
+    # 三笔:+20%(bench+1→α19)、-5%(bench+0→α-5)、+10%(无bench→α不计)
+    for code, price, bench in [("600519", 100.0, 1000.0), ("000001", 10.0, 1000.0),
+                               ("300308", 50.0, None)]:
+        pl.open_position(led, code=code, name=code, date="2026-09-07", price=price, bench=bench)
+    pl.close_position(led, code="600519", date="2026-09-09", price=120.0, bench=1010.0)  # +20% α19
+    pl.close_position(led, code="000001", date="2026-09-09", price=9.5, bench=1000.0)     # -5%  α-5
+    pl.close_position(led, code="300308", date="2026-09-09", price=55.0, bench=None)      # +10% α None
+    s = pl.summarize(led)
+    assert s["n"] == 3
+    assert s["win_rate"] == pytest.approx(2 / 3)      # 两笔正
+    assert s["median_pnl_pct"] == pytest.approx(10.0) # 收益 {20,-5,10} 中位 10
+    assert s["alpha_n"] == 2                           # 只两笔有基准超额
+    assert s["median_alpha_pct"] == pytest.approx((19.0 + -5.0) / 2)  # {19,-5} 中位
+    assert s["profit_loss_ratio"] == pytest.approx(15.0 / 5.0)        # avg盈15 / |avg亏5|

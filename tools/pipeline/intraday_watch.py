@@ -190,3 +190,79 @@ def run_watch(codes: list[str], ref_prices: dict[str, float] | None = None, *,
         if max_iters is None or i < max_iters:
             sleep_fn(cfg.interval_s)
     return total
+
+
+# ────────────────────────────── 午休参考价 ──────────────────────────────
+
+def load_ref_prices(date: str, slot: str = "1145") -> dict[str, float]:
+    """从午休快照 `data/intraday/<date>/T<slot>.json` 读 {code: 价} 作急拉/急跌参考。
+
+    快照缺失 → 空 dict(急拉/急跌两条规则本轮不判,不假造参考,见 evaluate_quote)。
+    """
+    p = OUT_ROOT / date / f"T{slot}.json"
+    if not p.exists():
+        logger.warning("午休快照不存在 %s,急拉/急跌无参考价", p)
+        return {}
+    try:
+        data = json.loads(p.read_text(encoding="utf-8"))
+    except Exception as e:
+        logger.warning("午休快照解析失败 %s:%s", p, e)
+        return {}
+    out: dict[str, float] = {}
+    for code, q in (data.get("codes") or {}).items():
+        price = q.get("price")
+        if price is not None:
+            out[code] = float(price)
+    return out
+
+
+# ────────────────────────────── CLI ──────────────────────────────
+
+def _setup_logging() -> None:
+    log_path = settings.PROJECT_ROOT / "logs" / "intraday_watch.log"
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    fmt = logging.Formatter("%(asctime)s %(name)s %(levelname)s %(message)s")
+    root = logging.getLogger()
+    root.setLevel(logging.INFO)
+    for h in (logging.FileHandler(log_path, encoding="utf-8"), logging.StreamHandler()):
+        h.setFormatter(fmt)
+        root.addHandler(h)
+
+
+def main(argv: list[str] | None = None) -> int:
+    """CLI:盯 = --codes(午盘候选)∪ 当前持仓(读账本);急拉/急跌参考价读午休快照。
+
+        python -m tools.pipeline.intraday_watch --codes 300308,002234 --max-iters 900
+    """
+    import argparse
+
+    from tools.pipeline import position_ledger as pl
+
+    ap = argparse.ArgumentParser(description="日内实时观测循环(盯候选+持仓,阈值触发倾向信号)")
+    ap.add_argument("--codes", default="", help="午盘候选代码,逗号分隔(与持仓合并去重)")
+    ap.add_argument("--date", default=None, help="日期 YYYY-MM-DD(默认今天)")
+    ap.add_argument("--slot", default="1145", help="午休参考快照 slot(默认 1145)")
+    ap.add_argument("--interval", type=float, default=4.0, help="轮询间隔秒(默认 4)")
+    ap.add_argument("--max-iters", type=int, default=None, help="最大轮数(默认到外部停)")
+    args = ap.parse_args(argv)
+    _setup_logging()
+
+    date = args.date or datetime.now().strftime("%Y-%m-%d")
+    cand = [c.strip() for c in args.codes.split(",") if c.strip()]
+    held = pl.list_open_codes(pl.load())
+    codes = list(dict.fromkeys([*cand, *held]))
+    if not codes:
+        logger.warning("无候选也无持仓,观测循环无事可盯,退出")
+        return 0
+    ref = load_ref_prices(date, args.slot)
+    logger.info("观测启动:%d 只(候选 %d ∪ 持仓 %d),参考价 %d 只,间隔 %ss",
+                len(codes), len(cand), len(held), len(ref), args.interval)
+    cfg = WatchConfig(interval_s=args.interval)
+    total = run_watch(codes, ref, date=date, cfg=cfg, max_iters=args.max_iters)
+    logger.info("观测结束:累计触发 %d 条", total)
+    return 0
+
+
+if __name__ == "__main__":
+    import sys
+    sys.exit(main())
