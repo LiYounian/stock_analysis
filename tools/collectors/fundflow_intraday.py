@@ -12,13 +12,12 @@
 
 落盘:走 store 层(kind="fundflow_intraday",parquet),分区 date/code(见 `_RAW_KINDS`)。
 契约见 docs/每日分析_午盘Q/M1_契约稿.md §三。
-
-⚠️ 骨架期:函数体尚未实现(2026-09-07),仅锁 I/O 契约。M1 审阅后填实现。
 """
 from __future__ import annotations
 
 import logging
 import os
+import re
 import time
 from typing import Literal
 
@@ -44,6 +43,8 @@ _VALID_FREQ = (FREQ_1MIN, FREQ_5MIN)
 
 MAX_BATCH_CODES = 50                                  # 候选池上限(超过说明用法错了,拦下)
 
+_AS_OF_RE = re.compile(r"^([01]\d|2[0-3]):([0-5]\d)$")   # HH:MM 严格校验
+
 
 def _secid(code: str) -> str:
     """代码 → 东财 secid(与 fundflow.py 同规则,保持单一真源)。
@@ -59,21 +60,53 @@ def _secid(code: str) -> str:
 
 
 def _http_get(secid: str, klt: int) -> dict:
-    """curl_cffi 伪装 chrome 拉东财分时资金流 JSON。抽出便于测试 mock。
+    """curl_cffi 伪装 chrome 拉东财分时资金流 JSON。抽出便于测试 mock。"""
+    from curl_cffi import requests as creq
 
-    klt: 1(1min) 或 5(5min)。其他值由调用方在 fetch_one 处校验后再进来。
-    """
-    raise NotImplementedError("M1 骨架:审阅后填实现(套路 = fundflow.py._http_get + klt 参)")
+    params = {"lmt": "0", "klt": str(klt), "secid": secid,
+              "fields1": "f1,f2,f3,f7", "fields2": _FIELDS2}
+    r = creq.get(_FF_URL, params=params, impersonate="chrome", timeout=_TIMEOUT)
+    r.raise_for_status()
+    return r.json()
 
 
 def _parse(js: dict) -> pd.DataFrame:
     """把东财 klines 字符串数组解析成 DataFrame。列见 _COLS。
 
-    - klines 里的时间是 "YYYY-MM-DD HH:MM" 字符串,转 pd.Timestamp
+    - klines 时间是 "YYYY-MM-DD HH:MM" 字符串 → pd.Timestamp
     - 数值列缺失/非数 → NaN(不静默填 0,同 fundflow.py._parse 口径)
-    - 空 klines → 返回列齐全的空 DataFrame(空判由 fetch_one 抛错)
+    - 空 klines → 空 DataFrame(空判由 fetch_one 抛错)
     """
-    raise NotImplementedError("M1 骨架:审阅后填实现(套路 = fundflow.py._parse + time 而非 date)")
+    klines = (js.get("data") or {}).get("klines") or []
+    rows = []
+    for line in klines:
+        parts = line.split(",")
+        rec = {"time": parts[0]}
+        for i, col in enumerate(_COLS[1:], start=1):
+            try:
+                rec[col] = float(parts[i])
+            except (ValueError, IndexError):
+                rec[col] = float("nan")
+        rows.append(rec)
+    df = pd.DataFrame(rows, columns=_COLS)
+    if not df.empty:
+        df["time"] = pd.to_datetime(df["time"])
+        df = df.sort_values("time").reset_index(drop=True)
+    return df
+
+
+def _truncate_by_as_of(df: pd.DataFrame, as_of: str | None) -> pd.DataFrame:
+    """按 HH:MM 截断当日分时(防未来函数)。跨日行不受影响。
+
+    比较口径:同一日期内,只保留 time.strftime("%H:%M") <= as_of 的行。
+    df.time 已是 pd.Timestamp(见 _parse)。
+    """
+    if not as_of or df.empty:
+        return df
+    hh, mm = as_of.split(":")
+    cutoff_minutes = int(hh) * 60 + int(mm)
+    row_minutes = df["time"].dt.hour * 60 + df["time"].dt.minute
+    return df[row_minutes <= cutoff_minutes].reset_index(drop=True)
 
 
 def fetch_one(
@@ -81,27 +114,25 @@ def fetch_one(
     freq: int = FREQ_5MIN,
     as_of: str | None = None,
 ) -> pd.DataFrame:
-    """拉单票分时资金流(不落盘)。
-
-    参数:
-        code:  6 位股票代码(A 股)
-        freq:  1 或 5(分钟);默认 5min
-        as_of: "HH:MM" 或 None
-               · 生产 14:30 首判传 "14:30",14:50 复核传 "14:50"(未来函数红线)
-               · None → 拿全天(仅回测/历史补录场景使用)
-
-    返回:
-        DataFrame 列 = _COLS。time 列为 pd.Timestamp,升序。
-        - 单位:主力/大/中/小/超大单 = 元;主力净占比 = 百分比
-        - as_of 生效时,`time.strftime("%H:%M") > as_of` 的行被剔除
+    """拉单票分时资金流(不落盘)。契约见模块 docstring。
 
     异常:
-        - freq 非法 → ValueError
-        - as_of 格式非 HH:MM → ValueError
-        - 网络失败 → 走 retry_call 后仍败 → 抛(curl_cffi.CurlError / RemoteDisconnected 等)
-        - 数据为空(接口返 klines=[]) → ValueError(不返回空 df 伪装成功)
+        - freq 非 1/5 → ValueError
+        - as_of 非 HH:MM → ValueError
+        - 网络失败 → 走 retry_call 后仍败 → 抛
+        - 空数据 → ValueError(不返回空 df 伪装成功)
     """
-    raise NotImplementedError("M1 骨架:审阅后填实现")
+    if freq not in _VALID_FREQ:
+        raise ValueError(f"freq 必须 ∈ {_VALID_FREQ},收到 {freq!r}")
+    if as_of is not None and not _AS_OF_RE.match(as_of):
+        raise ValueError(f"as_of 必须 HH:MM 格式,收到 {as_of!r}")
+
+    from tools.collectors._retry import retry_call
+    df = _parse(retry_call(_http_get, _secid(code), freq,
+                            label=f"分时资金流{code}(klt={freq})"))
+    if df.empty:
+        raise ValueError(f"{code} 分时资金流为空(接口异常/代码错/非交易日)")
+    return _truncate_by_as_of(df, as_of)
 
 
 def collect(
@@ -109,26 +140,39 @@ def collect(
     freq: int = FREQ_5MIN,
     as_of: str | None = None,
 ) -> tuple[dict[str, pd.DataFrame], list[dict]]:
-    """批量拉候选池,单票失败进 errors,不炸整批。
+    """批量拉候选池,单票失败进 errors,不炸整批。契约见模块 docstring。
 
-    参数:
-        codes:  候选池代码,长度 ≤ MAX_BATCH_CODES(超过抛 ValueError,防误用全 A)
-        freq / as_of:  同 fetch_one
-
-    返回:
-        ({code: DataFrame}, [{"code": code, "reason": str}, ...])
-        - out 只含成功的票
-        - errors 包含所有失败原因(网络/空数据)
-        - 批间走 settings.FETCH_SLEEP_SEC 节流,同 fundflow.py.fetch_fundflow
-
-    副作用:
-        每只成功的票落盘 store.put_raw("fundflow_intraday", code, df, meta={
-            "source": _SOURCE, "freq_min": freq, "as_of": as_of,
-        })
+    副作用:每只成功的票落盘 store.put_raw("fundflow_intraday", code, df, meta={
+        "source": _SOURCE, "freq_min": freq, "as_of": as_of,
+    })
     """
-    raise NotImplementedError("M1 骨架:审阅后填实现")
+    if len(codes) > MAX_BATCH_CODES:
+        raise ValueError(
+            f"codes 数量 {len(codes)} 超 MAX_BATCH_CODES={MAX_BATCH_CODES}"
+            "(本采集器仅对候选池,不做全A;要拉全A请另想办法)"
+        )
+    settings.ensure_dirs()
+    out: dict[str, pd.DataFrame] = {}
+    errors: list[dict] = []
+    n = len(codes)
+    for i, code in enumerate(codes, 1):
+        logger.info("[%d/%d] 分时资金流 %s 采集(freq=%d,as_of=%s)...", i, n, code, freq, as_of)
+        try:
+            df = fetch_one(code, freq=freq, as_of=as_of)
+            store.put_raw("fundflow_intraday", code, df,
+                          meta={"source": _SOURCE, "freq_min": freq, "as_of": as_of})
+            out[code] = df
+            logger.info("分时资金流 %s:%d 行", code, len(df))
+        except Exception as e:
+            errors.append({"code": code, "reason": f"{type(e).__name__}: {e}"})
+            logger.error("分时资金流 %s 失败: %s", code, e)
+        time.sleep(settings.FETCH_SLEEP_SEC)
+    if errors:
+        logger.warning("分时资金流拉取失败 %d/%d: %s",
+                       len(errors), n, [e["code"] for e in errors])
+    return out, errors
 
 
 def load_intraday(code: str, date: str | None = "latest") -> pd.DataFrame:
     """从本地缓存读单票分时资金流。缓存缺失抛 FileNotFoundError(同 fundflow.py.load_fundflow)。"""
-    raise NotImplementedError("M1 骨架:审阅后填实现(单行 return store.get_raw)")
+    return store.get_raw("fundflow_intraday", code, date=date)
