@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.stock.intraday_noon</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>/Users/yqg/Documents/projects/stock_analysis/ops/launchd/intraday_snapshot.sh</string>
+  </array>
+  <!-- 午休冻结快照(11:30-13:00 市场停牌,顺序拉全A无时间差):日内超短线循环的取数窗口。
+       11:35 触发,给午休留足 5min;复用 intraday_snapshot.sh,仅 slot 改 1145。 -->
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>INTRADAY_SLOT</key>
+    <string>1145</string>
+  </dict>
+  <key>StartCalendarInterval</key>
+  <array>
+    <dict><key>Weekday</key><integer>1</integer><key>Hour</key><integer>11</integer><key>Minute</key><integer>35</integer></dict>
+    <dict><key>Weekday</key><integer>2</integer><key>Hour</key><integer>11</integer><key>Minute</key><integer>35</integer></dict>
+    <dict><key>Weekday</key><integer>3</integer><key>Hour</key><integer>11</integer><key>Minute</key><integer>35</integer></dict>
+    <dict><key>Weekday</key><integer>4</integer><key>Hour</key><integer>11</integer><key>Minute</key><integer>35</integer></dict>
+    <dict><key>Weekday</key><integer>5</integer><key>Hour</key><integer>11</integer><key>Minute</key><integer>35</integer></dict>
+  </array>
+  <key>RunAtLoad</key>
+  <false/>
+  <key>StandardOutPath</key>
+  <string>/Users/yqg/.local/state/stock/intraday_noon.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/yqg/.local/state/stock/intraday_noon.err.log</string>
+</dict>
+</plist>
