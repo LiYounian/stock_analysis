@@ -406,9 +406,12 @@ def build_record(code: str, as_of: str) -> dict:
 
     # 财报质地块(P1):披露日锚定的最新已披露报告期轻量摘要(analysis.financial)。
     # 缺财报采集 → None(优雅降级,不阻断);行业传入供金融业红旗特判。
+    # 复用:传入上一份(≤as_of 最近)记录的 financial 块——报告期等未变则 analyzer 直接复用、
+    # 不重算数值/不重读 LLM(见 build_financial_block 复用闸)。缺前值 → None → 恒实算。
+    prev_fin = _safe(lambda: (store.get_record(code, date=as_of) or {}).get("financial"))
     from tools.analysis.financial import analyzer as fr_analyzer
     financial_block = _safe(lambda: fr_analyzer.build_financial_block(
-        code, as_of=as_of, industry=(s.industry if s else None)))
+        code, as_of=as_of, industry=(s.industry if s else None), prev_block=prev_fin))
 
     # summary 一并带上:事件专家减持性质区分(协议转让给战投 vs 二级抛售)靠公告标题/摘要文本
     # 兜底,标题外的"引入战投/业务协同/集中竞价"等语义常落在摘要里(采集缺 summary 时为 None,不影响)。

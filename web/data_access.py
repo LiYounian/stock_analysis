@@ -125,15 +125,20 @@ def financial_page(date: str = "latest") -> dict:
     (闭环里仅 news_subset=自选∪每策略前5 采财报,故通常几十只)。展示层只读、不算。
     """
     order = {"风险": 0, "差": 1, "中": 2, "良": 3, "优": 4}
+    recs = _load_all(date)
     rows = []
-    for r in _load_all(date).values():
+    for r in recs.values():
         fin = r.get("financial")
         if not fin:
             continue
         v = fin.get("verdict") or {}
+        code = r["meta"]["code"]
         rows.append({
-            "code": r["meta"]["code"], "name": r["meta"].get("name"),
-            "industry": r["meta"].get("industry"),
+            "code": code, "name": r["meta"].get("name"),
+            # 行业统一走回退链(meta.industry→sector→全A code_industry 映射),
+            # 缺则 None(模板渲染「未知」);直接取 meta.industry 会让全A/自选缺行业的票
+            # 落成 Python None,Jinja 把 None 渲染成字面 "None"(即页面上的 "no")。
+            "industry": _industry(recs, code),
             "评级": fin.get("评级"), "质地分": fin.get("quality_score"),
             "报告期": fin.get("报告期"), "金融业口径": fin.get("金融业口径"),
             "审计意见闸门": fin.get("审计意见闸门"), "审计机构闸门": fin.get("审计机构闸门"),
@@ -174,7 +179,14 @@ def financial_detail(code: str, date: str = "latest") -> dict | None:
         pass
     return {
         "code": str(code).zfill(6), "name": rec["meta"].get("name"),
-        "industry": rec["meta"].get("industry"), "sector": rec["meta"].get("sector"),
+        # 行业回退链:meta.industry→sector→全A code_industry 映射(缺则 None,模板条件省略)
+        "industry": (rec["meta"].get("industry") or rec["meta"].get("sector")
+                     or _code_industry_map().get(str(code).zfill(6))),
+        "sector": rec["meta"].get("sector"),
+        # 两个日期(B-3):分析日期=该财报分析生成日(块内 分析日期,缺则回退记录 as_of);
+        # 财报发布日期=最新已披露报告期的披露日(块内 披露日)。均无值 → 模板回退「未知」。
+        "分析日期": fin.get("分析日期") or rec["meta"].get("as_of"),
+        "披露日": fin.get("披露日"),
         "fin": rec["financial"],
         "现金流": cash, "资产负债": balance,
         "annual": annual,

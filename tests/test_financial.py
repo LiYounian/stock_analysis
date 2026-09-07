@@ -395,6 +395,51 @@ def test_build_financial_block(monkeypatch):
     assert blk["评级"] in ("优", "良", "中", "差", "风险")
     assert "利润表摘要" in blk and blk["利润表摘要"]["营业总收入"] == 120.0
     assert isinstance(blk["flags"], list)
+    # B-3:块自带 分析日期(生成日 as_of)+ 披露日(财报发布日)供页面展示
+    assert blk["分析日期"] == "2026-05-01"
+    assert blk["披露日"] == "2026-04-01"
+
+
+def test_financial_block_reuse_by_report_period(monkeypatch):
+    """B-2 复用机制:报告期未变 → 传入 prev_block 直接复用、不重算(不调用 _compute);
+    报告期更新(有更晚已披露报告期)→ 重算,分析日期刷新。锁"按报告期复用、变则重算"语义。"""
+    _install_synthetic_raw(monkeypatch)
+    # 首次:无 prev_block → 实算,带 _fingerprint(复用判据)+ 分析日期(生成日)
+    blk1 = analyzer.build_financial_block("000001", as_of="2026-05-01")
+    assert blk1["报告期"] == "2025-12-31"
+    assert "_fingerprint" in blk1 and blk1["分析日期"] == "2026-05-01"
+
+    # 复用闸:同 raw,把 blk1 当 prev_block 传回 → 直接复用,_compute 一次都不调用
+    calls = {"n": 0}
+    orig_compute = analyzer._compute_financial_block
+
+    def _spy(*a, **k):
+        calls["n"] += 1
+        return orig_compute(*a, **k)
+    monkeypatch.setattr(analyzer, "_compute_financial_block", _spy)
+    blk2 = analyzer.build_financial_block("000001", as_of="2026-06-10", prev_block=blk1)
+    assert calls["n"] == 0            # 报告期未变 → 未重算
+    assert blk2 is blk1              # 直接复用同一份块对象
+    assert blk2["分析日期"] == "2026-05-01"   # 复用时分析日期保持首次(体现"未重跑")
+
+    # 报告期更新:新增一期更晚且已披露的半年报 → 指纹变 → 触发一次重算,分析日期刷新
+    newp = dict(_synthetic_periods())
+    newp["2026-06-30"] = {
+        "report_date": "2026-06-30", "disclosure_date": "2026-08-28", "report_type": "半年报",
+        "利润表": {"营业总收入": 70.0, "营业成本": 50.0, "归母净利润": 5.0,
+                 "扣非归母净利润": 3.0, "净利润": 5.0},
+        "资产负债表": {"资产总计": 520.0, "负债合计": 390.0, "股东权益合计": 130.0,
+                   "归母股东权益": 130.0, "货币资金": 12.0},
+        "现金流量表": {"经营活动现金流量净额": 3.0},
+    }
+    payload = {"code": "000001", "name": "测试股", "periods": newp}
+    monkeypatch.setattr(store, "get_raw",
+                        lambda kind, code, date="latest": payload if kind == "financial_report"
+                        else (_ for _ in ()).throw(FileNotFoundError(kind)))
+    blk3 = analyzer.build_financial_block("000001", as_of="2026-09-01", prev_block=blk1)
+    assert calls["n"] == 1                 # 报告期变 → 重算一次
+    assert blk3["报告期"] == "2026-06-30"    # 用上新披露报告期
+    assert blk3["分析日期"] == "2026-09-01"   # 分析日期刷新到本次 as_of
 
 
 # ————————————————————— 行业专家覆写钩子 / 路由 —————————————————————

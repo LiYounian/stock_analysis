@@ -176,14 +176,44 @@ def test_news_detail_missing_code_404():
     assert client.get("/news/000000/0").status_code == 404
 
 
-def test_sepa_page_ok():
-    """监控页缺 view 也必须 200(空表),导航含 SEPA监控,免责必现。"""
-    r = client.get("/sepa")
-    assert r.status_code == 200
-    assert "SEPA" in r.text
-    assert "非投资建议" in r.text
-    assert "VCP 完成" not in r.text
-
-
-def test_sepa_detail_missing_404():
+def test_sepa_and_watch_routes_removed():
+    """撤下 SEPA监控 / 实时盯盘:四条路由均不存在(404),导航不再出现两项入口。"""
+    assert client.get("/sepa").status_code == 404
     assert client.get("/sepa/000000").status_code == 404
+    assert client.get("/watch").status_code == 404
+    assert client.get("/api/watch").status_code == 404
+
+
+@skip_no_data
+def test_nav_has_no_sepa_watch_entries():
+    """导航栏不再含 SEPA监控 / 实时盯盘(base.html/dashboard.html 已删)。"""
+    r = client.get("/")
+    assert r.status_code == 200
+    assert "SEPA监控" not in r.text
+    assert "实时盯盘" not in r.text
+    assert 'href="/sepa' not in r.text
+    assert 'href="/watch' not in r.text
+
+
+def test_financial_page_industry_fallback_no_none(monkeypatch):
+    """B-1 行业回退链:meta.industry→sector→全A code_industry 映射;全缺→None。
+    模板层 None 必渲染成 '未知'(绝不出 Jinja 把 None 直渲的字面 'None'/页面上的 'no')。"""
+    recs = {
+        "000001": {"meta": {"code": "000001", "name": "甲", "industry": "银行"},
+                   "financial": {"评级": "良", "quality_score": 80}},
+        "000002": {"meta": {"code": "000002", "name": "乙", "industry": None, "sector": None},
+                   "financial": {"评级": "中", "quality_score": 60}},
+        "000003": {"meta": {"code": "000003", "name": "丙", "industry": None, "sector": None},
+                   "financial": {"评级": "差", "quality_score": 40}},
+    }
+    monkeypatch.setattr(da, "_load_all", lambda date="latest": recs)
+    monkeypatch.setattr(da, "_code_industry_map", lambda: {"000003": "电子"})
+    f = da.financial_page("latest")
+    ind = {r["code"]: r["industry"] for r in f["rows"]}
+    assert ind["000001"] == "银行"       # 人工 meta 优先
+    assert ind["000003"] == "电子"       # 全A 映射兜底
+    assert ind["000002"] is None         # 全缺 → None(交模板兜底)
+    # 模板等价:None → '未知',而非字面 'None'
+    from jinja2 import Template
+    assert Template("{{ x or '未知' }}").render(x=None) == "未知"
+    assert Template("{{ x or '未知' }}").render(x="银行") == "银行"
