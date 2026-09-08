@@ -174,15 +174,31 @@ def test_no_fetch_does_not_touch_network(patch_universe, tmp_path, monkeypatch):
     assert v["入选数"] == 0
 
 
+def _put_fin_raw(store, code, report_date, disclosure_date):
+    """写一份最小 financial_report raw(供报告期新鲜度闸判定;键按采集层 zfill(6) 对齐)。"""
+    code = str(code).zfill(6)
+    store.put_raw("financial_report", code, {
+        "code": code, "name": "测试股",
+        "periods": {report_date: {"report_date": report_date,
+                                  "disclosure_date": disclosure_date,
+                                  "利润表": {}, "资产负债表": {}, "现金流量表": {}}},
+        "n_periods": 1,
+    }, meta={"source": "test"})
+
+
 def test_fetch_true_auto_collects_missing_financials(patch_universe, tmp_path, monkeypatch):
-    """fetch=True 时,缺缓存的票被自动送去 fin.fetch_financial(修远端"策略先跑、财报后采"顺序坑)。"""
+    """fetch=True 时,缺缓存/报告期过期的票被自动送去采集(报告期新鲜度闸,哲学二)。
+
+    as_of=2026-08-19 → 法定应披露最新期=2026-03-31(一季报)。A 缓存已达一季报(新鲜)、
+    B/C 无缓存 → 只采 B/C(A 复用跳过)。"""
+    store = sf.fin.store
+    monkeypatch.setattr(store, "_RAW_DIR", tmp_path)
+    store.set_active_date("2026-08-19")
+    _put_fin_raw(store, "A", "2026-03-31", "2026-04-20")         # A 新鲜(已达应披露期)
     fetched: list[list[str]] = []
     def _fake_fetch_fin(codes, **_):
         fetched.append(list(codes))
         return {c: {} for c in codes}
-    # A 有缓存(load 成功)、B/C 缺(load 抛)
-    monkeypatch.setattr(sf.fin, "load_financial",
-                        lambda c: {} if c == "A" else (_ for _ in ()).throw(FileNotFoundError()))
     monkeypatch.setattr(sf.fin, "fetch_financial", _fake_fetch_fin)
     monkeypatch.setattr(sf.fd, "load_fundamental", lambda c: _fund(500.0))
     monkeypatch.setattr(sf.fr_analyzer, "build_financial_block",
@@ -190,14 +206,19 @@ def test_fetch_true_auto_collects_missing_financials(patch_universe, tmp_path, m
     monkeypatch.setattr(sf.market, "load_kline_recent", lambda c: _kline())
     monkeypatch.setattr("tools.store.repo.put_view", lambda name, view, **_: str(tmp_path / f"{name}.json"))
     v = sf.run_semi_factor_screen(["A", "B", "C"], as_of="2026-08-19", fetch=True, top_k=3)
-    assert len(fetched) == 1 and set(fetched[0]) == {"B", "C"}   # 只补 B/C(A 命中缓存跳过)
+    # 采集层按 zfill(6) 归一;只补 B/C(A 报告期新鲜跳过)
+    assert len(fetched) == 1 and set(fetched[0]) == {"B".zfill(6), "C".zfill(6)}
     assert v["入选数"] == 3                                        # 都拿到数据 → 入选
 
 
 def test_fetch_true_all_cached_no_refetch(patch_universe, tmp_path, monkeypatch):
-    """fetch=True 且全命中缓存时,不重复采(skip-if-cached 幂等)。"""
+    """fetch=True 且全部报告期新鲜时,不重复采(报告期新鲜度闸,报告季外≈0)。"""
+    store = sf.fin.store
+    monkeypatch.setattr(store, "_RAW_DIR", tmp_path)
+    store.set_active_date("2026-08-19")
+    for c in ("A", "B", "C"):
+        _put_fin_raw(store, c, "2026-03-31", "2026-04-20")       # 全部已达应披露期 → 新鲜
     called = {"fin": 0}
-    monkeypatch.setattr(sf.fin, "load_financial", lambda c: {})   # 全命中
     monkeypatch.setattr(sf.fin, "fetch_financial",
                         lambda codes, **_: called.__setitem__("fin", called["fin"] + 1) or {})
     monkeypatch.setattr(sf.fd, "load_fundamental", lambda c: _fund(500.0))
@@ -206,4 +227,4 @@ def test_fetch_true_all_cached_no_refetch(patch_universe, tmp_path, monkeypatch)
     monkeypatch.setattr(sf.market, "load_kline_recent", lambda c: _kline())
     monkeypatch.setattr("tools.store.repo.put_view", lambda name, view, **_: str(tmp_path / f"{name}.json"))
     sf.run_semi_factor_screen(["A", "B", "C"], as_of="2026-08-19", fetch=True, top_k=3)
-    assert called["fin"] == 0                                    # 全 cached → 零采集调用
+    assert called["fin"] == 0                                    # 全新鲜 → 零采集调用
