@@ -550,7 +550,9 @@ def anchor_stops(rec: dict) -> dict:
 
 
 def screen_page(date: str = "latest") -> dict:
-    """选股页数据:读 screen 视图 + 补每票关键字段。"""
+    """[dead] 预设筛选页(/screen)数据装配。页面与路由已下线(被 /selection 选股结果页取代),
+    本函数不再被 web.app 接线;保留仅供 test_council_web 复用其 council 综合分排序逻辑与历史存档。
+    读 screen 视图 + 补每票关键字段。底层产 screen view 的策略/管线不受影响。"""
     recs = _load_all(date)
     try:
         data = store.get_view("screen", date=date)
