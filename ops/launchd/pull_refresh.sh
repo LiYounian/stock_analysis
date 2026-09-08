@@ -8,7 +8,9 @@
 #   (实测全A 5548 只跑通、退出码0、峰值414MB、耗时~73min,主档正常推进到当日)。故本脚本 ① 默认单进程。
 #   spot 增量偶发网络断连会自动回退逐只(腾讯/新浪)推进主档,当日盘后即含收盘价。
 # 密钥只放本机受限文件、不进 git:默认从 $HOME/.config/stock/sync.env 读(chmod 600)。
-# 仓库路径由脚本自身位置推出(ops/launchd/ 上两级),无需硬编用户名/绝对路径。
+# 代码源:**不从主仓工作树跑**——主仓常被并发会话卡在旧 commit(WIP 挡住 ff-only 自更),
+#   从主仓跑会漏当天新合并的字段/节点。改为像 autopush 一样,从一个常驻 detached worktree
+#   跑最新 origin/main:每轮 fetch + reset --hard origin/main,全程不碰主仓 HEAD/工作树。
 set -uo pipefail
 
 ENV_FILE="${STOCK_SYNC_ENV:-$HOME/.config/stock/sync.env}"
@@ -21,7 +23,20 @@ if [ -z "${LLM_API_KEY:-}" ]; then
 fi
 export LLM_BASE_URL="${LLM_BASE_URL:-}" LLM_API_KEY="${LLM_API_KEY:-}" LLM_MODEL="${LLM_MODEL:-}"
 
-REPO="$(cd "$(dirname "$0")/../.." && pwd)"
+# —— 专用 worktree 卫生:强制常驻 worktree 更到最新 origin/main 再跑(照 autopush.sh 选项A)——
+# data/raw|master|backtest_local|intraday 在该 worktree 内是指向主仓的 symlink(共享大缓存/盘中状态),
+# data/analysis 由 worktree 自己滚存(部署时已 seed 历史日期目录,记分卡多周样本不断)。
+# 可用 STOCK_DAILYJOB_WORKTREE 覆盖路径。fetch 走该 worktree 的 git(与主仓共享对象库,不动主仓)。
+WORKTREE="${STOCK_DAILYJOB_WORKTREE:-$HOME/Documents/projects/worktrees/stock_analysis/dailyjob}"
+if [ ! -e "$WORKTREE/.git" ]; then
+  echo "$(date) 致命:专用 worktree 不存在:$WORKTREE(请先 git worktree add --detach \"$WORKTREE\" origin/main)" >&2
+  exit 3
+fi
+git -C "$WORKTREE" fetch --quiet origin || echo "!! ⓪ git fetch origin 失败,用该 worktree 现有 origin/main" >&2
+_OLD_HEAD="$(git -C "$WORKTREE" rev-parse --short HEAD 2>/dev/null || echo unknown)"
+git -C "$WORKTREE" reset --hard origin/main
+_NEW_HEAD="$(git -C "$WORKTREE" rev-parse --short HEAD 2>/dev/null || echo unknown)"
+REPO="$WORKTREE"
 cd "$REPO"
 PY="${STOCK_PYTHON:-$HOME/.conda/envs/stock_analysis/bin/python}"
 D="$(date +%Y-%m-%d)"
@@ -34,32 +49,13 @@ trap 'rmdir "$LOCK" 2>/dev/null' EXIT
 
 {
   echo "==================== $(date) pull_refresh $D ===================="
-  # ⓪ 跑最新已合并 main 代码(选项B:主仓内 ff-only 自更,不破坏数据流)——
-  #    背景:本项目多窗口并发,主仓可能落后 origin/main(别的 worktree 合并并 push 后,主仓没同步)。
-  #    若不自更,当天会用旧代码产数据、新字段漏。这里在主仓内直接 fetch + ff-only 快进到 origin/main。
-  #    为什么不切到专用 worktree(选项A):本任务的数据流强依赖"在同一仓库里滚存"——
-  #      · forward_scorecard 每次 build_scorecard() 从 store.list_dates() 全量重扫 data/analysis/<日期>/ 重建 CSV;
-  #      · 而这些每日日期目录是**未跟踪产物**,靠常年跑在同一主仓才逐日累积(git status 里一片 ?? data/analysis/2026-08-*)。
-  #    worktree 每次 reset --hard 只会保留 origin/main 已提交的日期目录 + 当天新产,历史未跟踪日期目录不累积,
-  #    记分卡的多周滚存样本会被打断。故选 ff-only 自更:只快进代码,data/analysis 滚存原样不动。
-  #    安全性:fetch 只碰共享对象库;merge --ff-only 绝不产生合并提交/改写历史,冲突即中止;仅当 HEAD==main 时才动,
-  #    不触碰其它 worktree/feature 分支。拿不到最新时**打 WARNING 照跑当前代码**(不静默,便于事后定位漏字段)。
-  _CUR_BRANCH="$(git -C "$REPO" rev-parse --abbrev-ref HEAD 2>/dev/null || echo unknown)"
-  git -C "$REPO" fetch --quiet origin 2>/dev/null || echo "!! ⓪ git fetch origin 失败,用主仓现有 origin/main 尝试快进"
-  if [ "$_CUR_BRANCH" = "main" ]; then
-    _OLD_HEAD="$(git -C "$REPO" rev-parse --short HEAD 2>/dev/null || echo unknown)"
-    if git -C "$REPO" merge --ff-only origin/main >/dev/null 2>&1; then
-      _NEW_HEAD="$(git -C "$REPO" rev-parse --short HEAD 2>/dev/null || echo unknown)"
-      if [ "$_OLD_HEAD" = "$_NEW_HEAD" ]; then
-        echo "-- ⓪ 代码已是最新 main($_NEW_HEAD),无需更新 --"
-      else
-        echo "-- ⓪ 已快进到最新 main:$_OLD_HEAD -> $_NEW_HEAD --"
-      fi
-    else
-      echo "!! ⓪ WARNING:ff-only 快进失败(主仓可能领先/有对同一跟踪文件的本地改动/与 origin/main 分叉)——用当前代码($_OLD_HEAD)跑,可能漏新字段"
-    fi
+  # ⓪ 代码已在脚本头部由专用 worktree 卫生更到最新 origin/main(fetch + reset --hard),这里只记账:
+  #    forward_scorecard 的多周滚存样本靠 data/analysis/<日期>/ 逐日累积——本 worktree 常驻不删,
+  #    reset --hard 只重置 tracked 文件、不动未跟踪日期目录,故滚存在本 worktree 内照常累积(部署已 seed 历史)。
+  if [ "$_OLD_HEAD" = "$_NEW_HEAD" ]; then
+    echo "-- ⓪ 专用 worktree 已是最新 origin/main($_NEW_HEAD),无需更新 --"
   else
-    echo "!! ⓪ WARNING:主仓 HEAD 不在 main 分支(当前=$_CUR_BRANCH)——不自更,用当前代码跑,可能漏新字段。请把主仓切回 main"
+    echo "-- ⓪ 专用 worktree 已更到最新 origin/main:$_OLD_HEAD -> $_NEW_HEAD --"
   fi
   # ① 本地自采全A K线(PULL_FETCH=1 开启;plist 已设)。**必须单进程 FETCH_WORKERS=1**——
   #    多进程会触发 mini_racer/V8 的 PartitionAlloc 崩溃(见头部根因订正);单进程实测跑通不崩。

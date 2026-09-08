@@ -6,13 +6,21 @@
 # (实测盘中任务 10:34 触发、13:50 才跑第一条命令),取数时点因此严重漂移。把"在正确时点
 # 取数"这件确定性的事下沉到代码 + launchd,判断部分才留给会话。见 docs/计划/定时任务时序治理.md
 #
-# 与 pull_refresh.sh 的差异:①本脚本**不做 git ff-only 自更**——10:30 是盘中,主仓工作树
-# 可能正被其它会话使用,盘中动 git 风险大于收益;快照逻辑刻意保持简单稳定。②无需 LLM_*
-# (纯行情抓取,不调 LLM),故不解析登录 shell 的密钥链。
-# 仓库路径由脚本自身位置推出(ops/launchd/ 上两级),不硬编用户名/绝对路径。
+# 代码源:从常驻专用 worktree 跑最新 origin/main(与 pull_refresh.sh 同款卫生)。**不从主仓跑**——
+#   主仓工作树被并发会话卡在旧 commit 时,intraday_snapshot.py/intraday_watch.py 等新模块会 ModuleNotFound。
+#   专用 worktree 是独立工作副本、动它的 git 不碰主仓 HEAD/WIP,盘中也安全。②无需 LLM_*(纯行情抓取)。
+# data/intraday 在 worktree 内是指向主仓的 symlink,快照落主仓共享目录、盘中观测/下游读同一份。
 set -uo pipefail
 
-REPO="$(cd "$(dirname "$0")/../.." && pwd)"
+# —— 专用 worktree 卫生:强制常驻 worktree 更到最新 origin/main 再跑(照 autopush.sh 选项A)——
+WORKTREE="${STOCK_DAILYJOB_WORKTREE:-$HOME/Documents/projects/worktrees/stock_analysis/dailyjob}"
+if [ ! -e "$WORKTREE/.git" ]; then
+  echo "$(date) 致命:专用 worktree 不存在:$WORKTREE(请先 git worktree add --detach \"$WORKTREE\" origin/main)" >&2
+  exit 3
+fi
+git -C "$WORKTREE" fetch --quiet origin || echo "$(date) 警告:git fetch origin 失败,用该 worktree 现有 origin/main" >&2
+git -C "$WORKTREE" reset --hard origin/main >/dev/null 2>&1 || echo "$(date) 警告:reset --hard origin/main 失败,用 worktree 当前代码" >&2
+REPO="$WORKTREE"
 cd "$REPO"
 PY="${STOCK_PYTHON:-$HOME/.conda/envs/stock_analysis/bin/python}"
 SLOT="${INTRADAY_SLOT:-1030}"
