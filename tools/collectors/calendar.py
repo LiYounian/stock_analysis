@@ -7,6 +7,7 @@
 
 对外:
     is_trading_day(date=None) -> bool     # 缺省今天
+    next_trading_day(date=None) -> str    # date 之后的下一个交易日(严格 >)
     trading_dates(...) -> set[str]        # 全部交易日(YYYY-MM-DD)
 """
 from __future__ import annotations
@@ -103,6 +104,32 @@ def trading_dates(*, allow_fetch: bool = True, refresh: bool = False) -> set[str
     if cache and cache.get("dates"):
         return set(cache["dates"])
     return set()
+
+
+def _weekday_next_approx(d: str) -> str:
+    """回退近似:下一个"周一~周五"(跳过周末,不识别节假日)。供日历取不到时兜底。"""
+    cur = datetime.strptime(d, "%Y-%m-%d") + timedelta(days=1)
+    while cur.weekday() >= 5:
+        cur += timedelta(days=1)
+    return cur.strftime("%Y-%m-%d")
+
+
+def next_trading_day(date=None, *, allow_fetch: bool = True) -> str:
+    """date(缺省今天)之后的下一个 A 股交易日(YYYY-MM-DD,严格 > date)。
+
+    日历可用 → 取交易日集合中大于 date 的最小者;日历取不到(空集)→ 回退"跳过周末"近似。
+    allow_fetch=False 时只用本地缓存/近似,不触网(供 web 展示层调用,页面渲染不因网络阻塞)。
+    """
+    d = _norm(date)
+    try:
+        dates = trading_dates(allow_fetch=allow_fetch)
+        if dates:
+            later = sorted(x for x in dates if x > d)
+            if later:
+                return later[0]
+    except Exception as e:                                   # noqa: BLE001
+        logger.warning("下一交易日判定异常,回退周内近似:%s", e)
+    return _weekday_next_approx(d)
 
 
 def is_trading_day(date=None, *, allow_fetch: bool = True) -> bool:

@@ -149,6 +149,28 @@ def financial_page(date: str = "latest") -> dict:
     return {"rows": rows, "count": len(rows), "date": date}
 
 
+def _upload_time(code: str, date: str) -> str | None:
+    """该票分析产物最近一次上传到远端的时间(B-2,区别于 as_of 数据日)。
+
+    来源:上传回执 `data/sync_receipts/<date>.json` 里该票分片(键=6位代码)的 `at` 时间戳
+    (upload._now_iso(),每次实际发送该分片时写入)。回执是本地运行态、不入库,故 web 若跑在
+    没有回执文件的环境上会取不到 → 返回 None(模板回退「未知」)。取不到/解析失败均 None,不报错。
+    """
+    from tools.config import settings
+    p = settings.PROJECT_ROOT / "data" / "sync_receipts" / f"{date}.json"
+    if not p.is_file():
+        return None
+    try:
+        import json as _json
+        rec = _json.loads(p.read_text(encoding="utf-8"))
+        shards = rec.get("shards") or {}
+        c = str(code).zfill(6)
+        sh = shards.get(c) or shards.get(str(code))
+        return (sh or {}).get("at") or None
+    except Exception:                                       # noqa: BLE001
+        return None
+
+
 def financial_detail(code: str, date: str = "latest") -> dict | None:
     """单只票的**详细**财报分析页数据:分析+证据(带来源)+ AI 讲解 + 审计标准。
 
@@ -187,6 +209,9 @@ def financial_detail(code: str, date: str = "latest") -> dict | None:
         # 财报发布日期=最新已披露报告期的披露日(块内 披露日)。均无值 → 模板回退「未知」。
         "分析日期": fin.get("分析日期") or rec["meta"].get("as_of"),
         "披露日": fin.get("披露日"),
+        # 分析上传时间(B-2):该票分片最近一次上传远端的时间戳(取回执 shards[code].at);
+        # 无回执文件(如 web 跑在无本地回执的环境)→ None,模板回退「未知」。
+        "上传时间": _upload_time(code, as_of(date)),
         "fin": rec["financial"],
         "现金流": cash, "资产负债": balance,
         "annual": annual,
@@ -1433,6 +1458,13 @@ def selection_analysis_view(date: str = "latest") -> dict:
     view.setdefault("盘后", None)
     view.setdefault("盘中", None)
     view.setdefault("盘尾", None)
+    # 排序表两列(午盘/复盘)幂等补齐:store 里的旧视图可能没有这两列,这里就地补上,
+    # 使页面立即展示,不必等下次重新上传(build_selection_view 已在上传口径注入,这里兜底)。
+    try:
+        from tools import selection_summary
+        selection_summary.enrich_view_cross_refs(view)
+    except Exception:                                   # noqa: BLE001
+        pass
     return view
 
 

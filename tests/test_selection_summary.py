@@ -11,6 +11,20 @@ import pytest
 
 from tools import selection_summary as ss
 
+
+class _MemP:
+    """内存版 Path:read_text 返回预置文本;None 表示文件不存在。"""
+    def __init__(self, text): self._t = text
+    def is_file(self): return self._t is not None
+    def read_text(self, encoding="utf-8"): return self._t
+
+
+class _MemDir:
+    """内存版目录:`dir / name` → _MemP(mp[name])。用于把 build_selection_view 的
+    选股/复盘目录替换成内存映射,单测不落磁盘。"""
+    def __init__(self, mp): self._mp = mp
+    def __truediv__(self, name): return _MemP(self._mp.get(name))
+
 # 版式 A:代码/名称分列、表态/一句话列(近期版式,如 2026-09-07)
 _SEL_A = """# 每日选股分析 · 2026-09-07（收盘后选股，预测 09-08）
 
@@ -119,25 +133,112 @@ def test_review_summary_excludes_deep_text():
 
 def test_build_view_structure():
     """三区两项结构固定;盘中/盘尾恒为占位 None。"""
-    import types
-
-    class _P:
-        def __init__(self, text): self._t = text
-        def is_file(self): return self._t is not None
-        def read_text(self, encoding="utf-8"): return self._t
-
-    class _Dir:
-        def __init__(self, mp): self._mp = mp
-        def __truediv__(self, name): return _P(self._mp.get(name))
-
-    sel_dir = _Dir({"2026-09-07.md": _SEL_A})
-    rev_dir = _Dir({"2026-09-07.md": _REVIEW})
+    sel_dir = _MemDir({"2026-09-07.md": _SEL_A})
+    rev_dir = _MemDir({"2026-09-07.md": _REVIEW})
     v = ss.build_selection_view("2026-09-07", selection_dir=sel_dir, review_dir=rev_dir)
     assert set(v) == {"date", "盘后", "盘中", "盘尾"}
     assert v["date"] == "2026-09-07"
     assert v["盘中"] is None and v["盘尾"] is None
     assert v["盘后"]["选股"]["ranking"][0]["code"] == "605007"
     assert v["盘后"]["复盘"]["scorecard"][0]["code"] == "002234"
+
+
+def test_review_scorecard_captures_stance():
+    """记分表新增 stance 字段(复盘里记录的原始表态列),供排序表「复盘结果」列取用。"""
+    r = ss.extract_review_summary(_REVIEW)
+    st = {row["code"]: row.get("stance") for row in r["scorecard"]}
+    assert st["002234"] == "买入"
+    assert st["603162"] == "规避"
+
+
+# 版式:选股票与复盘票有重叠(605007 同时出现在选股排序与当日复盘记分),验证按 code 匹配
+_REVIEW_OVERLAP = """# 每日复盘 · 2026-09-07
+
+### 二、逐票收盘记分（α = 收盘涨跌 − 全A等权）
+
+| 票 | 表态 | 收盘 | **α vs 等权** | 收盘判定 |
+|---|---|---|---|---|
+| **605007 五洲特纸** | 买入(条件式) | 15.30 +3.5% | **+2.57pp** | ✅ 兑现 |
+| **002234 民和** | 规避 | 8.52 −1.0% | **−1.90pp** | ✅ |
+"""
+
+
+def test_ranking_review_column_cross_day_three_states():
+    """排序表「复盘结果」列 = 跨日反查:选股日 D 的票取其 D+1(次一交易日)复盘的回看结果。
+    三态齐锁:命中→表态+α;D+1 复盘存在但票不在→空串(渲染「—」);D+1 复盘不存在→"待复盘"。
+    交易日推进走 calendar.next_trading_day(与被测同一日历口径,不硬算),测试对日历实现无耦合。"""
+    from tools.collectors import calendar as cal
+    D = "2026-09-07"
+    D1 = cal.next_trading_day(D, allow_fetch=False)          # 次一交易日(D+1),不触网
+    assert D1 > D
+    # D+1 复盘存在:605007 命中(表态+α),688262 不在其中(→ 空串)
+    view = ss.build_selection_view(
+        D,
+        selection_dir=_MemDir({f"{D}.md": _SEL_A}),
+        review_dir=_MemDir({f"{D1}.md": _REVIEW_OVERLAP}),
+    )
+    rows = {r["code"]: r for r in view["盘后"]["选股"]["ranking"]}
+    assert "买入" in rows["605007"]["review"] and "+2.57pp" in rows["605007"]["review"]
+    assert rows["688262"]["review"] == ""                   # D+1 复盘里没有该票 → 「—」
+    # 午盘无数据源 → 恒为空串占位
+    assert rows["605007"]["midday"] == "" and rows["688262"]["midday"] == ""
+
+
+def test_ranking_review_pending_when_next_day_review_absent():
+    """边界:选股日 D 的 D+1 复盘尚未产出(如今天刚选的票)→ 排序表「复盘结果」列显示"待复盘",
+    绝不取"当日 D 复盘"(那评的是前一日票、与今日选出的票不重叠)、不报错、不渲染「—」。"""
+    # review_dir 里只有"当日 D"复盘、没有 D+1 → 跨日反查落空 → 待复盘
+    view = ss.build_selection_view(
+        "2026-09-07",
+        selection_dir=_MemDir({"2026-09-07.md": _SEL_A}),
+        review_dir=_MemDir({"2026-09-07.md": _REVIEW_OVERLAP}),   # 同日复盘,非 D+1
+    )
+    rows = {r["code"]: r for r in view["盘后"]["选股"]["ranking"]}
+    assert rows["605007"]["review"] == "待复盘"
+    assert rows["688262"]["review"] == "待复盘"
+
+
+def test_review_takes_same_date_not_previous_day():
+    """A-1:复盘取"当日"复盘,不取前一天。给两天不同复盘,build_selection_view(D)只应
+    命中 D 的复盘(605007 命中),绝不落到 D-1 的复盘(其记分是别的票)。"""
+    _REVIEW_PREV = """# 每日复盘 · 2026-09-04
+
+### 二、逐票收盘记分
+
+| 票 | 表态 | **α vs 等权** |
+|---|---|---|
+| **999999 别的票** | 规避 | **−9.99pp** |
+"""
+    rev_dir = _MemDir({"2026-09-07.md": _REVIEW_OVERLAP, "2026-09-04.md": _REVIEW_PREV})
+    view = ss.build_selection_view(
+        "2026-09-07", selection_dir=_MemDir({"2026-09-07.md": _SEL_A}), review_dir=rev_dir)
+    sc_codes = {row["code"] for row in view["盘后"]["复盘"]["scorecard"]}
+    assert sc_codes == {"605007", "002234"}          # 当日(09-07)复盘
+    assert "999999" not in sc_codes                  # 绝不串到前一天(09-04)
+
+
+def test_page_no_experience_block_rendered(monkeypatch):
+    """A-3:/selection-analysis 页不再出现「新增/确认经验」区块(摘要仍抽取,仅不渲染)。"""
+    from fastapi.testclient import TestClient
+
+    import web.app as webapp
+    from web import data_access as da
+
+    view = ss.build_selection_view(
+        "2026-09-07",
+        selection_dir=_MemDir({"2026-09-07.md": _SEL_A}),
+        review_dir=_MemDir({"2026-09-07.md": _REVIEW}),
+    )
+    # 摘要里经验仍被抽出(不破坏抽取能力)
+    assert view["盘后"]["复盘"]["experiences"], "经验抽取应保留"
+    monkeypatch.setattr(da, "selection_analysis_view", lambda date="latest": view)
+    monkeypatch.setattr(da, "available_dates", lambda: ["2026-09-07"])
+    monkeypatch.setattr(da, "as_of", lambda date="latest": "2026-09-07")
+    monkeypatch.setattr(da, "current_data_source", lambda sample=20: {})
+    html = TestClient(webapp.app).get("/selection-analysis").text
+    assert "新增/确认经验" not in html                 # 经验区块标题不出现
+    assert "板块β隔周衰减" not in html                 # 经验条目文本不出现
+    assert "午盘分析" in html and "复盘结果" in html    # A-2 两列表头在
 
 
 def test_build_view_none_when_both_missing():

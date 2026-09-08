@@ -217,3 +217,43 @@ def test_financial_page_industry_fallback_no_none(monkeypatch):
     from jinja2 import Template
     assert Template("{{ x or '未知' }}").render(x=None) == "未知"
     assert Template("{{ x or '未知' }}").render(x="银行") == "银行"
+
+
+def test_upload_time_from_receipt(tmp_path, monkeypatch):
+    """B-2 分析上传时间:取回执 data/sync_receipts/<date>.json 里该票分片的 at 时间戳;
+    补零匹配 6 位代码;缺文件/缺分片 → None(模板回退「未知」)。"""
+    import json
+
+    from tools.config import settings
+
+    monkeypatch.setattr(settings, "PROJECT_ROOT", tmp_path)
+    rdir = tmp_path / "data" / "sync_receipts"
+    rdir.mkdir(parents=True)
+    (rdir / "2026-09-07.json").write_text(json.dumps({
+        "date": "2026-09-07",
+        "shards": {
+            "000009": {"ok": True, "at": "2026-09-07T20:15:03+08:00", "hash": "x"},
+        },
+    }), encoding="utf-8")
+    # 命中(int/str/补零均可)
+    assert da._upload_time("000009", "2026-09-07") == "2026-09-07T20:15:03+08:00"
+    assert da._upload_time(9, "2026-09-07") == "2026-09-07T20:15:03+08:00"
+    # 分片不存在 → None
+    assert da._upload_time("600519", "2026-09-07") is None
+    # 回执文件不存在 → None(模板回退「未知」)
+    assert da._upload_time("000009", "2026-01-01") is None
+
+
+def test_financial_detail_exposes_dates(monkeypatch):
+    """B-1/B-2:财报详情组装暴露 披露日(财报发布时间)/分析日期/上传时间三个字段。
+    披露日取 financial.披露日(无值时模板回退「未知」);上传时间取回执 at。"""
+    rec = {"meta": {"code": "000009", "name": "中国宝安", "as_of": "2026-09-07",
+                    "industry": "综合"},
+           "financial": {"评级": "良", "披露日": "2026-04-30", "报告期": "2026-03-31"}}
+    monkeypatch.setattr(da, "get_record", lambda code, date="latest": rec)
+    monkeypatch.setattr(da, "as_of", lambda date="latest": "2026-09-07")
+    monkeypatch.setattr(da, "_upload_time", lambda code, date: "2026-09-07T20:15:03+08:00")
+    d = da.financial_detail("000009", "latest")
+    assert d["披露日"] == "2026-04-30"                    # 财报发布时间正常(无缺口)
+    assert d["分析日期"] == "2026-09-07"                  # 无块内分析日期 → 回退 as_of
+    assert d["上传时间"] == "2026-09-07T20:15:03+08:00"   # 分析上传时间字段暴露
