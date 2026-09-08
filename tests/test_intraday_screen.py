@@ -150,9 +150,10 @@ def test_shortlist_capped(monkeypatch):
 def test_orchestration_two_phase(monkeypatch, tmp_path):
     calls = {}
 
-    def _fake_screenall(codes, as_of, no_llm=False, no_fetch=False, skip_strategies=None):
+    def _fake_screenall(codes, as_of, no_llm=False, no_fetch=False, skip_strategies=None,
+                        lean=False):
         calls["stage1"] = {"no_llm": no_llm, "no_fetch": no_fetch, "skip": skip_strategies,
-                           "n": len(codes)}
+                           "lean": lean, "n": len(codes)}
         return {"union": 3, "llm_subset": 5, "各策略入选": {}}
 
     def _fake_candmsg(as_of, no_llm=False):
@@ -167,6 +168,7 @@ def test_orchestration_two_phase(monkeypatch, tmp_path):
     assert calls["stage1"]["no_llm"] is True
     assert calls["stage1"]["no_fetch"] is True
     assert calls["stage1"]["skip"] == isr.INTRADAY_SKIP_STRATEGIES
+    assert calls["stage1"]["lean"] is True   # 午盘阶段1 必走 lean 精简模式(跳收盘重活)
     # 阶段2:消息面默认跑 LLM(no_llm=False),对同一 as_of
     assert calls["stage2"]["as_of"] == "2026-09-08"
     assert calls["stage2"]["no_llm"] is False
@@ -174,6 +176,49 @@ def test_orchestration_two_phase(monkeypatch, tmp_path):
     # run_screen_all 内置消息面节点开关已还原(未泄漏 CANDIDATE_MSG_CONFIRM=0)
     import os
     assert os.environ.get("CANDIDATE_MSG_CONFIRM") in (None, "1")
+
+
+# ————————————————————————————————————————————————
+# ⑥ lean 精简:午盘阶段1 跳过收盘才需要的重活;收盘默认 lean=False 行为不变
+# ————————————————————————————————————————————————
+def test_run_screen_all_lean_default_off():
+    """收盘默认路径不变:run_screen_all 的 lean 默认必须是 False(锁「默认不瘦身」)。"""
+    import inspect as _inspect
+    assert _inspect.signature(run.run_screen_all).parameters["lean"].default is False
+
+
+def test_run_screen_all_lean_skips_heavy(monkeypatch):
+    """lean=True 时,收盘才需要的重活(数值面深采/事件/因子/合议/panel/前瞻回测/龙虎榜)一个都不跑。
+
+    做法:把 step② 各 screener 桩成返回空 view(不触网),把 step⑤ 之后的重活桩成「一被调用就记名」,
+    再跑 run_screen_all(lean=True),断言:返回 lean=True 且重活列表全空(证明确实早退、没进 step⑤)。
+    """
+    from tools.pipeline import (screen_conditional_rank, screen_council,
+                                screen_deduct_quality, screen_max_range, screen_momentum,
+                                screen_reversal_turnover, screen_s02, screen_semi_factor,
+                                screen_strong, screen_volume)
+    # step②:各 screener 桩成返回空 view(不触网、不读主档)。
+    for mod, fn in [(screen_council, "run_council_screen"), (screen_s02, "run_s02_screen"),
+                    (screen_momentum, "run_momentum_screen"),
+                    (screen_semi_factor, "run_semi_factor_screen"),
+                    (screen_max_range, "run_max_range_screen"),
+                    (screen_volume, "run_volume_screen"), (screen_strong, "run_strong_screen"),
+                    (screen_reversal_turnover, "run_reversal_turnover_screen"),
+                    (screen_conditional_rank, "run_conditional_rank_screen"),
+                    (screen_deduct_quality, "run_deduct_quality_screen")]:
+        monkeypatch.setattr(mod, fn, lambda *a, **k: {}, raising=False)
+    # step⑤ 之后的重活:一被调用就记名(lean 应一个都不碰)。
+    heavy = ["collect_values_missing", "collect_market_context", "enrich_candidates",
+             "collect_ticks", "run_serialize", "run_events", "run_factor", "run_council",
+             "run_panel", "run_screen", "run_multi_gate", "run_backtest", "collect_lhb",
+             "_update_lhb_scorecard"]
+    called: list[str] = []
+    for name in heavy:
+        monkeypatch.setattr(run, name, (lambda n: lambda *a, **k: called.append(n))(name),
+                            raising=False)
+    rep = run.run_screen_all([], "2026-09-08", no_llm=True, no_fetch=True, lean=True)
+    assert rep.get("lean") is True
+    assert called == [], f"lean 模式不应跑任何重活,却跑了:{called}"
 
 
 def test_render_md_from_view(monkeypatch, tmp_path):
