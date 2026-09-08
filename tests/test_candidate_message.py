@@ -263,6 +263,77 @@ def test_default_experts_still_contain_fundflow():
     assert "资金流" in THRESHOLDS["合议"]["默认专家组"]
 
 
+# ————————————————————————————————————————————————
+# 方案乙·根治 double-count(2026-09-08 续7):base(数据面综合分)重算合议时剔除消息面专家。
+# 甲只把回灌权重 0.5→0.3 压倍数,结构性根源仍在——默认专家组仍含 情绪三层/事件驱动,消息面分又
+# 单独合议这两位并回灌 → 同批专家算两次(~2×)。乙拆通道:base = 默认专家组 − 消息面专家(资金流
+# 是数据面因子仍留 base),让消息面专家只经回灌进完整分 → "完整分"所见即所得、无重复计数。可逆(开关)。
+# ————————————————————————————————————————————————
+def test_base剔除消息面专家_switch_default_true():
+    """① 开关「base剔除消息面专家」默认 True(方案乙生产口径)。"""
+    assert THRESHOLDS["消息面回灌"]["base剔除消息面专家"] is True
+
+
+def test_resolve_base_experts_excludes_msg_keeps_fundflow():
+    """base 专家组 = 默认专家组 − 消息面专家(情绪三层/事件驱动);**资金流仍留 base**(数据面因子)。
+    开关关 → 退回完整默认专家组(方案甲行为,可逆)。"""
+    base = cm.resolve_base_experts(["情绪三层", "事件驱动"])
+    assert "情绪三层" not in base and "事件驱动" not in base   # 消息面专家从 base 拿掉
+    assert "资金流" in base                                   # 资金流是数据面因子,保留 base
+    assert base == ["超买超卖", "拐点", "资金流", "多因子", "板块轮动", "财报"]
+    off = cm.resolve_base_experts(["情绪三层", "事件驱动"],
+                                  cfg={"base剔除消息面专家": False})
+    assert off == THRESHOLDS["合议"]["默认专家组"]             # 退回完整默认组
+    assert "情绪三层" in off and "事件驱动" in off             # 方案甲行为(可逆回退)
+
+
+def _spy_convene(monkeypatch):
+    """monkeypatch council.convene 记录每次被调用的专家名列表(delegate 到真实实现)。
+    返回 calls:[0]=消息面合议专家, [1]=base(数据面综合分)合议专家。"""
+    real = cm.council.convene
+    calls: list[list[str]] = []
+
+    def _spy(expert_names, record, *a, **k):
+        calls.append(list(expert_names))
+        return real(expert_names, record, *a, **k)
+
+    monkeypatch.setattr(cm.council, "convene", _spy)
+    return calls
+
+
+def test_base_convene_excludes_msg_msg_convene_uses_msg_experts(monkeypatch, hermetic_experts):
+    """② base 合议**不含**情绪三层/事件驱动、**仍含**资金流;③ 消息面分仍由 MSG_EXPERTS 算。"""
+    calls = _spy_convene(monkeypatch)
+    recs = {"P": _rec_with_news("P", 0.6)}
+    cm.rescore_pool(["P"], provenance={}, load_record=lambda c: recs[c])
+    # _score_one 先召消息面合议、再召 base 合议
+    assert calls[0] == ["情绪三层", "事件驱动"]                # ③ 消息面分由 MSG_EXPERTS 算
+    base = calls[1]
+    assert "情绪三层" not in base and "事件驱动" not in base    # ② base 剔除消息面专家(防 double-count)
+    assert "资金流" in base                                    # ② 资金流仍在 base
+
+
+def test_full_score_is_base_excluded_plus_weighted_msg(hermetic_experts):
+    """④ 完整分 = base(剔除msg)数据面综合分 + 0.3×消息面分(所见即所得)。"""
+    recs = {"P": _rec_with_news("P", 0.6)}
+    out = cm.rescore_pool(["P"], provenance={}, load_record=lambda c: recs[c])
+    x = out[0]
+    w = float(THRESHOLDS["消息面回灌"]["回灌权重"])
+    assert w == 0.3                                            # 权重维持 0.3(方案乙不动 w)
+    assert x["完整分"] == pytest.approx(x["数据面综合分"] + w * x["消息面分"])
+
+
+def test_base_convene_switch_off_reverts_to_full_default(monkeypatch, hermetic_experts):
+    """⑤ 开关关 → base 合议退回完整默认专家组(含情绪三层/事件驱动),可逆回退方案甲。"""
+    calls = _spy_convene(monkeypatch)
+    recs = {"P": _rec_with_news("P", 0.6)}
+    cfg_off = {**THRESHOLDS["消息面回灌"], "base剔除消息面专家": False}
+    cm.rescore_pool(["P"], provenance={}, load_record=lambda c: recs[c], cfg=cfg_off)
+    base = calls[1]
+    assert "情绪三层" in base and "事件驱动" in base            # 退回含 msg 的旧行为(方案甲)
+    assert base == THRESHOLDS["合议"]["默认专家组"]
+
+
 def test_node_no_llm_flag_propagates(monkeypatch, hermetic_experts, analysis_tmpdir):
     cm.store.set_active_date("2026-09-08")
     cm.store.put_view("策略0合议", {"top": [{"code": "C001"}]}, date="2026-09-08")
