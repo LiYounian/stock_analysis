@@ -36,6 +36,7 @@ import time
 
 import pandas as pd
 
+from tools import parallel
 from tools.analysis import technical as ta
 from tools.collectors import announcement as an
 from tools.collectors import baidu_news
@@ -202,24 +203,31 @@ def collect_values_missing(codes: list[str]) -> None:
         socket.setdefaulttimeout(_old)
 
 
-def collect_message(codes: list[str]) -> None:
-    """采集消息面:每个源各自 try/except 降级,任一源(含政策)失败都不中止整批。"""
-    logger.info("采集消息面 %d 只(新闻/舆情/政策)...", len(codes))
+def collect_message(codes: list[str], workers: int = 1) -> None:
+    """采集消息面:每个源各自 try/except 降级,任一源(含政策)失败都不中止整批。
+
+    workers:候选池富集提速用的**有界并发度**(默认 1 = 原串行,全A/自选等调用方不受影响)。
+      >1 时各源内部按票在有界线程池并发拉取(新闻/舆情/百度个股,网络 IO 型);政策是全池共用
+      的单次调用(非逐票),不并发。结果落盘各票独立,与完成顺序无关(见各 collector 的 workers)。
+    """
+    logger.info("采集消息面 %d 只(新闻/舆情/政策,并发数=%d)...", len(codes), max(1, int(workers or 1)))
     _old = socket.getdefaulttimeout()
     socket.setdefaulttimeout(FETCH_TIMEOUT)
     try:
         # recall=True:开启行业主题词扩召回 + LLM 宁严相关性初筛(collect_message 只被自选池/
         # screenall(候选定向富集)/两阶段的候选子集调用,天然不波及全A;补"挂不到个股的行业/宏观/管制"消息)。
-        logger.info("新闻:成功 %d", len(_safe("新闻", lambda: news.fetch_news(codes, recall=True)) or {}))
-        logger.info("舆情(股吧):成功 %d", len(_safe("舆情(股吧)", lambda: ugc.fetch_ugc(codes)) or {}))
+        logger.info("新闻:成功 %d",
+                    len(_safe("新闻", lambda: news.fetch_news(codes, recall=True, workers=workers)) or {}))
+        logger.info("舆情(股吧):成功 %d",
+                    len(_safe("舆情(股吧)", lambda: ugc.fetch_ugc(codes, workers=workers)) or {}))
         # 百度个股新闻(前向情绪滚存):仅采集落盘、不接情绪评分。与上面 news/ugc 共用同一
         # codes(候选定向富集集/自选,票池级),天然不波及全A;fetch_baidu_news 自带新鲜度门控
         # (缓存≤BAIDU_NEWS_STALE_DAYS 天跳过重拉)+ 前向增量并集幂等,同日重跑不猛拉。
         # 整块 _safe 兜底、内部单票失败已降级,任何失败都不阻断闭环。开关 BAIDU_NEWS_COLLECT。
         if settings.BAIDU_NEWS_COLLECT:
             logger.info("百度新闻(前向滚存):成功 %d",
-                        len(_safe("百度新闻", lambda: baidu_news.fetch_baidu_news(codes)) or {}))
-        pol = _safe("政策", lambda: policy.fetch_policy())      # 政策按行业关键词(全池共用)
+                        len(_safe("百度新闻", lambda: baidu_news.fetch_baidu_news(codes, workers=workers)) or {}))
+        pol = _safe("政策", lambda: policy.fetch_policy())      # 政策按行业关键词(全池共用,单次非逐票)
         logger.info("政策:%d 条", len(pol or []))
     finally:
         socket.setdefaulttimeout(_old)
@@ -287,14 +295,20 @@ def _update_lhb_scorecard(as_of: str) -> None:
 # ————————————————————————————————————————————————
 # 情绪:LLM 三层打分(政策全局 + 各票新闻/舆情)
 # ————————————————————————————————————————————————
-def run_sentiment(codes: list[str]) -> int:
+def run_sentiment(codes: list[str], workers: int = 1) -> int:
+    """三层情绪 LLM 打分(逐票):政策全局一次 → 每票 新闻/舆情/政策 三层合成 → news_ai 视图。
+
+    workers:候选池富集提速用的**有界并发度**(默认 1 = 原串行)。>1 时**每票**的 analyze_stock
+      (LLM 网络型,是本节点主耗时)在有界线程池并发跑;各票 sentiment/{code}.json 独立落盘,
+      **统计量后汇总**(与完成顺序无关);政策打分/name_fallback 是全局单次、保持在并发前串行做。
+    """
     from tools.analysis import event
     from tools.llm import client as lc
     if not lc.is_configured():
         logger.warning("LLM 未配置,跳过情绪打分(记录 sentiment 将为空)")
         return 0
     logger.info("LLM 政策打分...")
-    if not event.score_policy():
+    if not event.score_policy():                         # 全局一次(非逐票),并发前串行做
         logger.warning("政策打分为空(缺政策缓存?),政策层降级")
     # 富集前可观测:多少票拿不到真名、只能回退成代码(=本股新闻有被误判「无关」的风险)。
     nf = event.name_fallback_stats(codes)
@@ -307,28 +321,36 @@ def run_sentiment(codes: list[str]) -> int:
         store.put_view("name_fallback", nf)              # 落盘按日期视图,便于回溯/验收
     except Exception as e:
         logger.warning("name_fallback 视图落盘失败(不阻断):%s", str(e)[:80])
-    ok = 0
     n = len(codes)
     fresh_stat = {"新鲜": 0, "陈旧": 0, "无数据": 0}          # 顶层新鲜度三态占比(验收观测点)
     layer_stat = {"新闻": dict(fresh_stat), "舆情": dict(fresh_stat), "政策": dict(fresh_stat)}
-    for i, code in enumerate(codes, 1):
-        logger.info("[%d/%d] %s — 新闻情绪(LLM)...", i, n, code)
+
+    def _one(idx: int, code: str) -> dict | None:
+        """单票三层情绪(LLM,自含 FileNotFoundError 降级),返回 rec['sentiment'] 或 None。"""
+        logger.info("[%d/%d] %s — 新闻情绪(LLM)...", idx + 1, n, code)
         try:
             rec = event.analyze_stock(code)
         except FileNotFoundError:
+            return None
+        s = rec["sentiment"]
+        logger.info("  %s 净情绪 %s 新鲜度=%s(新闻%d/舆情%d/政策%d)", code, s["净情绪分"],
+                    s.get("新鲜度"),
+                    s["三层"]["新闻"]["样本数"], s["三层"]["舆情"].get("样本数", 0),
+                    s["三层"]["政策"]["样本数"])
+        return s
+
+    # 并发跑每票(结果按输入序回填)→ 统计量按序汇总(与完成顺序无关,逐值等价串行)
+    ok = 0
+    for s in parallel.pmap(_one, codes, workers):
+        if s is None:
             continue
         ok += 1
-        s = rec["sentiment"]
         if s.get("新鲜度") in fresh_stat:
             fresh_stat[s["新鲜度"]] += 1
         for lname, lstat in layer_stat.items():
             f = s.get("三层", {}).get(lname, {}).get("新鲜度")
             if f in lstat:
                 lstat[f] += 1
-        logger.info("  %s 净情绪 %s 新鲜度=%s(新闻%d/舆情%d/政策%d)", code, s["净情绪分"],
-                    s.get("新鲜度"),
-                    s["三层"]["新闻"]["样本数"], s["三层"]["舆情"].get("样本数", 0),
-                    s["三层"]["政策"]["样本数"])
     logger.info("情绪打分完成:%d 只", ok)
     logger.info("  顶层新鲜度:新鲜%d/陈旧%d/无数据%d",
                 fresh_stat["新鲜"], fresh_stat["陈旧"], fresh_stat["无数据"])
@@ -337,7 +359,7 @@ def run_sentiment(codes: list[str]) -> int:
                     lname, lstat["新鲜"], lstat["陈旧"], lstat["无数据"])
     # 同阶段生产「新闻+AI」统一视图(复用本阶段已建的 LLM 抽取缓存,不额外烧钱)
     from tools.analysis import news_ai
-    logger.info("新闻 AI 视图:%d 只", news_ai.write_news_ai(codes))
+    logger.info("新闻 AI 视图:%d 只", news_ai.write_news_ai(codes, workers=workers))
     return ok
 
 

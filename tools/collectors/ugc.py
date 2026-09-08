@@ -28,6 +28,7 @@ import re
 import time
 from datetime import date, timedelta
 
+from tools import parallel
 from tools.config import settings
 from tools.store import repo as store
 
@@ -160,30 +161,43 @@ def fetch_one(code: str, limit: int | None = None) -> list[dict]:
     return items
 
 
-def fetch_ugc(codes: list[str], limit: int | None = None) -> dict[str, list[dict]]:
+def fetch_ugc(codes: list[str], limit: int | None = None,
+              workers: int = 1) -> dict[str, list[dict]]:
     """抓取每票近期股吧帖子并经 store 落盘。
 
     输出:{code: [{time, author, is_v, text, likes, replies}, ...]}(时间倒序)。
     仅保留时间窗(today - NEWS_LOOKBACK_DAYS)内的帖子,使跨票热度可比。
     is_v 标记是否大V/加V用户,供热度加权。
     单票失败记 logger 跳过,不中断整批;拉到空视作失败(不静默)。
+
+    workers:候选池富集提速用的有界并发度(默认 1 = 原串行);>1 时每票(网络 IO 型)在有界
+      线程池并发拉取,各票落盘独立,结果 out/failed 按 code 收集,**与完成顺序无关**。
     """
     limit = limit or settings.UGC_LIMIT
 
     out: dict[str, list[dict]] = {}
     failed: list[str] = []
     n = len(codes)
-    for i, code in enumerate(codes, 1):
-        logger.info("[%d/%d] 股吧 %s 采集...", i, n, code)
+
+    def _one(idx: int, code: str) -> tuple[str, list[dict] | None]:
+        """采单票股吧(自含失败隔离),返回 (code, items 或 None失败)。"""
+        logger.info("[%d/%d] 股吧 %s 采集...", idx + 1, n, code)
         try:
             items = fetch_one(code, limit)
             store.put_raw("ugc", code, items, meta={"source": "eastmoney_guba"})
-            out[code] = items
             logger.info("股吧 %s:%d 帖", code, len(items))
+            r: list[dict] | None = items
         except Exception as e:
-            failed.append(code)
             logger.error("股吧 %s 失败: %s", code, e)
-        time.sleep(settings.FETCH_SLEEP_SEC)
+            r = None
+        time.sleep(settings.FETCH_SLEEP_SEC)     # 每票节流(并发下各线程各自节流)
+        return code, r
+
+    for code, items in parallel.pmap(_one, codes, workers):
+        if items is None:
+            failed.append(code)
+        else:
+            out[code] = items
     if failed:
         logger.warning("股吧拉取失败(%d): %s", len(failed), failed)
     return out

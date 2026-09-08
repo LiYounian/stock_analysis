@@ -569,26 +569,38 @@ def _council_bias_reconcile(rec: dict) -> dict | None:
     return council.reconcile_direction(方向, 结论)
 
 
-def serialize_all(as_of: str | None = None, codes: list[str] | None = None) -> dict[str, str]:
+def serialize_all(as_of: str | None = None, codes: list[str] | None = None,
+                  workers: int = 1) -> dict[str, str]:
     """对给定票池(缺省全池)组装并经 store 按日期落盘。落盘前过 contracts 校验(§9.2)。
 
     落盘走 store.put_record(rec, date=as_of):记录进 data/analysis/<as_of>/{code}.json。
     返回 {code: path}。
+
+    workers:候选池富集提速用的有界并发度(默认 1 = 原串行,全A serialize 不受影响)。>1 时
+      每票 build_record+校验+落盘(CPU/读盘型)在有界线程池并发;各票记录独立文件、store 原子写,
+      结果 out(按 code)与不合规计数**按序汇总,与完成顺序无关**(逐值等价串行)。
     """
     import pandas as pd
 
+    from tools import parallel
     from tools.contracts import record as contracts
     from tools.store import repo as store
     as_of = as_of or pd.Timestamp.today().strftime("%Y-%m-%d")
     codes = codes or stock_pool.get_codes()
-    out, invalid = {}, 0
-    for code in codes:
+
+    def _one(idx: int, code: str) -> tuple[str, str, bool]:
+        """单票组装+校验+落盘,返回 (code, path, 是否不合规)。"""
         rec = build_record(code, as_of)
         errs = contracts.validate_record(rec)     # 契约优先:产出即校验,漂移当场暴露
-        if errs:
-            invalid += 1
+        bad = bool(errs)
+        if bad:
             logger.warning("契约校验 %s:%d 处问题 %s", code, len(errs), errs[:3])
-        out[code] = store.put_record(rec, date=as_of)
+        return code, store.put_record(rec, date=as_of), bad
+
+    out, invalid = {}, 0
+    for code, path, bad in parallel.pmap(_one, codes, workers):
+        out[code] = path
+        invalid += 1 if bad else 0
     logger.info("结构化 JSON 落盘 %d 只(契约不合规 %d,日期 %s)", len(out), invalid, as_of)
     return out
 

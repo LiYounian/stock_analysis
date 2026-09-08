@@ -101,13 +101,24 @@ def enrich_news(code: str, date: str | None = None, client=None) -> list[dict]:
     return out
 
 
-def write_news_ai(codes: list[str], date: str | None = None, client=None) -> int:
-    """批量生产「新闻+AI」按票视图并落盘。返回落盘票数(无新闻的票跳过)。"""
-    n = 0
-    for code in codes:
+def write_news_ai(codes: list[str], date: str | None = None, client=None,
+                  workers: int = 1) -> int:
+    """批量生产「新闻+AI」按票视图并落盘。返回落盘票数(无新闻的票跳过)。
+
+    workers:候选池富集提速用的有界并发度(默认 1 = 原串行)。>1 时每票的 enrich_news
+      (复用 event 逐条抽取的 LLM 缓存,多为命中、近乎免费)在有界线程池并发;各票 code_view
+      独立落盘,落盘数按 code 汇总,**与完成顺序无关**(逐值等价串行)。
+    """
+    from tools import parallel
+
+    def _one(idx: int, code: str) -> bool:
+        """单票生产 news_ai 视图,返回是否落盘(无新闻 → False)。"""
         items = enrich_news(code, date=date, client=client)
         if items:
             store.put_code_view("news_ai", code, items, date=date)
-            n += 1
+            return True
+        return False
+
+    n = sum(1 for wrote in parallel.pmap(_one, codes, workers) if wrote)
     logger.info("新闻 AI 视图落盘 %d 只(store 按日期)", n)
     return n

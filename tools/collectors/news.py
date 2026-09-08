@@ -28,6 +28,7 @@ import time
 
 import pandas as pd
 
+from tools import parallel
 from tools.config import exchange, settings
 from tools.store import repo as store
 
@@ -277,11 +278,15 @@ def _fetch_cls(code: str, cutoff: str) -> list[dict]:
 
 
 def fetch_news(codes: list[str], days: int | None = None,
-               recall: bool | None = None) -> dict[str, list[dict]]:
+               recall: bool | None = None, workers: int = 1) -> dict[str, list[dict]]:
     """拉取每票近 days 天新闻并落盘。
 
     输出:{code: [{title, content, time, source, url}, ...]}(按时间倒序)。
     单票失败记 logger 跳过,不中断整批。
+
+    workers:候选池富集提速用的**有界并发度**(默认 1 = 原串行,全A 等调用方不受影响)。
+      >1 时每票(东财+新浪+财联社多源采集,网络 IO 型)在有界线程池并发拉取;各票落盘互不干扰
+      (store 各 code 独立文件、原子写),结果 `out`/`failed` 按 code 收集,**与完成顺序无关**。
 
     recall:是否开启**新闻扩召回 + LLM 相关性初筛**(见 collectors.news_recall)。
       None → 取 settings.NEWS_RECALL_ENABLED(默认 False);True/False 显式覆盖。
@@ -298,7 +303,10 @@ def fetch_news(codes: list[str], days: int | None = None,
     out: dict[str, list[dict]] = {}
     failed: list[str] = []
     n = len(codes)
-    for i, code in enumerate(codes, 1):
+
+    def _one(idx: int, code: str) -> tuple[str, list[dict], bool]:
+        """采单票新闻(多源并集去重落盘),返回 (code, items, 是否失败)。自含失败隔离,供并发调度。"""
+        i = idx + 1
         logger.info("[%d/%d] 新闻 %s 采集...", i, n, code)
         from tools.config import stock_pool as _sp
         is_hk = _sp.is_hk(code)
@@ -353,11 +361,16 @@ def fetch_news(codes: list[str], days: int | None = None,
         items.sort(key=lambda x: x["time"], reverse=True)
         src = "+".join(contributors) if contributors else _SOURCE
         store.put_raw("news", code, items, meta={"source": src})
-        out[code] = items
-        if err and not items:                    # 各源皆挂且无数据才算失败(不静默)
-            failed.append(code)
+        is_failed = bool(err and not items)      # 各源皆挂且无数据才算失败(不静默)
         logger.info("新闻 %s:%d 条(源=%s)", code, len(items), src)
-        time.sleep(settings.FETCH_SLEEP_SEC)
+        time.sleep(settings.FETCH_SLEEP_SEC)     # 每票节流(并发下各线程各自节流,不撤源保护)
+        return code, items, is_failed
+
+    # 有界并发(workers>1)/串行(默认)统一走 pmap:结果按输入序回填 → out/failed 与完成顺序无关
+    for code, items, is_failed in parallel.pmap(_one, codes, workers):
+        out[code] = items
+        if is_failed:
+            failed.append(code)
     if failed:
         logger.warning("新闻拉取失败(%d): %s", len(failed), failed)
     return out
