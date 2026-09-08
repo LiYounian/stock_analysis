@@ -165,21 +165,15 @@ def run_deduct_quality_screen(codes: list[str], as_of: str | None = None,
         store.set_active_date(as_of)
     as_of = as_of or pd.Timestamp.today().strftime("%Y-%m-%d")
 
-    # —— 先自采财报三大表(skip-if-cached,幂等;缺则策略侧全维缺失跳过)——
+    # —— 先自采财报三大表(报告期新鲜度闸,哲学二;缺则策略侧全维缺失跳过)——
+    # 无缓存 or 缓存报告期过期(as_of 下应能看到更新一期)才采,否则跳过复用 → 日更全A采量=
+    # 当日新披露报告期增量(报告季外≈0),并修掉「新披露季命中旧缓存→永不刷新→吃过期财报」bug。
+    # kill-switch:config 财报.采集.报告期指纹复用=False → 退回旧存在性 skip。
     if fetch and codes:
-        need_fin = []
-        for code in codes:
-            try:
-                fin.load_financial(code)
-            except FileNotFoundError:
-                need_fin.append(code)
-        if need_fin:
-            logger.info("扣非质量:补采财报三大表 %d 只(缓存命中 %d 只跳过)",
-                        len(need_fin), len(codes) - len(need_fin))
-            try:
-                fin.fetch_financial(need_fin)
-            except Exception as e:                    # noqa: BLE001
-                logger.warning("财报三大表补采失败(降级逐票判): %s", e)
+        try:
+            fin.fetch_financial_missing_or_stale(codes, as_of=as_of)
+        except Exception as e:                        # noqa: BLE001
+            logger.warning("财报三大表补采失败(降级逐票判): %s", e)
 
     records: dict[str, dict] = {}
     skip_pre: dict[str, int] = {}
