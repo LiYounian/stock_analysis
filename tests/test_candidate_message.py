@@ -154,8 +154,9 @@ def test_rescore_uses_message_and_reranks(hermetic_experts):
     ranks = {x["code"]: x["候选排名"] for x in out}
     assert ranks["P"] < ranks["Z"]
     assert ranks["P"] < ranks["N"]
-    # 发声名单
-    assert "情绪三层" in by["P"]["发声专家"] and "资金流" in by["P"]["发声专家"]
+    # 发声名单:情绪三层发声;资金流已移出消息面消费者专家 → 不进消息面合议、不在发声名单
+    assert "情绪三层" in by["P"]["发声专家"]
+    assert "资金流" not in by["P"]["发声专家"]
     assert by["P"]["理由"] and by["P"]["候选来源"] == ["策略0合议"]
     # ③ 不写 record['council']:注入 record 从未被塞进 council(全A主排序不受影响)
     assert all("council" not in recs[c] for c in recs)
@@ -231,6 +232,35 @@ def test_node_bounded_writes_views_and_no_council_mutation(monkeypatch, hermetic
         assert key in row
     # 评分按完整分降序(候选排名 1 分最高)
     assert scoring["评分"][0]["完整分"] >= scoring["评分"][-1]["完整分"]
+
+
+# ————————————————————————————————————————————————
+# 消息面回灌校准锁(2026-09-08 续6:w 0.5→0.3 + 资金流移出消息面专家)
+# 前向评测证实旧配置 double-count:默认专家组已含 情绪三层/事件驱动/资金流,
+# 消息面分又单独合议这三位并以 w=0.5 回灌 → 同批专家算两次、放大噪声。
+# 校准=①权重降到 0.3(强协同项非主导)②资金流(数据面因子)移出消息面消费者专家、
+# 但仍留默认专家组走 base 通道(不误删数据面资金流因子)。
+# ————————————————————————————————————————————————
+def test_reflow_weight_is_calibrated_to_0_3():
+    """① 回灌权重 == 0.3(前向评测校准:旧 0.5 双重计数偏激进)。"""
+    assert THRESHOLDS["消息面回灌"]["回灌权重"] == 0.3
+
+
+def test_msg_experts_exclude_fundflow():
+    """② 消息面消费者专家 == [情绪三层, 事件驱动](资金流已移出,不再走回灌重复通道);
+    config 与模块常量 MSG_EXPERTS 保持一致(单一真源)。"""
+    assert THRESHOLDS["消息面回灌"]["消费者专家"] == ["情绪三层", "事件驱动"]
+    assert cm.MSG_EXPERTS == ["情绪三层", "事件驱动"]
+    assert "资金流" not in THRESHOLDS["消息面回灌"]["消费者专家"]
+    assert "资金流" not in cm.MSG_EXPERTS
+
+
+def test_default_experts_still_contain_fundflow():
+    """③ 资金流仅移出消息面通道,**仍在数据面默认专家组**(它是数据面因子,该在 base)。
+    锁死此点防未来把资金流从 base 一并误删。"""
+    # 默认专家组是 rescore_pool 的 consumer_experts 真源(数据面综合分用它重算合议),
+    # 故资金流仍作为数据面因子参与 base 打分,只是不再走消息面回灌重复通道。
+    assert "资金流" in THRESHOLDS["合议"]["默认专家组"]
 
 
 def test_node_no_llm_flag_propagates(monkeypatch, hermetic_experts, analysis_tmpdir):
