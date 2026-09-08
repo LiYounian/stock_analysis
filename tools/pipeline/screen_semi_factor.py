@@ -127,26 +127,17 @@ def run_semi_factor_screen(codes: list[str], as_of: str | None = None,
 
     logger.info("半导体多因子:扫描 %d 只(全A ∩ 半导体池 %d)", len(scoped), len(universe))
 
-    # —— 先自采财报三大表(skip-if-cached,幂等)——
+    # —— 先自采财报三大表(报告期新鲜度闸,哲学二;与策略12一致)——
     # 现有 screenall 编排:screen_semi_factor 跑在 run_financial_collect 之前,故本 pipeline
-    # 若不自采,build_financial_block 会因 raw 缺失全空。skip-if-cached 保证日常闭环几乎秒过
-    # (只在新披露季度实际触网),不重复采。fetch=False 时纯离线复算,不采。
+    # 若不自采,build_financial_block 会因 raw 缺失全空。报告期新鲜度闸:无缓存 or 报告期过期
+    # (as_of 下应能看到更新一期)才采,否则跳过复用 → 日常闭环几乎秒过(只在新披露季实际触网),
+    # 并修掉「新披露季命中旧缓存→永不刷新」bug。fetch=False 时纯离线复算,不采。
+    # kill-switch:config 财报.采集.报告期指纹复用=False → 退回旧存在性 skip。
     if fetch and scoped:
-        need_fin = []
-        for code in scoped:
-            try:
-                fin.load_financial(code)                        # 命中缓存则 skip
-            except FileNotFoundError:
-                need_fin.append(code)
-        if need_fin:
-            logger.info("半导体多因子:补采财报三大表 %d 只(缓存命中 %d 只跳过)",
-                        len(need_fin), len(scoped) - len(need_fin))
-            try:
-                fin.fetch_financial(need_fin)
-            except Exception as e:                              # noqa: BLE001
-                logger.warning("财报三大表补采失败(降级 build_record 逐票判): %s", e)
-        else:
-            logger.info("半导体多因子:财报三大表全命中缓存,跳过采集")
+        try:
+            fin.fetch_financial_missing_or_stale(scoped, as_of=as_of)
+        except Exception as e:                                  # noqa: BLE001
+            logger.warning("财报三大表补采失败(降级 build_record 逐票判): %s", e)
 
     records: dict[str, dict] = {}
     skipped = 0

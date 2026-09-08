@@ -281,3 +281,124 @@ def fetch_financial(codes: list[str], periods: int = DEFAULT_PERIODS,
 def load_financial(code: str) -> dict:
     """读单票财报 raw(多报告期)。缓存缺失抛 FileNotFoundError。"""
     return store.get_raw("financial_report", str(code).zfill(6))
+
+
+# ————————————————————————————————————————————————————————————————
+# 报告期指纹复用(哲学二):采集层「报告期新鲜度闸」
+#   把旧的「存在性 skip」(有文件就不采)换成「无缓存 或 报告期过期才采」,
+#   使日更全A采量 = 当日新披露报告期增量(报告季外≈0),并修掉
+#   「新披露季命中旧缓存→永不刷新→吃过期财报」的隐性 correctness bug。
+#   判据只用 ≤ as_of 的**法定披露日历**(不看个股实际披露),故无未来函数。
+#   设计/口径/边界见 docs/计划/2026-09-09_财报采集报告期指纹复用_方案.md。
+# ————————————————————————————————————————————————————————————————
+
+def expected_latest_report_period(as_of: str | None = None) -> str | None:
+    """给定 as_of(YYYY-MM-DD),返回 A 股法定披露日历下「此刻理应能看到的最新报告期」report_date。
+
+    仅用 ≤ as_of 的**法定披露截止日历**(不看任何个股实际披露),天然 as-of、无未来函数。
+    法定截止:一季报 4/30、中报 8/31、三季报 10/31、(上一年)年报 4/30。
+    **保守下限口径**(只认法定必到期,不猜个股提前披露)——见方案 §3.1:
+
+      · [01-01, 04-29] → (Y-1)-09-30(去年三季报;去年年报未到法定截止,保守不认)
+      · [04-30, 08-30] → Y-03-31(一季报;年报同期到但期更旧,取最新)
+      · [08-31, 10-30] → Y-06-30(中报)
+      · [10-31, 12-31] → Y-09-30(三季报)
+
+    保守下限使 expected 只在法定截止日跨过时前进一格,跨过时几乎所有票已披露→一次重采即达标,
+    不会在披露季里天天重采(防 churn);年报(12-31)永不作 expected,但 4/30 跨过时缓存
+    <Y-03-31 者(含只有去年年报的票)一并重采→年报+Q1 同窗采回,不遗漏。
+    as_of=None → 取今天(入口另有默认;此处兜底,保证 expected 恒可算)。
+    """
+    if not as_of:
+        as_of = time.strftime("%Y-%m-%d")
+    try:
+        y = int(as_of[:4])
+    except (TypeError, ValueError):
+        return None
+    md = as_of[5:10]                       # "MM-DD" 定宽串,字典序==时间序
+    if md >= "10-31":
+        return f"{y}-09-30"
+    if md >= "08-31":
+        return f"{y}-06-30"
+    if md >= "04-30":
+        return f"{y}-03-31"
+    return f"{y - 1}-09-30"
+
+
+def _cached_visible_latest_period(raw: dict, as_of: str | None) -> str | None:
+    """缓存里该票**最新可见报告期** report_date(镜像 analyzer._reuse_fingerprint 的可见性规则)。
+
+    periods 中 disclosure_date 为空 或 ≤ as_of 者视为可见(只认 ≤ as_of 披露,防未来);
+    取可见期 report_date 最大值;无可见期 → None。
+    """
+    periods = (raw or {}).get("periods", {}) or {}
+    visible = [
+        (r.get("report_date") or p)
+        for p, r in periods.items()
+        if not (as_of is not None and r.get("disclosure_date") is not None
+                and r["disclosure_date"] > as_of)
+    ]
+    return max(visible) if visible else None
+
+
+def _reuse_enabled_default() -> bool:
+    """采集层报告期指纹复用总开关(config 单一真源;读不到→默认开)。"""
+    try:
+        from tools.config import strategy
+        return bool(strategy.THRESHOLDS.get("财报", {})
+                    .get("采集", {}).get("报告期指纹复用", True))
+    except Exception:                          # noqa: BLE001
+        return True
+
+
+def _needs_fetch(code: str, as_of: str | None, reuse: bool) -> bool:
+    """某票是否需要触网补采财报三大表。
+
+    reuse=True(报告期新鲜度闸):无缓存 / 缓存无可见报告期 / 缓存最新可见期 < 法定应披露最新期 → 采。
+    reuse=False(退回存在性 skip):仅无缓存才采(有缓存即跳过,逐字段等价旧行为)。
+    """
+    try:
+        raw = store.get_raw("financial_report", str(code).zfill(6))
+    except FileNotFoundError:
+        return True                            # 无缓存:两种口径都采
+    if not reuse:
+        return False                           # 存在性 skip:有缓存即不采
+    cache_latest = _cached_visible_latest_period(raw, as_of)
+    if cache_latest is None:
+        return True                            # 有文件但无可见报告期 → 采
+    expected = expected_latest_report_period(as_of)
+    if expected is None:
+        return False                           # 日历口径失效 → 保守不采(退回复用)
+    return cache_latest < expected             # 报告期落后于法定应披露期 → 过期,采
+
+
+def fetch_financial_missing_or_stale(codes: list[str], as_of: str | None = None,
+                                     periods: int = DEFAULT_PERIODS,
+                                     reuse_fingerprint: bool | None = None) -> dict[str, dict]:
+    """统一采集入口:逐票判「无缓存 or 报告期过期」才 `fetch_financial`,否则跳过复用。
+
+    取代 pipeline 里旧的「存在性 skip」循环(有文件就不采)。只对**需采子集**触网,
+    报告季外 need≈0(全体缓存已达当期);新披露季法定截止日跨过时对落后票重采一遍。
+
+    Args:
+        codes: 6 位代码列表。
+        as_of: 判定锚点(缺省今天);法定应披露期与缓存可见期均按此判,防未来函数。
+        periods: 回溯报告期数(透传 fetch_financial)。
+        reuse_fingerprint: None→读 config 开关(默认开);False→退回存在性 skip(kill-switch)。
+    Returns:
+        {code: payload} —— **仅实际采集**的票(跳过复用的不在内);全跳过→{}。
+    """
+    codes = [str(c).zfill(6) for c in codes]
+    if not codes:
+        return {}
+    as_of = as_of or time.strftime("%Y-%m-%d")
+    reuse = _reuse_enabled_default() if reuse_fingerprint is None else bool(reuse_fingerprint)
+    need = [c for c in codes if _needs_fetch(c, as_of, reuse)]
+    mode = "报告期新鲜度闸" if reuse else "存在性skip"
+    if not need:
+        logger.info("财报采集(%s):%d 只全部缓存新鲜,跳过采集(as_of=%s)",
+                    mode, len(codes), as_of)
+        return {}
+    logger.info("财报采集(%s):需采 %d/%d 只(缺失或报告期过期),复用跳过 %d 只(as_of=%s)",
+                mode, len(need), len(codes), len(codes) - len(need), as_of)
+    return fetch_financial(need, periods=periods, as_of=as_of)
