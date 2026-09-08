@@ -1028,8 +1028,19 @@ def _edges_from_view(view: dict | None) -> list[str]:
     return [c for c in e if isinstance(c, str) and c]
 
 
+def _apply_skip(screeners: list, skip_strategies: set[str] | None) -> list:
+    """从 (label, fn) 策略列表里剔除 skip_strategies 里的 label(按 label 精确匹配)。
+
+    抽成纯函数便于单测(午盘裁策略11 的语义锁)。skip 为空 → 原样返回。
+    """
+    if not skip_strategies:
+        return screeners
+    return [(label, fn) for (label, fn) in screeners if label not in skip_strategies]
+
+
 def run_screen_all(codes_all: list[str], as_of: str, no_llm: bool = False,
-                   no_fetch: bool = False) -> dict:
+                   no_fetch: bool = False,
+                   skip_strategies: set[str] | None = None) -> dict:
     """全A 多策略选股 → 只对(各策略选出并集 ∪ 自选)做新闻/LLM/合议。
 
     与 run_two_stage(单形态达标池)的区别:达标池 = 各在产全A screener 选出票的并集,
@@ -1104,6 +1115,13 @@ def run_screen_all(codes_all: list[str], as_of: str, no_llm: bool = False,
         ("策略12·扣非质量", lambda: screen_deduct_quality.run_deduct_quality_screen(
             codes_all, as_of=as_of, fetch=True)),
     ]
+    # 午盘/精简模式裁剪:剔除 skip_strategies 里的策略(如午盘裁「策略11·指标条件化状态排序」
+    # ——非alpha、占~10min,午休时段省成本)。收盘默认 skip_strategies=None,行为不变。
+    if skip_strategies:
+        before = [l for l, _ in screeners]
+        screeners = _apply_skip(screeners, skip_strategies)
+        logger.info("策略裁剪:剔除 %s;保留 %d/%d 策略",
+                    skip_strategies, len(screeners), len(before))
     # 候选定向富集口径:每策略取前 M 只并入候选集(∪自选)做全套消息面/财报/资金流富集。
     # M=0(默认)→ 候选集=各策略选出并集∪自选(= llm_subset,即所有被 serialize 成 record 的票),
     #   airtight:任何可能被深度分析/推荐买入的票都有系统数据,彻底修"买入候选反而无数据"硬伤。
@@ -1303,6 +1321,19 @@ def cmd_candmsg(argv):
     logger.info("候选池消息面回灌打分:候选 %d,统计 %s", rep.get("候选池规模", 0), rep.get("统计"))
 
 
+def cmd_intraday_screen(argv):
+    """午盘全A选股入口(11:30 午休冻结口径):
+    python -m tools.run intraday_screen [--date YYYY-MM-DD] [--universe N] [--stage2-no-llm]
+    [--force] [--no-md]。
+
+    午休时点对全A现挑票:拉全A午盘行情→内存注入今日午盘 bar→数据初筛(no_llm/no_fetch/裁策略11)
+    →shortlist 消息面三段式回灌重排→产 docs/每日分析/选股/日内_<date>.md。参数透传给子模块 _main。
+    与收盘 screenall(盘后)/盯盘研判(盯已选)并存互补。⚠️ 研究模拟,非投资建议。
+    """
+    from tools.pipeline import intraday_screen
+    intraday_screen._main(argv[2:])   # argv[0]=脚本 argv[1]=intraday_screen,其余透传
+
+
 def cmd_findata(argv):
     """全A 财报三大表增量回填入口:python -m tools.run findata [--universe N] [--force] [--dry-run]。
 
@@ -1322,7 +1353,8 @@ _CMDS = {"collect": cmd_collect, "message": cmd_message, "sentiment": cmd_sentim
          "screenall": cmd_screenall,
          "pattern": cmd_pattern, "sepa": cmd_sepa, "strong": cmd_strong,
          "analyze": cmd_analyze, "findata": cmd_findata, "all": cmd_all,
-         "ticks": cmd_ticks, "enrich": cmd_enrich, "candmsg": cmd_candmsg}
+         "ticks": cmd_ticks, "enrich": cmd_enrich, "candmsg": cmd_candmsg,
+         "intraday_screen": cmd_intraday_screen}
 
 
 def main(argv: list[str]) -> int:
