@@ -27,6 +27,7 @@ import os
 import time
 from datetime import datetime, timedelta, timezone
 
+from tools import parallel
 from tools.config import settings
 from tools.store import repo as store
 
@@ -249,7 +250,8 @@ def fetch_one(code: str, rn: int | None = None) -> list[dict]:
 
 def fetch_baidu_news(codes: list[str], rn: int | None = None,
                      skip_fresh: bool = True,
-                     max_days: float | None = None) -> dict[str, list[dict]]:
+                     max_days: float | None = None,
+                     workers: int = 1) -> dict[str, list[dict]]:
     """批量采集百度个股新闻并落盘(前向增量、幂等、带新鲜度门控)。
 
     参数:
@@ -271,14 +273,20 @@ def fetch_baidu_news(codes: list[str], rn: int | None = None,
     out: dict[str, list[dict]] = {}
     failed: list[str] = []
     n = len(codes)
-    for i, code in enumerate(codes, 1):
+
+    def _one(idx: int, code: str) -> tuple[str, list[dict] | None, bool]:
+        """采单票百度新闻(新鲜度门控 + 增量并集,自含失败隔离)。
+
+        返回 (code, items, 是否失败):items 非 None 即入 out(含门控跳过回落的旧快照、港股空);
+        失败(是否失败=True)不入 out、计入 failed。
+        """
+        i = idx + 1
         # 新鲜度门控:已有新鲜快照 → 跳过重拉(沿用既有)
         if skip_fresh and not store.is_stale("baidu_news", code, md):
             try:
                 cached = store.get_raw("baidu_news", code)
             except FileNotFoundError:
                 cached = []
-            out[code] = cached
             # 采集时刻新鲜≠内容新鲜:跳过重拉时仍核条目发布日,陈旧照样告警(不静默)
             cstale = content_stale_days(cached)
             if cstale is not None and cstale > settings.BAIDU_NEWS_ITEM_STALE_DAYS:
@@ -287,13 +295,12 @@ def fetch_baidu_news(codes: list[str], rn: int | None = None,
                                i, n, code, newest_str[:10] if newest_str else "无", cstale)
             else:
                 logger.info("[%d/%d] 百度新闻 %s:缓存新鲜,跳过", i, n, code)
-            continue
+            return code, cached, False
 
         logger.info("[%d/%d] 百度新闻 %s 采集...", i, n, code)
         if stock_pool.is_hk(code):
             store.put_raw("baidu_news", code, [], meta={"source": "none(hk)"})
-            out[code] = []
-            continue
+            return code, [], False
         try:
             fresh = _parse(_fetch_raw(code, rn))
             # 前向增量并集:与最近快照按 news_id 去重合并,累积不丢旧条(幂等)
@@ -303,17 +310,24 @@ def fetch_baidu_news(codes: list[str], rn: int | None = None,
             store.put_raw("baidu_news", code, merged,
                           meta={"source": _SOURCE, "new_pulled": len(fresh),
                                 "total": len(merged), "rn": rn, **fresh_meta})
-            out[code] = merged
             logger.info("百度新闻 %s:新拉 %d 条,累积 %d 条(最新条目 %s)",
                         code, len(fresh), len(merged), fresh_meta["newest_item_date"] or "无")
             if fresh_meta["content_stale"]:
                 logger.warning("百度新闻 %s 内容陈旧:最新条目 %s 落后 %.0f 天(>%.0f)——勿当有效新数据",
                                code, fresh_meta["newest_item_date"], fresh_meta["item_stale_days"],
                                settings.BAIDU_NEWS_ITEM_STALE_DAYS)
+            r: tuple[str, list[dict] | None, bool] = (code, merged, False)
         except Exception as e:
-            failed.append(code)
             logger.warning("百度新闻 %s 失败(降级跳过): %s", code, e)
-        time.sleep(settings.FETCH_SLEEP_SEC)
+            r = (code, None, True)
+        time.sleep(settings.FETCH_SLEEP_SEC)     # 每票节流(并发下各线程各自节流)
+        return r
+
+    for code, items, is_failed in parallel.pmap(_one, codes, workers):
+        if is_failed:
+            failed.append(code)
+        else:
+            out[code] = items
     if failed:
         logger.warning("百度新闻拉取失败(%d): %s", len(failed), failed)
     return out
