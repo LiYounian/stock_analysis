@@ -14,6 +14,7 @@ from pathlib import Path
 import pytest
 
 from tools.analysis.midday_q import gate as G
+from tools.config import midday_q_universe as UNIV
 from tools.pipeline import midday_q_gate as PG
 from tools.pipeline import midday_q_screen as PS
 
@@ -52,6 +53,23 @@ def _install_snapshot_reader(monkeypatch, tmp_path: Path):
         with open(p, encoding="utf-8") as f:
             return json.load(f)
     monkeypatch.setattr(PS, "_load_snapshot", _load)
+
+
+def _install_universe(monkeypatch, tmp_path: Path,
+                       focus=("600001", "600002"),
+                       full=None):
+    """写一份 midday_q_universe.json 并接入。"""
+    full = list(full) if full else list(focus) + ["600099"]
+    p = tmp_path / "config" / "midday_q_universe.json"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps({
+        "version": "1.0",
+        "focus_codes": list(focus),
+        "codes": [{"code": c, "name": f"票{c}", "sw3": "test",
+                    "in_focus": c in focus} for c in full],
+    }, ensure_ascii=False), encoding="utf-8")
+    monkeypatch.setattr(UNIV, "_STORE", p)
+    UNIV.reload()
 
 
 def _gate_stage(*, state="强势", allowed=("Q1",), pos=1.0):
@@ -148,6 +166,8 @@ def test_full_pipeline_flipped_forces_empty_final(monkeypatch, tmp_path):
     monkeypatch.setattr(PS.cal, "is_trading_day", lambda d: True)
 
     _install_snapshot_reader(monkeypatch, tmp_path)
+    _install_universe(monkeypatch, tmp_path,
+                       focus=("600001",), full=("600001",))
     _write_gate(tmp_path, "2026-09-07",
                 stage1=_gate_stage(state="震荡", allowed=("Q1", "Q3"), pos=0.5),
                 stage2=_gate_stage(state="弱势", allowed=(), pos=0.0),
@@ -188,3 +208,93 @@ def test_pre_screen_candidates_sort():
     }
     picked = PS._pre_screen_candidates(quotes, top=2)
     assert picked[:2] == ["B", "A"]
+
+
+# ────────────────────────────── 票池过滤(focus/full) ──────────────────────────────
+
+def test_universe_filter_focus_default(monkeypatch, tmp_path):
+    """默认用 focus 池:snapshot 里 3 只、focus 里只有 2 只 → 过滤后剩 2 只。"""
+    monkeypatch.setattr(PS.settings, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(G.settings, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(PS.cal, "is_trading_day", lambda d: True)
+    _install_snapshot_reader(monkeypatch, tmp_path)
+    _install_universe(monkeypatch, tmp_path,
+                       focus=("300308", "300502"),
+                       full=("300308", "300502", "600099"))
+
+    _write_gate(tmp_path, "2026-09-07",
+                stage1=_gate_stage(state="强势", allowed=("Q1",), pos=1.0))
+    _write_snapshot(tmp_path, "2026-09-07", "1430", {
+        "300308": {"name": "在focus1", "price": None},
+        "300502": {"name": "在focus2", "price": None},
+        "600099": {"name": "在full不在focus", "price": None},
+    })
+
+    assert PS.run("1430", date="2026-09-07", skip_fundflow=True) == 0
+    data = json.loads(PS._screen_path("2026-09-07").read_text(encoding="utf-8"))
+    # 三只票没一只符合 Q1 信号,但 pipeline 应该跑成功(state=0)
+    assert data["stage1_1430"]["selections"].get("Q1") == []
+
+
+def test_universe_filter_full(monkeypatch, tmp_path):
+    """full_universe=True → 主池 3 只全过。"""
+    monkeypatch.setattr(PS.settings, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(G.settings, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(PS.cal, "is_trading_day", lambda d: True)
+    _install_snapshot_reader(monkeypatch, tmp_path)
+    _install_universe(monkeypatch, tmp_path,
+                       focus=("300308",),
+                       full=("300308", "300502", "600099"))
+
+    _write_gate(tmp_path, "2026-09-07",
+                stage1=_gate_stage(state="强势", allowed=("Q1",), pos=1.0))
+    _write_snapshot(tmp_path, "2026-09-07", "1430", {
+        "300308": {"name": "A", "price": None},
+        "300502": {"name": "B", "price": None},
+        "600099": {"name": "C", "price": None},
+    })
+
+    assert PS.run("1430", date="2026-09-07",
+                   skip_fundflow=True, full_universe=True) == 0
+    # 只判定 pipeline 跑通即可(具体 selections 是空,因为 quote 没数据)
+
+
+def test_universe_filter_all_out_yields_empty(monkeypatch, tmp_path):
+    """snapshot 里的票全都不在票池 → 落空清单 exit 0(不 error 1,让下游看到"跑过了但空")。"""
+    monkeypatch.setattr(PS.settings, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(G.settings, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(PS.cal, "is_trading_day", lambda d: True)
+    _install_snapshot_reader(monkeypatch, tmp_path)
+    _install_universe(monkeypatch, tmp_path,
+                       focus=("300308",),
+                       full=("300308",))
+
+    _write_gate(tmp_path, "2026-09-07",
+                stage1=_gate_stage(state="强势", allowed=("Q1",), pos=1.0))
+    _write_snapshot(tmp_path, "2026-09-07", "1430", {
+        "999997": {"name": "无关", "price": None},
+        "999998": {"name": "无关", "price": None},
+    })
+
+    assert PS.run("1430", date="2026-09-07", skip_fundflow=True) == 0
+    data = json.loads(PS._screen_path("2026-09-07").read_text(encoding="utf-8"))
+    assert data["stage1_1430"]["final_codes"] == []
+    assert "票池" in data["stage1_1430"]["note"]
+
+
+def test_universe_missing_file_exits_1(monkeypatch, tmp_path):
+    """票池 JSON 缺失 → exit 1(不静默继续)。"""
+    monkeypatch.setattr(PS.settings, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(G.settings, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(PS.cal, "is_trading_day", lambda d: True)
+    _install_snapshot_reader(monkeypatch, tmp_path)
+    # 显式指到不存在的路径
+    monkeypatch.setattr(UNIV, "_STORE", tmp_path / "nx.json")
+    UNIV.reload()
+
+    _write_gate(tmp_path, "2026-09-07",
+                stage1=_gate_stage(state="强势", allowed=("Q1",), pos=1.0))
+    _write_snapshot(tmp_path, "2026-09-07", "1430",
+                     {"300308": {"name": "A", "price": None}})
+
+    assert PS.run("1430", date="2026-09-07", skip_fundflow=True) == 1
