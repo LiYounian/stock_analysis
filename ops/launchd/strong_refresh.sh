@@ -8,7 +8,19 @@ set -uo pipefail
 ENV_FILE="${STOCK_SYNC_ENV:-$HOME/.config/stock/sync.env}"
 [ -f "$ENV_FILE" ] && set -a && . "$ENV_FILE" && set +a
 
-REPO="$(cd "$(dirname "$0")/../.." && pwd)"
+# —— 专用 worktree 卫生:强制常驻 worktree 更到最新 origin/main 再跑(照 pull_refresh.sh)——
+# 主仓常被并发会话弄脏/切走,就地跑会用陈旧代码或 ModuleNotFound;从专用 worktree 跑最新
+# origin/main(每轮 fetch + reset --hard),全程不碰主仓 HEAD/工作树。可用 STOCK_DAILYJOB_WORKTREE 覆盖。
+WORKTREE="${STOCK_DAILYJOB_WORKTREE:-$HOME/Documents/projects/worktrees/stock_analysis/dailyjob}"
+if [ ! -e "$WORKTREE/.git" ]; then
+  echo "$(date) 致命:专用 worktree 不存在:$WORKTREE(请先 git worktree add --detach \"$WORKTREE\" origin/main)" >&2
+  exit 3
+fi
+git -C "$WORKTREE" fetch --quiet origin || echo "!! ⓪ git fetch origin 失败,用该 worktree 现有 origin/main" >&2
+_OLD_HEAD="$(git -C "$WORKTREE" rev-parse --short HEAD 2>/dev/null || echo unknown)"
+git -C "$WORKTREE" reset --hard origin/main
+_NEW_HEAD="$(git -C "$WORKTREE" rev-parse --short HEAD 2>/dev/null || echo unknown)"
+REPO="$WORKTREE"
 cd "$REPO"
 PY="${STOCK_PYTHON:-$HOME/.conda/envs/stock_analysis/bin/python}"
 D="$(date +%Y-%m-%d)"
@@ -21,18 +33,11 @@ trap 'rmdir "$LOCK" 2>/dev/null' EXIT
 
 {
   echo "==================== $(date) strong_refresh $D ===================="
-  # ⓪ ff-only 自更到最新 main(与 pull_refresh 同策略):确保用最新代码(strong 子命令 / --only-view 补传)。
-  #    只快进代码,data/analysis 滚存原样不动;仅 HEAD==main 时才动;拿不到就打 WARNING 照跑当前代码。
-  _CUR_BRANCH="$(git -C "$REPO" rev-parse --abbrev-ref HEAD 2>/dev/null || echo unknown)"
-  git -C "$REPO" fetch --quiet origin 2>/dev/null || echo "!! ⓪ git fetch origin 失败"
-  if [ "$_CUR_BRANCH" = "main" ]; then
-    if git -C "$REPO" merge --ff-only origin/main >/dev/null 2>&1; then
-      echo "-- ⓪ 代码同步到 main($(git -C "$REPO" rev-parse --short HEAD)) --"
-    else
-      echo "!! ⓪ WARNING:ff-only 快进失败——用当前代码($(git -C "$REPO" rev-parse --short HEAD))跑"
-    fi
+  # ⓪ 代码已在脚本头部由专用 dailyjob worktree 卫生更到最新 origin/main(fetch + reset --hard),这里只记账:
+  if [ "$_OLD_HEAD" = "$_NEW_HEAD" ]; then
+    echo "-- ⓪ 专用 worktree 已是最新 origin/main($_NEW_HEAD),无需更新 --"
   else
-    echo "!! ⓪ WARNING:主仓 HEAD 不在 main(当前=$_CUR_BRANCH)——用当前代码跑"
+    echo "-- ⓪ 专用 worktree 已更到最新 origin/main:$_OLD_HEAD -> $_NEW_HEAD --"
   fi
   # ① 重跑 S05 最强选股(全A,--no-fetch 读 daily 已落的主档;此时 Tushare 筹码 cyq_perf 已发布)。
   #    未配 TUSHARE_TOKEN / 仍取不到 → 写"需 Tushare"占位 view、不出(不崩)。
