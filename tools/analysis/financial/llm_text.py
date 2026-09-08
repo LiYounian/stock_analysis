@@ -31,7 +31,8 @@ def _cached_extract(client, text: str, instruction: str, schema: dict) -> dict:
     if p.exists():
         return json.loads(p.read_text(encoding="utf-8"))
     r = client.extract(text, schema, instruction=instruction)
-    p.write_text(json.dumps(r, ensure_ascii=False), encoding="utf-8")
+    from tools.analysis.event import _atomic_write_json
+    _atomic_write_json(p, r)                 # 原子写:候选池并发下多线程同键写不坏文件/不读半截
     return r
 
 

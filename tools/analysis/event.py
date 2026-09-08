@@ -10,6 +10,8 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import os
+import threading
 from concurrent.futures import ThreadPoolExecutor
 
 from tools.collectors import news as nw
@@ -157,6 +159,18 @@ def _cache_key(s: str) -> str:
     return hashlib.md5(s.encode("utf-8")).hexdigest()
 
 
+def _atomic_write_json(p, obj) -> None:
+    """原子写 JSON:先写**唯一** tmp(含 pid+线程 id,并发同键不撞 tmp)再 os.replace 覆盖。
+
+    候选池并发富集下,多线程可能几乎同时首次命中同一缺失缓存键(同 instruction+text hash)。
+    直接 write_text 会让两写者交叠、留半截文件、读者读到坏 JSON。唯一 tmp + 原子 replace →
+    最终文件永远是某一次的完整内容(幂等,内容相同),不损坏、不读半截。
+    """
+    tmp = p.parent / f"{p.name}.{os.getpid()}.{threading.get_ident()}.tmp"
+    tmp.write_text(json.dumps(obj, ensure_ascii=False), encoding="utf-8")
+    os.replace(tmp, p)
+
+
 def _pmap(fn, items: list, workers: int) -> list:
     """有界线程池按输入顺序回填结果(index 对齐,防并发乱序)。
 
@@ -187,7 +201,7 @@ def _cached_extract(client, text: str, instruction: str, schema: dict | None = N
     if p.exists():
         return json.loads(p.read_text(encoding="utf-8"))
     r = client.extract(text, schema, instruction=instruction)
-    p.write_text(json.dumps(r, ensure_ascii=False), encoding="utf-8")
+    _atomic_write_json(p, r)                 # 原子写:候选池并发下多线程同键写不坏文件/不读半截
     return r
 
 
