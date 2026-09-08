@@ -39,6 +39,12 @@ data/master/
 scratch_diag_out.txt
 data/analysis/backtest/finval/
 
+# 派生聚合总表(每日由 tools/analysis/panel.py:write_panel 重写,可从 data/analysis/<日期>/*.json
+# 再生)。曾被跟踪 → 每轮产生 diff、把主仓工作树弄脏、挡 merge --ff-only,故取消跟踪并忽略。
+# 精确到这两个派生文件,不误伤 data/analysis/<日期>/*.json 等仍需跟踪的原始数据。
+data/analysis/panel.csv
+data/analysis/panel.json
+
 # 定时任务运行期产物（护栏锁 / OS级盘中快照），纯滚存不入库
 data/task_locks/
 data/intraday/
