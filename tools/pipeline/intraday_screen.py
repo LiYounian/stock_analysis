@@ -1,13 +1,18 @@
 """午盘全A选股(午休时点对全A现挑票)。
 
-权威设计:docs/计划/2026-09-08_午盘全A选股_设计.md(已实测可行,总耗时 ~25min)。
+权威设计:docs/计划/2026-09-08_午盘全A选股_设计.md(设计估总耗时 ~25min)。
+⚠️ 耗时修正(2026-09-08):早期冒烟阶段1 直调完整 run_screen_all 实测 **1h28min**——设计的
+~25min 只有在阶段1 走 `lean=True`(跳数值面深采/事件/因子/前瞻回测/龙虎榜等收盘重活)时才成立。
+现阶段1 已恒传 lean=True(见 run_intraday_screen);详见 docs/日志/开发日志.md「阶段1 瘦身」条。
 
 一句话:把「消息面三段式」搬到午休时点,让策略在「收盘历史 + 今日午盘 bar」上跑,
 产出午休冻结(11:30)口径的全A午盘候选。与收盘 screenall 并存、互不影响。
 
 ## 三段式(= 复用收盘 run_screen_all + candidate_message,只换两处)
 - 阶段1 · 纯数据初筛(午休冻结):拉全A gtimg 行情快照(11:30 冻结)→ **内存注入今日午盘 bar**
-  → `run_screen_all(no_llm, no_fetch, skip_strategies={策略11})` 跑各数据策略出榜。
+  → `run_screen_all(no_llm, no_fetch, skip_strategies={策略11}, lean=True)` 跑各数据策略出榜。
+  lean=True 跳过收盘才需要的重活(数值面深采/事件/因子/合议/panel/前瞻回测/龙虎榜),只出候选 union
+  ——午盘阶段1 从 ~1.5h 瘦身回十几分钟量级(消息面精选由阶段2 在 shortlist 上自采)。
 - 阶段2 · 消息面精选(仅 shortlist):`candidate_message.run_candidate_message_enrich`——各策略
   top-K∪ 取 shortlist(≤策略数×10,~50)→ 采新闻+news_ai+情绪+事件 → 可解释线性映射回灌重排。
 - 产出:`docs/每日分析/选股/日内_<date>.md`(全A午盘候选 + 买入排序 + 消息面确认)。
@@ -297,7 +302,7 @@ def run_intraday_screen(as_of: str | None = None, *, universe_limit: int | None 
         os.environ["CANDIDATE_MSG_CONFIRM"] = "0"
         try:
             stage1 = run_screen_all_fn(codes, as_of, no_llm=True, no_fetch=True,
-                                       skip_strategies=INTRADAY_SKIP_STRATEGIES)
+                                       skip_strategies=INTRADAY_SKIP_STRATEGIES, lean=True)
         finally:
             if prev_confirm is None:
                 os.environ.pop("CANDIDATE_MSG_CONFIRM", None)

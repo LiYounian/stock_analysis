@@ -1040,8 +1040,17 @@ def _apply_skip(screeners: list, skip_strategies: set[str] | None) -> list:
 
 def run_screen_all(codes_all: list[str], as_of: str, no_llm: bool = False,
                    no_fetch: bool = False,
-                   skip_strategies: set[str] | None = None) -> dict:
+                   skip_strategies: set[str] | None = None,
+                   lean: bool = False) -> dict:
     """全A 多策略选股 → 只对(各策略选出并集 ∪ 自选)做新闻/LLM/合议。
+
+    lean=True(午盘精简模式,**收盘默认 False 行为完全不变**):只做「数据策略打分 + 排序 +
+    候选 union」,跳过收盘才需要的重活——6 类数值面深采(collect_values_missing/collect_ticks)、
+    serialize/事件深采(run_events)/多因子预计算(run_factor)/合议重算(run_council)/panel/选股视图、
+    候选池消息面回灌节点、多策略命中闸门、**前瞻回测记分卡**(run_backtest)、龙虎榜采集+前向记分卡、
+    流式增量推。午盘阶段1 用它出 shortlist 候选 union,消息面精选由 candidate_message 独立在
+    shortlist 上自采(见 tools.pipeline.intraday_screen 阶段2)。lean 只影响 step② 之后的重活,
+    数据策略(step②)与候选 union 计算(step③④)完全保留。
 
     与 run_two_stage(单形态达标池)的区别:达标池 = 各在产全A screener 选出票的并集,
     把新闻/LLM 覆盖面扩到所有策略选出的票,而非仅形态。省 token 命门同 two_stage:
@@ -1154,9 +1163,10 @@ def run_screen_all(codes_all: list[str], as_of: str, no_llm: bool = False,
         strategy_picks.append(picks)
         picks_by_view[_screener_view.get(label, label)] = picks
         logger.info("  %s 入选 %d(边缘候选 %d)", label, len(picks), len(edges))
-        # 流式增量推:该策略 view 落盘后立即推(抗断点——某策略/网络失败不影响已推的;末尾兜底补漏)
+        # 流式增量推:该策略 view 落盘后立即推(抗断点——某策略/网络失败不影响已推的;末尾兜底补漏)。
+        # lean(午盘精简)不推:午盘策略 view 是午盘 bar 口径,不应推去覆盖远端收盘 view;且省网络往返。
         vname = _screener_view.get(label)
-        if view is not None and vname:
+        if not lean and view is not None and vname:
             _push_incremental(as_of, {f"{_VPREFIX}{vname}"})
 
     union_picks = _dedup(union)                     # 各策略选出票并集(去重保序)
@@ -1183,6 +1193,22 @@ def run_screen_all(codes_all: list[str], as_of: str, no_llm: bool = False,
                 per_strategy, per_strategy_edge, len(union_picks), len(llm_subset),
                 edge_cap, len(edge_candidates), len(analysis_set),
                 f"每策略前{enrich_topk}∪自选" if enrich_topk > 0 else "= llm_subset", len(cand_set))
+
+    # —— lean(午盘精简)早退:只出「数据策略打分 + 候选 union」,跳过收盘才需要的全部重活 ——
+    #    (数值面深采/serialize/事件/因子/合议/panel/选股视图/消息面回灌/多策略闸门/前瞻回测/龙虎榜)。
+    #    午盘阶段2(candidate_message)会在 shortlist 上自采消息面,不依赖此处任何产物。
+    if lean:
+        logger.info("===== 全A多策略选股(lean 精简模式)完成 → data/analysis/%s/;union=%d,"
+                    "llm_subset=%d;已跳过数值面深采/serialize/事件/因子/合议/panel/选股视图/"
+                    "消息面回灌/多策略闸门/前瞻回测/龙虎榜(收盘才需要)=====",
+                    as_of, len(union_picks), len(llm_subset))
+        return {"as_of": as_of, "扫描": len(codes_all), "各策略入选": per_strategy,
+                "各策略边缘": per_strategy_edge,
+                "union": len(union_picks), "llm_subset": len(llm_subset),
+                "边缘候选": len(edge_candidates), "analysis_set": len(analysis_set),
+                "union_picks": union_picks, "llm_subset_codes": llm_subset,
+                "edge_candidates": edge_candidates, "analysis_set_codes": analysis_set,
+                "lean": True}
 
     # —— 阶段②:数值面深采 对 analysis_set(含边缘候选,#23)——
     collect_values_missing(analysis_set)             # 补 K线/基本面/公告/资金流/筹码/一致预期(无 LLM,skip-if-cached)
