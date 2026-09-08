@@ -118,9 +118,17 @@ def test_ma_stacked_bullish_true():
     assert S.ma_stacked_bullish(df, current_open=27.0) is True
 
 
-def test_ma_stacked_bullish_false_when_short():
+def test_ma_stacked_bullish_short_history_default_true():
+    """数据不足 → 默认 True(降级不判,同 not_long_term_downtrend);strict_when_missing=True → False。"""
     df = pd.DataFrame({"close": [1, 2, 3]})
-    assert S.ma_stacked_bullish(df, current_open=5.0) is False
+    assert S.ma_stacked_bullish(df, current_open=5.0) is True
+    assert S.ma_stacked_bullish(df, current_open=5.0, strict_when_missing=True) is False
+
+
+def test_ma_stacked_bullish_none_kline_default_true():
+    """kline=None 也降级 True(生产没跑 kline 采集时的常见场景)。"""
+    assert S.ma_stacked_bullish(None, current_open=10.0) is True
+    assert S.ma_stacked_bullish(None, current_open=10.0, strict_when_missing=True) is False
 
 
 def test_ma_stacked_bullish_false_below_ma5():

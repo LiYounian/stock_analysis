@@ -202,14 +202,22 @@ def am_pm_vol_ratio(pm_quote: Mapping, am_quote: Mapping) -> float | None:
 # ────────────────────────────── T-1 上下文(kline) ──────────────────────────────
 
 def ma_stacked_bullish(t1_kline: pd.DataFrame | None,
-                        current_open: float | None) -> bool:
+                        current_open: float | None,
+                        strict_when_missing: bool = False) -> bool:
     """MA5 > MA10 > MA20(短均线多头) 且 current_open > MA5。
 
-    t1_kline 需含 'close' 列,末行 = T-1 收盘;current_open = T 日 open。
-    数据不足(≤20 行) → False。
+    数据充足(≥20 行 + current_open 有值) → 严格判定
+    数据不足:
+        · strict_when_missing=False (默认) → True(降级不判定,同 not_long_term_downtrend)
+        · strict_when_missing=True             → False(严格拦下,回测阶段用)
+
+    降级默认为 True 是因为:生产端某些新上市/数据缺失票没有 kline,
+    默认 False 会导致这些票**永远无法通过 Q1**,产生"数据缺 = 误杀"的隐蔽 bug。
     """
-    if t1_kline is None or current_open is None or len(t1_kline) < 20 or "close" not in t1_kline.columns:
-        return False
+    if current_open is None:
+        return not strict_when_missing
+    if t1_kline is None or len(t1_kline) < 20 or "close" not in t1_kline.columns:
+        return not strict_when_missing
     c = t1_kline["close"].astype(float)
     ma5 = float(c.tail(5).mean())
     ma10 = float(c.tail(10).mean())
