@@ -163,20 +163,39 @@ _REVIEW_OVERLAP = """# 每日复盘 · 2026-09-07
 """
 
 
-def test_ranking_rows_carry_midday_and_review_columns():
-    """排序表每行补 midday(午盘·当前无源→空) 与 review(同日复盘按 code 匹配)两列。"""
+def test_ranking_review_column_cross_day_three_states():
+    """排序表「复盘结果」列 = 跨日反查:选股日 D 的票取其 D+1(次一交易日)复盘的回看结果。
+    三态齐锁:命中→表态+α;D+1 复盘存在但票不在→空串(渲染「—」);D+1 复盘不存在→"待复盘"。
+    交易日推进走 calendar.next_trading_day(与被测同一日历口径,不硬算),测试对日历实现无耦合。"""
+    from tools.collectors import calendar as cal
+    D = "2026-09-07"
+    D1 = cal.next_trading_day(D, allow_fetch=False)          # 次一交易日(D+1),不触网
+    assert D1 > D
+    # D+1 复盘存在:605007 命中(表态+α),688262 不在其中(→ 空串)
+    view = ss.build_selection_view(
+        D,
+        selection_dir=_MemDir({f"{D}.md": _SEL_A}),
+        review_dir=_MemDir({f"{D1}.md": _REVIEW_OVERLAP}),
+    )
+    rows = {r["code"]: r for r in view["盘后"]["选股"]["ranking"]}
+    assert "买入" in rows["605007"]["review"] and "+2.57pp" in rows["605007"]["review"]
+    assert rows["688262"]["review"] == ""                   # D+1 复盘里没有该票 → 「—」
+    # 午盘无数据源 → 恒为空串占位
+    assert rows["605007"]["midday"] == "" and rows["688262"]["midday"] == ""
+
+
+def test_ranking_review_pending_when_next_day_review_absent():
+    """边界:选股日 D 的 D+1 复盘尚未产出(如今天刚选的票)→ 排序表「复盘结果」列显示"待复盘",
+    绝不取"当日 D 复盘"(那评的是前一日票、与今日选出的票不重叠)、不报错、不渲染「—」。"""
+    # review_dir 里只有"当日 D"复盘、没有 D+1 → 跨日反查落空 → 待复盘
     view = ss.build_selection_view(
         "2026-09-07",
         selection_dir=_MemDir({"2026-09-07.md": _SEL_A}),
-        review_dir=_MemDir({"2026-09-07.md": _REVIEW_OVERLAP}),
+        review_dir=_MemDir({"2026-09-07.md": _REVIEW_OVERLAP}),   # 同日复盘,非 D+1
     )
     rows = {r["code"]: r for r in view["盘后"]["选股"]["ranking"]}
-    # 605007 在当日复盘里 → 复盘结果 = 主表态词 + α
-    assert "买入" in rows["605007"]["review"] and "+2.57pp" in rows["605007"]["review"]
-    # 688262 不在当日复盘 → 复盘结果空串(展示层渲染「—」)
-    assert rows["688262"]["review"] == ""
-    # 午盘无数据源 → 恒为空串占位
-    assert rows["605007"]["midday"] == "" and rows["688262"]["midday"] == ""
+    assert rows["605007"]["review"] == "待复盘"
+    assert rows["688262"]["review"] == "待复盘"
 
 
 def test_review_takes_same_date_not_previous_day():

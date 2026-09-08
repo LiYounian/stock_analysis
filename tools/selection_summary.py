@@ -288,27 +288,54 @@ def _review_index(rev_summary: dict | None) -> dict:
     return idx
 
 
-def enrich_view_cross_refs(view: dict | None) -> dict | None:
+def _next_day_review_index(date: str, review_dir) -> tuple[dict, bool]:
+    """取"选股日 D 的次一交易日 D+1 复盘"的复盘结果索引(跨日反查)。
+
+    返回 (idx, 已复盘):
+      · 已复盘=False —— `复盘/<D+1>.md` 尚不存在(今天选的票还没到次日复盘)→ 排序表列显示"待复盘";
+      · 已复盘=True  —— D+1 复盘已存在;idx 按 code 给"主表态词 · α"(等权),未命中该票的 code 取空串(渲染「—」)。
+    交易日推进走项目交易日历(collectors.calendar.next_trading_day,不触网,缺日历回退跳周末近似)。
+    """
+    from tools.collectors import calendar as _cal
+    d1 = _cal.next_trading_day(date, allow_fetch=False)
+    rev_p = review_dir / f"{d1}.md"
+    if not rev_p.is_file():
+        return {}, False                                    # D+1 复盘未产出 → 待复盘
+    rev = extract_review_summary(rev_p.read_text(encoding="utf-8"))
+    return _review_index(rev), True
+
+
+def enrich_view_cross_refs(view: dict | None, *, review_dir=None) -> dict | None:
     """给三区各时段选股 ranking 行补两列精简信息(幂等):
       - midday(午盘分析):午盘选股产出;当前无该数据源 → 占位空串(展示层渲染「—」);
-      - review(复盘结果):同一日复盘里该票的表态/α,按 code 匹配 scorecard;无则空串。
-    语义(A-1):review 取的是"同一 date"的复盘(同 seg.复盘),不跨日,与选股同日配对。"""
+      - review(复盘结果):**跨日反查**——选股日 D 的票,取其在 D+1(次一交易日)复盘里的回看结果
+        (主表态词 · α,按 code 匹配 scorecard),三态:D+1 复盘未产出→"待复盘";已产出但票不在→空串(渲染「—」);
+        命中→表态+α。
+
+    语义变更(A-1→跨日):此前 review 取"同一 date"的复盘(评的是前一交易日选的票,与当日选出的票几乎不重叠→
+    几乎恒为「—」,无用);现改为取"次一交易日"复盘(正是回看当日 D 选出的票的表现),按 code 对齐。
+    注:右侧独立「复盘结果」区块(seg.复盘=当日复盘,评前一日票)语义不变,不受此函数影响。
+
+    review_dir 缺省用模块级 REVIEW_DIR(真实 docs);单测可注入内存目录。"""
     if not view:
         return view
+    rev_dir = review_dir or REVIEW_DIR
+    date = view.get("date")
+    rev_idx, reviewed = ({}, False)
+    if date:
+        rev_idx, reviewed = _next_day_review_index(date, rev_dir)
     for region in ("盘后", "盘中", "盘尾"):
         seg = view.get(region)
         if not seg:
             continue
         sel = seg.get("选股")
-        rev = seg.get("复盘")
         if not sel or not sel.get("ranking"):
             continue
-        rev_idx = _review_index(rev)
         for r in sel["ranking"]:
             code = r.get("code") or ""
             r.setdefault("midday", "")            # 午盘数据源尚未落地,占位空
-            if not r.get("review"):
-                r["review"] = rev_idx.get(code, "")
+            # 跨日反查覆写(非 setdefault):旧视图里可能残留同日口径的 review 值,须以次日口径为准。
+            r["review"] = rev_idx.get(code, "") if reviewed else "待复盘"
     return view
 
 
@@ -364,9 +391,11 @@ def build_selection_view(date: str, selection_dir=None, review_dir=None) -> dict
     """构建某日 `selection_analysis` 视图。三区:盘后(选股+复盘精简)、盘中(暂无)、盘尾(暂无)。
     选股/复盘 md 均缺 → 返回 None(不产空视图)。盘中/盘尾数据源尚未落地,固定占位 None。
 
-    A-1 同日配对:选股取 `选股/<date>.md`、复盘取 `复盘/<date>.md`——**同一个 date**,
-    绝不取前一天复盘。语义:某日复盘是复盘"前一交易日选出的票今天表现",故它归属于"当日",
-    应与当日选股同页并列。排序表两列(午盘/复盘)也由本函数经 enrich_view_cross_refs 补齐。"""
+    A-1 同日配对(右侧独立「复盘结果」区块):选股取 `选股/<date>.md`、复盘取 `复盘/<date>.md`——
+    **同一个 date**。语义:某日复盘是复盘"前一交易日选出的票今天表现",故它归属于"当日",应与当日
+    选股同页并列。此区块语义不变。
+    排序表内「复盘结果」列则为**跨日反查**:选股日 D 的票取其 D+1(次一交易日)复盘的回看结果,
+    由 enrich_view_cross_refs 补齐(D+1 复盘未产出→"待复盘";已产出但票不在→「—」;命中→表态+α)。"""
     sel_dir = selection_dir or SELECTION_DIR
     rev_dir = review_dir or REVIEW_DIR
     sel_p = sel_dir / f"{date}.md"
@@ -376,4 +405,5 @@ def build_selection_view(date: str, selection_dir=None, review_dir=None) -> dict
     if sel is None and rev is None:
         return None
     view = {"date": date, "盘后": {"选股": sel, "复盘": rev}, "盘中": None, "盘尾": None}
-    return enrich_view_cross_refs(view)
+    # 排序表「复盘结果」列跨日反查取 D+1 复盘,故把同一 rev_dir 透传给 enrich(单测注入的内存目录亦生效)。
+    return enrich_view_cross_refs(view, review_dir=rev_dir)
