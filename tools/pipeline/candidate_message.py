@@ -17,9 +17,10 @@
     - 对每只候选召「消息面消费者专家」(情绪三层/事件驱动;资金流是数据面因子,不走此通道)合议 → 得**消息面方向 + 强度**;
     - **可解释线性映射**(方向符号 × 强度 × 斜率,再 clamp;config「消息面回灌」,可 kill-switch)
       → **消息面分**;
-    - **数据面综合分** = 候选集内用**富集后 record 重算合议**(默认专家组;消息面专家因候选集现在
-      有 sentiment/events/fundflow 而**发声**,不再像全A那样弃权);
-    - **完整分** = 数据面综合分 + 回灌权重 × 消息面分 → 候选集**内**据此**重排**。
+    - **数据面综合分** = 候选集内用**富集后 record 重算合议**(base 专家组 = 默认专家组 **剔除
+      消息面专家**;方案乙防 double-count——情绪三层/事件驱动只走回灌通道、不在 base 再算一次,
+      资金流是数据面因子仍留 base);
+    - **完整分** = 数据面综合分 + 回灌权重 × 消息面分 → 候选集**内**据此**重排**(所见即所得,无重复计数)。
     - **关键:只重排候选集,绝不写回 record['council']、绝不改全A 5000 的主排序**(测试锁死)。
 
 留存(硬要求)
@@ -78,6 +79,22 @@ def _dedup(seq: list[str]) -> list[str]:
 
 def _clamp(x: float, lo: float, hi: float) -> float:
     return lo if x < lo else (hi if x > hi else x)
+
+
+def resolve_base_experts(msg_experts: list[str], cfg: dict | None = None) -> list[str]:
+    """算「数据面综合分」重算合议用的 base 专家组(所见即所得,方案乙防 double-count)。
+
+    方案乙(根治重复计数):开关「base剔除消息面专家」开(默认 True)→ base 专家组 =
+    默认专家组 − 消息面专家(情绪三层/事件驱动只走回灌通道,不在 base 里再算一次;**资金流是
+    数据面因子,保留 base**)。开关关 → 退回完整默认专家组(方案甲行为,可逆回退)。
+    与 rescore_pool 里的 consumer_experts 单一真源一致(此处集中计算,避免口径漂移)。
+    """
+    c = cfg if cfg is not None else _cfg()
+    default = list(THRESHOLDS["合议"]["默认专家组"])
+    if c.get("base剔除消息面专家", True):
+        excl = set(msg_experts or [])
+        return [e for e in default if e not in excl]
+    return default
 
 
 def _picks_from_view(view: dict | None) -> list[str]:
@@ -282,8 +299,9 @@ def _score_one(code: str, record: dict, provenance: dict, *,
 
     - 消息面评价:council.convene(msg_experts, record) → 综合方向 + 综合分(强度=|综合分|,∈[0,1])。
     - 消息面分:msg_score_from_evaluation(方向, 强度)(线性映射 + kill-switch)。
-    - 数据面综合分:council.convene(消费者专家组=默认专家组, record).综合分——候选集内用**富集后
-      record 重算合议**;消息面专家因候选集有数据而**发声**(全A 阶段它们弃权)。
+    - 数据面综合分:council.convene(base 专家组=默认专家组**剔除消息面专家**, record).综合分——
+      候选集内用**富集后 record 重算合议**;消息面专家(情绪三层/事件驱动)只走回灌通道、不在 base
+      重复计数(方案乙防 double-count);资金流等数据面因子仍在 base。
     - 完整分 = 数据面综合分 + 回灌权重 × 消息面分。
     仅内存计算,**从不写 record['council']**(全A 主排序不受影响的根本保证)。
     """
@@ -298,7 +316,7 @@ def _score_one(code: str, record: dict, provenance: dict, *,
     依据 = [f"{a['专家']}:{'·'.join(a.get('依据') or []) or a['方向']}" for a in 归因
             if not a.get("弃权") and a.get("置信度", 0) > 0]
 
-    # 数据面综合分:候选集内重算全合议(消费者专家组);富集后消息面专家发声 → 与纯数据基线不同。
+    # 数据面综合分:候选集内重算合议(base 专家组=默认组剔除消息面专家);消息面专家不在此、只走回灌。
     full = council.convene(list(consumer_experts), record)
     数据面综合分 = float(full.get("综合分", 0.0) or 0.0)
     完整分 = round(数据面综合分 + reflow_weight * 消息面分, 4)
@@ -331,8 +349,10 @@ def rescore_pool(pool: list[str], provenance: dict, *, load_record=None,
         load_record = serialize.load_record
     c = cfg if cfg is not None else _cfg()
     msg_experts = msg_experts or c.get("消费者专家") or MSG_EXPERTS
-    # 消费者专家组 = 默认专家组(候选集重算全合议;消息面专家发声即体现"用消息面")。
-    consumer_experts = consumer_experts or THRESHOLDS["合议"]["默认专家组"]
+    # base(数据面综合分)专家组 = 默认专家组 − 消息面专家(方案乙:消息面专家只走回灌通道,不在
+    # base 里重复计数;资金流是数据面因子仍留 base)。开关关 → 退回完整默认专家组(方案甲行为)。
+    if consumer_experts is None:
+        consumer_experts = resolve_base_experts(msg_experts, c)
     reflow_weight = float(c.get("回灌权重", 0.5))
 
     out: list[dict] = []
