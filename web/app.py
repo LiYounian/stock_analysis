@@ -1,6 +1,6 @@
 """FastAPI Web 应用:A 股策略辅助工具展示层。
 
-页面:/ 概览、/screen 选股、/news 新闻(公告流)、/news/{code} 个股新闻列表、
+页面:/ 概览、/selection 选股结果、/news 新闻(公告流)、/news/{code} 个股新闻列表、
       /news/{code}/{idx} 新闻详情、/stock/{code} 个股评估。
 所有页面支持 `?date=YYYY-MM-DD` 查看历史(缺省最新);数据只读 data/analysis(离线 run.py 产出)。非投资建议。
 启动:uvicorn web.app:app --reload --port 8801
@@ -38,13 +38,6 @@ def dashboard(request: Request, date: str = "latest"):
     return templates.TemplateResponse(
         request=request, name="dashboard.html",
         context={"d": da.dashboard(date), "records": da.list_records(date), **_nav(date)})
-
-
-@app.get("/screen", response_class=HTMLResponse)
-def screen(request: Request, date: str = "latest"):
-    return templates.TemplateResponse(
-        request=request, name="screen.html",
-        context={"s": da.screen_page(date), **_nav(date)})
 
 
 @app.get("/selection", response_class=HTMLResponse)
