@@ -228,8 +228,9 @@ def _alpha_col(header: list[str]) -> int:
 
 
 def _scorecard(text: str) -> list[dict]:
-    """逐票收盘记分表:{code,name,alpha}。表头首列为 票/代码/名称 且含 α 列;
-    "逐票收盘记分"优先,退而求"逐票…"(盘中核实)。"""
+    """逐票收盘记分表:{code,name,alpha,stance}。表头首列为 票/代码/名称 且含 α 列;
+    "逐票收盘记分"优先,退而求"逐票…"(盘中核实)。
+    stance = 复盘里记录的该票原始表态列(如"09-04 表态"),缺则空;供排序表「复盘结果」列取用。"""
     best = None
     for t in _parse_tables(text):
         h = t["header"]
@@ -243,6 +244,7 @@ def _scorecard(text: str) -> list[dict]:
         return []
     t = best[1]
     ci_alpha = _alpha_col(t["header"])
+    ci_stance = _col(t["header"], "表态", "建议", "判定", "结论")
     out: list[dict] = []
     for row in t["rows"]:
         cell0 = _clean(row[0])
@@ -250,10 +252,64 @@ def _scorecard(text: str) -> list[dict]:
         code = m.group(1) if m else ""
         name = (cell0[: m.start()] + cell0[m.end():]).strip() if m else cell0
         alpha = _clean(row[ci_alpha]) if 0 <= ci_alpha < len(row) else ""
+        stance = _clean(row[ci_stance]) if 0 <= ci_stance < len(row) else ""
         if not (code or name):
             continue
-        out.append({"code": code, "name": name, "alpha": alpha})
+        out.append({"code": code, "name": name, "alpha": alpha, "stance": stance})
     return out
+
+
+def _stance_short(s: str) -> str:
+    """把复盘表态压成主表态词:取第一个分隔符（括号/斜杠/顿点/空格）前的部分。
+    如"买入(唯一持仓,条件式)/ 偏多·中" → "买入";"规避" → "规避"。"""
+    s = _clean(s)
+    for sep in ("（", "(", "/", "／", "·", " ", "，", ","):
+        i = s.find(sep)
+        if i > 0:
+            s = s[:i]
+            break
+    return s.strip()
+
+
+def _review_index(rev_summary: dict | None) -> dict:
+    """按 code 建"复盘结果精简串"索引:主表态词 + α(等权)。供排序表「复盘结果」列取用。
+    如 {"002234": "买入 · α+1.23pp"}。无表态/无α则只留有的一项;都无则空串。"""
+    idx: dict[str, str] = {}
+    if not rev_summary:
+        return idx
+    for row in rev_summary.get("scorecard") or []:
+        code = row.get("code")
+        if not code:
+            continue
+        st = _stance_short(row.get("stance") or "")
+        al = (row.get("alpha") or "").strip()
+        parts = [p for p in (st, ("α" + al) if al else "") if p]
+        idx[code] = " · ".join(parts)
+    return idx
+
+
+def enrich_view_cross_refs(view: dict | None) -> dict | None:
+    """给三区各时段选股 ranking 行补两列精简信息(幂等):
+      - midday(午盘分析):午盘选股产出;当前无该数据源 → 占位空串(展示层渲染「—」);
+      - review(复盘结果):同一日复盘里该票的表态/α,按 code 匹配 scorecard;无则空串。
+    语义(A-1):review 取的是"同一 date"的复盘(同 seg.复盘),不跨日,与选股同日配对。"""
+    if not view:
+        return view
+    for region in ("盘后", "盘中", "盘尾"):
+        seg = view.get(region)
+        if not seg:
+            continue
+        sel = seg.get("选股")
+        rev = seg.get("复盘")
+        if not sel or not sel.get("ranking"):
+            continue
+        rev_idx = _review_index(rev)
+        for r in sel["ranking"]:
+            code = r.get("code") or ""
+            r.setdefault("midday", "")            # 午盘数据源尚未落地,占位空
+            if not r.get("review"):
+                r["review"] = rev_idx.get(code, "")
+    return view
 
 
 def _experiences(text: str) -> list[str]:
@@ -306,7 +362,11 @@ def extract_review_summary(md_text: str) -> dict:
 # ————————————————————————————————————————————————
 def build_selection_view(date: str, selection_dir=None, review_dir=None) -> dict | None:
     """构建某日 `selection_analysis` 视图。三区:盘后(选股+复盘精简)、盘中(暂无)、盘尾(暂无)。
-    选股/复盘 md 均缺 → 返回 None(不产空视图)。盘中/盘尾数据源尚未落地,固定占位 None。"""
+    选股/复盘 md 均缺 → 返回 None(不产空视图)。盘中/盘尾数据源尚未落地,固定占位 None。
+
+    A-1 同日配对:选股取 `选股/<date>.md`、复盘取 `复盘/<date>.md`——**同一个 date**,
+    绝不取前一天复盘。语义:某日复盘是复盘"前一交易日选出的票今天表现",故它归属于"当日",
+    应与当日选股同页并列。排序表两列(午盘/复盘)也由本函数经 enrich_view_cross_refs 补齐。"""
     sel_dir = selection_dir or SELECTION_DIR
     rev_dir = review_dir or REVIEW_DIR
     sel_p = sel_dir / f"{date}.md"
@@ -315,4 +375,5 @@ def build_selection_view(date: str, selection_dir=None, review_dir=None) -> dict
     rev = extract_review_summary(rev_p.read_text(encoding="utf-8")) if rev_p.is_file() else None
     if sel is None and rev is None:
         return None
-    return {"date": date, "盘后": {"选股": sel, "复盘": rev}, "盘中": None, "盘尾": None}
+    view = {"date": date, "盘后": {"选股": sel, "复盘": rev}, "盘中": None, "盘尾": None}
+    return enrich_view_cross_refs(view)
