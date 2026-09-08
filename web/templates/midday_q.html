@@ -1,0 +1,156 @@
+{% extends "base.html" %}
+{% block title %}午盘 Q · 半导体+CPO 尾盘策略 · A股策略辅助工具{% endblock %}
+{% block content %}
+<h1>午盘 Q · <small>半导体+CPO · 14:30 首判 + 14:50 复核 → 尾盘买 · 次日尾盘卖 · v0.3</small></h1>
+
+{% if not q.available %}
+<section class="card">
+  <p class="muted">{{ q.reason }}</p>
+  <p class="muted tiny">跑命令产出数据:
+    <code>python -m tools.pipeline.midday_q_gate --stage 1430 --date {{ q.date or 'YYYY-MM-DD' }}</code>
+    (14:30 首判)<br>
+    <code>python -m tools.pipeline.midday_q_screen --stage 1430 --date {{ q.date or 'YYYY-MM-DD' }}</code>
+    (选股)
+  </p>
+</section>
+{% else %}
+
+<!-- 大盘闸门状态 -->
+<section class="card wide">
+  <h2>大盘闸门 · <small>{{ q.date }}</small>
+    {% if q.gate.state %}
+    {% set _cls = {'强势':'pos','弱势':'neg','震荡':'muted','崩盘':'neg','未知':'muted'}[q.gate.state] %}
+    <span class="{{ _cls }}" style="margin-left:8px">{{ q.gate.state }}</span>
+    · 仓位建议 <b>{{ (q.gate.position_pct * 100)|int if q.gate.position_pct else 0 }}%</b>
+    {% if q.gate.flipped %} · <span class="neg">⚠️ 翻转(14:30→14:50 状态劣化,撤单)</span>{% endif %}
+    {% endif %}
+  </h2>
+  <p class="muted tiny">
+    {{ q.gate.note }}
+    {% if q.gate.stage1_state and q.gate.stage2_state %}
+    · 首判 <b>{{ q.gate.stage1_state }}</b> → 复核 <b>{{ q.gate.stage2_state }}</b>
+    {% endif %}
+  </p>
+  {% if q.gate.stage1_reasons or q.gate.stage2_reasons %}
+  <details class="tiny muted">
+    <summary style="cursor:pointer">展开闸门判定详情</summary>
+    {% if q.gate.stage1_reasons %}
+    <p><b>14:30 首判</b>:</p>
+    <ul>{% for r in q.gate.stage1_reasons %}<li>{{ r }}</li>{% endfor %}</ul>
+    {% endif %}
+    {% if q.gate.stage2_reasons %}
+    <p><b>14:50 复核</b>:</p>
+    <ul>{% for r in q.gate.stage2_reasons %}<li>{{ r }}</li>{% endfor %}</ul>
+    {% endif %}
+  </details>
+  {% endif %}
+</section>
+
+<!-- 最终清单 -->
+{% if q.final %}
+<section class="card wide">
+  <h2>最终清单
+    <small>{{ q.final.label if q.final.label else '最终' }} ·
+    共 <b class="pos">{{ q.final.final_codes|length }}</b> 只
+    · 买入 T 日 14:55 · 卖出 T+1 日 14:30-14:50</small>
+  </h2>
+
+  {% if q.final.final_codes %}
+  <table>
+    <thead>
+      <tr>
+        <th>代码</th><th>名称</th><th>来自策略</th><th>综合分</th><th>信号快照</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for h in q.final.final_codes %}
+      <tr>
+        <td><a href="/stock/{{ h.code }}?date={{ q.date }}">{{ h.code }}</a></td>
+        <td>{{ h.name }}</td>
+        <td><span class="tag">{{ h.from_strategy }}</span></td>
+        <td class="pos">{{ '%.3f'|format(h.rank_score) if h.rank_score else '-' }}</td>
+        <td class="tiny muted">
+          {% for k, v in (h.signals or {}).items() %}
+          {{ k }}={{ v }}{% if not loop.last %} · {% endif %}
+          {% endfor %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="muted">今日最终清单为空({{ q.final.note or '闸门不允许出手或无票命中信号' }})</p>
+  {% endif %}
+</section>
+
+<!-- 按策略分组明细 -->
+{% if q.final.selections %}
+<section class="card wide">
+  <h2>按策略分组</h2>
+  {% for strat_key, hits in q.final.selections.items() %}
+  <h3>{{ strat_key }}
+    {% if strat_key == 'Q1' %}<small>· 强势接力(追温和涨 3-6%)</small>
+    {% elif strat_key == 'Q2' %}<small>· 弱转强反抽(早跌 3% 反弹 2%)</small>
+    {% elif strat_key == 'Q3' %}<small>· 资金流前瞻(主力+大单+温和)</small>
+    {% endif %}
+    · 共 <b>{{ hits|length }}</b> 只
+  </h3>
+  {% if hits %}
+  <table>
+    <thead><tr><th>代码</th><th>名称</th><th>综合分</th><th>信号</th></tr></thead>
+    <tbody>
+      {% for h in hits %}
+      <tr>
+        <td><a href="/stock/{{ h.code }}?date={{ q.date }}">{{ h.code }}</a></td>
+        <td>{{ h.name }}</td>
+        <td>{{ '%.3f'|format(h.rank_score) if h.rank_score else '-' }}</td>
+        <td class="tiny muted">
+          {% for k, v in (h.signals or {}).items() %}
+          {{ k }}={{ v }}{% if not loop.last %} · {% endif %}
+          {% endfor %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="muted tiny">未命中</p>
+  {% endif %}
+  {% endfor %}
+</section>
+{% endif %}
+
+{% endif %}
+
+<!-- 三段进度(首判/复核/final) -->
+<section class="card wide">
+  <h2>三段进度</h2>
+  <ul class="tiny">
+    {% for st in q.stages %}
+    <li>
+      <b>{{ st.label }}</b>
+      · 大盘 <b>{{ st.gate_state or '-' }}</b>
+      · 仓位 {{ (st.position_pct * 100)|int if st.position_pct else 0 }}%
+      · 入选 {{ st.final_codes|length }} 只
+      {% if st.note %}· <span class="muted">{{ st.note }}</span>{% endif %}
+    </li>
+    {% endfor %}
+  </ul>
+</section>
+
+<!-- 说明 -->
+<section class="card wide">
+  <h2>策略说明</h2>
+  <p class="tiny muted">
+    <b>Q1 强势接力</b>:14:30 涨 3-6% + 距日高 &lt;1.5% + 量能延续 + 均线多头(追温和强势)。<br>
+    <b>Q2 弱转强反抽</b>:早盘急跌 ≥3% + 从最低反弹 ≥2% + 修复到平盘附近(反转型)。<br>
+    <b>Q3 资金流前瞻</b>:下午主力净流入 + 大单占比 ≥30% + 涨跌温和(跟主力)。<br>
+    <b>大盘闸门</b>:5 项指标(沪深300/中证1000/涨跌家数比/涨停跌停比/净广度) 4 挡状态。<br>
+    <b>双点判定</b>:14:30 首判 + 14:50 复核,大盘翻转即撤单空仓。<br>
+    <b>卖出规则(v0.3)</b>:{{ q.meta.sell_rule }}。<br>
+    <span class="neg">⚠️ {{ q.meta.note }}</span>
+  </p>
+</section>
+
+{% endif %}
+{% endblock %}
