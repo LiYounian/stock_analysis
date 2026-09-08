@@ -34,6 +34,7 @@ from typing import Literal
 from tools.analysis.midday_q import gate as G
 from tools.collectors import calendar as cal
 from tools.config import settings
+from tools.config import midday_q_universe as UNIV
 from tools.strategy import midday_q_screener as SC
 
 logger = logging.getLogger("pipeline.midday_q_screen")
@@ -195,10 +196,12 @@ def _pre_screen_candidates(quotes: dict[str, dict], top: int = 50) -> list[str]:
 # ────────────────────────────── run() ──────────────────────────────
 
 def run(stage: Stage, *, date: str | None = None, force: bool = False,
-        skip_fundflow: bool = False) -> int:
+        skip_fundflow: bool = False, full_universe: bool = False) -> int:
     """跑一段选股。
 
-    skip_fundflow=True 时不触发 Q3 分时资金流采集(用于本地联调/测试环境,避免真触网)。
+    参数:
+        skip_fundflow:  True 时不触发 Q3 分时资金流采集(本地联调用,避免触网)
+        full_universe:  True 时用主池 413 只;默认 False → focus 126 只(生产模式)
     """
     if stage not in _STAGES:
         logger.error("非法 stage %r", stage)
@@ -267,17 +270,34 @@ def run(stage: Stage, *, date: str | None = None, force: bool = False,
         logger.info("落 screen.%s:gate.%s state=%s → 空", key, stage, gate_stage.get("state"))
         return 0
 
-    # 读快照,拿全 A 报价
+    # 读快照,拿报价
     snap = _load_snapshot(date, stage)
     if not snap:
         logger.error("上游 snapshot 缺失:T%s.json", stage)
         return 1
-    quotes = _quotes_from_snapshot(snap)
-    if not quotes:
+    quotes_raw = _quotes_from_snapshot(snap)
+    if not quotes_raw:
         logger.error("snapshot codes 空 → 无候选")
         screen[key] = {"selections": {}, "final_codes": [], "note": "snapshot codes 空"}
         _write_atomic(_screen_path(date), screen)
         return 1
+
+    # 用午盘 Q 票池收窄范围(默认 focus 126;--full-universe 切主池 413)
+    try:
+        universe_codes = set(UNIV.get_full_codes() if full_universe else UNIV.get_focus_codes())
+    except FileNotFoundError as e:
+        logger.error("午盘 Q 票池文件缺失,无法收窄范围:%s", e)
+        return 1
+    quotes = {c: q for c, q in quotes_raw.items() if c in universe_codes}
+    logger.info("票池过滤:snapshot %d 只 ∩ midday_q_universe(%s) %d 只 → 候选 %d 只",
+                len(quotes_raw),
+                "full" if full_universe else "focus",
+                len(universe_codes), len(quotes))
+    if not quotes:
+        screen[key] = {"selections": {}, "final_codes": [],
+                        "note": f"票池过滤后无候选(snapshot∩universe=空)"}
+        _write_atomic(_screen_path(date), screen)
+        return 0
 
     # confirm_from:1450 阶段从 stage1_1430.final_codes 取
     confirm_from: dict[str, list[str]] | None = None
@@ -332,11 +352,14 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--force", action="store_true")
     ap.add_argument("--skip-fundflow", action="store_true",
                     help="不触发 Q3 分时资金流采集(联调/测试用)")
+    ap.add_argument("--full-universe", action="store_true",
+                    help="用主池 413 只(默认 focus 126 只)")
     args = ap.parse_args(argv)
 
     _setup_logging()
     return run(args.stage, date=args.date, force=args.force,
-                skip_fundflow=args.skip_fundflow)
+                skip_fundflow=args.skip_fundflow,
+                full_universe=args.full_universe)
 
 
 if __name__ == "__main__":
