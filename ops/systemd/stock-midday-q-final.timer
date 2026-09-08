@@ -1,0 +1,15 @@
+# 午盘 Q 最终清单定时器:工作日 14:52 触发 stock-midday-q@final.service
+# 触发内容:合并首判+复核,应用翻转规则,落最终清单 → data/analysis/midday_q/screen_<date>.json.final
+# 时间 14:52 = 14:50 复核触发 + 预留 2 分钟给复核 pipeline 跑完(实测数据管道 <15s,富余)
+#
+# 安装:同 stock-midday-q-1430.timer(见其文件头注释)
+[Unit]
+Description=Trigger midday Q gate+screen stage=final (weekdays 14:52)
+
+[Timer]
+OnCalendar=Mon..Fri 14:52
+Persistent=true
+Unit=stock-midday-q@final.service
+
+[Install]
+WantedBy=timers.target

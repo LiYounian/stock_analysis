@@ -1,0 +1,21 @@
+# 午盘 Q 首判定时器:工作日 14:30 触发 stock-midday-q@1430.service
+# 触发内容:大盘闸门首判 + Q1/Q2/Q3 首判选股 → data/analysis/midday_q/{gate,screen}_<date>.json.stage1_1430
+#
+# 安装(远端):
+#   sudo cp stock-midday-q@.service stock-midday-q-*.timer /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now stock-midday-q-1430.timer
+#   sudo systemctl enable --now stock-midday-q-1450.timer
+#   sudo systemctl enable --now stock-midday-q-final.timer
+# 查看下次触发:systemctl list-timers | grep midday-q
+[Unit]
+Description=Trigger midday Q gate+screen stage=1430 (weekdays 14:30)
+
+[Timer]
+OnCalendar=Mon..Fri 14:30
+# Persistent=true:错过时点(机器宕机/维护)会在下次可用时补跑,避免漏一天
+Persistent=true
+Unit=stock-midday-q@1430.service
+
+[Install]
+WantedBy=timers.target
