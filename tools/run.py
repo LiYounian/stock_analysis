@@ -1188,22 +1188,22 @@ def run_screen_all(codes_all: list[str], as_of: str, no_llm: bool = False,
         _push_incremental(as_of, set(_b))
     run_panel(analysis_set)
     run_screen(analysis_set)
-    # —— 候选池消息面富集·独立确认层(项目根本特色:把消息面前移进每日选股)——
-    #    策略/合议出候选后,对候选池(合议Top-N∪各策略前K∪自选,~40–50 只,有界)采新闻+news_ai+
-    #    三层情绪+事件+资金流,再召消息面专家(情绪三层/事件驱动/资金流)二次合议产「消息面方向+理由」,
-    #    落 view「候选池消息面确认」。**不改写全A主排序 record['council']**——独立确认层,风险控制。
+    # —— 候选池消息面三段式·回灌打分(项目根本特色:把消息面前移进每日选股并真正回灌进用得上它的策略)——
+    #    策略/合议出候选后,对候选池(各策略 top-K∪自选,≤策略数×10,有界)采新闻+news_ai+三层情绪+
+    #    事件+资金流,再把消息面评价**可解释线性映射成分数、回灌到候选集重算合议 → 候选集内重排**得完整分,
+    #    落 view「候选池消息面确认」+「消息面评分」。**不写全A主排序 record['council']**——只重排候选集。
     #    默认开(CANDIDATE_MSG_CONFIRM=1);_safe 隔离——失败降级不中止闭环。no_llm 透传(跳三层情绪)。
     if os.getenv("CANDIDATE_MSG_CONFIRM", "1") == "1":
         def _cand_msg():
             from tools.pipeline import candidate_message as _cmsg
-            top_n = int(os.getenv("CANDIDATE_MSG_COUNCIL_TOPN", "30"))
-            top_k = int(os.getenv("CANDIDATE_MSG_VIEW_TOPK", "5"))
-            _cmsg.run_candidate_message_enrich(as_of, council_top_n=top_n,
-                                               per_view_top_k=top_k, no_llm=no_llm)
-            _push_incremental(as_of, {f"{_VPREFIX}候选池消息面确认"})
-        _safe("候选池消息面确认层", _cand_msg)
+            top_k_env = os.getenv("CANDIDATE_MSG_TOPK")
+            top_k = int(top_k_env) if top_k_env and top_k_env.isdigit() else None
+            _cmsg.run_candidate_message_enrich(as_of, top_k=top_k, no_llm=no_llm)
+            _push_incremental(as_of, {f"{_VPREFIX}候选池消息面确认",
+                                      f"{_VPREFIX}消息面评分"})
+        _safe("候选池消息面回灌打分", _cand_msg)
     else:
-        logger.info("候选池消息面确认层:CANDIDATE_MSG_CONFIRM≠1,跳过(开关关闭)")
+        logger.info("候选池消息面回灌打分:CANDIDATE_MSG_CONFIRM≠1,跳过(开关关闭)")
     # —— 多策略命中「同源信号闸门」(选股汇总层·统一一处):独立口径命中数替代命中数 +
     #    游资情绪过热多轴前置闸 + 统一风控 veto 汇聚复用。kill-switch(config 多策略命中闸门.启用)。
     #    只读已落盘的 picks/财报/龙虎榜/K线,失败降级不中止闭环;产物落 view 供选股/SOP 消费。
@@ -1277,13 +1277,13 @@ def cmd_enrich(argv):
 
 
 def cmd_candmsg(argv):
-    """候选池消息面富集·独立确认层入口:
-    python -m tools.run candmsg [--date YYYY-MM-DD] [--no-llm] [--council-top-n N] [--view-top-k K]。
+    """候选池消息面三段式·回灌打分入口:
+    python -m tools.run candmsg [--date YYYY-MM-DD] [--no-llm] [--top-k K]。
 
-    对候选池(合议Top-N∪各策略前K∪自选,有界 ~40–50 只)采新闻+news_ai+三层情绪+事件+资金流,
-    再召消息面专家二次合议产「消息面方向+理由」→ view「候选池消息面确认」。**不改全A主排序**。
-    读已落盘的策略/合议 view 算候选池,故须在 screenall/合议出榜后跑(screenall 已内置本节点,
-    默认开;本命令供手动/定时**单独重跑或补跑**)。--no-llm 跳三层情绪(情绪专家弃权)。
+    对候选池(各策略 top-K∪自选,≤策略数×10,有界)采新闻+news_ai+三层情绪+事件+资金流,再把消息面
+    评价可解释线性映射成分、回灌到候选集重算合议 → 候选集内重排得完整分 → view「候选池消息面确认」
+    +「消息面评分」。**不改全A主排序**。读已落盘的策略/合议 view 算候选池,故须在 screenall/合议出榜后
+    跑(screenall 已内置本节点,默认开;本命令供手动/定时**单独重跑或补跑**)。--no-llm 跳三层情绪。
     """
     from tools.pipeline import candidate_message as cmsg
     as_of = _as_of()
@@ -1293,19 +1293,14 @@ def cmd_candmsg(argv):
             as_of = argv[i + 1]
     store.set_active_date(as_of)
     no_llm = bool(argv and "--no-llm" in argv)
-    top_n = int(os.getenv("CANDIDATE_MSG_COUNCIL_TOPN", "30"))
-    top_k = int(os.getenv("CANDIDATE_MSG_VIEW_TOPK", "5"))
-    if argv and "--council-top-n" in argv:
-        i = argv.index("--council-top-n")
-        if i + 1 < len(argv) and argv[i + 1].isdigit():
-            top_n = int(argv[i + 1])
-    if argv and "--view-top-k" in argv:
-        i = argv.index("--view-top-k")
+    top_k_env = os.getenv("CANDIDATE_MSG_TOPK")
+    top_k = int(top_k_env) if top_k_env and top_k_env.isdigit() else None
+    if argv and "--top-k" in argv:
+        i = argv.index("--top-k")
         if i + 1 < len(argv) and argv[i + 1].isdigit():
             top_k = int(argv[i + 1])
-    rep = cmsg.run_candidate_message_enrich(as_of, council_top_n=top_n,
-                                            per_view_top_k=top_k, no_llm=no_llm)
-    logger.info("候选池消息面确认层:候选 %d,统计 %s", rep.get("候选池规模", 0), rep.get("统计"))
+    rep = cmsg.run_candidate_message_enrich(as_of, top_k=top_k, no_llm=no_llm)
+    logger.info("候选池消息面回灌打分:候选 %d,统计 %s", rep.get("候选池规模", 0), rep.get("统计"))
 
 
 def cmd_findata(argv):
