@@ -43,6 +43,7 @@ from __future__ import annotations
 
 import logging
 
+from tools import parallel
 from tools.analysis import council
 from tools.config import stock_pool
 from tools.config.strategy import THRESHOLDS
@@ -66,6 +67,16 @@ _CFG = THRESHOLDS.get("消息面回灌", {}) or {}
 def _cfg() -> dict:
     """读「消息面回灌」config(单一真源;测试可 monkeypatch THRESHOLDS 后自取)。"""
     return THRESHOLDS.get("消息面回灌", {}) or {}
+
+
+def _concurrency(cfg: dict | None = None) -> int:
+    """候选池富集(采集+情绪LLM+组装+回灌打分)的**有界并发度**(config「消息面回灌.并发数」)。
+
+    默认 6(稳妥值);**返回 1 = 退回串行**(kill-switch,逐值等价旧串行路径)。下限钳到 1
+    (config 误配 0/负数不致零线程)。别太高防 LLM 网关 429(见 config 注释)。
+    """
+    c = cfg if cfg is not None else _cfg()
+    return max(1, int(c.get("并发数", 6) or 1))
 
 
 # ————————————————————————————————————————————————
@@ -234,13 +245,15 @@ def _default_enrich(pool: list[str], as_of: str, *, no_llm: bool = False,
 
     if batch_size is None:
         batch_size = int(_cfg().get("批大小", 0) or 0)
+    workers = _concurrency()                 # 候选池富集有界并发度(config;1=串行)
 
     def _one_batch(batch: list[str]) -> dict:
-        run._safe("候选池新闻采集", lambda: run.collect_message(batch))
+        # 采集(新闻/舆情/百度,网络 IO)与三层情绪(LLM)按票有界并发提速;结果与完成顺序无关。
+        run._safe("候选池新闻采集", lambda: run.collect_message(batch, workers=workers))
         if no_llm:
             logger.info("候选池消息面精选:no_llm=True,跳过三层情绪(情绪专家将弃权)")
         else:
-            run._safe("候选池三层情绪+news_ai", lambda: run.run_sentiment(batch))
+            run._safe("候选池三层情绪+news_ai", lambda: run.run_sentiment(batch, workers=workers))
         run._safe("候选池事件精数值", lambda: run.run_events(batch, as_of))
         nd = 0
         if ensure_fundflow:
@@ -266,9 +279,13 @@ def _default_enrich(pool: list[str], as_of: str, *, no_llm: bool = False,
 
 
 def _default_serialize(pool: list[str], as_of: str) -> None:
-    """把候选池富集后的数据组装进 record(供阶段3重算合议读取)。惰性 import。"""
+    """把候选池富集后的数据组装进 record(供阶段3重算合议读取)。惰性 import。
+
+    组装按票有界并发提速(config 并发数;1=串行);各票记录独立文件、store 原子写,结果与完成
+    顺序无关(逐值等价串行)。
+    """
     from tools.analysis import serialize
-    serialize.serialize_all(as_of=as_of, codes=pool)
+    serialize.serialize_all(as_of=as_of, codes=pool, workers=_concurrency())
 
 
 # ————————————————————————————————————————————————
@@ -355,18 +372,23 @@ def rescore_pool(pool: list[str], provenance: dict, *, load_record=None,
         consumer_experts = resolve_base_experts(msg_experts, c)
     reflow_weight = float(c.get("回灌权重", 0.5))
 
-    out: list[dict] = []
-    for code in pool:
+    def _one(idx: int, code: str) -> dict | None:
+        """单票回灌打分(council 合议纯 CPU、只读 record;自含失败/缺 record 降级)。"""
         try:
             rec = load_record(code)
         except FileNotFoundError:
-            continue
+            return None
         try:
-            out.append(_score_one(code, rec, provenance, msg_experts=msg_experts,
-                                   consumer_experts=consumer_experts,
-                                   reflow_weight=reflow_weight, cfg=c))
+            return _score_one(code, rec, provenance, msg_experts=msg_experts,
+                              consumer_experts=consumer_experts,
+                              reflow_weight=reflow_weight, cfg=c)
         except Exception as e:  # noqa: BLE001
             logger.warning("候选池消息面回灌打分 %s 失败(降级跳过):%s", code, str(e)[:120])
+            return None
+
+    # 按票有界并发打分(council 只读注入 record、不写 record['council'],线程安全);结果按输入序
+    # 回填后再重排 → 输出**与完成顺序无关**(下方完整分降序稳定排序保证逐值等价串行)。
+    out: list[dict] = [x for x in parallel.pmap(_one, pool, _concurrency(c)) if x is not None]
     # 候选集内重排:完整分降序(同分时消息面看多在前,便于选股一眼看回灌后的次序)。
     _dir_rank = {"看多": 2, "看涨": 2, "中性": 1, "看空": 0}
     out.sort(key=lambda x: (x["完整分"], _dir_rank.get(x["消息面方向"], 1),
