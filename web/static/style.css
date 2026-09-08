@@ -122,6 +122,7 @@ button {
 }
 button:hover { filter: brightness(1.1); }
 button:disabled { opacity: .5; cursor: not-allowed; }
+button.btn-sm { padding: 3px 10px; font-size: 12px; }
 .del-btn { background: #3a2020; color: #e89; padding: 4px 10px; }
 
 /* 专家合议(F5) */
