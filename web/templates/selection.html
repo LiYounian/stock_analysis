@@ -61,6 +61,10 @@
 <!-- 综合选股:勾选策略 → 各策略入选代码并集(前端实时重算) -->
 <section class="card wide">
   <h2>综合选股 <small>勾选策略 → 展示所选策略入选股票代码的<b>并集</b>(去重);前端实时重算,不触网</small></h2>
+  <div class="council-toolbar" style="margin-bottom:6px">
+    <button type="button" id="combinedToggleAll" class="btn-sm"
+            title="全选/全不选(点击切换,仅影响可用策略)">全选 / 全不选</button>
+  </div>
   <div class="council-experts">
     {% for st in s.combined.strategies %}
     <label class="council-chk" title="{{ st.title }}">
@@ -513,6 +517,21 @@
   }
 
   document.querySelectorAll(".strat-cb").forEach(function (cb) { cb.addEventListener("change", renderCombined); });
+
+  // 全选/全不选切换按钮:按当前状态智能切换
+  //   · 有任一未勾选 → 全部勾上(补齐)
+  //   · 全部已勾选   → 全部取消
+  //   · disabled 的策略不动(数据缺失不能选)
+  var toggleBtn = document.getElementById("combinedToggleAll");
+  if (toggleBtn) {
+    toggleBtn.addEventListener("click", function () {
+      var cbs = [].slice.call(document.querySelectorAll(".strat-cb")).filter(function (cb) { return !cb.disabled; });
+      var allChecked = cbs.every(function (cb) { return cb.checked; });
+      cbs.forEach(function (cb) { cb.checked = !allChecked; });
+      renderCombined();
+    });
+  }
+
   renderCombined();   // 默认全勾 → 全并集
 })();
 

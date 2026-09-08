@@ -151,6 +151,14 @@ def pool(request: Request):
         context={"p": da.pool_page(), **_nav("latest")})
 
 
+# ———— 午盘 Q 策略族:半导体+CPO 14:30/14:50 双点判定 → 尾盘买次日尾盘卖 ————
+@app.get("/midday-q", response_class=HTMLResponse)
+def midday_q(request: Request, date: str = "latest"):
+    return templates.TemplateResponse(
+        request=request, name="midday_q.html",
+        context={"q": da.midday_q_page(date), **_nav(date)})
+
+
 class PoolAdd(BaseModel):
     code: str
     name: str

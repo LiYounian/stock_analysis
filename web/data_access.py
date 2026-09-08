@@ -1524,3 +1524,93 @@ def sepa_detail(code: str, date: str = "latest") -> dict | None:
     return {"code": code, "name": name, "row": row or {}, "chart": chart,
             "as_of": as_of(date)}
 
+
+# ————————————————————————————————————————————————
+# 午盘 Q 策略族(半导体+CPO,14:30 首判 + 14:50 复核,次日尾盘卖)
+# 数据源:data/analysis/midday_q/{gate,screen}_<date>.json
+# 由 pipeline midday_q_gate / midday_q_screen 落盘
+# ————————————————————————————————————————————————
+def midday_q_page(date: str = "latest") -> dict:
+    """午盘 Q 页面数据:闸门状态 + Q1/Q2/Q3 选股清单 + 卖出建议。
+
+    date="latest" → 找 data/analysis/midday_q/ 下最新一份 screen_*.json;缺文件 → 空占位。
+    """
+    import json as _json     # 局部 import(与本文件其他函数 _upload_time/financial_detail 一致风格)
+    from tools.config import settings as _s
+    root = _s.PROJECT_ROOT / "data" / "analysis" / "midday_q"
+    if not root.exists():
+        return {"date": None, "available": False, "reason": "尚未生成任何午盘 Q 数据(先跑 pipeline)"}
+
+    # 找日期:显式日期 or "latest"(从文件名解析)
+    if date == "latest":
+        files = sorted(root.glob("screen_*.json"))
+        if not files:
+            return {"date": None, "available": False,
+                    "reason": "尚未生成任何 screen_*.json(先跑 pipeline midday_q_screen)"}
+        as_of_date = files[-1].stem.replace("screen_", "")
+    else:
+        as_of_date = date
+
+    screen_p = root / f"screen_{as_of_date}.json"
+    gate_p = root / f"gate_{as_of_date}.json"
+
+    if not screen_p.exists():
+        return {"date": as_of_date, "available": False,
+                "reason": f"{screen_p.name} 不存在;闸门可能已跑但选股 pipeline 未跑"}
+
+    try:
+        screen = _json.loads(screen_p.read_text(encoding="utf-8"))
+    except (_json.JSONDecodeError, OSError) as e:
+        return {"date": as_of_date, "available": False,
+                "reason": f"读 {screen_p.name} 失败:{e}"}
+
+    gate = {}
+    if gate_p.exists():
+        try:
+            gate = _json.loads(gate_p.read_text(encoding="utf-8"))
+        except (_json.JSONDecodeError, OSError):
+            gate = {}
+
+    # 组装 3 段的清单,给前端展示用
+    stages = []
+    for key, label in [("stage1_1430", "14:30 首判"),
+                       ("stage2_1450", "14:50 复核"),
+                       ("final", "最终清单")]:
+        seg = screen.get(key) or {}
+        if not seg: continue
+        stages.append({
+            "key": key, "label": label,
+            "gate_state": seg.get("gate_state"),
+            "position_pct": seg.get("position_pct"),
+            "note": seg.get("note", ""),
+            "selections": seg.get("selections") or {},
+            "final_codes": seg.get("final_codes") or [],
+        })
+
+    # 闸门指标
+    gate_final = (gate.get("final") if gate else None) or {}
+    gate_summary = {
+        "state": gate_final.get("state") or (stages[-1]["gate_state"] if stages else None),
+        "position_pct": gate_final.get("position_pct")
+                          or (stages[-1]["position_pct"] if stages else 0.0),
+        "note": gate_final.get("note", ""),
+        "flipped": bool(gate.get("flipped", False)) if gate else False,
+        "stage1_state": (gate.get("stage1_1430") or {}).get("state"),
+        "stage2_state": (gate.get("stage2_1450") or {}).get("state"),
+        "stage1_reasons": (gate.get("stage1_1430") or {}).get("reasons") or [],
+        "stage2_reasons": (gate.get("stage2_1450") or {}).get("reasons") or [],
+    }
+
+    return {
+        "date": as_of_date,
+        "available": True,
+        "gate": gate_summary,
+        "stages": stages,
+        "final": stages[-1] if stages else None,
+        "meta": {
+            "sell_rule": "次日 14:30-14:50 尾盘 VWAP · 无止损(v0.3 修订 2026-09-08)",
+            "buy_rule": "T 日 14:55-15:00 尾盘挂单",
+            "note": "非投资建议 · 研究模拟",
+        },
+    }
+
