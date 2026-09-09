@@ -444,3 +444,114 @@ def test_web_selection_analysis_prior_day_picks_real_parse(monkeypatch):
     # 今日选股(09-09)票的复盘列:次日 09-10 基准缺 → 待复盘
     assert v["盘后"]["选股"]["skipped"] is False
     assert all(r["review"] == "待复盘" for r in v["盘后"]["选股"]["ranking"])
+
+
+# ————————————————————————————————————————————————
+# web 取「该票 D 日涨跌%」多级回退(_selection_pct_at):record → 主档 K线 → 复盘 md → None
+# 锁:回退优先级、α 口径(下游 α=pct−基准)、防未来函数(只取 md_date 当日/之前数据)。
+# 注:_scorecard 用 6 位代码正则抽票,故测试代码须为 6 位数字。
+# ————————————————————————————————————————————————
+_REVIEW_MD = (
+    "### 二、逐票收盘记分（α = 收盘涨跌 − 全A等权 +0.926%）\n\n"
+    "| 票 | 09-08收 | **09-09收** | **α vs 等权** | 收盘判定 |\n"
+    "|---|---|---|---|---|\n"
+    "| **600003 测试C** | 11.20 | **11.75 +4.91%**、换手2.7% | **+3.98pp** | ✅ 强 α |\n"
+    "| **600005 测试E** | 9.50 | **9.70 +2.00%** | **+1.07pp** | ◻️ |\n"
+)
+# 收盘列无带符号百分数(只有价) → 走 α + 表头基准还原兜底
+_REVIEW_MD_NOPCT = (
+    "### 二、逐票收盘记分（α = 收盘涨跌 − 全A等权 +0.926%）\n\n"
+    "| 票 | **09-09收** | **α vs 等权** | 收盘判定 |\n"
+    "|---|---|---|---|\n"
+    "| **600007 测试F** | 12.30 | **+5.38pp** | ✅ |\n"
+)
+
+
+def test_parse_review_close_pct_direct_and_reconstruct():
+    """主路:直接取 D 日收盘列的带符号涨跌%(+4.91% / +2.00%),忽略"收盘判定"列的"收"字干扰;
+    兜底:收盘列无 % 时用 α + 表头声明基准还原(pct = 0.926 + 5.38);
+    找不到票 / 无表 → None(不臆造)。"""
+    assert ss.parse_review_close_pct(_REVIEW_MD, "600003") == 4.91          # 主路直接取
+    assert ss.parse_review_close_pct(_REVIEW_MD, "600005") == 2.00
+    assert ss.parse_review_close_pct(_REVIEW_MD_NOPCT, "600007") == round(0.926 + 5.38, 4)  # 兜底
+    assert ss.parse_review_close_pct(_REVIEW_MD, "999999") is None          # 票不在表
+    assert ss.parse_review_close_pct("无记分表的正文", "600003") is None
+    assert ss.parse_review_close_pct("", "600003") is None
+
+
+def _fake_master_df(rows):
+    """构造最小主档 K线 DataFrame(date/close/pct_chg 列),rows=[(date, close, pct_chg)]。"""
+    import pandas as pd
+    return pd.DataFrame(rows, columns=["date", "close", "pct_chg"])
+
+
+def test_selection_pct_at_fallback_priority(monkeypatch, tmp_path):
+    """多级回退优先级 + 防未来:
+      A) record 有 → 用 record.snapshot.pct_chg;
+      B) record 无、主档 K线有当日 → 用主档 pct_chg;
+      C) record/主档均无、复盘 md 有 → 用 md 还原 pct;
+      D) 全无 → None;
+      E) 防未来:主档最新日 < md_date(当日无行)→ 主档不冒充,退到 md 级。"""
+    from web import data_access as da
+    from tools.store import repo as store
+    D = "2026-09-09"
+
+    rec_pct = {"600001": 4.91}                          # A:仅此票有 record
+    master = {                                          # B/E:主档
+        "600002": _fake_master_df([("2026-09-08", 10.0, 1.0), (D, 10.8, 8.0)]),
+        "600005": _fake_master_df([("2026-09-07", 9.0, 1.0), ("2026-09-08", 9.5, 5.0)]),  # 无 D 当日行
+    }
+
+    def fake_get_record(code, date="latest"):
+        if date == D and code in rec_pct:
+            return {"meta": {"code": code}, "snapshot": {"pct_chg": rec_pct[code]}}
+        raise FileNotFoundError(code)
+
+    def fake_get_master_kline(code):
+        if code in master:
+            return master[code]
+        raise FileNotFoundError(code)
+
+    monkeypatch.setattr(store, "get_record", fake_get_record)
+    monkeypatch.setattr(store, "get_master_kline", fake_get_master_kline)
+    rev_dir = tmp_path / "复盘"                          # C/E:复盘 md(含 600003/600005 行)
+    rev_dir.mkdir()
+    (rev_dir / f"{D}.md").write_text(_REVIEW_MD, encoding="utf-8")
+    monkeypatch.setattr(ss, "REVIEW_DIR", rev_dir)
+
+    assert da._selection_pct_at("600001", D) == 4.91                       # A) record 优先
+    assert da._selection_pct_at("600002", D) == 8.0                        # B) 主档当日 pct_chg
+    assert da._selection_pct_at("600003", D) == 4.91                       # C) md 直接取收盘%
+    assert da._selection_pct_at("600009", D) is None                       # D) 全无 → None
+    assert da._selection_pct_at("600005", D) == 2.00                       # E) 主档无当日行→退 md
+
+
+def test_selection_pct_at_master_computes_from_close_when_pct_nan(monkeypatch):
+    """主档 pct_chg 缺/NaN 时由 close/prev_close−1 现算(单位 %),口径正确。"""
+    import math as _m
+    from web import data_access as da
+    from tools.store import repo as store
+    D = "2026-09-09"
+    df = _fake_master_df([("2026-09-08", 10.0, 1.0), (D, 11.0, float("nan"))])
+
+    monkeypatch.setattr(store, "get_record",
+                        lambda code, date="latest": (_ for _ in ()).throw(FileNotFoundError(code)))
+    monkeypatch.setattr(store, "get_master_kline", lambda code: df)
+    v = da._selection_pct_at("600002", D)
+    assert v is not None and abs(v - 10.0) < 1e-6      # (11/10−1)*100 = 10.0%
+    assert not _m.isnan(v)
+
+
+def test_selection_pct_at_alpha_caliber_end_to_end(monkeypatch):
+    """口径锁:下游 α = pct(多级回退取到) − 全A等权基准,与项目定义一致。
+    用主档源取 pct=8.0,基准=−0.4674 → α=round(8.0−(−0.4674),2)。"""
+    from web import data_access as da
+    from tools.store import repo as store
+    D = "2026-09-09"
+    df = _fake_master_df([("2026-09-08", 10.0, 1.0), (D, 10.8, 8.0)])
+    monkeypatch.setattr(store, "get_record",
+                        lambda code, date="latest": (_ for _ in ()).throw(FileNotFoundError(code)))
+    monkeypatch.setattr(store, "get_master_kline", lambda code: df)
+    pct = da._selection_pct_at("600002", D)
+    bench = -0.4674
+    assert round(pct - bench, 2) == round(8.0 - (-0.4674), 2)
