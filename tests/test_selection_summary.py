@@ -555,3 +555,74 @@ def test_selection_pct_at_alpha_caliber_end_to_end(monkeypatch):
     pct = da._selection_pct_at("600002", D)
     bench = -0.4674
     assert round(pct - bench, 2) == round(8.0 - (-0.4674), 2)
+
+
+# ————————————————————————————————————————————————
+# retroactive 补录锁:复盘/2026-09-09.md「对昨日(09-08)选出票的复盘·逐票收盘记分」表
+# 语义(为什么补):09-08 全A 选股当日闭环跳过留痕,但 8 只候选已入册;09-09 复盘 md 原本只有
+# 「自选盯盘池」表(错的复盘对象),导致 /selection-analysis 复盘表 8 只 α 取不到(末级回退无表)。
+# 补一张 parse_review_close_pct 能解析的收盘记分表后,web 末级回退能算出 8 只 α。
+# 锁:① 8 只齐、② 收盘涨跌%(带符号)正确解析、③ α 口径=pct−(−0.4674)、④ 该表被优先选中(非盯盘池)。
+# ————————————————————————————————————————————————
+_RETRO_0908_PICKS = ["600356", "601061", "601339", "688712",
+                     "601000", "000035", "688262", "000019"]
+# 主档 K线 09-09 收盘涨跌%(补表所据,签名与 md 一致);α = pct − (−0.4674),四舍五入 2 位
+_RETRO_0909_PCT = {"000019": 10.01, "601061": 4.91, "601339": 1.34, "601000": 1.33,
+                   "000035": 0.40, "688262": -0.22, "600356": -0.64, "688712": -2.58}
+_RETRO_BENCH = -0.4674
+
+
+def _read_review_0909():
+    from tools.config import settings
+    p = settings.PROJECT_ROOT / "docs" / "每日分析" / "复盘" / "2026-09-09.md"
+    if not p.is_file():
+        pytest.skip("复盘/2026-09-09.md 不在本工作区(worktree 未含 docs)")
+    return p.read_text(encoding="utf-8")
+
+
+def test_retro_review_0909_scorecard_parses_all_eight():
+    """补录表能被 parse_review_close_pct 解析:8 只齐、收盘涨跌%(带符号)取值正确。"""
+    md = _read_review_0909()
+    for code, pct in _RETRO_0909_PCT.items():
+        got = ss.parse_review_close_pct(md, code)
+        assert got == pct, f"{code}: parse={got} 期望={pct}"
+    # 该表被 _scorecard 优先选中(score=2「逐票收盘记分」压过盯盘池 score=1),8 只齐、非盯盘票
+    sc_codes = {r["code"] for r in ss._scorecard(md)}
+    assert set(_RETRO_0908_PICKS) <= sc_codes
+    assert "300209" not in sc_codes and "300476" not in sc_codes   # 不是自选盯盘池
+
+
+def test_retro_review_0909_alpha_caliber_matches_expected():
+    """α 口径锁:α = 收盘涨跌% − 全A等权基准(−0.4674),关键 3 只与预期一致
+    (601061 +5.38pp、000019 +10.48pp、688712 −2.11pp)。"""
+    md = _read_review_0909()
+    expect = {"601061": 5.38, "000019": 10.48, "688712": -2.11}
+    for code, exp_alpha in expect.items():
+        pct = ss.parse_review_close_pct(md, code)
+        assert round(pct - _RETRO_BENCH, 2) == exp_alpha
+
+
+def test_retro_review_0909_web_view_fills_all_alpha(monkeypatch):
+    """web 端到端(worktree 无主档/记录 → 走末级复盘 md 回退):
+    date=2026-09-09 复盘表 8 只 α 全部算出(alpha_val 非 None),口径 pct−基准。"""
+    from web import data_access as da
+    from tools.config import settings
+    if not (settings.PROJECT_ROOT / "docs" / "每日分析" / "复盘" / "2026-09-09.md").is_file():
+        pytest.skip("复盘/2026-09-09.md 不在本工作区")
+    from tools.store import repo as store
+    from tools.analysis import equal_weight_index as ewi
+    # 强制屏蔽 record/主档 → 只留复盘 md 末级回退,锁「补表即可让 web 算出 α」
+    monkeypatch.setattr(store, "get_record",
+                        lambda code, date="latest": (_ for _ in ()).throw(FileNotFoundError(code)))
+    monkeypatch.setattr(store, "get_master_kline",
+                        lambda code: (_ for _ in ()).throw(FileNotFoundError(code)))
+    monkeypatch.setattr(ewi, "load_daily_mean_pct", lambda *a, **k: {})   # 基准走选股 md 解析 −0.4674
+    v = da.selection_analysis_view("2026-09-09")
+    rev = v["盘后"]["复盘"]
+    assert rev["prior_sel_date"] == "2026-09-08" and rev["skipped"] is False
+    by = {r["code"]: r for r in rev["scorecard"]}
+    assert set(_RETRO_0908_PICKS) <= set(by)                 # 8 只齐
+    assert all(by[c]["alpha_val"] is not None for c in _RETRO_0908_PICKS)  # α 全部算出
+    assert by["601061"]["alpha_val"] == 5.38
+    assert by["000019"]["alpha_val"] == 10.48
+    assert by["688712"]["alpha_val"] == -2.11
