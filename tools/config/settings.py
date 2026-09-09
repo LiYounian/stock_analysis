@@ -78,10 +78,12 @@ LLM_ROUTE = {"extract": "openai_compat", "sentiment": "qwen", "summary": "openai
 LLM_CACHE = DATA_RAW / "llm_cache"             # 抽取结果缓存,改下游免重复调用
 
 # —— 采集限频(防封)——
-FETCH_SLEEP_SEC = 0.5       # 单次请求间隔(串行兜底路径)
-# 方案B 兜底并发(仅主档缺失时逐只 akshare 回退用):有界线程池 + jitter。
-# 默认 1 = 保持串行(不激进并发,避免打封);需要提速时调 8–12。
-FETCH_WORKERS = int(os.getenv("FETCH_WORKERS", "1"))
+# 逐只兜底路径每请求间隔。默认 0:并发路径下 sleep 反而拖慢,腾讯/新浪/baostock 实测
+# 并发 8 无封禁(bench_fetch 自证);需对特定源限速时再经 env 调高。
+FETCH_SLEEP_SEC = float(os.getenv("FETCH_SLEEP_SEC", "0"))
+# 方案B 兜底并发(仅主档缺失时逐只回退用):有界线程池 + jitter。
+# 默认 8:全A 逐只回退从数十分钟(串行)降到分钟级;源被打封时经 env 调低。
+FETCH_WORKERS = int(os.getenv("FETCH_WORKERS", "8"))
 FETCH_JITTER_SEC = 0.2      # 并发路径每请求前随机抖动上限(秒)
 
 # —— screenall 深采分层门控:边缘候选集上界(#23,防对全A深采)——

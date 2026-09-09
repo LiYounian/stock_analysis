@@ -172,3 +172,45 @@ def test_北交所920段路由到bj_而900段沪B仍归sh():
     assert financial._em_symbol("430047") == "BJ430047"
     assert financial._em_symbol("600000") == "SH600000"
     assert financial._em_symbol("000001") == "SZ000001"
+
+
+# ———————————— P1-1/P3-1:腾讯批量 spot 源 + 量额归一断言 ————————————
+def _fake_quotes(codes):
+    """gtimg_quote.fetch_quotes 形态:close=10 元、volume=1000 手、amount=100 万元
+    → 归一后 amount/(close×volume股)=1e6/(10×1e5)=1.0(量额自洽)。"""
+    return {c: {"name": "T" + c, "price": 10.0, "prev_close": 9.5, "open": 9.6,
+                "high": 10.8, "low": 9.4, "volume": 1000.0, "amount_wan": 100.0,
+                "pct_chg": 5.0, "change": 0.5, "vol_ratio": 1.2, "turnover": 3.5,
+                "amplitude": 2.0, "quote_time": "20260909150000"} for c in codes}
+
+
+def test_fetch_spot_all_tencent_单位归一(monkeypatch):
+    """腾讯快照 → 主档口径:volume 手→×100 股、amount 万元→×1e4 元、turnover 百分数原样。"""
+    codes = [f"{600000 + i:06d}" for i in range(25)]
+    monkeypatch.setattr("tools.collectors.gtimg_quote.fetch_quotes", lambda cs: _fake_quotes(cs))
+    df = market.fetch_spot_all_tencent(codes)
+    assert set(["code", "open", "high", "low", "close", "volume", "amount",
+                "turnover", "pct_chg"]).issubset(df.columns)
+    row = df.set_index("code").loc["600000"]
+    assert row["close"] == 10.0                 # 收盘后现价=收盘价
+    assert row["volume"] == 1000.0 * 100        # 手 → 股
+    assert row["amount"] == 100.0 * 1e4         # 万元 → 元
+    assert row["turnover"] == 3.5               # 百分数原样(gtimg_quote 登记 PERCENT)
+
+
+def test_spot_量额断言_捕获volume未归股(monkeypatch):
+    """P3-1:volume 误留"手"(小 100×)→ amount/(close×volume) 中位≈100 → 硬断言必抛。"""
+    n = 25
+    bad = pd.DataFrame({
+        "code": [f"{i:06d}" for i in range(n)],
+        "open": [9.6] * n, "high": [10.8] * n, "low": [9.4] * n, "close": [10.0] * n,
+        "volume": [1000.0] * n,       # 误当"手"未 ×100
+        "amount": [1e6] * n,          # 元(正确)
+        "turnover": [3.5] * n, "pct_chg": [5.0] * n,
+    })
+    with pytest.raises(ValueError, match="量额口径异常"):
+        market._assert_spot_amount_volume(bad, "test", hard=True)
+    # 正确口径(volume 股)→ 不抛;soft 模式即使错也不抛(不阻断兜底)
+    good = bad.copy(); good["volume"] = 1e5
+    market._assert_spot_amount_volume(good, "test", hard=True)
+    market._assert_spot_amount_volume(bad, "test", hard=False)   # 仅告警,不抛

@@ -62,8 +62,8 @@ def test_spot_when_master_fresh(monkeypatch):
     _patch_master(monkeypatch, codes, _TODAY)           # 新鲜
     seen = {}
 
-    def fake_spot():
-        return pd.DataFrame({"code": codes})
+    def fake_tencent(cs):                               # 免费源主源=腾讯批量 spot
+        return pd.DataFrame({"code": list(cs)})
 
     def fake_update(codes=None, date=None, spot=None, source=None):
         seen["date"] = date
@@ -72,7 +72,10 @@ def test_spot_when_master_fresh(monkeypatch):
         return {"ok": len(codes), "skipped": 0}
 
     monkeypatch.setattr(settings, "TUSHARE_ENABLED", False)   # 未配 Tushare → 免费源
-    monkeypatch.setattr(market, "fetch_spot_all", fake_spot)
+    monkeypatch.setattr(market, "fetch_spot_all_tencent", fake_tencent)
+    # 腾讯成功 → akshare spot 不应被调用
+    monkeypatch.setattr(market, "fetch_spot_all",
+                        lambda: (_ for _ in ()).throw(AssertionError("腾讯成功不应调 akshare spot")))
     monkeypatch.setattr(market, "update_master_from_spot", fake_update)
     # backfill 不应被调用
     monkeypatch.setattr(market, "backfill_master",
@@ -80,7 +83,29 @@ def test_spot_when_master_fresh(monkeypatch):
     r = master_sync.sync_master(codes, as_of=_TODAY)
     assert r["mode"] == "spot" and r["ok"] == 2
     assert seen["date"] == _TODAY and seen["codes"] == codes
-    assert seen["source"] == "akshare_spot"   # 未配 Tushare → 免费源标记
+    assert seen["source"] == "gtimg_quote"   # 未配 Tushare → 免费源主源=腾讯批量 spot
+
+
+def test_spot_falls_back_to_akshare_when_tencent_fails(monkeypatch):
+    """免费源主源腾讯批量 spot 失败 → 回退 akshare spot(不进逐只 fallback),source=akshare_spot。"""
+    codes = ["000001", "000002"]
+    _patch_master(monkeypatch, codes, _TODAY)
+    seen = {}
+    monkeypatch.setattr(settings, "TUSHARE_ENABLED", False)
+    monkeypatch.setattr(market, "fetch_spot_all_tencent",
+                        lambda cs: (_ for _ in ()).throw(ConnectionError("腾讯 spot 挂")))
+    monkeypatch.setattr(market, "fetch_spot_all", lambda: pd.DataFrame({"code": codes}))
+
+    def fake_update(codes=None, date=None, spot=None, source=None):
+        seen["source"] = source
+        return {"ok": len(codes), "skipped": 0}
+
+    monkeypatch.setattr(market, "update_master_from_spot", fake_update)
+    monkeypatch.setattr(market, "backfill_master",
+                        lambda *a, **k: (_ for _ in ()).throw(AssertionError("不应走 backfill")))
+    r = master_sync.sync_master(codes, as_of=_TODAY)
+    assert r["mode"] == "spot" and r["ok"] == 2
+    assert seen["source"] == "akshare_spot"   # 腾讯失败 → 回退 akshare
 
 
 # ———————————— Tushare 可选源口子 + 回退(免费优先/读得通才用/失败静默回退)————————————
@@ -109,8 +134,8 @@ def test_spot_prefers_tushare_when_enabled(monkeypatch):
 
 
 def test_spot_falls_back_to_free_when_tushare_fails(monkeypatch):
-    """配了 Tushare 但**读不通**(抛异常)→ 静默回退免费源 akshare spot,不报错、不进逐只 fallback,
-    source 回落 akshare_spot。"""
+    """配了 Tushare 但**读不通**(抛异常)→ 静默回退免费源(主源腾讯批量 spot),不报错、
+    不进逐只 fallback,source 回落 gtimg_quote。"""
     codes = ["000001", "000002"]
     _patch_master(monkeypatch, codes, _TODAY)
     seen = {}
@@ -121,19 +146,19 @@ def test_spot_falls_back_to_free_when_tushare_fails(monkeypatch):
                         lambda day: (_ for _ in ()).throw(ConnectionError("tushare 未收盘/网络断")))
     called = {"free_spot": False}
 
-    def fake_free_spot():
+    def fake_free_spot(cs):
         called["free_spot"] = True
-        return pd.DataFrame({"code": codes})
+        return pd.DataFrame({"code": list(cs)})
 
     def fake_update(codes=None, date=None, spot=None, source=None):
         seen["source"] = source
         return {"ok": len(codes), "skipped": 0}
 
-    monkeypatch.setattr(market, "fetch_spot_all", fake_free_spot)
+    monkeypatch.setattr(market, "fetch_spot_all_tencent", fake_free_spot)
     monkeypatch.setattr(market, "update_master_from_spot", fake_update)
     r = master_sync.sync_master(codes, as_of=_TODAY)
-    assert called["free_spot"] is True             # 确实回退到免费源
-    assert r["mode"] == "spot" and seen["source"] == "akshare_spot"
+    assert called["free_spot"] is True             # 确实回退到免费源(腾讯)
+    assert r["mode"] == "spot" and seen["source"] == "gtimg_quote"
 
 
 # ———————————— fallback 路径 ————————————
@@ -159,6 +184,9 @@ def test_fallback_on_backfill_all_zero(monkeypatch):
 def test_fallback_on_spot_failure(monkeypatch):
     codes = ["000001", "000002"]
     _patch_master(monkeypatch, codes, _TODAY)           # → 本应 spot
+    # 免费源两级(腾讯批量 → akshare)都挂 → 落逐只 fallback
+    monkeypatch.setattr(market, "fetch_spot_all_tencent",
+                        lambda cs: (_ for _ in ()).throw(ConnectionError("腾讯 spot down")))
     monkeypatch.setattr(market, "fetch_spot_all",
                         lambda: (_ for _ in ()).throw(ConnectionError("spot down")))
     monkeypatch.setattr(market, "fetch_kline",
@@ -199,7 +227,9 @@ def _seed_master(code, rows):
 
 
 def _spot_fails(monkeypatch):
-    """令决策走 spot 分支,且 spot 抓取失败 → 触发回退。"""
+    """令决策走 spot 分支,且免费源两级(腾讯批量 → akshare)均失败 → 触发逐只回退。"""
+    monkeypatch.setattr(market, "fetch_spot_all_tencent",
+                        lambda cs: (_ for _ in ()).throw(ConnectionError("腾讯 spot down")))
     monkeypatch.setattr(market, "fetch_spot_all",
                         lambda: (_ for _ in ()).throw(ConnectionError("spot down")))
 

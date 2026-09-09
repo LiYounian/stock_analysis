@@ -296,7 +296,16 @@ def sync_master(codes: list[str], as_of: str | None = None, *,
                 logger.warning("Tushare 全市场取数失败,回退免费源 spot(不报错):%s", te)
                 spot = None
         if spot is None:
-            spot = market.fetch_spot_all()
+            # 免费源:腾讯批量快照优先(本机东财 spot 有 TLS 指纹墙,akshare spot 必败→逐只慢回退),
+            # 腾讯失败再退 akshare spot;两者都是"未复权当日 bar",追加语义一致。src_tag 记实际命中源。
+            try:
+                spot = market.fetch_spot_all_tencent(a_codes)
+                src_tag = "gtimg_quote"
+                logger.info("当日增量:腾讯批量 spot(%s)命中 %d 行", as_of, len(spot))
+            except Exception as qe:
+                logger.warning("腾讯批量 spot 失败,回退 akshare spot:%s", qe)
+                spot = market.fetch_spot_all()
+                src_tag = "akshare_spot"
         r = market.update_master_from_spot(codes=a_codes, date=as_of, spot=spot, source=src_tag)
 
         if hk_codes:
