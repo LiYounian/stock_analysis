@@ -53,11 +53,14 @@ _TURN_N = int(_CFG.get("S情绪", {}).get("换手窗口", 20))
 _S_DIR = _CFG.get("S情绪", {}).get("方向", {"动量": -1, "换手": -1, "波动率": -1})
 _S_W = _CFG.get("S情绪", {}).get("子权重", {"动量": 1.0, "换手": 1.0, "波动率": 1.0})
 _E_W = _CFG.get("E盈利", {}).get("子权重", {"归母净利增速": 1.0, "营收增速": 1.0, "ROE": 1.0})
+_V_W = _CFG.get("V估值", {}).get("子权重", {"PE_TTM": 1.0, "PB": 1.0, "市值分位": 1.0})
+_V_DIR = _CFG.get("V估值", {}).get("方向", {"PE_TTM": -1, "PB": -1, "市值分位": -1})
 _DIM_W = _CFG.get("维度权重", {"E盈利": 0.40, "V估值": 0.33, "S情绪": 0.27})
 
 # 面板列名(原始子因子)
 _S_COLS = {"动量": "mom", "换手": "turn", "波动率": "vol"}
 _E_COLS = {"归母净利增速": "e_np", "营收增速": "e_rev", "ROE": "e_roe"}
+# V:PE/PB 直接列;市值分位在 add_scores 里从 v_mv 按当日横截面秩现算
 
 
 # ————————————————————————— E 盈利:每票预算 PIT 选期器 —————————————————————————
@@ -90,6 +93,41 @@ def _earnings_asof(derived_all, disc_list, date: str):
     return out if any(v is not None for v in out.values()) else None
 
 
+# ————————————————————————— V 估值:每票历史日序列 as-of 选取器 —————————————————————————
+def _valuation_timeline(code: str):
+    """读 valuation 整条日序列 → (dates[str], pe[], pb[], mv[]) 按日期升序。缺失→None。"""
+    try:
+        df = store.get_raw("valuation", code)
+    except Exception:                                        # noqa: BLE001
+        return None
+    if df is None or len(df) == 0 or not {"date", "PE_TTM", "PB", "总市值"} <= set(df.columns):
+        return None
+    df = df.sort_values("date")
+    dates = [str(x)[:10] for x in df["date"].tolist()]
+    return (dates, df["PE_TTM"].to_numpy(float),
+            df["PB"].to_numpy(float), df["总市值"].to_numpy(float))
+
+
+def _valuation_asof(tl, date: str):
+    """面板日 date 可见的最新 (PE_TTM, PB, 总市值);PE/PB≤0(亏损/负净资产)记 None;无可见→None。
+
+    防未来函数:bisect 取 date 前(含)最后一行(≤ date);同 master_kline / E披露日 PIT 模型。
+    """
+    if not tl:
+        return None
+    import bisect
+    dates, pe, pb, mv = tl
+    i = bisect.bisect_right(dates, date) - 1
+    if i < 0:
+        return None
+    p = float(pe[i]) if (pe[i] == pe[i] and pe[i] > 0) else None
+    b = float(pb[i]) if (pb[i] == pb[i] and pb[i] > 0) else None
+    m = float(mv[i]) if (mv[i] == mv[i] and mv[i] > 0) else None
+    if p is None and b is None and m is None:
+        return None
+    return p, b, m
+
+
 # ————————————————————————— 建横截面 panel —————————————————————————
 def build_revs_panel(codes, dims, horizons=(5, 10, 20), step: int = 5,
                      warmup: int = _WARMUP) -> pd.DataFrame:
@@ -100,6 +138,7 @@ def build_revs_panel(codes, dims, horizons=(5, 10, 20), step: int = 5,
     """
     want_s = "S情绪" in dims
     want_e = "E盈利" in dims
+    want_v = "V估值" in dims
     maxN = max(horizons)
     rows = []
     used = 0
@@ -119,9 +158,7 @@ def build_revs_panel(codes, dims, horizons=(5, 10, 20), step: int = 5,
         dates = [str(x)[:10] for x in df["date"].tolist()]
         n = len(df)
         derived_all, disc_list = _earnings_timeline(code) if want_e else (None, [])
-        if want_e and not disc_list:
-            # E 维要求但该票无财报 → 该票 E 全缺(仍可只凭 S 进,若 S 也要;这里保留,合成时重归一)
-            pass
+        val_tl = _valuation_timeline(code) if want_v else None
         used += 1
         for t in range(warmup, n - maxN, step):
             date = dates[t]
@@ -142,6 +179,12 @@ def build_revs_panel(codes, dims, horizons=(5, 10, 20), step: int = 5,
                 row["e_rev"] = float(e["营收增速"]) if e and e.get("营收增速") is not None else np.nan
                 row["e_roe"] = float(e["ROE"]) if e and e.get("ROE") is not None else np.nan
                 ok = ok or (e is not None)
+            if want_v:
+                vv = _valuation_asof(val_tl, date)
+                row["v_pe"] = float(vv[0]) if vv and vv[0] is not None else np.nan
+                row["v_pb"] = float(vv[1]) if vv and vv[1] is not None else np.nan
+                row["v_mv"] = float(vv[2]) if vv and vv[2] is not None else np.nan
+                ok = ok or (vv is not None)
             if not ok:
                 continue
             for N in horizons:
@@ -195,6 +238,15 @@ def add_scores(panel: pd.DataFrame, dims, dim_weights, scale: float = 3.0) -> pd
                     for name, col in _E_COLS.items()}
             g["score_E"] = _dim_from_subs(subz, _E_W)
             dim_vals["E盈利"] = g["score_E"].to_numpy()
+        if "V估值" in dims:
+            mv_pct = g["v_mv"].rank(pct=True).to_numpy()          # 市值分位:当日横截面秩(缺mv→NaN)
+            subz = {
+                "PE_TTM": _zdir(g["v_pe"].to_numpy(), int(_V_DIR.get("PE_TTM", -1)), scale),
+                "PB": _zdir(g["v_pb"].to_numpy(), int(_V_DIR.get("PB", -1)), scale),
+                "市值分位": _zdir(mv_pct, int(_V_DIR.get("市值分位", -1)), scale),
+            }
+            g["score_V"] = _dim_from_subs(subz, _V_W)
+            dim_vals["V估值"] = g["score_V"].to_numpy()
         # 维间合成(逐行 present 维重归一)
         keys = [d for d in dims if d in dim_vals]
         Z = np.vstack([dim_vals[d] for d in keys])
@@ -218,7 +270,7 @@ def _liq_filter(panel: pd.DataFrame, min_liq_pct: float) -> pd.DataFrame:
 
 
 # ————————————————————————— 主流程 —————————————————————————
-def run(codes, dims=("E盈利", "S情绪"), horizons=(5, 10, 20), step=5, topk=20,
+def run(codes, dims=("E盈利", "V估值", "S情绪"), horizons=(5, 10, 20), step=5, topk=20,
         roundtrip_bps=17.5, min_liq_pct=0.0, dim_weights=None, min_date=None,
         json_path=None):
     dims = list(dims)
@@ -244,11 +296,13 @@ def run(codes, dims=("E盈利", "S情绪"), horizons=(5, 10, 20), step=5, topk=2
     factors = {"composite": "score_composite"}
     if "E盈利" in dims:
         factors["E盈利"] = "score_E"
+    if "V估值" in dims:
+        factors["V估值"] = "score_V"
     if "S情绪" in dims:
         factors["S情绪"] = "score_S"
 
     res = {
-        "策略": "REVS四因子(阶段1 E+S)前瞻回测",
+        "策略": f"REVS四因子前瞻回测({'+'.join(dims)})",
         "参数": {"参与维度": dims, "维度权重": dim_weights, "topk": topk,
                  "往返成本bps": roundtrip_bps, "流动性过滤分位": min_liq_pct, "step": step,
                  "动量窗口": _MOM_N, "换手窗口": _TURN_N, "波动窗口": _VOL_N},
@@ -256,7 +310,7 @@ def run(codes, dims=("E盈利", "S情绪"), horizons=(5, 10, 20), step=5, topk=2
         "交易日数": int(panel["date"].nunique()), "免责": _DISCLAIMER,
         "结果": {},
     }
-    print(f"\n===== REVS四因子(E+S) 前瞻回测 · 样本 {used} 只 · 观测 {len(panel)} · "
+    print(f"\n===== REVS四因子 前瞻回测({'+'.join(dims)}) · 样本 {used} 只 · 观测 {len(panel)} · "
           f"{res['交易日数']} 交易日 · 往返成本 {roundtrip_bps}bps · 流动性过滤≥{min_liq_pct} · "
           f"维度 {dims} =====")
     print("(横截面·无未来函数;net 超额为正才算能交易;composite 须相对最好单维有增量;非投资建议)\n")
@@ -292,7 +346,7 @@ def run(codes, dims=("E盈利", "S情绪"), horizons=(5, 10, 20), step=5, topk=2
 def _verdict(res: dict, horizons, dims) -> None:
     """诚实判定:composite 的 net 是否 >0 且相对**最好单维**有增量。写入 res['判定'] 并打印。"""
     comp = res["结果"].get("composite", {})
-    single = [d for d in ("E盈利", "S情绪") if d in dims and d in res["结果"]]
+    single = [d for d in ("E盈利", "V估值", "S情绪") if d in dims and d in res["结果"]]
     lines = []
     for N in horizons:
         cn = (comp.get(f"{N}日", {}) or {}).get("TopK净额", {}).get("net年化超额%")
@@ -333,7 +387,7 @@ def _main(argv=None) -> int:
     ap.add_argument("--topk", type=int, default=20)
     ap.add_argument("--roundtrip-bps", type=float, default=17.5)
     ap.add_argument("--min-liq-pct", type=float, default=0.0, help="每日剔除成交额分位<此值的票(0~1)")
-    ap.add_argument("--dims", default="E盈利,S情绪", help="参与维度(逗号分隔;V估值待历史回填后可加)")
+    ap.add_argument("--dims", default="E盈利,V估值,S情绪", help="参与维度(逗号分隔;默认完整三维E/V/S)")
     ap.add_argument("--min-date", default="", help="只保留>=此日期的截面(公平对比E:财报史~3年,默认不限)")
     ap.add_argument("--json", default="")
     a = ap.parse_args(argv)
