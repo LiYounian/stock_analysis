@@ -1,0 +1,14 @@
+# 午盘 Q 复核定时器:工作日 14:50 触发 stock-midday-q@1450.service
+# 触发内容:大盘闸门复核 + Q1/Q2/Q3 复核(confirm_from 首判候选) → 落 stage2_1450 段
+#
+# 安装:同 stock-midday-q-1430.timer(见其文件头注释)
+[Unit]
+Description=Trigger midday Q gate+screen stage=1450 (weekdays 14:50)
+
+[Timer]
+OnCalendar=Mon..Fri 14:50
+Persistent=true
+Unit=stock-midday-q@1450.service
+
+[Install]
+WantedBy=timers.target

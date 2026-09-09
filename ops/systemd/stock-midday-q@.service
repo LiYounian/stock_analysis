@@ -1,0 +1,36 @@
+# 午盘 Q 策略族(半导体+CPO,14:30 首判 + 14:50 复核 → 尾盘买 · 次日尾盘卖)
+# systemd template unit,实例参数(%i)= stage 值:1430 / 1450 / final
+# ⚠️ 非投资建议,研究模拟。
+#
+# 使用:
+#   systemctl start stock-midday-q@1430.service    # 手动跑首判
+#   由 stock-midday-q-{1430,1450,final}.timer 定时触发
+#
+# 依赖上游数据(pipeline 会自己检查缺失并 exit 1,无副作用):
+#   · data/analysis/midday_q/gate_<date>.json     (midday_q_gate 落)
+#   · data/breadth/<date>.json                     (breadth 采集或 pipeline 拷副本)
+#   · data/intraday/<date>/T<slot>.json           (intraday_snapshot 落,M2 可选)
+#
+# 幂等:同 stage 已落 → pipeline 自身跳过 exit 0,systemd 重启不会重复处理。
+# 非交易日:pipeline 自身跳过 exit 0,timer 触发无害。
+#
+# 安装:占位符替换后拷到 /etc/systemd/system/ → systemctl daemon-reload
+[Unit]
+Description=Stock Analysis midday Q (semi+CPO) - stage %i
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=deploy
+WorkingDirectory=/srv/stock_analysis
+EnvironmentFile=-/etc/stock-analysis/sync.env
+# stage 通过 %i 参数传入(等于 systemctl start stock-midday-q@<stage>.service 里的 <stage>)
+# --skip-fundflow:M2 阶段 Q3 分时资金流未做真实盘中验证,先跳过 Q3(Q1/Q2 正常出)
+#   等 M3.b 分时数据积累+ Q3 fundflow_intraday 在真实盘中跑通后移除
+ExecStart=/bin/bash -c '\
+  /srv/stock_analysis/.venv/bin/python -m tools.pipeline.midday_q_gate --stage %i && \
+  /srv/stock_analysis/.venv/bin/python -m tools.pipeline.midday_q_screen --stage %i --skip-fundflow'
+
+[Install]
+WantedBy=multi-user.target
