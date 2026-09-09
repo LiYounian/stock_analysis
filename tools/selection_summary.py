@@ -407,3 +407,140 @@ def build_selection_view(date: str, selection_dir=None, review_dir=None) -> dict
     view = {"date": date, "盘后": {"选股": sel, "复盘": rev}, "盘中": None, "盘尾": None}
     # 排序表「复盘结果」列跨日反查取 D+1 复盘,故把同一 rev_dir 透传给 enrich(单测注入的内存目录亦生效)。
     return enrich_view_cross_refs(view, review_dir=rev_dir)
+
+
+# ————————————————————————————————————————————————
+# 盘后两表视图:今日选股(D) + 对昨日(D-1)选股的复盘,α 由代码算
+#
+# 诉求(2026-09-09,/selection-analysis 页):把"每天的选股 ↔ 被选股的复盘"对应上。
+#   旧实现的两个缺陷:
+#     · 复盘侧直接抽 `复盘/<D>.md` 里那张表 —— 那是"自选盯盘池/盘中核实"表,**不是**对
+#       (D-1)实际选出票的复盘;某些日子(D-1 选股跳过)复盘对象干脆成了自选池,与选股完全对不上。
+#     · 名称易丢、无"D 选股 ↔ D-1 选股复盘"的日期对应。
+#   新口径(本函数):
+#     · 今日选股(D):读 `选股/D.md` 买入排序(带名称);每票「复盘结果」= 该票次日 D+1 的 α
+#       (从 D+1 数据回填);D+1 未到/未复盘 → "待复盘";D 当天选股跳过/未出 → 整表"结果未出"。
+#     · 对昨日(D-1)选股的复盘:取 `选股/D-1.md` **实际选出票**(parse_pick_codes,非自选盯盘池),
+#       逐票 名称 + α;α 由代码算:该票 D 日涨跌% − D 日全A等权 mean_pct(口径同项目 α=等权基准),
+#       **不 parse 复盘 md 里那张错表**;D-1 选股跳过/未出 → 显式"昨日选股结果未出"。
+#
+# 本函数是**纯装配**:取数(record.snapshot.pct_chg、breadth mean_pct、名称回退链、交易日历、
+# 选股码解析)全部经 provider 注入 —— web 展示层(有 store/breadth)接真实源,单测注入内存 fake,
+# 故本模块仍不触网、不读 store、可独立单测。⚠️ 测试环境研究模拟,非投资建议。
+# ————————————————————————————————————————————————
+_MEAN_PCT_RE = re.compile(r"([+\-−]?\d+(?:\.\d+)?)\s*%")
+
+
+def parse_equal_weight_mean_pct(md_text: str) -> float | None:
+    """从选股/复盘 md 市场表抽「全A等权 mean_pct」(%),作 breadth json 缺失时 α 基准的兜底源。
+    定位同时含"全A等权"与"mean_pct"的行,取其中带 % 的首个数值(兼容 ASCII '-' 与 Unicode '−')。
+    找不到 → None(上层据此把 α 记 null,不假造)。"""
+    for raw in md_text.splitlines():
+        s = raw.replace("*", "")
+        if "全A等权" in s and "mean_pct" in s:
+            m = _MEAN_PCT_RE.search(s)
+            if m:
+                try:
+                    return float(m.group(1).replace("−", "-"))
+                except ValueError:
+                    return None
+    return None
+
+
+def _fmt_alpha(alpha: float | None) -> str:
+    """α 显示串:+X.XXpp / −X.XXpp(用 Unicode 负号,与项目复盘口径一致);None → 空串(模板渲染「—」)。"""
+    if not isinstance(alpha, (int, float)) or isinstance(alpha, bool):
+        return ""
+    return f"{alpha:+.2f}pp".replace("-", "−")
+
+
+def alpha_scorecard(picks, *, quote_of, benchmark, name_of):
+    """逐票 α 记分行(等权基准口径,由代码算,不 parse 复盘 md 记分表):
+      picks     选股日**实际选出票**代码(顺序保留;来自 parse_pick_codes)
+      quote_of  (code) -> 该票"衡量日"涨跌%(record.snapshot.pct_chg),缺 → None
+      benchmark 衡量日全A等权 mean_pct(%);None → 无法算 α
+      name_of   (code) -> 名称(回退链,保证不空)
+    返回 [{code, name, pct, alpha_val, alpha}]:alpha_val = round(pct − benchmark, 2),
+    pct 或 benchmark 任一缺 → alpha_val=None、alpha=''(模板渲染「—」)。"""
+    rows = []
+    for code in picks:
+        pct = quote_of(code)
+        alpha_val = None
+        if (isinstance(pct, (int, float)) and not isinstance(pct, bool)
+                and isinstance(benchmark, (int, float)) and not isinstance(benchmark, bool)):
+            alpha_val = round(pct - benchmark, 2)
+        rows.append({"code": code, "name": name_of(code) or code, "pct": pct,
+                     "alpha_val": alpha_val, "alpha": _fmt_alpha(alpha_val)})
+    return rows
+
+
+def build_postmarket_view(date, *, selection_dir=None, parse_picks=None,
+                          prev_trading_day=None, next_trading_day=None,
+                          quote_at=None, benchmark_at=None, name_of=None):
+    """构建 /selection-analysis「每日盘后选股」区两表(今日选股 D + 对昨日 D-1 选股复盘)。
+
+    provider(全部可注入,web 层接真实源、单测注入 fake):
+      parse_picks(md_path) -> [code]     选股 md → 当日实际选出票(权威解析,跳过留痕文件返回空)
+      prev_trading_day(D)  -> D-1        上一交易日(被复盘的选股日)
+      next_trading_day(D)  -> D+1        下一交易日(今日票的复盘衡量日)
+      quote_at(code, md)   -> pct|None   某票某交易日的涨跌%(record.snapshot.pct_chg)
+      benchmark_at(md)     -> pct|None   某交易日全A等权 mean_pct(%)(α 基准)
+      name_of(code)        -> name       名称回退链(不空)
+
+    返回 {date, sel_date:D, prior_sel_date:D-1, measure_date:D, 选股:{...}, 复盘:{...}}。
+    今日选股跳过 → 选股.skipped=True(整表"结果未出");D-1 选股跳过 → 复盘.skipped=True("昨日选股结果未出")。
+    """
+    sel_dir = selection_dir or SELECTION_DIR
+    name_of = name_of or (lambda c: c)
+    D = date
+
+    # —— 今日选股(D):读排序 + 名称 + 每票 D+1 α 回填 ——
+    sel_p = sel_dir / f"{D}.md"
+    sel_text = sel_p.read_text(encoding="utf-8") if sel_p.is_file() else ""
+    sel_summary = (extract_selection_summary(sel_text) if sel_text else
+                   {"env_note": "", "ranking": [], "title": "", "src_date": ""})
+    today_picks = parse_picks(sel_p) if (parse_picks and sel_p.is_file()) else []
+    today_skipped = not today_picks                 # md 缺 / 跳过留痕 / 无选出 → 结果未出
+    ranking = list(sel_summary.get("ranking") or [])
+    if not ranking and today_picks:                 # 排序表没解析到但有 picks → 用 picks 兜底出行
+        ranking = [{"rank": i + 1, "code": c, "name": "", "stance": "", "note": ""}
+                   for i, c in enumerate(today_picks)]
+    for r in ranking:                               # 名称列不能空:走回退链补齐
+        if not r.get("name"):
+            r["name"] = name_of(r.get("code") or "")
+    d_next = next_trading_day(D) if next_trading_day else None
+    bench_next = benchmark_at(d_next) if (benchmark_at and d_next) else None
+    next_reviewed = isinstance(bench_next, (int, float)) and not isinstance(bench_next, bool)
+    for r in ranking:
+        r.setdefault("midday", "")                  # 午盘数据源尚未落地,占位空
+        if today_skipped:
+            r["review"] = ""
+        elif not next_reviewed:                     # D+1 广度未产出(次日未到/未复盘)→ 待复盘
+            r["review"] = "待复盘"
+        else:
+            pct = quote_at(r.get("code") or "", d_next) if quote_at else None
+            av = (round(pct - bench_next, 2)
+                  if isinstance(pct, (int, float)) and not isinstance(pct, bool) else None)
+            r["review"] = _fmt_alpha(av)            # 命中→+X.XXpp;该票缺→'' 渲染「—」
+    today = {"env_note": sel_summary.get("env_note", ""), "ranking": ranking,
+             "title": sel_summary.get("title", ""), "src_date": sel_summary.get("src_date", ""),
+             "skipped": today_skipped, "next_date": d_next, "next_reviewed": next_reviewed}
+
+    # —— 对昨日(D-1)选股的复盘:D-1 实际选出票 + 代码算 α(D 日衡量)——
+    d_prev = prev_trading_day(D) if prev_trading_day else None
+    prev_p = (sel_dir / f"{d_prev}.md") if d_prev else None
+    prev_picks = (parse_picks(prev_p)
+                  if (parse_picks and prev_p is not None and prev_p.is_file()) else [])
+    prev_skipped = not prev_picks
+    bench_D = benchmark_at(D) if benchmark_at else None
+    scorecard = (alpha_scorecard(prev_picks,
+                                 quote_of=lambda c: (quote_at(c, D) if quote_at else None),
+                                 benchmark=bench_D, name_of=name_of)
+                 if not prev_skipped else [])
+    review = {"prior_sel_date": d_prev, "measure_date": D, "benchmark": bench_D,
+              "scorecard": scorecard, "skipped": prev_skipped,
+              "benchmark_missing": not (isinstance(bench_D, (int, float))
+                                        and not isinstance(bench_D, bool))}
+
+    return {"date": D, "sel_date": D, "prior_sel_date": d_prev, "measure_date": D,
+            "选股": today, "复盘": review}

@@ -1434,41 +1434,79 @@ def get_analysis_report(name: str) -> dict | None:
 
 
 # ———— 每日选股分析视图(selection_analysis:盘后/盘中/盘尾三区,供 /selection-analysis 页)————
-def selection_analysis_view(date: str = "latest") -> dict:
-    """读 `selection_analysis` 池级视图(三区两项摘要)。远端优先读 store 视图;
-    store 缺(如本地开发未入库)时回退到 tools.selection_summary 现抽 docs md。
-    始终返回三区结构(缺数据的区为 None),供模板空态兜底。"""
-    d = as_of(date)
-    view = None
-    try:
-        view = store.get_view("selection_analysis", date=date)
-    except FileNotFoundError:
-        view = None
-    if not view:                                    # 本地兜底:直接从 docs/每日分析 现抽
-        try:
-            from tools import selection_summary
-            # 先按解析日期,再按原始请求日期(docs md 以自然日命名,可能超出 analysis 日期范围)
-            for cand in (d, date if date and date != "latest" else None):
-                if not cand:
-                    continue
-                view = selection_summary.build_selection_view(cand)
-                if view:
-                    break
-        except Exception:
-            view = None
-    if not view:
-        return {"date": d, "盘后": None, "盘中": None, "盘尾": None}
-    view.setdefault("盘后", None)
-    view.setdefault("盘中", None)
-    view.setdefault("盘尾", None)
-    # 排序表两列(午盘/复盘)幂等补齐:store 里的旧视图可能没有这两列,这里就地补上,
-    # 使页面立即展示,不必等下次重新上传(build_selection_view 已在上传口径注入,这里兜底)。
+def _selection_benchmark_at(md_date: str, daily_mean: dict) -> float | None:
+    """某交易日全A等权 mean_pct(%)(α 基准)。主源 = data/breadth/<date>.json(daily_mean 预载);
+    缺则兜底解析 `选股/<date>.md` 市场表「全A等权 mean_pct」;都无 → None(α 记 null,不假造)。"""
+    if not md_date:
+        return None
+    if md_date in daily_mean:
+        return daily_mean[md_date]
     try:
         from tools import selection_summary
-        selection_summary.enrich_view_cross_refs(view)
+        p = selection_summary.SELECTION_DIR / f"{md_date}.md"
+        if p.is_file():
+            return selection_summary.parse_equal_weight_mean_pct(p.read_text(encoding="utf-8"))
     except Exception:                                   # noqa: BLE001
         pass
-    return view
+    return None
+
+
+def _selection_pct_at(code: str, md_date: str) -> float | None:
+    """某票某交易日的涨跌%(record.snapshot.pct_chg);无该日记录/字段 → None。展示层只读、不算。"""
+    if not code or not md_date:
+        return None
+    try:
+        rec = store.get_record(code, date=md_date)
+    except Exception:                                   # noqa: BLE001 (含 FileNotFoundError)
+        return None
+    snap = (rec or {}).get("snapshot") or {}
+    v = snap.get("pct_chg")
+    return v if isinstance(v, (int, float)) and not isinstance(v, bool) else None
+
+
+def selection_analysis_view(date: str = "latest") -> dict:
+    """`/selection-analysis`「每日盘后选股」区数据:今日选股(D) + 对昨日(D-1)选股的复盘。
+
+    口径(2026-09-09 修:让选股 ↔ 被选股复盘对应上,详见 tools.selection_summary.build_postmarket_view):
+      · 今日选股(D):读 `选股/D.md` 买入排序(带名称);每票「复盘结果」= 次日 D+1 的 α;
+        D+1 未到/未复盘 → "待复盘";D 选股跳过/未出 → 整表"结果未出"。
+      · 对昨日(D-1)复盘:取 `选股/D-1.md` **实际选出票**(parse_pick_codes,非自选盯盘池),
+        逐票 名称 + **代码算的 α**(该票 D 日涨跌% − D 日全A等权 mean_pct);D-1 跳过 → "昨日选股结果未出"。
+
+    取数经 store(record.snapshot.pct_chg)+ breadth(mean_pct)+ 名称回退链;docs md 以自然日命名
+    (可能超出 analysis 日期范围),故用原始请求日期优先、解析日期兜底。任何异常都不炸页 → 退空结构。
+    ⚠️ 测试环境研究模拟,非投资建议。"""
+    d = as_of(date)
+    # docs md 以自然日命名,优先原始请求日期(可能是 analysis 尚无的更新日),回退解析日期。
+    D = date if (date and date != "latest") else d
+    try:
+        from tools import selection_summary
+        from tools.analysis import equal_weight_index as ewi
+        from tools.collectors import calendar as cal
+        from tools.pipeline.intraday_snapshot import parse_pick_codes, prev_trading_day
+
+        try:
+            daily_mean = ewi.load_daily_mean_pct()
+        except Exception:                               # noqa: BLE001
+            daily_mean = {}
+
+        def _name_of(code: str) -> str:
+            code = str(code or "")
+            rec = get_record(code, D) or get_record(code, "latest")
+            return _resolve_name(rec, code)
+
+        postmarket = selection_summary.build_postmarket_view(
+            D,
+            parse_picks=parse_pick_codes,
+            prev_trading_day=prev_trading_day,
+            next_trading_day=lambda x: cal.next_trading_day(x, allow_fetch=False),
+            quote_at=_selection_pct_at,
+            benchmark_at=lambda md: _selection_benchmark_at(md, daily_mean),
+            name_of=_name_of,
+        )
+        return {"date": d, "盘后": postmarket, "盘中": None, "盘尾": None}
+    except Exception:                                   # noqa: BLE001 展示层不炸页
+        return {"date": d, "盘后": None, "盘中": None, "盘尾": None}
 
 
 def sepa_page(date: str = "latest") -> dict:
