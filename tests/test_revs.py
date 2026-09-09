@@ -265,6 +265,22 @@ def test_less_than_2_samples_and_empty():
         assert reg.run("REVS四因子", r, top_k=3)["codes"] == []
 
 
+def test_valuation_asof_pit_and_dropneg():
+    """1b 回测 V 取数器:as_of 只取≤当日最新行(防未来);PE/PB≤0 剔为 None;早于序列→None。"""
+    import numpy as np
+
+    from tools.backtest import backtest_revs as B
+    tl = (["2024-01-05", "2024-03-20", "2024-06-10"],
+          np.array([20.0, -5.0, 15.0]),      # 2024-03-20 那行 PE 为负(亏损)
+          np.array([2.0, 1.5, 1.2]),
+          np.array([100.0, 110.0, 120.0]))
+    assert B._valuation_asof(tl, "2024-02-01") == (20.0, 2.0, 100.0)   # 取 01-05 行
+    r = B._valuation_asof(tl, "2024-04-01")                            # 取 03-20 行,PE<0→None
+    assert r[0] is None and r[1] == 1.5 and r[2] == 110.0
+    assert B._valuation_asof(tl, "2023-12-01") is None                 # 早于序列→无可见
+    assert B._valuation_asof(None, "2024-05-01") is None
+
+
 def test_top_k_and_ordering():
     """top_k 生效 + 综合分降序。"""
     recs = {f"6000{i:02d}": _rec(_E(i * 10, i * 5, i * 2), _V(100 - i * 5, 5 - i * 0.3, (10 - i) * 1e9),
