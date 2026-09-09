@@ -336,3 +336,98 @@ def test_no_llm下情绪维仍是skipped不受新鲜度改动影响(monkeypatch,
     rep = run.enrich_candidates(cand, "2026-09-02", no_llm=True)
 
     assert rep["per_code"]["002811"]["sentiment"] == "skipped_no_llm"
+
+
+# ————————————————————————————————————————————————
+# 收盘选股主路径富集**有界并发**:workers 按 config 透传(修"选股跑数小时"的串行瓶颈)
+#
+# 为什么这么写(防未来重写误删规则):收盘主路径 screenall→run_screen_all→enrich_candidates 对候选集
+# (~557 只)采新闻 + 跑三层情绪 LLM,原两处调用未传 workers → 默认 1 = 逐只串行,是慢的主因。改成
+# 读 config「消息面富集.并发数」(默认 4)有界并发。本组锁四条:
+#   · workers 按 config 透传给 collect_message / run_sentiment(默认 4);
+#   · config=1 → workers=1(kill-switch 退回串行,逐值等价旧路径);
+#   · _enrich_workers 缺省/误配兜底(缺省 4、误配 0/负钳 1);
+#   · 只作用于收盘主路径——不改采集口径/降级语义(沿用上面各用例)。
+# 并发本身"并行==串行·有界·缓存安全"由 tools/parallel.pmap 与 tests/test_并行富集.py 锁死,此处只锁透传。
+# ————————————————————————————————————————————————
+def _spy_workers(monkeypatch, fake):
+    """把 collect_message / run_sentiment 换成记录 workers 入参的间谍桩(仍写假缓存,报告不受影响)。"""
+    seen = {"collect_message": None, "run_sentiment": None}
+
+    def _cm(codes, *a, workers=1, **k):
+        seen["collect_message"] = workers
+        for c in codes:
+            fake.d["news"][c] = [1]
+        return {}
+
+    def _rs(codes, *a, workers=1, **k):
+        seen["run_sentiment"] = workers
+        for c in codes:
+            fake.d["sentiment"][c] = {"s": 1}
+        return len(codes)
+
+    monkeypatch.setattr(run, "collect_message", _cm)
+    monkeypatch.setattr(run, "run_sentiment", _rs)
+    monkeypatch.setattr(run, "run_financial_collect", fake._mk("financial", {"X": [1]}))
+    monkeypatch.setattr(run, "run_annual_report", fake._mk("annual", {"X": [1]}))
+    monkeypatch.setattr(run, "run_financial_text", lambda codes, as_of: None)
+    return seen
+
+
+def test_富集按config并发度透传给采集与情绪(monkeypatch, fake):
+    """默认口径:enrich_candidates 把 config「消息面富集.并发数」(默认4)透传给 collect_message 与
+    run_sentiment(修串行瓶颈)。"""
+    from tools.config.strategy import THRESHOLDS
+    monkeypatch.setitem(THRESHOLDS["消息面富集"], "并发数", 4)
+    seen = _spy_workers(monkeypatch, fake)
+    for c in ("603270", "688569"):
+        fake.d["financial"][c] = {"x": 1}
+        fake.d["fundflow"][c] = {"x": 1}
+        fake.d["annual"][c] = {"x": 1}
+
+    run.enrich_candidates(["603270", "688569"], "2026-09-02")
+
+    assert seen["collect_message"] == 4, "新闻采集应按 config 并发度并发,不再默认串行"
+    assert seen["run_sentiment"] == 4, "三层情绪 LLM(主耗时)应按 config 并发度并发"
+
+
+def test_config并发数1退回串行透传(monkeypatch, fake):
+    """kill-switch:config 并发数=1 → workers=1 透传(逐值等价旧串行路径)。"""
+    from tools.config.strategy import THRESHOLDS
+    monkeypatch.setitem(THRESHOLDS["消息面富集"], "并发数", 1)
+    seen = _spy_workers(monkeypatch, fake)
+    fake.d["financial"]["603270"] = {"x": 1}
+    fake.d["fundflow"]["603270"] = {"x": 1}
+    fake.d["annual"]["603270"] = {"x": 1}
+
+    run.enrich_candidates(["603270"], "2026-09-02")
+
+    assert seen["collect_message"] == 1 and seen["run_sentiment"] == 1
+
+
+def test_no_llm不并发跑情绪但新闻仍按config并发(monkeypatch, fake):
+    """no_llm=True:run_sentiment 不被调(情绪跳过),collect_message 仍按 config 并发采新闻。"""
+    from tools.config.strategy import THRESHOLDS
+    monkeypatch.setitem(THRESHOLDS["消息面富集"], "并发数", 4)
+    seen = _spy_workers(monkeypatch, fake)
+    fake.d["financial"]["603270"] = {"x": 1}
+    fake.d["fundflow"]["603270"] = {"x": 1}
+    fake.d["annual"]["603270"] = {"x": 1}
+
+    run.enrich_candidates(["603270"], "2026-09-02", no_llm=True)
+
+    assert seen["collect_message"] == 4       # 新闻仍并发采
+    assert seen["run_sentiment"] is None      # 情绪 LLM 未被调(no_llm)
+
+
+def test_enrich_workers缺省与误配兜底(monkeypatch):
+    """_enrich_workers:缺省 4;误配 0/负钳到 1(不致零线程);正常值原样。"""
+    from tools.config.strategy import THRESHOLDS
+    monkeypatch.setitem(THRESHOLDS, "消息面富集", {})
+    assert run._enrich_workers() == 4                      # 缺「并发数」→ 默认 4
+    monkeypatch.setitem(THRESHOLDS, "消息面富集", {"并发数": 0})
+    assert run._enrich_workers() == 1                      # 误配 0 → 钳到 1
+    monkeypatch.setitem(THRESHOLDS, "消息面富集", {"并发数": -3})
+    assert run._enrich_workers() == 1                      # 误配负 → 钳到 1
+    monkeypatch.setitem(THRESHOLDS, "消息面富集", {"并发数": 6})
+    assert run._enrich_workers() == 6

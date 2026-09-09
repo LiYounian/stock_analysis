@@ -498,6 +498,17 @@ def _enrich_report(codes: list[str], no_llm: bool, as_of: str) -> dict:
             "degraded": degraded, "summary": summary}
 
 
+def _enrich_workers() -> int:
+    """收盘选股主路径(enrich_candidates)新闻/LLM 富集的**有界并发度**(config「消息面富集.并发数」)。
+
+    默认 4;**返回 1 = 退回串行**(kill-switch,逐值等价旧串行路径)。下限钳到 1(config 误配 0/负数
+    不致零线程)。别太高防 LLM 网关 429(见 config 注释)。收盘主路径专用——其它调用方不读本值。
+    """
+    from tools.config.strategy import THRESHOLDS
+    c = THRESHOLDS.get("消息面富集", {}) or {}
+    return max(1, int(c.get("并发数", 4) or 1))
+
+
 def enrich_candidates(codes: list[str], as_of: str, no_llm: bool = False) -> dict:
     """**候选定向富集**(幂等 / skip-if-cached / 优雅降级 / 防未来函数):对一批候选票**确保**采到
     新闻→LLM情绪→财报(三大表+年报+LLM文本)→资金流,让任何可能成为深度分析/买入候选的票都有
@@ -527,9 +538,9 @@ def enrich_candidates(codes: list[str], as_of: str, no_llm: bool = False) -> dic
     logger.info("候选定向富集:%d 只%s(skip-if-cached 需采 新闻 %d / 资金流 %d / 财报三表 %d / 年报 %d)",
                 len(codes), "(数据-only,跳过LLM情绪/财报文本)" if no_llm else "",
                 len(need_news), len(need_ff), len(need_fin), len(need_ar))
-    # 1) 新闻/舆情(网络;政策全局)——只补缺失票
+    # 1) 新闻/舆情(网络;政策全局)——只补缺失票。有界并发(config「消息面富集.并发数」,默认4;=1退串行)
     if need_news:
-        collect_message(need_news)
+        collect_message(need_news, workers=_enrich_workers())
     # 2) 资金流——只补缺失票(修"候选票缺 fundflow"),走短超时快速失败降级 + **批级再扫**。
     #    为什么要再扫:上游连接层限流的失败是**成簇**的(一段冷却窗内整批全挂,窗过后又整批可用),
     #    单票级 retry 的退避只有数秒、整批容易全落在同一个簇内 → 单趟采完仍大面积缺 fundflow
@@ -573,7 +584,9 @@ def enrich_candidates(codes: list[str], as_of: str, no_llm: bool = False) -> dic
         run_annual_report(need_ar)
     # 4) LLM 层(结果 hash 缓存,幂等;数据模式跳过)——对整批(已缓存票近乎零开销)
     if not no_llm:
-        run_sentiment(codes)               # 三层情绪 + news_ai 视图(cached extract,只对新票计费)
+        # 三层情绪 + news_ai 视图(cached extract,只对新票计费)。有界并发(config「消息面富集.并发数」,
+        # 默认4;=1退串行)——本节点(逐票 analyze_stock LLM)是收盘选股主耗时,workers 透传进 news_ai。
+        run_sentiment(codes, workers=_enrich_workers())
         run_financial_text(codes, as_of)   # 财报文本层(缓存免重烧)
     # 5) 覆盖报告:逐票核验四维落地,缺数据显式降级标记(不静默)
     report = _enrich_report(codes, no_llm, as_of)
