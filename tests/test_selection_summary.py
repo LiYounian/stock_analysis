@@ -285,3 +285,162 @@ def test_collect_date_injects_selection_view(tmp_path, monkeypatch):
     from tools.sync import upload
     shards = upload.build_shards(payload)
     assert "__view__:selection_analysis" in shards
+
+
+# ————————————————————————————————————————————————
+# 盘后两表(今日选股 D + 对昨日 D-1 选股复盘,α 由代码算)—— 锁新口径语义
+# 为什么改(2026-09-09):旧实现复盘侧抽的是"自选盯盘池/盘中核实"表(与选出票对不上、名称丢),
+# 且无"D 选股 ↔ D-1 选股复盘"的日期对应。新口径:复盘对象=选股 md **实际选出票**、α 代码算
+# (该票次日涨跌% − 次日全A等权 mean_pct)、名称回退不空、选股/复盘跳过时显式占位。
+# ————————————————————————————————————————————————
+class _PickP:
+    """内存版选股 md 文件:text(None=不存在) + 预置 picks(fake parse_picks 直接取)。"""
+    def __init__(self, text, picks): self._t = text; self.picks = picks
+    def is_file(self): return self._t is not None
+    def read_text(self, encoding="utf-8"): return self._t
+
+
+class _PickDir:
+    def __init__(self, mp): self._mp = mp
+    def __truediv__(self, name): return self._mp.get(name) or _PickP(None, [])
+
+
+def _fake_parse(p):
+    return list(getattr(p, "picks", []) or [])
+
+
+# 09-08 选出票(买入排序,非自选池);09-07 起承接
+_SEL_0908 = """# 每日选股分析 · 2026-09-08
+
+## 4. 买入建议排序（明确表态·不对冲）
+
+| 排序 | 代码 | 名称 | 表态 | 一句话 |
+|---|---|---|---|---|
+| 1 | **601061** | 中信金属 | **买入候选** | 数据面强+真利好双击 |
+| 2 | 600356 | 恒丰纸业 | 观望偏多 | 数据面最高被利空压低 |
+"""
+
+
+def test_parse_equal_weight_mean_pct_both_signs():
+    """市场表「全A等权 mean_pct」抽取:兼容 +0.665% 与 Unicode 负号 −0.4674%。"""
+    assert ss.parse_equal_weight_mean_pct("| **全A等权 mean_pct** | **+0.665%** | α 记分主基准 |") == 0.665
+    assert ss.parse_equal_weight_mean_pct("| **全A等权 mean_pct** | **−0.4674%** |") == -0.4674
+    assert ss.parse_equal_weight_mean_pct("无关文本") is None
+
+
+def test_alpha_scorecard_formula_and_name_fallback():
+    """α = 该票衡量日涨跌% − 全A等权基准;名称走回退(不空);pct/基准任一缺 → α=None、显示空串。"""
+    quotes = {"601061": 4.91, "000019": 10.0, "600356": None}   # 600356 无报价
+    names = {"601061": "中信金属", "000019": "深粮控股"}         # 600356 无名 → 回退 code
+    rows = ss.alpha_scorecard(
+        ["601061", "000019", "600356"],
+        quote_of=lambda c: quotes.get(c),
+        benchmark=-0.4674,
+        name_of=lambda c: names.get(c) or c)
+    by = {r["code"]: r for r in rows}
+    assert by["601061"]["alpha_val"] == round(4.91 - (-0.4674), 2)   # 正 α
+    assert by["601061"]["alpha_val"] > 0
+    assert by["000019"]["alpha_val"] == round(10.0 - (-0.4674), 2)   # 涨停 → α 大正
+    assert by["600356"]["alpha_val"] is None and by["600356"]["alpha"] == ""
+    assert all(r["name"] for r in rows)                              # 名称非空
+    assert by["600356"]["name"] == "600356"                          # 无名回退 code
+    # 基准缺失 → 全票 α=None
+    none_bench = ss.alpha_scorecard(["601061"], quote_of=lambda c: 4.91,
+                                    benchmark=None, name_of=lambda c: "x")
+    assert none_bench[0]["alpha_val"] is None
+
+
+def test_postmarket_review_is_prior_day_actual_picks_with_code_alpha():
+    """复盘侧 = 昨日(D-1)**实际选出票** + 代码算 α(D 日衡量),**不是**自选盯盘池、不 parse 复盘 md。"""
+    D, D1 = "2026-09-09", "2026-09-08"
+    sel_dir = _PickDir({
+        f"{D}.md": _PickP("# D 选股\n", ["601061"]),
+        f"{D1}.md": _PickP(_SEL_0908, ["601061", "600356"]),
+    })
+    quotes = {("601061", D): 4.91, ("600356", D): 2.0}
+    v = ss.build_postmarket_view(
+        D, selection_dir=sel_dir, parse_picks=_fake_parse,
+        prev_trading_day=lambda x: D1, next_trading_day=lambda x: "2026-09-10",
+        quote_at=lambda c, md: quotes.get((c, md)),
+        benchmark_at=lambda md: -0.4674 if md == D else None,   # D+1(09-10)基准缺 → 今日票待复盘
+        name_of=lambda c: {"601061": "中信金属", "600356": "恒丰纸业"}.get(c, c))
+    rev = v["复盘"]
+    assert v["prior_sel_date"] == D1 and rev["measure_date"] == D
+    assert [r["code"] for r in rev["scorecard"]] == ["601061", "600356"]   # D-1 实际选出票
+    by = {r["code"]: r for r in rev["scorecard"]}
+    assert by["601061"]["alpha_val"] == round(4.91 - (-0.4674), 2) > 0     # 代码算 α
+    assert all(r["name"] for r in rev["scorecard"])                        # 名称非空
+    assert rev["skipped"] is False and rev["benchmark"] == -0.4674
+    # 今日选股(D)票的「复盘结果」列:D+1 基准缺 → 待复盘
+    assert v["选股"]["skipped"] is False
+    assert all(r["review"] == "待复盘" for r in v["选股"]["ranking"])
+
+
+def test_postmarket_today_review_column_next_day_alpha():
+    """今日票「复盘结果」列 = 次日 D+1 α:D+1 基准已产出 → 命中票显示 α、无报价票渲染空(「—」)。"""
+    D, D1 = "2026-09-07", "2026-09-08"
+    sel_dir = _PickDir({
+        f"{D}.md": _PickP(_SEL_A, ["605007", "688262"]),
+        f"{D1}.md": _PickP(None, []),   # D-1(09-04)选股缺,复盘侧另测,这里不关注
+    })
+    q = {("605007", D1): 3.5}            # 688262 次日无报价
+    v = ss.build_postmarket_view(
+        D, selection_dir=sel_dir, parse_picks=_fake_parse,
+        prev_trading_day=lambda x: "2026-09-04", next_trading_day=lambda x: D1,
+        quote_at=lambda c, md: q.get((c, md)),
+        benchmark_at=lambda md: 0.926 if md == D1 else None,
+        name_of=lambda c: c)
+    rows = {r["code"]: r for r in v["选股"]["ranking"]}
+    assert rows["605007"]["review"] == ss._fmt_alpha(round(3.5 - 0.926, 2))  # 命中 → α
+    assert rows["688262"]["review"] == ""                                    # 次日无报价 → 「—」
+
+
+def test_postmarket_skip_states():
+    """跳过态占位:D 选股跳过 → 选股.skipped(整表结果未出);D-1 选股跳过 → 复盘.skipped(昨日结果未出)。"""
+    D = "2026-09-09"
+    sel_dir = _PickDir({
+        f"{D}.md": _PickP("# 跳过留痕\n本日无选股。", []),        # D 跳过
+        "2026-09-08.md": _PickP("# 跳过留痕\n本日无选股。", []),   # D-1 跳过
+    })
+    v = ss.build_postmarket_view(
+        D, selection_dir=sel_dir, parse_picks=_fake_parse,
+        prev_trading_day=lambda x: "2026-09-08", next_trading_day=lambda x: "2026-09-10",
+        quote_at=lambda c, md: None, benchmark_at=lambda md: None, name_of=lambda c: c)
+    assert v["选股"]["skipped"] is True
+    assert v["复盘"]["skipped"] is True and v["复盘"]["scorecard"] == []
+
+
+def test_web_selection_analysis_prior_day_picks_real_parse(monkeypatch):
+    """web 端到端(真实 parse_pick_codes + 真实 09-08 选股 md + 合成记录/基准):
+    date=2026-09-09 复盘表 = 09-08 **实际选出票**(8 只),名称非空,α 代码算且 601061 为正;
+    绝不出现自选盯盘池(300209 等)。"""
+    from web import data_access as da
+    from tools.store import repo as store
+    from tools.analysis import equal_weight_index as ewi
+
+    expect_0908 = ["600356", "601061", "601339", "688712",
+                   "601000", "000035", "688262", "000019"]
+    pct_0909 = {"601061": 4.91, "000019": 10.0, "600356": 1.2, "601339": -0.5,
+                "688712": 2.3, "601000": 0.8, "000035": 3.1, "688262": -1.0}
+
+    def fake_get_record(code, date="latest"):
+        if date == "2026-09-09" and code in pct_0909:
+            return {"meta": {"code": code, "name": f"名{code}"},
+                    "snapshot": {"pct_chg": pct_0909[code]}}
+        raise FileNotFoundError(code)
+
+    monkeypatch.setattr(store, "get_record", fake_get_record)
+    monkeypatch.setattr(ewi, "load_daily_mean_pct", lambda *a, **k: {"2026-09-09": -0.4674})
+    v = da.selection_analysis_view("2026-09-09")
+    rev = v["盘后"]["复盘"]
+    codes = [r["code"] for r in rev["scorecard"]]
+    assert codes == expect_0908                         # D-1 实际选出票,顺序一致
+    assert "300209" not in codes and "300476" not in codes   # 不再是自选盯盘池
+    assert all(r["name"] for r in rev["scorecard"])     # 名称非空
+    by = {r["code"]: r for r in rev["scorecard"]}
+    assert by["601061"]["alpha_val"] == round(4.91 - (-0.4674), 2) > 0
+    assert by["000019"]["alpha_val"] > 9                # 涨停 → α 大正
+    assert rev["prior_sel_date"] == "2026-09-08"
+    # 今日选股(09-09)票的复盘列:次日 09-10 基准缺 → 待复盘
+    assert v["盘后"]["选股"]["skipped"] is False
+    assert all(r["review"] == "待复盘" for r in v["盘后"]["选股"]["ranking"])
