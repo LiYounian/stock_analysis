@@ -333,6 +333,24 @@ def _score_one(code: str, record: dict, provenance: dict, *,
     依据 = [f"{a['专家']}:{'·'.join(a.get('依据') or []) or a['方向']}" for a in 归因
             if not a.get("弃权") and a.get("置信度", 0) > 0]
 
+    # 方向冲突处理(修复5):事件驱动(真减持=看空)与情绪三层(看多)方向冲突时,别让情绪分
+    # 单方面把减持拉成正分(000019 一类)。只在「事件看空 且 情绪看多 且 消息面分>0」时触发:
+    # 按「冲突降权系数」缩放正的消息面分(默认 0.0=中和,消息面分绝不因情绪把真减持拉正)。
+    # 开关「方向冲突降权」关 → 不处理(退回旧行为,可逆)。事件驱动弃权/中性时不触发。
+    def _dir(exp: str) -> str | None:
+        for a in 归因:
+            if a.get("专家") == exp and (a.get("置信度", 0) or 0) > 0:
+                return a.get("方向")
+        return None
+    事件方向, 情绪方向 = _dir("事件驱动"), _dir("情绪三层")
+    方向冲突 = bool(事件方向 and 情绪方向
+                    and {事件方向, 情绪方向} == {"看多", "看空"})
+    冲突降权 = False
+    if cfg.get("方向冲突降权", True) and 事件方向 == "看空" and 消息面分 > 0:
+        系数 = float(cfg.get("冲突降权系数", 0.0))
+        消息面分 = round(消息面分 * 系数, 4)
+        冲突降权 = True
+
     # 数据面综合分:候选集内重算合议(base 专家组=默认组剔除消息面专家);消息面专家不在此、只走回灌。
     full = council.convene(list(consumer_experts), record)
     数据面综合分 = float(full.get("综合分", 0.0) or 0.0)
@@ -348,6 +366,7 @@ def _score_one(code: str, record: dict, provenance: dict, *,
         "完整分": 完整分,
         "发声专家": 发声, "弃权专家": 弃权, "全弃权": not 发声,
         "是否冲突": bool(msg.get("是否冲突", False)),
+        "方向冲突": 方向冲突, "冲突降权": 冲突降权,
         "理由": 依据,
         "候选来源": provenance.get(code, []),
     }
