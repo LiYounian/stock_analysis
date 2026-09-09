@@ -6,10 +6,21 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 _ROOT = Path(__file__).resolve().parents[2]
 STRATEGY_JSON = _ROOT / "config" / "strategy.json"
+
+# ————————————————————————————————————————————————
+# 开关:S05「最强选股」④号条件(筹码高度获利)的取数源(env `STRONG_CHIP_SOURCE`)。
+#   local(默认)  = 本地 chip.py 推演(获利比例×100→winner_rate、成本区间上沿→cost_95pct),
+#                   15:40 主流程当场可算、零 Tushare 依赖。
+#   tushare       = 旧行为回退,走 tushare_daily.fetch_chip(cyq_perf);未配 token 写"需 Tushare"占位。
+# 阶段一校准已达标(相关0.628/一致0.84/前向1.08×,best_thr=95.0),故默认切 local;tushare 作兜底可一键回退。
+# ⚠️ 量纲:本地 `获利比例` 是 0~1 小数,适配层 ×100 转百分数复用现有 `获利比阈值=95.0`(cyq_perf 口径)。
+# ————————————————————————————————————————————————
+STRONG_CHIP_SOURCE = os.getenv("STRONG_CHIP_SOURCE", "local").strip().lower()
 
 # ————————————————————————————————————————————————
 # 阈值(可调)
@@ -1188,7 +1199,8 @@ FORMULAS = {
 def dump_json() -> str:
     """导出 config/strategy.json(阈值 + 公式),返回路径。"""
     STRATEGY_JSON.parent.mkdir(parents=True, exist_ok=True)
-    payload = {"thresholds": THRESHOLDS, "formulas": FORMULAS}
+    payload = {"thresholds": THRESHOLDS, "formulas": FORMULAS,
+               "strong_chip_source": STRONG_CHIP_SOURCE}
     STRATEGY_JSON.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
     return str(STRATEGY_JSON)
 
