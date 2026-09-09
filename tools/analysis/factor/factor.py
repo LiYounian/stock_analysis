@@ -93,9 +93,12 @@ def raw_factors(record: dict, kline_df=None, 北向净流入趋势=None) -> dict
         "ROE": _num(fund.get("ROE")),
         "毛利率": _num(fund.get("毛利率")),
         "负债率": _num(fund.get("负债率")),
-        # 价值
+        # 价值:PE/PB 恒输出;总市值(市值分位原料)仅"价值市值分位启用"=True 时输出,
+        # 否则 None → cross_section 截面自动跳过 → 价值退回纯 PE/PB(与旧行为逐票等价)。
         "PE_TTM": _num(val.get("pe_ttm")),
         "PB": _num(val.get("pb")),
+        "总市值": (_num(val.get("mktcap_yi"))
+                 if _CFG.get("价值市值分位启用", False) else None),
         # 低波
         "年化波动率": annualized_vol(kline_df),
         # 成长
