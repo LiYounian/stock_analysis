@@ -178,3 +178,57 @@ def test_fetch_dividends_session_fail_degrades_empty(monkeypatch):
     monkeypatch.setattr(bsrc, "session", _boom)
     assert fd.fetch_dividends(["000625", "002129"]) == {}
     assert fd.fetch_dividends([]) == {}               # 空输入→空
+
+
+# ---------- P?:估值整条历史序列落盘(供 V 维历史回测)----------
+def _multi_row_baidu(dates, vals):
+    def _fn(symbol, indicator, period):
+        return pd.DataFrame({"date": list(dates), "value": list(vals)})
+    return _fn
+
+
+def test_valuation_series_保留整条历史(monkeypatch):
+    """fetch_valuation_series 保留整条 date×指标 序列(旧实现只留 vals[-1] 丢了历史)。"""
+    dates = ["2026-08-01", "2026-08-02", "2026-08-03"]
+    monkeypatch.setitem(__import__("sys").modules, "akshare",
+                        types.SimpleNamespace(
+                            stock_zh_valuation_baidu=_multi_row_baidu(dates, [10.0, 20.0, 30.0])))
+    s = fd.fetch_valuation_series("000021")
+    assert len(s) == 3                                       # 整条历史,非仅末值
+    assert list(s.columns) == ["date", "PE_TTM", "PB", "总市值"]
+    assert s["PE_TTM"].tolist() == [10.0, 20.0, 30.0]
+    assert s["date"].is_monotonic_increasing
+    sc = fd._valuation_scalars(s)                            # 标量派生口径不变
+    assert sc["PE_TTM"] == 30.0 and sc["PE分位"] == 1.0
+
+
+def test_valuation_series_单指标失败不拖累(monkeypatch):
+    """某指标失败 → 该列缺失,其它指标序列不受影响;派生标量该项 None。"""
+    def _fn(symbol, indicator, period):
+        if indicator == "市净率":                            # PB 指标失败
+            raise ConnectionError("PB 挂")
+        return pd.DataFrame({"date": ["2026-08-01", "2026-08-02"], "value": [10.0, 20.0]})
+    monkeypatch.setitem(__import__("sys").modules, "akshare",
+                        types.SimpleNamespace(stock_zh_valuation_baidu=_fn))
+    s = fd.fetch_valuation_series("000021")
+    assert "PE_TTM" in s.columns and "总市值" in s.columns
+    assert "PB" not in s.columns                              # 失败指标列缺失
+    sc = fd._valuation_scalars(s)
+    assert sc["PB"] is None and sc["PE_TTM"] == 20.0
+
+
+def test_fetch_fundamental_落盘估值序列(monkeypatch, tmp_path):
+    """fetch_fundamental 额外落盘 kind='valuation' 整条序列;kind='fundamental' 标量口径不变。"""
+    monkeypatch.setattr(store, "_RAW_DIR", tmp_path)
+    dates = ["2026-08-01", "2026-08-02", "2026-08-03"]
+    fake = types.SimpleNamespace(
+        stock_financial_abstract=lambda symbol: _fake_abstract_df(),
+        stock_zh_valuation_baidu=_multi_row_baidu(dates, [10.0, 20.0, 30.0]),
+    )
+    monkeypatch.setitem(__import__("sys").modules, "akshare", fake)
+    monkeypatch.setattr(fd, "fetch_dividends", lambda codes, as_of=None: {"000021": 0.5})
+    fd.fetch_fundamental(["000021"])
+    vs = store.get_raw("valuation", "000021")                # 新 kind 可读回,整条序列在
+    assert len(vs) == 3 and vs["PE_TTM"].tolist() == [10.0, 20.0, 30.0]
+    rec = fd.load_fundamental("000021")                      # 标量记录口径不变
+    assert rec["PE_TTM"] == 30.0 and rec["PE分位"] == 1.0 and rec["每股股利"] == 0.5

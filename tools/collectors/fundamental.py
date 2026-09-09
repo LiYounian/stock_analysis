@@ -67,31 +67,59 @@ def _percentile(vals: list[float], x: float) -> float | None:
     return round(sum(1 for v in vals if v <= x) / len(vals), 4)
 
 
-def _fetch_baidu(code: str) -> dict:
-    """百度估值,取各 indicator 时间序列最新值。单项失败该字段 None。
+def fetch_valuation_series(code: str, *, hk: bool = False) -> pd.DataFrame:
+    """百度估值**整条历史序列** → DataFrame[date, PE_TTM, PB, 总市值](按 date 外连接对齐、升序)。
 
-    额外产出 `PE分位`:最新 PE(TTM) 在 `settings.PE_PCTL_PERIOD` 窗口序列中的分位(0~1),
-    供护栏判"极度高估",复用同一次 PE 序列拉取、无额外网络。窗口口径记入 `PE分位窗口`,
-    供下游报告/护栏标注(#32:默认全历史,不再硬编码近一年)。
+    旧实现只取 `vals[-1]` 丢了整条历史 → store 里 V 维只有零散近端快照、无法历史回测。本函数
+    保留 date+value 全序列(供落盘 kind="valuation"),让 REVS 等能按 as_of 读任意历史日的 V。
+    逐 indicator 拉取:单项失败该列缺失(不拖累其它列);全失败返回空帧(列头保留)。
+    period 用 `settings.PE_PCTL_PERIOD`(默认全历史),与 PE 分位窗口同口径、复用同一次网络。
+    hk=True 走港股端点 `stock_hk_valuation_baidu`(indicator 口径与 A 股同)。
     """
     import akshare as ak
 
+    fn = ak.stock_hk_valuation_baidu if hk else ak.stock_zh_valuation_baidu
     period = settings.PE_PCTL_PERIOD
-    out = {"PE分位窗口": period}
+    merged = None
     for key, ind in _BAIDU_MAP.items():
         try:
-            df = ak.stock_zh_valuation_baidu(symbol=code, indicator=ind, period=period)
-            vals = [v for v in (_to_float(x) for x in df["value"].tolist())
-                    if v is not None] if len(df) else []
-            out[key] = vals[-1] if vals else None
-            if key == "PE_TTM":
-                out["PE分位"] = _percentile(vals, vals[-1]) if vals else None
-        except Exception as e:  # 单项估值失败不影响其他字段
-            logger.debug("%s 百度 %s 失败: %s", code, ind, e)
-            out[key] = None
-            if key == "PE_TTM":
-                out["PE分位"] = None
+            df = fn(symbol=code, indicator=ind, period=period)
+            if df is None or not len(df) or "value" not in getattr(df, "columns", []):
+                continue
+            date_col = "date" if "date" in df.columns else df.columns[0]
+            part = pd.DataFrame({
+                "date": pd.to_datetime(df[date_col], errors="coerce"),
+                key: [_to_float(x) for x in df["value"].tolist()],
+            }).dropna(subset=["date"])
+            merged = part if merged is None else merged.merge(part, on="date", how="outer")
+        except Exception as e:  # 单项估值失败不影响其他指标
+            logger.debug("%s 百度估值序列 %s 失败: %s", code, ind, e)
+    if merged is None or not len(merged):
+        return pd.DataFrame(columns=["date", *_BAIDU_MAP.keys()])
+    return merged.sort_values("date").reset_index(drop=True)
+
+
+def _valuation_scalars(series: pd.DataFrame) -> dict:
+    """从估值整条序列派生标量:各指标**最新值** + `PE分位`(最新 PE(TTM) 在整条 PE 序列中的分位)。
+
+    口径与旧 `_fetch_baidu` 完全一致(vals[-1] 取最新、_percentile 取分位、单指标缺失→None),
+    只是数据来源从"每次现拉"改为"从已拉好的整条序列派生",避免与序列落盘重复网络。
+    """
+    out = {"PE分位窗口": settings.PE_PCTL_PERIOD}
+    cols = getattr(series, "columns", [])
+    for key in _BAIDU_MAP:
+        vals = ([v for v in series[key].tolist() if v is not None and not pd.isna(v)]
+                if key in cols else [])
+        out[key] = vals[-1] if vals else None
+        if key == "PE_TTM":
+            out["PE分位"] = _percentile(vals, vals[-1]) if vals else None
     return out
+
+
+def _fetch_baidu(code: str) -> dict:
+    """百度估值标量(最新值 + PE 分位)。整条历史序列由 `fetch_valuation_series` 提供、单独落盘
+    (kind="valuation",供 V 维历史回测);本函数只从序列派生标量,口径不变(向后兼容旧调用)。"""
+    return _valuation_scalars(fetch_valuation_series(code))
 
 
 def _dividend_ttm_ps(bs, bscode: str, as_of: str) -> float | None:
@@ -170,8 +198,11 @@ def fetch_dividends(codes: list[str], as_of: str | None = None) -> dict[str, flo
     return out
 
 
-def _fetch_hk_fundamental(code: str) -> dict:
-    """港股基本面:东财核心指标 + 百度港股估值。"""
+def _fetch_hk_fundamental(code: str) -> tuple[dict, pd.DataFrame]:
+    """港股基本面:东财核心指标 + 百度港股估值。返回 (记录 dict, 估值整条序列 df)。
+
+    序列 df 由调用方落盘 kind="valuation"(供 V 维历史回测);估值标量口径与 A 股一致。
+    """
     import akshare as ak
 
     rec: dict = {"报告期": None}
@@ -190,24 +221,10 @@ def _fetch_hk_fundamental(code: str) -> dict:
             rec["每股股利"] = _to_float(row.get("每股股息TTM(港元)"))
     except Exception as e:
         logger.warning("港股 %s 东财财务指标失败: %s", code, e)
-    # 百度港股估值(PE 分位窗口同 A 股口径,见 settings.PE_PCTL_PERIOD,#32)
-    _HK_BAIDU_MAP = {"PE_TTM": "市盈率(TTM)", "PB": "市净率", "总市值": "总市值"}
-    period = settings.PE_PCTL_PERIOD
-    rec["PE分位窗口"] = period
-    for key, ind in _HK_BAIDU_MAP.items():
-        try:
-            df = ak.stock_hk_valuation_baidu(symbol=code, indicator=ind, period=period)
-            vals = [v for v in (_to_float(x) for x in df["value"].tolist())
-                    if v is not None] if len(df) else []
-            rec[key] = vals[-1] if vals else None
-            if key == "PE_TTM":
-                rec["PE分位"] = _percentile(vals, vals[-1]) if vals else None
-        except Exception as e:
-            logger.debug("港股 %s 百度 %s 失败: %s", code, ind, e)
-            rec[key] = None
-            if key == "PE_TTM":
-                rec["PE分位"] = None
-    return rec
+    # 百度港股估值:整条序列 + 派生标量(PE 分位窗口同 A 股口径,见 settings.PE_PCTL_PERIOD,#32)
+    vseries = fetch_valuation_series(code, hk=True)
+    rec.update(_valuation_scalars(vseries))
+    return rec, vseries
 
 
 def fetch_fundamental(codes: list[str], as_of: str | None = None) -> dict[str, dict]:
@@ -228,13 +245,18 @@ def fetch_fundamental(codes: list[str], as_of: str | None = None) -> dict[str, d
         logger.info("[%d/%d] 基本面 %s 采集...", i, n, code)
         try:
             if stock_pool.is_hk(code):
-                rec = _fetch_hk_fundamental(code)
+                rec, vseries = _fetch_hk_fundamental(code)
                 store.put_raw("fundamental", code, rec, meta={"source": "eastmoney_hk+百度"})
+                if len(vseries):
+                    store.put_raw("valuation", code, vseries, meta={"source": "百度港股估值序列"})
             else:
                 rec = _fetch_abstract(code)
-                rec.update(_fetch_baidu(code))
+                vseries = fetch_valuation_series(code)             # 整条历史序列(一次网络)
+                rec.update(_valuation_scalars(vseries))           # 派生标量(口径不变)
                 rec["每股股利"] = div_map.get(code)
                 store.put_raw("fundamental", code, rec, meta={"source": _SOURCE})
+                if len(vseries):                                  # 整条序列落盘,供 V 维历史回测
+                    store.put_raw("valuation", code, vseries, meta={"source": "百度估值序列"})
             out[code] = rec
             logger.info("基本面 %s 落盘(报告期 %s)", code, rec.get("报告期"))
         except Exception as e:
