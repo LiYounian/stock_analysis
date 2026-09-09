@@ -66,6 +66,25 @@ def test_value_factor_smallcap_higher_when_on(mktcap_flag):
     assert v_small > v_big                               # 小市值 → 价值分更高
 
 
+def test_estvalue_monitor_smallcap_tilt(mktcap_flag):
+    """估值位监控:高价值票偏小盘 → 小市值倾斜<1(风格回撤敞口可观测)。"""
+    mktcap_flag(True)
+    raw = {"A": {"总市值": 30.0}, "B": {"总市值": 300.0}, "C": {"总市值": 3000.0}}
+    scored = {"A": {"各因子分位": {"价值": 0.9}},   # 高价值=小市值
+              "B": {"各因子分位": {"价值": 0.5}},
+              "C": {"各因子分位": {"价值": 0.1}}}
+    mon = sc._estvalue_monitor(raw, scored)
+    assert mon["启用"] is True and mon["总市值覆盖"] == 1.0
+    assert mon["小市值倾斜"] < 1.0                    # 高价值票中位市值 < 全池中位 → 偏小盘
+
+
+def test_estvalue_monitor_off_returns_none(mktcap_flag):
+    """开关关 → 监控返回 None(不误报)。"""
+    mktcap_flag(False)
+    assert sc._estvalue_monitor({"A": {"总市值": 30.0}},
+                                {"A": {"各因子分位": {"价值": 0.9}}}) is None
+
+
 def test_value_factor_unchanged_when_off(mktcap_flag):
     """开关关:市值差异完全不影响价值因子(no-op 安全;PE/PB 相同→价值分相等)。"""
     mktcap_flag(False)

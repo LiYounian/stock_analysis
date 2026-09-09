@@ -195,7 +195,35 @@ def precompute(as_of: str | None = None, codes: list[str] | None = None,
         store.put_code_view("factor", c, r, date=as_of)
     avail = _availability(raw_by_code)
     logger.info("多因子截面:记录 %d / 打分 %d;因子可得性 %s", len(codes), len(scored), avail)
-    return {"扫描数": len(codes), "打分数": len(scored), "因子可得性": avail, "as_of": as_of}
+    mon = _estvalue_monitor(raw_by_code, scored)     # 估值位(市值分位)前向观测:小市值敞口
+    if mon:
+        logger.info("估值位监控:%s", mon)
+    return {"扫描数": len(codes), "打分数": len(scored), "因子可得性": avail,
+            "估值位监控": mon, "as_of": as_of}
+
+
+def _estvalue_monitor(raw_by_code: dict, scored: dict) -> dict | None:
+    """估值位(市值分位)前向观测:开启时报总市值覆盖 + 高价值票 vs 全池中位市值比(小市值敞口)。
+
+    小市值倾斜 = 高价值票中位总市值 / 全池中位总市值:<1 说明选股偏小盘(风格回撤敞口),
+    应持续盯——风格切换/risk-off 小盘大幅回撤时此值会很低。开关关(总市值恒 None)→ 返回 None。
+    """
+    if not _CFG.get("价值市值分位启用", False) or not scored:
+        return None
+    from statistics import median
+    caps = {c: raw_by_code[c].get("总市值") for c in scored
+            if raw_by_code.get(c, {}).get("总市值") is not None}
+    vals = {c: (scored[c].get("各因子分位") or {}).get("价值")
+            for c in scored if c in caps}
+    vals = {c: v for c, v in vals.items() if v is not None}
+    if not caps or not vals:
+        return None
+    uni_med = median(caps.values())
+    topq = sorted(vals, key=vals.get, reverse=True)[:max(1, len(vals) // 5)]
+    top_med = median(caps[c] for c in topq)
+    return {"启用": True, "总市值覆盖": round(len(caps) / (len(scored) or 1), 3),
+            "全池中位总市值_亿": round(uni_med, 1), "高价值票中位总市值_亿": round(top_med, 1),
+            "小市值倾斜": round(top_med / uni_med, 3) if uni_med else None}
 
 
 def _availability(raw_by_code: dict) -> dict:
