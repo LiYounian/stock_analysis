@@ -6,6 +6,9 @@
 
 {% macro selection_block(sel) -%}
   {% if sel %}
+    {% if sel.skipped %}
+      <p class="sa-empty">结果未出 —— 今日选股跳过或尚未产出。</p>
+    {% else %}
     {% if sel.env_note %}<p class="sa-env"><b>市场环境</b> · {{ sel.env_note }}</p>{% endif %}
     {% if sel.ranking %}
     <table class="sa-table">
@@ -15,7 +18,7 @@
         <tr>
           <td>{{ r.rank }}</td>
           <td class="mono">{{ r.code }}</td>
-          <td>{{ r.name }}</td>
+          <td>{{ r.name or r.code }}</td>
           <td class="sa-stance">{{ r.stance }}</td>
           <td class="sa-oneline">{{ r.note }}</td>
           <td class="sa-midday">{{ r.midday or '—' }}</td>
@@ -24,25 +27,29 @@
       {% endfor %}
       </tbody>
     </table>
+    <p class="sa-cap">「复盘结果」列 = 该票次日({{ sel.next_date or 'D+1' }})α（次日涨跌% − 次日全A等权基准）；次日未到/未复盘显示「待复盘」。</p>
     {% else %}<p class="sa-empty">未解析到买入建议排序表。</p>{% endif %}
+    {% endif %}
   {% else %}<p class="sa-empty">暂无选股摘要。</p>{% endif %}
 {%- endmacro %}
 
-{% macro review_block(rev) -%}
+{% macro review_block(rev, prior_date) -%}
   {% if rev %}
+    {% if rev.skipped %}
+      <p class="sa-empty">昨日选股结果未出 —— {{ prior_date or '上一交易日' }} 选股跳过或未产出，无可复盘对象。</p>
+    {% elif rev.scorecard %}
     {% if rev.direction %}<p class="sa-dir"><b>方向记分</b> · {{ rev.direction }}</p>{% endif %}
-    {% if rev.scorecard %}
     <table class="sa-table">
       <thead><tr><th>代码</th><th>名称</th><th>α vs 等权</th></tr></thead>
       <tbody>
       {% for r in rev.scorecard %}
-        <tr><td class="mono">{{ r.code }}</td><td>{{ r.name }}</td><td class="sa-alpha">{{ r.alpha }}</td></tr>
+        <tr><td class="mono">{{ r.code }}</td><td>{{ r.name or r.code }}</td><td class="sa-alpha">{{ r.alpha or '—' }}</td></tr>
       {% endfor %}
       </tbody>
     </table>
-    {% endif %}
-    {# A-3:页面不再展示「新增/确认经验」条目(摘要仍抽取,仅不渲染) #}
-    {% if not rev.scorecard and not rev.direction %}
+    <p class="sa-cap">复盘对象 = {{ prior_date or '上一交易日' }} <b>实际选出票</b>；α = 该票 {{ rev.measure_date or '次日' }} 涨跌% − 全A等权基准
+      {%- if rev.benchmark is defined and rev.benchmark is not none %}（{{ '%+.4f'|format(rev.benchmark) }}%）{%- elif rev.benchmark_missing %}（基准数据缺失）{%- endif %}。</p>
+    {% else %}
       <p class="sa-empty">未解析到复盘记分。</p>
     {% endif %}
   {% else %}<p class="sa-empty">暂无复盘摘要。</p>{% endif %}
@@ -53,8 +60,8 @@
   <h2>{{ title }}</h2>
   {% if data %}
   <div class="sa-cols">
-    <div class="sa-col"><h3>选股分析</h3>{{ selection_block(data.选股) }}</div>
-    <div class="sa-col"><h3>复盘结果</h3>{{ review_block(data.复盘) }}</div>
+    <div class="sa-col"><h3>今日选股{% if data.sel_date %}（{{ data.sel_date }}）{% endif %}</h3>{{ selection_block(data.选股) }}</div>
+    <div class="sa-col"><h3>对昨日选股的复盘{% if data.prior_sel_date %}（{{ data.prior_sel_date }}）{% endif %}</h3>{{ review_block(data.复盘, data.prior_sel_date) }}</div>
   </div>
   {% else %}
   <p class="sa-placeholder">{{ placeholder }}</p>
@@ -88,6 +95,7 @@
 .sa-exp ul { margin: 4px 0 0; padding-left: 18px; }
 .sa-exp li { margin: 2px 0; }
 .sa-empty { opacity: .6; font-size: .85em; font-style: italic; }
+.sa-cap { opacity: .6; font-size: .78em; margin: 4px 0 2px; line-height: 1.45; }
 .sa-placeholder { opacity: .6; font-style: italic; padding: 14px 4px; }
 @media (max-width: 820px) { .sa-cols { flex-direction: column; } }
 </style>
