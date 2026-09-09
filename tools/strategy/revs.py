@@ -301,9 +301,9 @@ def revs_screen(
             continue
         f = (rec or {}).get(_FIELD) or {}
         e, v, s = f.get("E"), f.get("V"), f.get("S")
-        mv = (v or {}).get("总市值")
+        mv = (v or {}).get("总市值")   # 单位:亿元(百度总市值,与 deduct 管线 mktcap_yi 同口径)
         # 流通市值门(缺流通用总市值/亿);无市值不判该门(避免误杀)
-        if _finite(mv) and (mv / 1e8) < min_float_yi:
+        if _finite(mv) and mv < min_float_yi:
             _skip("低流动性(市值)")
             continue
         scoped.append(code)
@@ -377,7 +377,7 @@ def revs_screen(
                      "维度分": {d: (round(dvals[d], 4) if dvals[d] is not None else None)
                                 for d in dim_weights},
                      "present维度": present,
-                     "总市值_亿": round(mktcap[c] / 1e8, 2) if c in mktcap else None})
+                     "总市值_亿": round(mktcap[c], 2) if c in mktcap else None})
 
     if not rows:
         return {"codes": [], "candidates": [], "top_k": top_k,
