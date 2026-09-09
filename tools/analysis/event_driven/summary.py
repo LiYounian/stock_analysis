@@ -35,6 +35,38 @@ def _within(days_diff: int, window: int) -> bool:
     return 0 <= days_diff <= window
 
 
+def _norm_code(x) -> str | None:
+    """归一化代码为补零 6 位纯数字(修复:同名/格式差异导致的增减持归属错配/漏配)。
+
+    两侧(record.meta.code 与采集缓存 code)先归一再精确对齐,杜绝 "600356" vs 600356(int)、
+    带交易所后缀等格式差异造成的张冠李戴/漏配。无数字 → None(不匹配)。
+    """
+    if x is None:
+        return None
+    s = "".join(ch for ch in str(x) if ch.isdigit())
+    return s.zfill(6) if s else None
+
+
+def _insider_stale(rd, as_of: pd.Timestamp) -> bool:
+    """增减持记录是否**陈旧**(早于时效窗下限,应剔除;修复 600356 陈旧减持误压)。
+
+    时效窗 = as_of 前「增减持时效_月」个月(config,默认 6)。只用 ≤as_of 信息、防未来不变;
+    本函数只再砍掉过旧记录。开关「增减持时效过滤」关 → 恒 False(退回旧无下限行为,可逆)。
+    缺日期/无法解析 → False(保守保留,沿用"缺日期不漏"的既有行为,向后兼容)。
+    """
+    if not _C.get("增减持时效过滤", True):
+        return False
+    if rd is None or str(rd).strip() in ("", "nan", "None", "NaT"):
+        return False
+    try:
+        d = pd.to_datetime(rd)
+    except Exception:                                # noqa: BLE001
+        return False
+    months = int(_C.get("增减持时效_月", 6) or 6)
+    cutoff = as_of - pd.DateOffset(months=months)
+    return d < cutoff
+
+
 def _quarter_ends_before(as_of: pd.Timestamp, back_days: int) -> list[str]:
     """as_of 往前 back_days 内的季度末报告期 "YYYYMMDD" 列表。"""
     ends = []
@@ -84,7 +116,9 @@ def _load_precise(code: str, as_of: pd.Timestamp, ann_text: str = "") -> list[di
     try:
         df = col.load_insider_trades("latest")
         if df is not None and not df.empty and "code" in df.columns:
-            hit = df[df["code"] == code]
+            # 代码归属校验(修复4):两侧归一化后精确对齐,防同名/格式差异张冠李戴(如 000019 vs 000027)。
+            tgt = _norm_code(code)
+            hit = df[df["code"].map(_norm_code) == tgt] if tgt else df.iloc[0:0]
             for _, r in hit.iterrows():
                 # 防未来函数:增减持记录的披露/变动日期若晚于 as_of(未来),不可用——跳过。
                 # 缺日期(无法解析)则保守保留(沿用「latest 快照」既有行为,不因缺日期而漏)。
@@ -95,12 +129,17 @@ def _load_precise(code: str, as_of: pd.Timestamp, ann_text: str = "") -> list[di
                             continue
                     except Exception:                # noqa: BLE001
                         pass
+                # 时效过滤(修复2):早于「增减持时效_月」窗口下限的陈旧增减持不进当日消息面
+                # (600356 一类 2018–2020 历史减持误压;开关关 → 退回旧无下限行为)。
+                if _insider_stale(rd, as_of):
+                    continue
                 atype = r.get("方向")
                 if atype in ("增持", "减持"):
                     method = r.get("方式") if "方式" in df.columns else None
                     v = judge.judge_corporate_action(atype, None, method=method, text=ann_text)
-                    # 战略引资/协议转让待定 = 识别不清或偏正,非显著看空 → 降数据充分度(低置信)
-                    显著 = (not v["象征性"]) and v.get("类别") not in ("战略引资", "协议转让待定")
+                    # 战略引资/协议转让待定/非减持承诺 = 识别不清或非真实减持 → 降数据充分度(低置信)
+                    显著 = (not v["象征性"]) and v.get("类别") not in (
+                        "战略引资", "协议转让待定", "非减持承诺")
                     events.append({"来源": "ggcg", "方向": v["方向"], "强度": v["强度"],
                                    "达显著线": 显著, "依据": v["依据"], "类别": "公司行为",
                                    "性质": v.get("类别")})
@@ -140,7 +179,7 @@ def _coarse_from_announcements(announcements, as_of: pd.Timestamp) -> list[dict]
             性质 = cls["类别"]
             if 性质 == "战略引资":                       # 引资背书 → 轻度偏正
                 方向, s = "看多", _C.get("战略引资强度", 0.15)
-            elif 性质 == "协议转让待定":                 # 识别不清 → 中性(而非默认看空)
+            elif 性质 in ("协议转让待定", "非减持承诺"):  # 识别不清/重组承诺 → 中性(而非默认看空)
                 方向, s = "中性", 0.0
             else:                                        # 二级减持/普通减持 → 看空
                 方向, s = "看空", -0.4
