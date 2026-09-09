@@ -1,0 +1,347 @@
+{
+  "生成时间": "2026-09-09 18:13:12",
+  "口径": {
+    "方案": "A(百分数,winner_rate 复用95.0语义)",
+    "校准范围": "近120交易日 × 流动性前1500(排北交所,成交额中位数排名)",
+    "真值": "Tushare cyq_perf(winner_rate/cost_95pct)",
+    "本地": "chip.summarize_asof point-in-time(获利比例×100 / 成本区间上沿)",
+    "阈值网格": [
+      90.0,
+      92.0,
+      94.0,
+      95.0,
+      96.0
+    ]
+  },
+  "交易日范围": [
+    "2026-03-18",
+    "2026-09-08"
+  ],
+  "配对样本数": 176001,
+  "甲_因子对齐": {
+    "overall": {
+      "n": 176001,
+      "pearson": 0.8496,
+      "spearman": 0.8499,
+      "MAE": 12.659,
+      "RMSE": 17.105,
+      "bias_mean": -2.023,
+      "bias_median": -2.25,
+      "bias_p5": -27.59,
+      "bias_p95": 28.08,
+      "cost95_relerr_median": 0.0116,
+      "cost95_relerr_absmedian": 0.0289,
+      "cost95_n": 176001,
+      "cost95_bool_agree": 0.918
+    },
+    "high_profit(wr_true>=90)": {
+      "n": 15808,
+      "pearson": 0.4726,
+      "spearman": 0.6281,
+      "MAE": 5.976,
+      "RMSE": 10.168,
+      "bias_mean": -3.728,
+      "bias_median": -0.04,
+      "bias_p5": -22.93,
+      "bias_p95": 5.31,
+      "cost95_relerr_median": -0.0022,
+      "cost95_relerr_absmedian": 0.0178,
+      "cost95_n": 15808,
+      "cost95_bool_agree": 0.7578
+    },
+    "degrade=False": {
+      "n": 163098,
+      "pearson": 0.8519,
+      "spearman": 0.8527,
+      "MAE": 12.586,
+      "RMSE": 16.977,
+      "bias_mean": -2.106,
+      "bias_median": -2.31,
+      "bias_p5": -27.45,
+      "bias_p95": 27.67,
+      "cost95_relerr_median": 0.0116,
+      "cost95_relerr_absmedian": 0.0285,
+      "cost95_n": 163098,
+      "cost95_bool_agree": 0.9203
+    },
+    "degrade=True": {
+      "n": 12903,
+      "pearson": 0.8217,
+      "spearman": 0.8156,
+      "MAE": 13.586,
+      "RMSE": 18.64,
+      "bias_mean": -0.982,
+      "bias_median": -1.53,
+      "bias_p5": -29.706,
+      "bias_p95": 33.04,
+      "cost95_relerr_median": 0.0116,
+      "cost95_relerr_absmedian": 0.0339,
+      "cost95_n": 12903,
+      "cost95_bool_agree": 0.8894
+    }
+  },
+  "乙_信号质量": {
+    "n_dates": 120,
+    "old_selected_total": 8083,
+    "old_selected_per_day_mean": 67.358,
+    "old_forward": {
+      "T+1": {
+        "n": 8083,
+        "mean": 0.4174,
+        "median": -0.0466,
+        "winrate": 0.4944
+      },
+      "T+3": {
+        "n": 8068,
+        "mean": 1.2455,
+        "median": 0.1803,
+        "winrate": 0.5067
+      },
+      "T+5": {
+        "n": 8058,
+        "mean": 1.4941,
+        "median": 0.0276,
+        "winrate": 0.5006
+      },
+      "T+10": {
+        "n": 8029,
+        "mean": 2.0638,
+        "median": -0.1913,
+        "winrate": 0.4961
+      }
+    },
+    "by_threshold": {
+      "90.0": {
+        "jaccard_mean": 0.8292,
+        "new_selected_total": 9511,
+        "new_selected_per_day_mean": 79.258,
+        "new_forward": {
+          "T+1": {
+            "n": 9511,
+            "mean": 0.4681,
+            "median": 0.0,
+            "winrate": 0.4967
+          },
+          "T+3": {
+            "n": 9496,
+            "mean": 1.2573,
+            "median": 0.2188,
+            "winrate": 0.508
+          },
+          "T+5": {
+            "n": 9484,
+            "mean": 1.6396,
+            "median": 0.1154,
+            "winrate": 0.504
+          },
+          "T+10": {
+            "n": 9450,
+            "mean": 2.3775,
+            "median": 0.0,
+            "winrate": 0.4992
+          }
+        },
+        "new_vs_old_mean_ratio": {
+          "T+1_mean_ratio": 1.121,
+          "T+3_mean_ratio": 1.009,
+          "T+5_mean_ratio": 1.097,
+          "T+10_mean_ratio": 1.152
+        }
+      },
+      "92.0": {
+        "jaccard_mean": 0.8341,
+        "new_selected_total": 9409,
+        "new_selected_per_day_mean": 78.408,
+        "new_forward": {
+          "T+1": {
+            "n": 9409,
+            "mean": 0.4642,
+            "median": 0.0,
+            "winrate": 0.4964
+          },
+          "T+3": {
+            "n": 9394,
+            "mean": 1.2574,
+            "median": 0.2129,
+            "winrate": 0.5079
+          },
+          "T+5": {
+            "n": 9383,
+            "mean": 1.6284,
+            "median": 0.111,
+            "winrate": 0.5039
+          },
+          "T+10": {
+            "n": 9352,
+            "mean": 2.3492,
+            "median": -0.0091,
+            "winrate": 0.4988
+          }
+        },
+        "new_vs_old_mean_ratio": {
+          "T+1_mean_ratio": 1.112,
+          "T+3_mean_ratio": 1.01,
+          "T+5_mean_ratio": 1.09,
+          "T+10_mean_ratio": 1.138
+        }
+      },
+      "94.0": {
+        "jaccard_mean": 0.8384,
+        "new_selected_total": 9345,
+        "new_selected_per_day_mean": 77.875,
+        "new_forward": {
+          "T+1": {
+            "n": 9345,
+            "mean": 0.4678,
+            "median": 0.0,
+            "winrate": 0.4966
+          },
+          "T+3": {
+            "n": 9330,
+            "mean": 1.2611,
+            "median": 0.2129,
+            "winrate": 0.5078
+          },
+          "T+5": {
+            "n": 9319,
+            "mean": 1.6151,
+            "median": 0.1027,
+            "winrate": 0.5035
+          },
+          "T+10": {
+            "n": 9288,
+            "mean": 2.3273,
+            "median": -0.0401,
+            "winrate": 0.4987
+          }
+        },
+        "new_vs_old_mean_ratio": {
+          "T+1_mean_ratio": 1.121,
+          "T+3_mean_ratio": 1.013,
+          "T+5_mean_ratio": 1.081,
+          "T+10_mean_ratio": 1.128
+        }
+      },
+      "95.0": {
+        "jaccard_mean": 0.8385,
+        "new_selected_total": 9334,
+        "new_selected_per_day_mean": 77.783,
+        "new_forward": {
+          "T+1": {
+            "n": 9334,
+            "mean": 0.4662,
+            "median": 0.0,
+            "winrate": 0.4965
+          },
+          "T+3": {
+            "n": 9319,
+            "mean": 1.2627,
+            "median": 0.2105,
+            "winrate": 0.5078
+          },
+          "T+5": {
+            "n": 9308,
+            "mean": 1.6129,
+            "median": 0.0997,
+            "winrate": 0.5032
+          },
+          "T+10": {
+            "n": 9277,
+            "mean": 2.3254,
+            "median": -0.0364,
+            "winrate": 0.4988
+          }
+        },
+        "new_vs_old_mean_ratio": {
+          "T+1_mean_ratio": 1.117,
+          "T+3_mean_ratio": 1.014,
+          "T+5_mean_ratio": 1.08,
+          "T+10_mean_ratio": 1.127
+        }
+      },
+      "96.0": {
+        "jaccard_mean": 0.8385,
+        "new_selected_total": 9334,
+        "new_selected_per_day_mean": 77.783,
+        "new_forward": {
+          "T+1": {
+            "n": 9334,
+            "mean": 0.4662,
+            "median": 0.0,
+            "winrate": 0.4965
+          },
+          "T+3": {
+            "n": 9319,
+            "mean": 1.2627,
+            "median": 0.2105,
+            "winrate": 0.5078
+          },
+          "T+5": {
+            "n": 9308,
+            "mean": 1.6129,
+            "median": 0.0997,
+            "winrate": 0.5032
+          },
+          "T+10": {
+            "n": 9277,
+            "mean": 2.3254,
+            "median": -0.0364,
+            "winrate": 0.4988
+          }
+        },
+        "new_vs_old_mean_ratio": {
+          "T+1_mean_ratio": 1.117,
+          "T+3_mean_ratio": 1.014,
+          "T+5_mean_ratio": 1.08,
+          "T+10_mean_ratio": 1.127
+        }
+      }
+    }
+  },
+  "gate判定": {
+    "gate1_因子相关(高获利区Spearman>=0.6)": {
+      "value": 0.6281,
+      "pass": true
+    },
+    "gate2_3_by_threshold": {
+      "90.0": {
+        "jaccard": 0.8292,
+        "T+5_ratio": 1.097,
+        "gate2_一致率>=0.80": true,
+        "gate3_前向>=0.9旧": true,
+        "pass": true
+      },
+      "92.0": {
+        "jaccard": 0.8341,
+        "T+5_ratio": 1.09,
+        "gate2_一致率>=0.80": true,
+        "gate3_前向>=0.9旧": true,
+        "pass": true
+      },
+      "94.0": {
+        "jaccard": 0.8384,
+        "T+5_ratio": 1.081,
+        "gate2_一致率>=0.80": true,
+        "gate3_前向>=0.9旧": true,
+        "pass": true
+      },
+      "95.0": {
+        "jaccard": 0.8385,
+        "T+5_ratio": 1.08,
+        "gate2_一致率>=0.80": true,
+        "gate3_前向>=0.9旧": true,
+        "pass": true
+      },
+      "96.0": {
+        "jaccard": 0.8385,
+        "T+5_ratio": 1.08,
+        "gate2_一致率>=0.80": true,
+        "gate3_前向>=0.9旧": true,
+        "pass": true
+      }
+    },
+    "best_threshold": 95.0,
+    "overall_pass": true,
+    "结论": "达标可切"
+  }
+}
