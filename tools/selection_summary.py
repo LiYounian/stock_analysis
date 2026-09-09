@@ -447,6 +447,71 @@ def parse_equal_weight_mean_pct(md_text: str) -> float | None:
     return None
 
 
+_CLOSE_HDR_EXCLUDE = ("α", "子链", "判定", "方向", "表态", "建议", "结论")
+_SIGNED_PCT_RE = re.compile(r"([+\-−]\d+(?:\.\d+)?)\s*%")
+
+
+def parse_review_close_pct(md_text: str, code: str) -> float | None:
+    """兜底(末级):从 复盘/<D>.md「逐票收盘记分」表,取某票 D 日收盘涨跌%(pct)。
+
+    用途:web 取「该票 D 日涨跌%」的**末级回退**——record.snapshot 与滚动主档 K线均缺该日时,
+    退而读复盘 md 里逐票收盘记分表(该票 D 日已定稿的收盘表现)。取到的 pct 交下游算
+    α = pct − 全A等权基准(口径不变)。
+
+    解析(启发式,版式不统一时降级):
+      · 选表:优先 heading 含"逐票收盘记分"的表(退而"逐票"),表头首列含 票/代码/名称 且有 α 列;
+      · 主路:D 日收盘列(最后一个含"收"、且非 α/子链/判定 等列)单元里首个**带符号百分数**
+        (如"8.52 +2.16%…"→ +2.16%)= 该票 D 日涨跌%;
+      · 兜底:主路取不到 → 用该表已算好的 α + 表头声明的等权基准还原 pct = 基准 + α。
+    找不到该票 / 都取不到 → None(有声缺失,绝不假造)。⚠️ 研究模拟,非投资建议。"""
+    if not md_text or not code:
+        return None
+    code = str(code)
+    best = None
+    for t in _parse_tables(md_text):
+        h = t["header"]
+        if not h or _alpha_col(h) < 0 or not any(k in h[0] for k in ("票", "代码", "名称")):
+            continue
+        score = 2 if "逐票收盘记分" in t["heading"] else (1 if "逐票" in t["heading"] else 0)
+        if best is None or score > best[0]:
+            best = (score, t)
+    if best is None:
+        return None
+    t = best[1]
+    target = None
+    for row in t["rows"]:
+        m = _CODE6.search(_clean(row[0]))
+        if m and m.group(1) == code:
+            target = row
+            break
+    if target is None:
+        return None
+    ci_alpha = _alpha_col(t["header"])
+    # 主路:最后一个"收盘价+涨跌%"列(含"收"、排除 α/子链/判定/方向/表态等)里首个带符号百分数
+    ci_close = -1
+    for idx, hh in enumerate(t["header"]):
+        if "收" in hh and idx != ci_alpha and not any(x in hh for x in _CLOSE_HDR_EXCLUDE):
+            ci_close = idx
+    if 0 <= ci_close < len(target):
+        m = _SIGNED_PCT_RE.search(_clean(target[ci_close]))
+        if m:
+            try:
+                return float(m.group(1).replace("−", "-"))
+            except ValueError:
+                pass
+    # 兜底:α + 表头声明的等权基准(pct = 基准 + α;该基准取自本记分表 heading,非全文首个)
+    mb = re.search(r"全A等权[^0-9+\-−]*([+\-−]?\d+(?:\.\d+)?)\s*%", t["heading"])
+    ma = (re.search(r"([+\-−]?\d+(?:\.\d+)?)",
+                    _clean(target[ci_alpha]).replace("−", "-"))
+          if 0 <= ci_alpha < len(target) else None)
+    if mb and ma:
+        try:
+            return round(float(mb.group(1).replace("−", "-")) + float(ma.group(1)), 4)
+        except ValueError:
+            pass
+    return None
+
+
 def _fmt_alpha(alpha: float | None) -> str:
     """α 显示串:+X.XXpp / −X.XXpp(用 Unicode 负号,与项目复盘口径一致);None → 空串(模板渲染「—」)。"""
     if not isinstance(alpha, (int, float)) or isinstance(alpha, bool):

@@ -1451,10 +1451,9 @@ def _selection_benchmark_at(md_date: str, daily_mean: dict) -> float | None:
     return None
 
 
-def _selection_pct_at(code: str, md_date: str) -> float | None:
-    """某票某交易日的涨跌%(record.snapshot.pct_chg);无该日记录/字段 → None。展示层只读、不算。"""
-    if not code or not md_date:
-        return None
+def _pct_from_record(code: str, md_date: str) -> float | None:
+    """回退1:中心记录 record.snapshot.pct_chg。只覆盖该日选出票/自选(D 日上传的 records
+    不完整覆盖 D-1 全部选出票),缺该日记录/字段 → None。展示层只读、不算。"""
     try:
         rec = store.get_record(code, date=md_date)
     except Exception:                                   # noqa: BLE001 (含 FileNotFoundError)
@@ -1462,6 +1461,69 @@ def _selection_pct_at(code: str, md_date: str) -> float | None:
     snap = (rec or {}).get("snapshot") or {}
     v = snap.get("pct_chg")
     return v if isinstance(v, (int, float)) and not isinstance(v, bool) else None
+
+
+def _pct_from_master(code: str, md_date: str) -> float | None:
+    """回退2:滚动主档 K线(data/master/kline,全A完整源)取该票 md_date 当日涨跌%。
+
+    优先该日行的 pct_chg 列(采集层已算,单位 %);缺/NaN 则由 close/prev_close−1 现算。
+    防未来函数:只用 **≤md_date** 的行,且当日行必须**恰为** md_date(主档最新日 < md_date
+    → None,不用历史日冒充、不外推)。任何异常 → None(不炸页、不臆造)。"""
+    try:
+        df = store.get_master_kline(code)
+    except Exception:                                   # noqa: BLE001 (含 FileNotFoundError)
+        return None
+    try:
+        import pandas as pd
+        d = pd.to_datetime(df["date"]).dt.strftime("%Y-%m-%d")
+        sub = df.assign(_d=d)
+        sub = sub[sub["_d"] <= md_date].sort_values("_d")
+        if sub.empty or str(sub.iloc[-1]["_d"]) != md_date:
+            return None                                 # 主档无 md_date 当日行 → 不冒充
+        row = sub.iloc[-1]
+        pc = row.get("pct_chg")
+        if isinstance(pc, (int, float)) and not isinstance(pc, bool) and not (
+                isinstance(pc, float) and math.isnan(pc)):
+            return float(pc)
+        if len(sub) >= 2:                               # 兜底:相邻收盘算日涨跌%
+            close, prev = row.get("close"), sub.iloc[-2].get("close")
+            if all(isinstance(x, (int, float)) and not (isinstance(x, float) and math.isnan(x))
+                   for x in (close, prev)) and prev:
+                return round((close / prev - 1.0) * 100.0, 4)
+    except Exception:                                   # noqa: BLE001
+        return None
+    return None
+
+
+def _pct_from_review_md(code: str, md_date: str) -> float | None:
+    """回退3(末级):复盘 md 已算好的 α + 表头声明的等权基准还原 pct(pct = 基准 + α)。
+
+    仅当 record 与主档 K线均缺该日时用;读 `复盘/<md_date>.md`,交纯函数
+    selection_summary.parse_review_close_pct 解析(不触网、可单测)。缺文件/解析不出 → None。"""
+    try:
+        from tools import selection_summary
+        p = selection_summary.REVIEW_DIR / f"{md_date}.md"
+        if not p.is_file():
+            return None
+        return selection_summary.parse_review_close_pct(p.read_text(encoding="utf-8"), code)
+    except Exception:                                   # noqa: BLE001
+        return None
+
+
+def _selection_pct_at(code: str, md_date: str) -> float | None:
+    """某票某交易日(md_date)的涨跌%,**多级回退**取数(展示层只读、不算、只用 ≤md_date 数据):
+      1) record.snapshot.pct_chg —— 现有,覆盖该日选出票/自选;
+      2) 滚动主档 K线 pct_chg / close 现算 —— 全A完整源,补齐次日未重选票(α 空的根因);
+      3) 复盘 md 已算好的 α + 声明基准还原 —— 末级兜底;
+      4) 都取不到 → None(该票 α 渲染「—」,有声缺失不臆造)。
+    α 口径不变(下游 α = pct − 全A等权基准);防未来函数:各源均只取 md_date 当日/之前数据。"""
+    if not code or not md_date:
+        return None
+    for src in (_pct_from_record, _pct_from_master, _pct_from_review_md):
+        v = src(code, md_date)
+        if isinstance(v, (int, float)) and not isinstance(v, bool):
+            return v
+    return None
 
 
 def selection_analysis_view(date: str = "latest") -> dict:
