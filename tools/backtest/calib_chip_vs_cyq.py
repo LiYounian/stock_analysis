@@ -394,6 +394,9 @@ def run(days: int, topn: int, thresholds: list[float], out: str,
 
 def _main(argv: list[str] | None = None) -> int:
     logging.basicConfig(level=logging.INFO, format="%(name)s %(levelname)s %(message)s")
+    # 批量点位推演每票每日都会触发 chip 的"换手缺失降级"WARNING(数万条),淹没进度日志;
+    # 降级信息**未丢失**——每个配对的 `degrade` 字段已单独记录并在报告里分层统计。此处仅静音噪声。
+    logging.getLogger("collectors.chip").setLevel(logging.ERROR)
     ap = argparse.ArgumentParser(description="S05 切本地筹码 · 阶段一校准(不改生产代码)")
     ap.add_argument("--days", type=int, default=120)
     ap.add_argument("--topn", type=int, default=1500)
