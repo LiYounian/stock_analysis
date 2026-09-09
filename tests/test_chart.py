@@ -64,7 +64,13 @@ def test_web_get_kline_reads_view_not_compute():
     from web import data_access as da
     import inspect
     src = inspect.getsource(da)
-    assert "import technical" not in src and "analysis import" not in src
+    # 展示层禁 import 重计算分析器(technical)。唯一允许的分析器依赖:equal_weight_index
+    # 的视图 loader(`load_daily_mean_pct` 读预算好的等权日均,供选股复盘 α 展示基准)——
+    # 属"只读视图"、不违反 §9.3 依赖方向;其它 `tools.analysis` compute 仍禁止。
+    assert "import technical" not in src
+    bad = [ln for ln in src.splitlines()
+           if "analysis import" in ln and "equal_weight_index" not in ln]
+    assert not bad, f"展示层只允许读 equal_weight_index 视图,不得 import 其它分析器: {bad}"
 
 
 _RECS = [f for f in glob.glob(str(settings.PROJECT_ROOT / "data/analysis/*.json"))
