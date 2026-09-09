@@ -1,8 +1,11 @@
-"""策略 S05「最强选股」入场 Screener(**硬依赖 Tushare 筹码获利比例,仅 Tushare 可用时出**)。
+"""策略 S05「最强选股」入场 Screener(筹码取数源可切:本地 chip 推演 / Tushare cyq_perf)。
 
-看多型:六均线多头 + 近期连续大涨 + 高位区间 + 筹码高度获利。筹码获利比例(`cyq_perf`
-的 winner_rate / cost_95pct)**免费源拿不到**,故未配 Tushare / 取不到筹码 → **不产出选股结果**
-(返回 present=False + "需 Tushare" 提示),**不用免费源硬凑**(见方案 J 表)。
+看多型:六均线多头 + 近期连续大涨 + 高位区间 + 筹码高度获利。④号「筹码高度获利」的取数由
+开关 `strategy.STRONG_CHIP_SOURCE`(env `STRONG_CHIP_SOURCE`)选源:
+  · local(默认)= 本地 `chip.py` 推演(获利比例×100→winner_rate、成本区间上沿→cost_95pct),
+                  15:40 主流程当场可算、**零 Tushare 依赖**;取不到换手率/数据不足 → ④False、不选。
+  · tushare     = 旧行为回退,走 `tushare_daily.fetch_chip`(cyq_perf);未配 token / 取不到筹码
+                  → 返回 present=False + "需 Tushare" 提示,**不产出选股**(不用免费源硬凑)。
 
 规格(参数全读 THRESHOLDS["最强选股"];当日 = 第 t 根,均前复权 OHLC + 当日筹码):
   ① 六均线多头:MA5>MA10>MA20>MA30>MA60>MA200
@@ -11,7 +14,9 @@
   ④ 筹码高度获利:winner_rate > 获利比阈值(%)  或  HIGH ≥ cost_95pct
   SELECT = ①∧②∧③∧④   (chip=None → ④False → 不选)
 
-防未来函数:只用 t 及之前;筹码用当日快照。⚠️ 非投资建议。
+⚠️ 量纲:signal_at 的 winner_rate 一律是**百分数(0~100)**,与 `获利比阈值=95.0` 同量纲。
+  本地源在适配层把 `获利比例`(0~1 小数)×100 转成百分数(写反会让 ④ 恒 False)。
+防未来函数:只用 t 及之前;本地筹码 point-in-time(summarize_asof 只用 ≤as_of 的 bar)。⚠️ 非投资建议。
 """
 from __future__ import annotations
 
@@ -20,13 +25,19 @@ import logging
 import pandas as pd
 
 from tools.analysis.trend_template import indicators as ind
-from tools.collectors import market, tushare_daily
+from tools.collectors import chip, market, tushare_daily
+from tools.config import strategy
 from tools.config.strategy import THRESHOLDS
 from tools.store import repo as store
 
 logger = logging.getLogger("pipeline.screen_strong")
 
 _CFG = THRESHOLDS["最强选股"]
+
+
+def _chip_source() -> str:
+    """当前 ④筹码取数源:'local'(默认)或 'tushare'。每次动态读,便于 env / 测试切换。"""
+    return getattr(strategy, "STRONG_CHIP_SOURCE", "local") or "local"
 
 
 def min_history() -> int:
@@ -115,14 +126,77 @@ def _chip_map(as_of: str) -> dict | None:
             for _, r in df.iterrows()}
 
 
+def _local_chip_of(kdf: pd.DataFrame, as_of: str | None) -> dict | None:
+    """本地 chip 适配层:从已加载的 K线推演当日筹码,映射到 cyq_perf 口径的 chip dict。
+
+    映射(方案A,阈值 95.0 不改):`获利比例`(0~1 小数)×100 → winner_rate(百分数,与阈值同量纲)、
+    `成本区间上沿`(0.95 分位成本价,元)→ cost_95pct。换手率不可用/数据不足(获利比例 None)→ None
+    (交由 signal_at 令 ④False、不选;不伪造筹码)。point-in-time:as_of 指定则 summarize_asof
+    只用 ≤as_of 的 bar,无前视偏差。
+    """
+    try:
+        rec = chip.summarize_asof(kdf, as_of) if as_of else chip.summarize(kdf)
+    except Exception as e:                       # 推演异常只降级该票,不中断整批
+        logger.warning("本地筹码推演失败(降级为无筹码):%s", e)
+        return None
+    wr = rec.get("获利比例")
+    if wr is None:                               # 换手缺失/数据不足 → 无筹码
+        return None
+    cost95 = rec.get("成本区间上沿")
+    return {"winner_rate": float(wr) * 100.0,    # ⚠️ ×100:小数→百分数(与 获利比阈值=95.0 同量纲)
+            "cost_95pct": (float(cost95) if cost95 is not None else None)}
+
+
 def run_strong_screen(codes: list[str], as_of: str | None = None,
                       fetch: bool = True) -> dict | None:
-    """扫描 codes,落 view「最强选股」。**仅 Tushare 可用且筹码取得到时出**;否则写"需 Tushare"占位 view 并返回。
+    """扫描 codes,落 view「最强选股」。④筹码取数源由 `strategy.STRONG_CHIP_SOURCE` 决定。
 
-    未配 token / 筹码取不到 → 不产出选股(不用免费源硬凑),view 标 present=False + 提示。
+    · local(默认):本地 chip 推演,零 Tushare 依赖,15:40 当场出真值。
+    · tushare(回退):**仅 Tushare 可用且筹码取得到时出**;否则写"需 Tushare"占位 view 并返回。
     """
     if as_of:
         store.set_active_date(as_of)
+    if _chip_source() == "local":
+        return _run_local(codes, as_of, fetch)
+    return _run_tushare(codes, as_of, fetch)
+
+
+def _run_local(codes: list[str], as_of: str | None, fetch: bool) -> dict:
+    """本地筹码路径:每票用本地 chip 推演 ④,不触网、不依赖 Tushare。"""
+    need = min_history()
+    selected: list[dict] = []
+    scanned = skipped = degraded = 0
+    for code in codes:
+        kdf = _load_kline(code, fetch)
+        if kdf is None or len(kdf) < need:
+            skipped += 1
+            continue
+        scanned += 1
+        chip_rec = _local_chip_of(kdf, as_of)
+        if chip_rec is None:
+            degraded += 1
+        r = screen_latest(kdf, chip=chip_rec)
+        if r.get("SELECT"):
+            selected.append({"code": code, "明细": r["明细"]})
+
+    view = {
+        "as_of": as_of, "策略": "最强选股(S05)", "方向": "看多", "present": True,
+        "扫描数": len(codes), "有效样本": scanned, "跳过数(历史不足)": skipped,
+        "筹码不可用数": degraded,
+        "入选数": len(selected), "入选清单": selected,
+        "规则": ("六均线多头(MA5>10>20>30>60>200)AND 11日内≥2日涨≥5% AND "
+                 "0.9·H52<C<1.2·H52 AND (获利比例×100>95% 或 HIGH≥成本区间上沿)"),
+        "数据源": "本地筹码推演 chip.py(获利比例×100→winner_rate、成本区间上沿→cost_95pct;零 Tushare)",
+        "防未来函数": "只用 t 及之前;本地筹码 point-in-time(summarize_asof 只用 ≤as_of 的 bar);日线<250 不选",
+    }
+    store.put_view("最强选股", view)
+    logger.info("最强选股(local):扫描 %d / 有效 %d / 跳过 %d / 筹码不可用 %d / 入选 %d",
+                len(codes), scanned, skipped, degraded, len(selected))
+    return view
+
+
+def _run_tushare(codes: list[str], as_of: str | None, fetch: bool) -> dict:
+    """Tushare 回退路径:行为与切换前逐字节等价(未配 token / 取不到筹码 → 占位 view)。"""
     if not tushare_daily.is_configured():
         view = {"as_of": as_of, "策略": "最强选股(S05)", "方向": "看多",
                 "present": False, "需要Tushare": True,
