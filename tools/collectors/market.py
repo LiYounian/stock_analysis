@@ -354,7 +354,71 @@ def fetch_spot_all() -> pd.DataFrame:
         if c != "code":
             df[c] = pd.to_numeric(df[c], errors="coerce")
     df["code"] = df["code"].astype(str).str.zfill(6)
+    _assert_spot_amount_volume(df, "akshare_spot", hard=False)   # 量额口径自检(不阻断兜底)
     return units.to_percent(df, "akshare_spot")   # 口径声明(spot 本已是百分数 → 无操作)
+
+
+def _assert_spot_amount_volume(df, source: str, *, hard: bool) -> None:
+    """量额口径一致性断言(P3-1):amount(元) ≈ close(元) × volume(股),比值中位数应 ≈ 1
+    (= VWAP/close)。若 volume 误留"手"(小 100×)或 amount 误留"万元"(小 1e4×),中位比值
+    会偏离 1 两个数量级,据此**决定性**捕获单位错配(区别于"值小就可疑"的脆弱判据)。
+
+    hard=True:严重偏离直接抛(采集源产出自检,挡住换源引入的 100×/1e4× 错);
+    hard=False:仅告警(下游防御,不阻断兜底路径——如 akshare spot 疑似 volume 留"手")。
+    样本 < 20 不判(宁漏报不误报)。
+    """
+    try:
+        import pandas as pd
+        m = df.loc[:, ["close", "volume", "amount"]].apply(pd.to_numeric, errors="coerce")
+        mask = (m["close"] > 0) & (m["volume"] > 0) & (m["amount"] > 0)
+        if int(mask.sum()) < 20:
+            return
+        ratio = float((m["amount"][mask] / (m["close"][mask] * m["volume"][mask])).median())
+    except Exception:
+        return                       # 缺列/异常帧不阻断,交由既有流程处理
+    if 0.5 <= ratio <= 2.0:
+        return
+    msg = (f"spot 量额口径异常(源 {source}):amount/(close×volume) 中位={ratio:.4g},应≈1;"
+           f"疑似 volume 未归股(×100)或 amount 未归元(×1e4)")
+    if hard:
+        raise ValueError(msg)
+    logger.warning(msg)
+
+
+def fetch_spot_all_tencent(codes: list[str]) -> pd.DataFrame:
+    """腾讯 gtimg 批量快照 → 全A当日 bar 标准帧(收盘后现价即收盘价)。返回标准列(含 code)。
+
+    本机东财 spot 有 TLS 指纹墙(akshare spot 必败 → 逐只慢回退),腾讯批量快照是当日增量的
+    稳定主源:~50 只/请求、约 0.2s/请求、不封 IP。字段**归一到主档口径**:
+      · volume 手 → ×100 股(与 backfill 的 baostock/腾讯K线口径一致,防主档拼接量级跳变)
+      · amount 万元 → ×1e4 元
+      · turnover 已是百分数(source="gtimg_quote" 在 units 登记为 PERCENT,不二次缩放)
+    落盘前经 `_assert_spot_amount_volume` 硬断言把住 100×/1e4× 错配(P3-1)。
+    codes:本轮 A 股票池(腾讯需显式代码);停牌/异常票不在返回里,由上层按缺失跳过。
+    """
+    from tools.collectors import gtimg_quote
+    codes = [c for c in dict.fromkeys(codes) if c]
+    if not codes:
+        raise ConnectionError("腾讯 spot:空票池")
+    quotes = gtimg_quote.fetch_quotes(codes)      # {code: 字段};停牌票不在内
+    if not quotes:
+        raise ConnectionError("腾讯 spot 全A当日行情为空")
+    rows = []
+    for code, q in quotes.items():
+        vol_shou = q.get("volume")
+        amt_wan = q.get("amount_wan")
+        rows.append({
+            "code": str(code).zfill(6),
+            "open": q.get("open"), "high": q.get("high"), "low": q.get("low"),
+            "close": q.get("price"),                                     # 收盘后现价=收盘价
+            "volume": None if vol_shou is None else vol_shou * 100.0,    # 手 → 股
+            "amount": None if amt_wan is None else amt_wan * 1e4,        # 万元 → 元
+            "turnover": q.get("turnover"),                              # 已百分数
+            "pct_chg": q.get("pct_chg"),
+        })
+    df = pd.DataFrame(rows)
+    _assert_spot_amount_volume(df, "gtimg_quote", hard=True)             # P3-1 归一硬断言
+    return units.to_percent(df, "gtimg_quote")     # turnover 口径声明(gtimg_quote=percent → 无操作)
 
 
 def update_master_from_spot(codes: list[str] | None = None, date: str | None = None,
@@ -373,6 +437,7 @@ def update_master_from_spot(codes: list[str] | None = None, date: str | None = N
     """
     if spot is None:
         spot = fetch_spot_all()
+    _assert_spot_amount_volume(spot, source, hard=False)   # 统一入口:任何源喂入的量额口径软校验
     d = date or pd.Timestamp.today().strftime("%Y-%m-%d")
     spot = spot.set_index("code")
     if codes is None:
