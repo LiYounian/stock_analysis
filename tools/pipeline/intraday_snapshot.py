@@ -72,6 +72,28 @@ _CODE_NAME_PATH = settings.PROJECT_ROOT / "config" / "code_name.json"
 _SLOT_RE = re.compile(r"^([01]\d|2[0-3])([0-5]\d)$")     # HHMM(其余 slot 名视为"名义时刻未知")
 _CODE_RE = re.compile(r"(?<!\d)(\d{6})(?!\d)")
 
+# 机读锚点:选股 md 顶部可放一行 `<!-- PICKS: 601061,600356,... -->`(HTML 注释,给人不可见、给机器权威)。
+# 选 HTML 注释而非 YAML frontmatter:注释对 md 渲染完全透明(不显示、不占版面),各类阅读器/GitHub 预览
+# 都不当正文;frontmatter 需文件严格以 `---` 起头,对存量自由文本 md 侵入更大。
+_ANCHOR_RE = re.compile(r"<!--\s*PICKS?\s*:\s*(.*?)\s*-->", re.IGNORECASE | re.DOTALL)
+# 锚点里表示"本日无选股"的取值(命中即返回空、绝不回退全文扫码)。
+_ANCHOR_NONE = {"none", "skip", "empty", "n/a", "na", "-", "无", ""}
+
+# 无锚点时的回退**首选锚区**:"买入建议排序"这一节。
+#   为什么单挑这一节:它是每份真实收盘选股 md 都有的**最终排序表**(`## 4. 买入建议排序` /
+#   `## 四、买入建议排序`),一张干净的表格恰好列出且仅列出当日全部入选票(买入候选/观望/检验/规避都在),
+#   且**排在**策略建议(§6)/记分预登记(§5)/遇到的问题这些含"说明性散码"的节**之前**。
+# `买入(建议)?排序` 同时覆盖收盘选股 md 的「买入建议排序」和 intraday_screen 全A午盘选股 md 的「买入排序」榜。
+_PICK_SECTION_RE = re.compile(r"买入(?:建议)?排序")
+# 次选锚区:没有"买入建议排序"节的老/异版 md(如 day-0 人工文)用其它"选股清单式"节名兜底。
+#   反例(刻意排除):§3「逐票深度分析」正文、§6「策略建议」等含消息面误判讨论里的散码
+#   (如"同名深圳能源000027 张冠李戴"),不在选股清单节内,故不会被扫到。
+_PICKLIST_SECTION_RE = re.compile(
+    r"买入(?:建议)?排序|选股清单|最终选出|最终\s*\d+\s*只|\d+\s*只票|入选.{0,6}清单|最终.{0,4}只")
+# 识别"跳过留痕/本日无选股"文件——只看**标题行**:真正的跳过文件会在标题里自证跳过;
+# 正文里"…当晚如实跳过…"这类叙述(补做文件常见)不算,否则会把有真实选股的补做文件误判成空。
+_SKIP_MARK_RE = re.compile(r"跳过留痕|本日无选股|今日无选股|无真实选股|选股跳过|未选股|本日跳过|跳过.{0,6}选股")
+
 
 # ────────────────────────────── 标的解析 ──────────────────────────────
 
@@ -96,28 +118,97 @@ def _looks_like_a_code(code: str) -> bool:
     return len(code) == 6 and code[:1] in ("0", "2", "3", "6", "8", "4") and code not in INDEX_CODES
 
 
-def parse_pick_codes(md_path: str | Path) -> list[str]:
-    """从选股 md 里解析出选中的股票代码(顺序去重)。
+def _codes_from(text: str, *, trust: bool = False) -> list[str]:
+    """从一段文本里扫独立 6 位代码(顺序去重、剔指数)。
 
-    md 是给人读的自由文本(代码出现在表格/标题/正文里,格式历史上不统一),所以不去猜版式:
-    扫全文所有独立 6 位数字串,再用**离线全A代码表**过滤(拿不到代码表时回退前缀规则),
-    并剔除指数代码。宁多不漏——多抓一只只是多抓一条报价,漏抓则该票当天没有早盘快照。
+    trust=False(默认,回退扫码):用**离线全A代码表**过滤散码(拿不到代码表时回退前缀规则),
+      只留像真票的;trust=True(锚点):锚点是权威来源,只做去指数/去重的最小清洗,不要求在代码表里
+      (允许代码表尚未收录的新票/920 段等,以锚点为准)。
     """
-    p = Path(md_path)
-    if not p.exists():
-        return []
-    text = p.read_text(encoding="utf-8", errors="ignore")
-    known = _known_codes()
+    known = _known_codes() if not trust else set()
     out: list[str] = []
     for code in _CODE_RE.findall(text):
         if code in INDEX_CODES or code in out:
             continue
-        if known:
+        if trust:
+            out.append(code)
+        elif known:
             if code in known:
                 out.append(code)
         elif _looks_like_a_code(code):
             out.append(code)
     return out
+
+
+def _split_sections(text: str) -> list[tuple[str, str]]:
+    """按 level-2(`## `)标题把 md 切成 [(标题行, 正文), ...];首个 `## ` 之前的前言标题为空串。"""
+    sections: list[tuple[str, str]] = []
+    head, body = "", []
+    for line in text.splitlines():
+        if re.match(r"^##\s", line):        # 只在 level-2 处切;### 子标题留在本节正文里
+            sections.append((head, "\n".join(body)))
+            head, body = line, []
+        else:
+            body.append(line)
+    sections.append((head, "\n".join(body)))
+    return sections
+
+
+def _is_skip_file(text: str) -> bool:
+    """跳过留痕/本日无选股文件?**只看标题行**(首个 `# `)是否自证跳过。
+
+    刻意不扫正文:补做文件常在正文叙述"原文件为跳过留痕/当晚如实跳过",但它本身有真实选股,
+    扫正文会把这类文件误判成空。真正的跳过留痕文件会在标题里写明。
+    """
+    title = next((ln for ln in text.splitlines() if ln.startswith("# ")), "")
+    return bool(_SKIP_MARK_RE.search(title))
+
+
+def parse_pick_codes(md_path: str | Path) -> list[str]:
+    """从选股 md 里解析出**当日选中**的股票代码(顺序去重、剔指数)。
+
+    解析优先级(从最权威到最兜底):
+      1. **机读锚点** `<!-- PICKS: 601061,600356,... -->`:存在即**只认锚点**里的码
+         (`PICKS: none` / 无选股标记 → 返回空)。这是生成方应主动写出的确定性契约。
+      2. **跳过留痕/本日无选股**文件(**标题行**自证跳过)→ 返回空,**不回退全文扫码**
+         (根因:这类文件正文常含说明性 6 位数字,历史上被误当"昨日选股"抓走)。
+      3. **无锚点时的回退**:只在**「买入建议排序」这一节**里扫码——它是每份真实收盘选股 md 都有的
+         最终排序表,干净地列出且仅列出当日全部入选票,且排在策略建议/记分/遇到的问题这些含正文散码的节之前。
+      4. **没有该节**的老/异版 md(如 day-0 人工文):退而扫其它"选股清单式"节(选股清单/最终选出/N只票…)。
+      5. **连选股清单节都没有** → 返回空。跳过留痕文件正是这种(只有根因/说明文字、无选股清单表),
+         从而**不会**再把根因段落里的散码误当"昨日选股"抓走(本次要修的缺陷)。
+
+    宁缺勿滥优先于宁多不漏:多抓一只散码会让下游快照/研判跟踪一只根本没选的票(已实证的缺陷),
+    比漏抓危害更大;真正想被跟踪的票,生成方写一行锚点即可确定性锁定。
+    """
+    p = Path(md_path)
+    if not p.exists():
+        return []
+    text = p.read_text(encoding="utf-8", errors="ignore")
+
+    # 1) 机读锚点最优先:存在即只认锚点
+    m = _ANCHOR_RE.search(text)
+    if m:
+        raw = m.group(1).strip()
+        if raw.lower() in _ANCHOR_NONE or _SKIP_MARK_RE.search(raw):
+            return []
+        return _codes_from(raw, trust=True)
+
+    # 2) 标题自证跳过 → 空(不回退扫码)
+    if _is_skip_file(text):
+        return []
+
+    sections = _split_sections(text)
+    # 3) 首选:「买入建议排序」节
+    region = "\n".join(body for head, body in sections if _PICK_SECTION_RE.search(head))
+    if region:
+        return _codes_from(region)
+    # 4) 次选:其它选股清单式节(老/异版 md)
+    region = "\n".join(body for head, body in sections if _PICKLIST_SECTION_RE.search(head))
+    if region:
+        return _codes_from(region)
+    # 5) 无任何选股清单节(含跳过留痕文件)→ 空
+    return []
 
 
 def prev_trading_day(date: str) -> str | None:

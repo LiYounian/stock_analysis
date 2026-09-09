@@ -17,6 +17,7 @@ from datetime import datetime, timedelta
 
 import pytest
 
+from tools.config import settings
 from tools.pipeline import intraday_snapshot as snap
 
 _DATE = "2026-09-03"          # 周四
@@ -48,29 +49,101 @@ def env(tmp_path, monkeypatch):
 
 # ───────────────── 标的解析 ─────────────────
 
-def test_parse_pick_codes_picks_stocks_from_md(env):
-    """选股 md 里的股票代码要能捞出来;指数代码/噪声数字不能混进来。"""
+# 一段带「买入建议排序」节的最小选股 md:回退路径只在该节里扫码。
+_PICK_MD = (
+    "# 每日选股 2026-09-02\n"
+    "## 2. 选股清单与理由\n"
+    "正文里聊到同名 深圳能源 000027 张冠李戴、对照 300885 海昌新材——都是散码,不该入选。\n"
+    "## 4. 买入建议排序（明确表态）\n"
+    "| 排序 | 代码 | 名称 | 表态 |\n"
+    "|---|---|---|---|\n"
+    "| 1 | **002811** 郑中设计 | 买入候选 |\n"
+    "| 2 | 603270 金帝股份 | 买入候选 |\n"
+    "| 3 | 688569 铁科轨道 | 观望 |\n"
+    "对照基准 沪深300 000300、深成指 399001;成交 1234567 万。\n"
+    "## 6. 策略建议\n"
+    "§6 提到 600248 / 600249 / 600250 是采集卡住的票(散码),绝不能当昨日选股。\n")
+
+
+def test_parse_pick_codes_from_ranking_section(env):
+    """无锚点 → 只从「买入建议排序」节取码:指数/正文散码/§6举例码都不该混进来。"""
+    md = env / "选股" / "2026-09-02.md"
+    md.write_text(_PICK_MD, encoding="utf-8")
+    codes = snap.parse_pick_codes(md)
+    assert codes == ["002811", "603270", "688569"]      # 顺序去重、只留排序节里的真票
+    assert "000300" not in codes and "399001" not in codes   # 指数不是标的(单列 indices)
+    for junk in ("000027", "300885", "600248", "600249", "600250"):
+        assert junk not in codes                        # §2/§6 正文散码不抓(本次要修的缺陷)
+
+
+def test_parse_pick_codes_anchor_only(env):
+    """有机读锚点 → 只认锚点里的码,正文里的散码/表格码一律忽略。"""
     md = env / "选股" / "2026-09-02.md"
     md.write_text(
+        "<!-- PICKS: 601061, 600356 , 601339 -->\n"
         "# 每日选股 2026-09-02\n"
-        "| **002811 郑中设计** | 买入候选 |\n"
-        "| 603270 金帝股份 | 买入候选 |\n"
-        "### 3. 铁科轨道 688569 ｜ 距250日高 91.08%\n"
-        "沪深300 000300 收 4547.96,深成指 399001;成交 1234567 万\n"
-        "无效代码 999999 不应入选\n", encoding="utf-8")
-    codes = snap.parse_pick_codes(md)
-    assert codes == ["002811", "603270", "688569"]      # 顺序去重、只留真票
-    assert "000300" not in codes and "399001" not in codes   # 指数不是标的(单列 indices)
-    assert "999999" not in codes                        # 不在全A代码表 → 剔除
+        "## 4. 买入建议排序\n"
+        "| 1 | 002811 | 买入 |  (锚点存在时这些表格码应被忽略)\n", encoding="utf-8")
+    assert snap.parse_pick_codes(md) == ["601061", "600356", "601339"]
+
+
+def test_parse_pick_codes_anchor_none_returns_empty(env):
+    """锚点 `PICKS: none` = 本日无选股 → 空,且不回退扫正文散码。"""
+    md = env / "选股" / "2026-09-02.md"
+    md.write_text(
+        "<!-- PICKS: none -->\n"
+        "# 每日选股 2026-09-02（跳过留痕）\n"
+        "根因:baostock 串行采集卡在 600248 / 600249 / 600250。\n", encoding="utf-8")
+    assert snap.parse_pick_codes(md) == []
+
+
+def test_parse_pick_codes_skip_stub_by_title_returns_empty(env):
+    """无锚点的跳过留痕文件(标题自证跳过)→ 空,不把根因段落里的散码当选股。"""
+    md = env / "选股" / "2026-09-02.md"
+    md.write_text(
+        "# 每日选股 2026-09-02 · 选股跳过留痕（本日无选股）\n"
+        "## 根因\n"
+        "baostock 串行自采超时,卡在 600248 / 600249 / 600250 等票,门控窗口内未就绪。\n",
+        encoding="utf-8")
+    assert snap.parse_pick_codes(md) == []
+
+
+def test_parse_pick_codes_backfill_narrating_skip_still_parses(env):
+    """补做文件正文虽叙述"原文件为跳过留痕/当晚如实跳过",但自身有真实选股 → 照常取到票。"""
+    md = env / "选股" / "2026-09-02.md"
+    md.write_text(
+        "# 每日选股分析 · 2026-09-02（收盘后选股）\n"
+        "> 本文为补做:当晚闭环超时、选股在门控窗口内跳过(原文件为跳过留痕),本文据实补做替代之。\n"
+        "## 4. 买入建议排序\n"
+        "| 1 | 002811 | 买入 |\n"
+        "| 2 | 603270 | 观望 |\n", encoding="utf-8")
+    assert snap.parse_pick_codes(md) == ["002811", "603270"]
+
+
+def test_parse_pick_codes_real_0908_md_no_junk():
+    """存量真实 md(2026-09-08,无锚点):应取到 §4 的 8 只、且不含根因/§6 里的散码。"""
+    real = settings.PROJECT_ROOT / "docs" / "每日分析" / "选股" / "2026-09-08.md"
+    if not real.exists():                               # 仓库外运行/文件被裁 → 跳过,不误红
+        pytest.skip("真实 09-08 选股 md 不在当前工作副本")
+    codes = snap.parse_pick_codes(real)
+    expected = {"601061", "600356", "601339", "688712", "601000", "000035", "688262", "000019"}
+    assert expected.issubset(set(codes))               # 8 只真实选股都在
+    for junk in ("600248", "600249", "600250"):        # 09-08 让 09-09 误跟的三只根因码
+        assert junk not in codes
 
 
 def test_parse_pick_codes_missing_file_returns_empty(env):
     assert snap.parse_pick_codes(env / "选股" / "不存在.md") == []
 
 
+def _ranking_md(*codes: str) -> str:
+    rows = "\n".join(f"| {i+1} | {c} | 买入 |" for i, c in enumerate(codes))
+    return "# 每日选股\n## 4. 买入建议排序\n| 排序 | 代码 | 表态 |\n|---|---|---|\n" + rows + "\n"
+
+
 def test_resolve_targets_union_pick_pool_explicit(env):
     """标的 = 选股md ∪ 自选池 ∪ --codes,且来源明细可追溯。"""
-    (env / "选股" / "2026-09-02.md").write_text("| 002811 郑中设计 |", encoding="utf-8")
+    (env / "选股" / "2026-09-02.md").write_text(_ranking_md("002811"), encoding="utf-8")
     codes, src = snap.resolve_targets(_DATE, ["603270"])
     assert codes == ["002811", "000021", "300308", "603270"]
     assert src["pick_codes"] == ["002811"] and src["pool_codes_n"] == 2
