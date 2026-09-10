@@ -7,7 +7,7 @@
 
 <div class="stock-head">
   <h1>{{ d.name }} <span class="code">{{ d.code }}</span>
-    <small>{{ d.sector }}{% if d.industry %} · {{ d.industry }}{% endif %} · 财报详细分析 · ⚠️ 非投资建议</small></h1>
+    <small>{% set _sec = d.sector %}{% set _ind = d.industry %}{% if _sec and _ind %}{{ _sec }} · {{ _ind }} · {% elif _sec or _ind %}{{ _sec or _ind }} · {% endif %}财报详细分析 · ⚠️ 非投资建议</small></h1>
   <p class="tiny muted">财报发布时间 <b>{{ d.披露日 or '未知' }}</b> · 分析日期 <b>{{ d.分析日期 or '未知' }}</b> · 分析上传时间 <b>{{ d.上传时间 or '未知' }}</b></p>
   <div class="badges">
     <span class="badge big {{ 'buy' if fin.评级 in ['优','良'] else ('sell' if fin.评级 in ['差','风险'] else 'wait') }}">财报评级 {{ fin.评级 or '-' }}</span>
