@@ -261,7 +261,11 @@ def sync_master(codes: list[str], as_of: str | None = None, *,
     """
     if not codes:
         return {"mode": "noop", "ok": 0}
-    as_of = as_of or pd.Timestamp.today().strftime("%Y-%m-%d")
+    # P0-1:编排入口统一"当前逻辑日"——as_of 缺省接 active_date()(编排开始已 set 的 as_of)→
+    # 再退今天;并**在开跑前 set_active_date(as_of)**,让主档写入路径(update_master_from_spot /
+    # 回退推进)与 raw 采集全链路落同一逻辑日,消除主档 bar 落"今天"、raw 落 as_of 的错位(风险 F)。
+    as_of = as_of or store.active_date() or pd.Timestamp.today().strftime("%Y-%m-%d")
+    store.set_active_date(as_of)
     need, reason = _needs_backfill(codes, as_of)
 
     if need:
