@@ -47,19 +47,76 @@ def bs_code(code: str) -> str | None:
     return exchange.dotted(code)
 
 
-@contextmanager
-def session():
-    """登录 baostock,退出时登出。登录失败抛 ConnectionError。"""
+def login():
+    """显式登录 baostock,返回 bs 模块;登录失败抛 ConnectionError。
+
+    供"可重建会话"手动管理登录态用(坏会话 → logout()+login() 重建)。
+    `session()` 内部也复用它,行为对既有调用者透明。
+    """
     import baostock as bs
     lg = bs.login()
     if lg.error_code != "0":
         raise ConnectionError(f"baostock 登录失败 {lg.error_code}: {lg.error_msg}")
     logger.info("baostock 登录成功")
+    return bs
+
+
+def logout():
+    """显式登出 baostock(幂等、不抛)。会话重建/收尾都经它,失败静默(登出失败无碍)。"""
+    try:
+        import baostock as bs
+        bs.logout()
+        logger.info("baostock 登出")
+    except Exception as e:  # noqa: BLE001
+        logger.debug("baostock 登出忽略异常: %s", e)
+
+
+@contextmanager
+def session():
+    """登录 baostock,退出时登出。登录失败抛 ConnectionError。"""
+    bs = login()
     try:
         yield bs
     finally:
-        bs.logout()
-        logger.info("baostock 登出")
+        logout()
+
+
+# —— 会话级/网络级 vs 数据级 错误分类(单一真源在本模块:baostock 报错形态它最懂)——
+# 会话级/网络级 → 可 logout+重登+重试;数据级/源不支持 → 终态 skip,**绝不重建**(防误伤
+# 正常会话)。判据用描述性一般特征(类型 + 中/英关键词),不写死具体 error_code 清单,
+# 未来 baostock 换措辞也不易误判。
+_DATA_LEVEL_ZH = ("空数据", "不支持", "未标识", "无数据")
+_DATA_LEVEL_EN = ("no data", "not identified", "empty", "unsupported")
+_SESSION_LEVEL_ZH = ("登录失败", "网络", "连接", "接收", "发送", "超时")
+_SESSION_LEVEL_EN = ("login", "network", "connection", "connect", "socket",
+                     "timed out", "timeout", "reset", "refused", "closed",
+                     "receive", "recv", "unreachable", "broken pipe")
+
+
+def is_session_error(exc: BaseException) -> bool:
+    """该异常是否为 baostock **会话级/网络级**错误(可 logout+重登+重试)。
+
+    返回 False 表示**数据级/源不支持**(空数据、北交所不支持等)——这类是"这只票本就
+    没数据",应按单票 skip,**绝不触发会话重建**(否则健康会话被无数据票误拖去重登 = 误伤)。
+
+    判据(数据级优先短路):
+      · ValueError → 数据级(fetch_one 用它表达"空数据 / 源不支持")。
+      · 命中数据级关键词 → 数据级。
+      · 命中会话级/网络关键词 → 会话级。
+      · 兜底:ConnectionError / OSError 等网络异常类型 → 会话级。
+    """
+    msg = str(exc)
+    low = f"{type(exc).__name__} {msg}".lower()
+    # 1) 数据级短路:明确"本就没数据/源不支持"→ 绝不重建
+    if isinstance(exc, ValueError):
+        return False
+    if any(m in msg for m in _DATA_LEVEL_ZH) or any(m in low for m in _DATA_LEVEL_EN):
+        return False
+    # 2) 会话级/网络级 → 可重建重试
+    if any(m in msg for m in _SESSION_LEVEL_ZH) or any(m in low for m in _SESSION_LEVEL_EN):
+        return True
+    # 3) 兜底:网络类异常类型视为会话级
+    return isinstance(exc, (ConnectionError, OSError))
 
 
 def fetch_one(code: str, start: str, end: str, adjust: str = "qfq") -> pd.DataFrame:

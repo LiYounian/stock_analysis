@@ -15,7 +15,7 @@ LOG="${STOCK_COMMITDOCS_LOG:-$HOME/.local/state/stock/commitdocs.log}"
 mkdir -p "$(dirname "$LOG")"
 log() { echo "$(date '+%Y-%m-%d %H:%M:%S') $*" >> "$LOG"; }
 
-PATHS=("docs/每日分析/选股" "docs/每日分析/复盘" "docs/每日分析/经验沉淀")
+PATHS=("docs/每日分析/选股" "docs/每日分析/复盘" "docs/每日分析/经验沉淀" "docs/每日分析/策略建议")
 
 log "==== commit_analysis_docs 开始 ===="
 

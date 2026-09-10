@@ -392,6 +392,115 @@ def test_enrich_switch_off(monkeypatch):
     assert stats["need"] == 0 and stats["filled"] == 0
 
 
+# ————————————————————————————————————————————————————————————————————————
+# baostock 会话深层韧性:坏会话检测 → 重建 → 重试(2026-09-10)
+# 锁死"为什么改"的语义:一次登录态老化不得毒化整批补齐、且不无限 churn;数据级错误
+# 绝不触发重建(防误伤正常会话);真全挂时纵深兜底(每日止血)不塌。
+# ————————————————————————————————————————————————————————————————————————
+def _nan_tail(date="2026-09-03"):
+    return pd.DataFrame({"date": pd.to_datetime([date]), "volume": [1e6],
+                        "amount": [np.nan], "turnover": [np.nan]})
+
+
+def _good_bar(start):
+    return pd.DataFrame({"date": pd.to_datetime([start]),
+                        "volume": [1e6], "amount": [8.2e7], "turnover": [2.7]})
+
+
+def test_enrich_rebuilds_broken_session_then_fills(monkeypatch):
+    """中途坏会话 → 重建后补满:第一个会话内查恒会话级失败,logout+重登后成功;
+    断言 filled 补满、still_missing==0、login 被调 ≥2(确实重建了)、rebuilds≥1。
+    锁住核心动机——死会话不再把批内其后整批拖成 NaN。"""
+    from contextlib import contextmanager
+    from tools.collectors import baostock_src, master_sync
+    monkeypatch.setattr(master_sync.time, "sleep", lambda *a, **k: None)  # 不真退避,测试快
+    state = {"gen": 0, "logins": 0}
+
+    @contextmanager
+    def _counting_session():
+        state["gen"] += 1
+        state["logins"] += 1
+        yield None
+
+    def _fetch(code, start, end, adjust="qfq"):
+        if state["gen"] == 1:            # 第一个(坏)会话:恒会话级失败
+            raise ConnectionError(f"baostock {code} error 10001001: 网络接收错误")
+        return _good_bar(start)          # 重登后的会话:成功
+
+    monkeypatch.setattr(baostock_src, "session", _counting_session)
+    monkeypatch.setattr(baostock_src, "fetch_one", _fetch)
+    tails = {c: _nan_tail() for c in ("000001", "600000")}
+    stats = master_sync._enrich_turnover_amount(tails)
+    assert stats["filled"] == 2 and stats["still_missing"] == 0
+    assert stats["session_failed"] is False
+    assert stats["rebuilds"] >= 1 and state["logins"] >= 2, "中途坏会话必须触发重建重登"
+
+
+def test_enrich_data_level_error_does_not_rebuild(monkeypatch):
+    """数据级错误(空数据)不触发重建:健康会话不被"本就没数据"的票误拖去重登。
+    断言 login 恰 1 次、rebuilds==0、该票 failed、其余票正常补齐。锁住"防误伤"。"""
+    from contextlib import contextmanager
+    from tools.collectors import baostock_src, master_sync
+    state = {"logins": 0}
+
+    @contextmanager
+    def _counting_session():
+        state["logins"] += 1
+        yield None
+
+    def _fetch(code, start, end, adjust="qfq"):
+        if code == "000001":
+            raise ValueError(f"baostock {code} 空数据")   # 数据级 → 绝不重建
+        return _good_bar(start)
+
+    monkeypatch.setattr(baostock_src, "session", _counting_session)
+    monkeypatch.setattr(baostock_src, "fetch_one", _fetch)
+    tails = {c: _nan_tail() for c in ("000001", "600000")}
+    stats = master_sync._enrich_turnover_amount(tails)
+    assert state["logins"] == 1 and stats["rebuilds"] == 0, "数据级错误不得触发会话重建"
+    assert stats["filled"] == 1 and stats["failed"] == 1
+    assert stats["session_failed"] is False
+
+
+def test_enrich_bounded_rebuilds_when_truly_down(monkeypatch, caplog):
+    """baostock 真全挂:每次建立会话即失败 → 重建有上界(login ≤ cap+1)、session_failed
+    契约成立、**不抛**、升 error、剩余票保持 NaN 交每日止血。
+    锁住"封顶不无限 churn 招登录频控、纵深兜底不塌"。"""
+    import logging
+    from tools.collectors import baostock_src, master_sync
+    monkeypatch.setenv("ENRICH_REBUILD_MAX", "2")
+    state = {"logins": 0}
+
+    def _dead_session():
+        state["logins"] += 1
+        raise ConnectionError("baostock 登录失败 10002007: 网络接收错误")
+
+    monkeypatch.setattr(baostock_src, "session", _dead_session)
+    tails = {c: _nan_tail() for c in ("000001", "600000")}
+    with caplog.at_level(logging.ERROR, logger="collectors.master_sync"):
+        stats = master_sync._enrich_turnover_amount(tails)   # 必须不抛
+    assert stats["session_failed"] is True
+    assert stats["filled"] == 0 and stats["failed"] == 2 and stats["still_missing"] == 2
+    assert stats["rebuilds"] == 2 and state["logins"] <= 3, "重建必须封顶(cap+1)"
+    assert any(r.levelno >= logging.ERROR for r in caplog.records), "真全挂必须升 error"
+
+
+def test_is_session_error_classifies_baostock_shapes():
+    """分类器:baostock 会话级/网络级(可 logout+重登+重试) vs 数据级/源不支持(终态 skip)。
+    锁住根因——分类器须认得 baostock 的 error_code+中文形态,不被未来重写悄悄改回英文-only。"""
+    from tools.collectors import baostock_src as b
+    # 会话级/网络级 → True(可重建重试)
+    assert b.is_session_error(ConnectionError("baostock 000001 error 10001001: 网络接收错误"))
+    assert b.is_session_error(ConnectionError("baostock 登录失败 10002007: ..."))
+    assert b.is_session_error(OSError("Connection reset by peer"))
+    assert b.is_session_error(TimeoutError("timed out"))
+    # 数据级/源不支持 → False(绝不重建,防误伤)
+    assert not b.is_session_error(ValueError("baostock 000001 空数据"))
+    assert not b.is_session_error(ValueError("baostock 不支持该代码(北交所或非A股): 920002"))
+    assert not b.is_session_error(RuntimeError("no data for 000001"))
+    assert not b.is_session_error(RuntimeError("some pure logic error"))
+
+
 # ————————————————————————————————————————————————
 # turnover 近端整段缺失(NaN)的 volume÷流通股 回填(backfill_turnover_from_volume)
 # 锁死语义:①用本票自身正常行 ratio × volume 还原,回填值是百分数、口径不二义;
