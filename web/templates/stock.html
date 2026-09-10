@@ -6,7 +6,7 @@
 
 <div class="stock-head">
   <h1>{{ r.meta.name }} <span class="code">{{ r.meta.code }}</span>
-    <small>{{ r.meta.sector }} · {{ r.meta.industry }}{% if r.meta.industry_asof and r.meta.industry_asof != r.meta.industry %}
+    <small>{% set _sec = r.meta.sector %}{% set _ind = r.meta.industry %}{% if _sec and _ind %}{{ _sec }} · {{ _ind }}{% else %}{{ _sec or _ind or '—' }}{% endif %}{% if r.meta.industry_asof and r.meta.industry_asof != r.meta.industry %}
       · <span class="muted" title="该日当时所属行业(去回测前视偏差)">当时:{{ r.meta.industry_asof }}</span>{% endif %}</small></h1>
   {% if snap %}
   <div class="price">{{ snap.close }}
