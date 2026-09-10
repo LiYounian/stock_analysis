@@ -48,6 +48,41 @@ def test_fetch_one_fallback(monkeypatch):
     assert len(df) == 2
 
 
+def test_watchdog_slow_source_skipped_不拖死整轮(monkeypatch):
+    """A1 单票看门狗:某源 read 挂起(远超硬超时仍不返回)→ 硬超时即跳过换下一个源,
+    整轮采集不被这只票拖死(RC-2 根治,诊断 §6.1)。锁"超时即跳过、快速返回"语义。
+    """
+    import threading
+    import time
+
+    monkeypatch.setenv("FETCH_SRC_TIMEOUT", "0.3")   # 缩短硬超时,测试内秒级验证
+    started = threading.Event()
+
+    def hang(*a, **k):
+        started.set()
+        time.sleep(30)               # 模拟 sina/eastmoney read 无限挂起(远超 0.3s 上界)
+        return _sample_std()
+
+    monkeypatch.setitem(market._FETCHERS, "tencent", hang)
+    monkeypatch.setitem(market._FETCHERS, "sina", lambda *a, **k: _sample_std())
+
+    t0 = time.monotonic()
+    df = market.fetch_one("000021", "20260101", "20260105", "qfq")
+    elapsed = time.monotonic() - t0
+
+    assert started.is_set()          # 挂起源确实被调用过
+    assert len(df) == 2              # 命中 fallback sina,不返空
+    assert elapsed < 5               # 关键:0.3s 硬超时即跳过,没被 30s sleep 拖死
+
+
+def test_watchdog_timeout_from_env_default(monkeypatch):
+    """看门狗超时可由 FETCH_SRC_TIMEOUT 覆盖,缺省 40s(覆盖 tencent 内部 15s×2 最坏串行)。"""
+    monkeypatch.delenv("FETCH_SRC_TIMEOUT", raising=False)
+    assert market._src_timeout() == 40.0
+    monkeypatch.setenv("FETCH_SRC_TIMEOUT", "12.5")
+    assert market._src_timeout() == 12.5
+
+
 def test_fetch_one_all_fail_raises(monkeypatch):
     """全源失败必须抛错,不返回空 df(约法第 5 条)。"""
     def boom(*a, **k):
