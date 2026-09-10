@@ -1,6 +1,8 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<!-- 午盘选股复盘(下午 α · D-0 当日闭环)。工作日 15:12 触发(breadth 15:05 之后)。
+<!-- 午盘选股复盘(下午 α · D-0 当日闭环)。工作日 17:00 触发(D9 方案a:等 pull_refresh 15:40+~73min
+     把当日全A收盘落进主档、约 16:50 齐,17:00 有 ~10min 余量;若某日 pull_refresh 跑超时,复盘会
+     优雅降级不崩,届时把本 job 往后挪即可)。
      ⚠️ 草案:由统筹/用户 launchctl load 安装,实现窗不安装、不 load。
      安装前请确认 ProgramArguments 里的 .sh 路径与本机 dailyjob worktree 一致(下方给的是
      与 com.stock.intraday_screen.plist 同款的双路径兜底,按本机实际改)。 -->
@@ -22,11 +24,11 @@
 	<string>/Users/yqg/.local/state/stock/intraday_review.out.log</string>
 	<key>StartCalendarInterval</key>
 	<array>
-		<dict><key>Hour</key><integer>15</integer><key>Minute</key><integer>12</integer><key>Weekday</key><integer>1</integer></dict>
-		<dict><key>Hour</key><integer>15</integer><key>Minute</key><integer>12</integer><key>Weekday</key><integer>2</integer></dict>
-		<dict><key>Hour</key><integer>15</integer><key>Minute</key><integer>12</integer><key>Weekday</key><integer>3</integer></dict>
-		<dict><key>Hour</key><integer>15</integer><key>Minute</key><integer>12</integer><key>Weekday</key><integer>4</integer></dict>
-		<dict><key>Hour</key><integer>15</integer><key>Minute</key><integer>12</integer><key>Weekday</key><integer>5</integer></dict>
+		<dict><key>Hour</key><integer>17</integer><key>Minute</key><integer>0</integer><key>Weekday</key><integer>1</integer></dict>
+		<dict><key>Hour</key><integer>17</integer><key>Minute</key><integer>0</integer><key>Weekday</key><integer>2</integer></dict>
+		<dict><key>Hour</key><integer>17</integer><key>Minute</key><integer>0</integer><key>Weekday</key><integer>3</integer></dict>
+		<dict><key>Hour</key><integer>17</integer><key>Minute</key><integer>0</integer><key>Weekday</key><integer>4</integer></dict>
+		<dict><key>Hour</key><integer>17</integer><key>Minute</key><integer>0</integer><key>Weekday</key><integer>5</integer></dict>
 	</array>
 </dict>
 </plist>
