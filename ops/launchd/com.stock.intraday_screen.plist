@@ -7,8 +7,8 @@
 	<key>ProgramArguments</key>
 	<array>
 		<string>/bin/bash</string>
-		<string>/Users/yqg/Documents/projects/worktrees/stock_analysis/fix-日更job专用worktree/ops/launchd/intraday_screen.sh</string>
-		<string>/Users/yqg/Documents/projects/stock_analysis/ops/launchd/intraday_screen.sh</string>
+		<string>/Users/yqg/.local/state/stock/bin/stock-launchd-bootstrap.sh</string>
+		<string>intraday_screen.sh</string>
 	</array>
 	<key>RunAtLoad</key>
 	<false/>

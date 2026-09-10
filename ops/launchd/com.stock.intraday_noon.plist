@@ -7,7 +7,8 @@
   <key>ProgramArguments</key>
   <array>
     <string>/bin/bash</string>
-    <string>/Users/yqg/Documents/projects/stock_analysis/ops/launchd/intraday_snapshot.sh</string>
+    <string>/Users/yqg/.local/state/stock/bin/stock-launchd-bootstrap.sh</string>
+    <string>intraday_snapshot.sh</string>
   </array>
   <!-- 午休冻结快照(11:30 收市即冻结,11:30-13:00 停牌顺序拉全A无时间差):日内超短线循环取数窗口。
        11:31 触发(收市留 1min 让全A行情稳定冻结);复用 intraday_snapshot.sh,slot 仍 1145

@@ -9,7 +9,8 @@
   <key>ProgramArguments</key>
   <array>
     <string>/bin/bash</string>
-    <string>/Users/yqg/Documents/projects/stock_analysis/ops/launchd/strong_refresh.sh</string>
+    <string>/Users/yqg/.local/state/stock/bin/stock-launchd-bootstrap.sh</string>
+    <string>strong_refresh.sh</string>
   </array>
   <key>StartCalendarInterval</key>
   <array>

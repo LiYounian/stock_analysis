@@ -7,7 +7,8 @@
   <key>ProgramArguments</key>
   <array>
     <string>/bin/bash</string>
-    <string>/Users/yqg/Documents/projects/stock_analysis/ops/launchd/pull_refresh.sh</string>
+    <string>/Users/yqg/.local/state/stock/bin/stock-launchd-bootstrap.sh</string>
+    <string>pull_refresh.sh</string>
   </array>
   <!-- ① 全A自采 K 线:PULL_FETCH=1 开启;FETCH_WORKERS=1 单进程(避 mini_racer/V8 多进程崩,见 pull_refresh.sh 根因订正) -->
   <key>EnvironmentVariables</key>
