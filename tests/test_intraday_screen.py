@@ -296,6 +296,15 @@ def test_action_tag_rules():
     assert isr.action_tag(_mk("A", 1, "看多"), "规避") == "仅规避"
 
 
+def test_counts_sourced_from_config():
+    """买入/规避条数是配置真源 THRESHOLDS['午盘选股'] 的投影(改一处生效,不散落硬编码)。"""
+    from tools.config import strategy
+    cfg = strategy.THRESHOLDS["午盘选股"]
+    assert isr.N_BUY == cfg["买入条数"] == 5
+    assert isr.N_AVOID == cfg["规避条数"] == 3
+    assert isr.noon_cfg()["规避条数"] == 3
+
+
 def test_render_two_columns_and_ledger(monkeypatch, tmp_path):
     """render 产出【今日可买入】+【今日规避】两栏 + 折叠完整台账;看空票不进买入栏。"""
     reranked = ([_mk(f"P{i}", 8.0 - i, "看多") for i in range(6)]

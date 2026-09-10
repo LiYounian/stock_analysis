@@ -85,8 +85,18 @@ NOON_SNAPSHOT_NAME = "noon_screen_snapshot.json"
 # 规避 3 只是**纠偏参照**,不是独立主指标:作用是暴露/纠正模型系统性偏差(防止把烂票也捧上去),
 # 靠买入-规避的方向对照来纠偏。切分口径是**输出侧(render)与复盘侧(intraday_review)的单一真源**,
 # 用同一函数避免两处漂移(见 docs/计划/2026-09-10_午盘选股迭代_复盘闭环与侧重点重构_设计.md §3.2)。
-N_BUY = 5
-N_AVOID = 3
+# 条数集中在配置真源 THRESHOLDS['午盘选股'](便于 §4 历史标定后预注册);读不到 → 回落硬默认 5/3。
+def noon_cfg() -> dict:
+    """午盘选股配置(THRESHOLDS['午盘选股']);缺失/异常 → 空 dict(调用方用硬默认)。"""
+    try:
+        from tools.config import strategy as _strategy
+        return _strategy.THRESHOLDS.get("午盘选股", {}) or {}
+    except Exception:                                          # noqa: BLE001 配置缺失不阻断选股
+        return {}
+
+
+N_BUY = int(noon_cfg().get("买入条数", 5))
+N_AVOID = int(noon_cfg().get("规避条数", 3))
 _BEARISH = {"看空"}          # 看空方向:排除出买入、优先进规避
 
 

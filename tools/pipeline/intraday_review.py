@@ -43,10 +43,11 @@ logger = logging.getLogger("pipeline.intraday_review")
 REVIEW_DIR = settings.PROJECT_ROOT / "docs" / "每日分析" / "复盘"
 INBOX_PATH = settings.PROJECT_ROOT / "docs" / "每日分析" / "经验沉淀" / "_待并入.md"
 MD_PREFIX = "午盘"                    # 产出 复盘/午盘_<date>.md(区别于盘后 复盘/<date>.md)
-MIN_COVERAGE = 0.60                   # 下午基准取样率下限:低于此标降级、基准不可当全市场口径
 
-# 收盘判定阈值(下午 α,单位 pp):买入组期望正 α。判定仅为可读标签,不改记分。
-_STRONG_PP = 1.0
+# 复盘阈值集中在配置真源 THRESHOLDS['午盘选股']['复盘'](§4 历史标定后预注册);缺失 → 回落硬默认。
+_REVIEW_CFG = (isr.noon_cfg().get("复盘", {}) or {})
+MIN_COVERAGE = float(_REVIEW_CFG.get("下午基准取样率下限", 0.60))   # 低于此 → 基准降级
+_STRONG_PP = float(_REVIEW_CFG.get("强α判定线pp", 1.0))            # |下午α|≥此 → 标「强」(可读标签)
 
 
 # ————————————————————————————————————————————————
