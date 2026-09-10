@@ -42,6 +42,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import json
 import logging
 import os
 from pathlib import Path
@@ -70,6 +71,67 @@ SELECTION_DIR = settings.PROJECT_ROOT / "docs" / "每日分析" / "选股"
 # 同名写入会**覆盖污染**那条流水。故本节点默认写 `日内全A_<date>.md`(全A午盘选股,与盯盘研判并存)。
 # 设计文档写的是 `日内_<date>.md`;此为规避冲突的安全默认,是否改回由统筹拍板(见回执决策点)。
 MD_PREFIX = "日内全A"
+
+# 午盘 11:30 全A快照落盘目录(gitignored:data/intraday/;与 intraday_snapshot.py 同根,不入库)。
+# 复盘节点(intraday_review)当日 15:xx 读它算「下午涨跌 / 下午等权基准」——快照在采集时刻冻结,
+# 防未来天然成立(只含 ≤11:30 冻结价)。**不写主档、不污染 data/master**。
+NOON_SNAPSHOT_DIR = settings.PROJECT_ROOT / "data" / "intraday"
+NOON_SNAPSHOT_NAME = "noon_screen_snapshot.json"
+
+# ————————————————————————————————————————————————
+# 输出侧重点:买入精选 / 规避精选条数(用户 2026-09-10 拍板 D5)
+# ————————————————————————————————————————————————
+# 买入 5 只是**主评价对象**——午盘选股的价值就看「买入选得准不准」。
+# 规避 3 只是**纠偏参照**,不是独立主指标:作用是暴露/纠正模型系统性偏差(防止把烂票也捧上去),
+# 靠买入-规避的方向对照来纠偏。切分口径是**输出侧(render)与复盘侧(intraday_review)的单一真源**,
+# 用同一函数避免两处漂移(见 docs/计划/2026-09-10_午盘选股迭代_复盘闭环与侧重点重构_设计.md §3.2)。
+N_BUY = 5
+N_AVOID = 3
+_BEARISH = {"看空"}          # 看空方向:排除出买入、优先进规避
+
+
+def _full_score(x: dict) -> float:
+    """取完整分用于排序;缺失/非数值沉底(-inf),不参与买入头部。"""
+    s = x.get("完整分")
+    return float(s) if isinstance(s, (int, float)) else float("-inf")
+
+
+def split_buy_avoid(reranked: list[dict] | None,
+                    n_buy: int = N_BUY, n_avoid: int = N_AVOID) -> tuple[list[dict], list[dict]]:
+    """把消息面回灌后的完整分榜(view「候选池消息面确认」的「重排」)切成【今日可买入】+【今日规避】。
+
+    单一真源:选股输出与复盘取数共用本函数。切分规则(D5 拍板):
+    - 买入:**排除看空**后,按完整分降序取 Top n_buy(主评价对象)。
+    - 规避:**看空票优先**(按完整分升序、最弱在前),不足 n_avoid 则从「买入未取」的剩余票里
+      按完整分升序补最低分,凑满 n_avoid(纠偏参照)。
+    - 买入 / 规避保证**不相交**(先取买入,规避只从剩余里取)。
+    输入通常已按完整分降序(candidate_message 阶段3 保证),本函数不依赖该前置、自行稳定排序。
+    """
+    ranked = sorted(list(reranked or []), key=_full_score, reverse=True)
+    非看空 = [x for x in ranked if x.get("消息面方向") not in _BEARISH]
+    买入 = 非看空[:n_buy]
+    买入_codes = {x.get("code") for x in 买入}
+    剩余 = [x for x in ranked if x.get("code") not in 买入_codes]
+
+    看空票 = sorted((x for x in 剩余 if x.get("消息面方向") in _BEARISH), key=_full_score)
+    规避 = 看空票[:n_avoid]
+    if len(规避) < n_avoid:                                     # 看空不足 → 补最低分票
+        规避_codes = {x.get("code") for x in 规避}
+        补 = sorted((x for x in 剩余 if x.get("code") not in 规避_codes), key=_full_score)
+        规避 += 补[: n_avoid - len(规避)]
+    return 买入, 规避
+
+
+def action_tag(x: dict, group: str) -> str:
+    """行动/时效标注(首版规则,待 §4 闸门在历史样本上标定)。
+
+    诚实边界:午盘量能仅累计半日,「尾盘可买」不做重量能承诺,以价形/趋势/横截面+消息面为主。
+    - 买入 · 消息面看多/看涨 → 「尾盘可买」;买入 · 中性 → 「次日观察」。
+    - 规避 → 「仅规避」。
+    """
+    if group == "规避":
+        return "仅规避"
+    return "尾盘可买" if x.get("消息面方向") in {"看多", "看涨"} else "次日观察"
 
 
 # ————————————————————————————————————————————————
@@ -183,6 +245,32 @@ def breadth_from_quotes(quotes: dict) -> dict:
             "中位涨幅": round(med, 3) if med is not None else None}
 
 
+def noon_snapshot_path(as_of: str, *, out_root: Path | None = None) -> Path:
+    """午盘 11:30 快照落盘路径(供落盘与复盘读取共用单一真源)。"""
+    return (out_root or NOON_SNAPSHOT_DIR) / as_of / NOON_SNAPSHOT_NAME
+
+
+def persist_noon_snapshot(quotes: dict, as_of: str, *, out_root: Path | None = None) -> Path:
+    """把全A 11:30 冻结快照(gtimg,run_intraday_screen 已在内存持有)落盘,供当日午盘复盘取「下午」口径。
+
+    只存 ≤11:30 冻结信息(price = 午休冻结价 = 当日临时收盘);防未来天然成立(采集时刻冻结)。
+    原子写(tmp → replace)。gitignored 路径,不入库、不碰主档。
+    """
+    path = noon_snapshot_path(as_of, out_root=out_root)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    kept = {code: {"price": q.get("price"), "open": q.get("open"),
+                   "pct_chg": q.get("pct_chg"), "turnover": q.get("turnover")}
+            for code, q in quotes.items() if q.get("price") is not None}
+    payload = {"as_of": as_of, "slot": SLOT, "freeze_label": FREEZE_LABEL,
+               "note": "11:30 午休冻结价(gtimg);price=当日临时收盘,防未来只含≤11:30。供当日午盘复盘算下午涨跌/下午等权基准。",
+               "count": len(kept), "quotes": kept}
+    tmp = path.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    tmp.replace(path)
+    logger.info("午盘 11:30 快照落盘 → %s(%d 只)", path, len(kept))
+    return path
+
+
 # ————————————————————————————————————————————————
 # 产出 日内_<date>.md
 # ————————————————————————————————————————————————
@@ -226,7 +314,47 @@ def render_intraday_md(as_of: str, *, breadth: dict | None = None,
         return path
 
     scored = view["重排"]
-    lines.append(f"## 午盘候选 · 买入排序(消息面回灌后完整分,共 {len(scored)} 只)")
+    买入, 规避 = split_buy_avoid(scored)
+
+    # 【今日可买入】(5 只,主评价对象)——聚焦「今日未结束交易日内可买入」。
+    lines.append(f"## 今日可买入(精选 {len(买入)} 只 · 主评价对象)")
+    lines.append("")
+    lines.append("> 口径:完整分 Top(排除看空)。买入组是午盘选股的**主评价对象**,复盘只看「买入选得准不准」。")
+    lines.append("")
+    lines.append("| 序 | 代码 | 名称 | 完整分 | 数据面综合分 | 消息面方向 | 消息面分 | 行动/时效 | 候选来源 | 理由 |")
+    lines.append("|---|---|---|---|---|---|---|---|---|---|")
+    for i, x in enumerate(买入, 1):
+        reasons = "；".join((x.get("理由") or [])[:3]) or "—"
+        srcs = "、".join(x.get("候选来源") or []) or "—"
+        lines.append(
+            f"| {i} | {x.get('code', '')} | {x.get('name', '')} | {x.get('完整分', '')} "
+            f"| {x.get('数据面综合分', '')} | {x.get('消息面方向', '')} | {x.get('消息面分', '')} "
+            f"| {action_tag(x, '买入')} | {srcs} | {reasons} |")
+    if not 买入:
+        lines.append("| — | — | _无非看空候选_ | | | | | | | |")
+    lines.append("")
+
+    # 【今日规避】(3 只,纠偏参照)。
+    lines.append(f"## 今日规避(精选 {len(规避)} 只 · 纠偏参照)")
+    lines.append("")
+    lines.append("> 口径:看空优先,不足则补最低分。规避组**不是主指标**,用于暴露/纠正模型系统性偏差。")
+    lines.append("")
+    lines.append("| 序 | 代码 | 名称 | 完整分 | 数据面综合分 | 消息面方向 | 消息面分 | 行动/时效 | 候选来源 | 理由 |")
+    lines.append("|---|---|---|---|---|---|---|---|---|---|")
+    for i, x in enumerate(规避, 1):
+        reasons = "；".join((x.get("理由") or [])[:3]) or "—"
+        srcs = "、".join(x.get("候选来源") or []) or "—"
+        lines.append(
+            f"| {i} | {x.get('code', '')} | {x.get('name', '')} | {x.get('完整分', '')} "
+            f"| {x.get('数据面综合分', '')} | {x.get('消息面方向', '')} | {x.get('消息面分', '')} "
+            f"| {action_tag(x, '规避')} | {srcs} | {reasons} |")
+    if not 规避:
+        lines.append("| — | — | _无规避候选_ | | | | | | | |")
+    lines.append("")
+
+    # 完整候选台账(全序,折叠)——保留全量供复盘取数 + 审计留痕(不丢数据,只改呈现重心)。
+    lines.append("<details>")
+    lines.append(f"<summary>完整候选台账 · 买入排序(消息面回灌后完整分,共 {len(scored)} 只)</summary>")
     lines.append("")
     lines.append("| 排名 | 代码 | 名称 | 完整分 | 数据面综合分 | 消息面方向 | 消息面分 | 候选来源 | 理由 |")
     lines.append("|---|---|---|---|---|---|---|---|---|")
@@ -237,6 +365,8 @@ def render_intraday_md(as_of: str, *, breadth: dict | None = None,
             f"| {x.get('候选排名', '')} | {x.get('code', '')} | {x.get('name', '')} "
             f"| {x.get('完整分', '')} | {x.get('数据面综合分', '')} | {x.get('消息面方向', '')} "
             f"| {x.get('消息面分', '')} | {srcs} | {reasons} |")
+    lines.append("")
+    lines.append("</details>")
     lines.append("")
 
     stat = view.get("统计", {})
@@ -259,7 +389,8 @@ def run_intraday_screen(as_of: str | None = None, *, universe_limit: int | None 
                         stage2_no_llm: bool = False, quotes: dict | None = None,
                         codes: list[str] | None = None,
                         run_screen_all_fn=None, cand_msg_fn=None,
-                        write_md: bool = True) -> dict:
+                        write_md: bool = True, persist_snapshot: bool = True,
+                        snapshot_root: Path | None = None) -> dict:
     """午盘全A选股节点主入口(阶段1 数据初筛 + 阶段2 消息面精选 + 产出 日内 md)。
 
     Args:
@@ -284,6 +415,9 @@ def run_intraday_screen(as_of: str | None = None, *, universe_limit: int | None 
         quotes = fetch_universe_quotes(codes)
     breadth = breadth_from_quotes(quotes)
 
+    # D1:落盘 11:30 全A快照,供当日午盘复盘(intraday_review)算「下午」口径。已在内存,零额外采集。
+    snap_path = persist_noon_snapshot(quotes, as_of, out_root=snapshot_root) if persist_snapshot else None
+
     if run_screen_all_fn is None or cand_msg_fn is None:
         from tools import run as _run
         from tools.pipeline import candidate_message as _cmsg
@@ -292,6 +426,7 @@ def run_intraday_screen(as_of: str | None = None, *, universe_limit: int | None 
 
     report: dict = {"as_of": as_of, "slot": SLOT, "全A": len(codes),
                     "快照命中": len(quotes), "市场环境": breadth,
+                    "快照落盘": str(snap_path) if snap_path else None,
                     "裁策略": sorted(INTRADAY_SKIP_STRATEGIES)}
 
     # 阶段1+阶段2 全程在午盘注入下跑(serialize 也读午盘 bar → record 反映午盘)。
