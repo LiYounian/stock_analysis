@@ -17,7 +17,9 @@ from __future__ import annotations
 
 import logging
 import os
+import random
 import socket
+import time
 
 import pandas as pd
 
@@ -138,7 +140,26 @@ _ENRICH_STILL_MISSING_ALERT = 0.5
 def _empty_enrich_stats() -> dict:
     """无需补齐 / 开关关闭时的空聚合(占位,便于上层无脑消费,不用判 None)。"""
     return {"need": 0, "filled": 0, "failed": 0, "session_failed": False,
-            "still_missing": 0, "ratio": 0.0}
+            "still_missing": 0, "ratio": 0.0, "rebuilds": 0}
+
+
+# —— 韧性可调项(env 覆盖,不改代码调激进/保守;沿用 _retry 的 FETCH_* 风格)——
+def _rebuild_cap() -> int:
+    """一批补齐内 baostock 坏会话的最大重建次数(logout+重登)。默认 2:一批坏 2 次基本
+    =baostock 真不稳,再 churn 只招登录频控,交每日止血更稳。0 = 关闭重建(退回旧行为)。"""
+    return max(0, int(os.getenv("ENRICH_REBUILD_MAX", "2")))
+
+
+def _single_attempts() -> int:
+    """单票在**同一会话内**对会话级/网络级错误的重试次数(吸收瞬时抖动,不动会话)。
+    默认 2(1 次原调用 + 1 次重试);耗尽仍会话级失败才升级为"会话已死 → 重建"。"""
+    return max(1, int(os.getenv("ENRICH_SINGLE_RETRY", "2")))
+
+
+def _enrich_backoff(i: int) -> float:
+    """单票同会话重试的退避秒数(指数 + jitter,封顶)。"""
+    d = min(0.5 * (2 ** (i - 1)), 4.0)
+    return d + random.uniform(0, d * 0.3)
 
 
 def _lacks_amount_turnover(tail) -> bool:
@@ -149,6 +170,102 @@ def _lacks_amount_turnover(tail) -> bool:
         if pd.to_numeric(tail[c], errors="coerce").isna().any():
             return True
     return False
+
+
+class _SessionBroken(Exception):
+    """内部信号:当前 baostock 会话已判死,需退出上下文重建。携带原始异常供日志。"""
+
+    def __init__(self, cause: BaseException):
+        super().__init__(str(cause))
+        self.cause = cause
+
+
+def _fill_one_from_baostock(bs_fetch, code: str, tail) -> None:
+    """按日期对齐把 baostock 的 amount/turnover 填进单票 tail 的缺口(就地 fillna)。
+
+    volume/OHLC 不动。fetch 在任何 tail 变更**之前**执行 → 失败即抛、不留半填(每票原子)。
+    接口/网络异常原样上抛,交调用方分类(数据级 skip / 会话级重建)。无未来函数:只按
+    [tail.date.min, tail.date.max] 窗口查、只回填已存在 bar 的两列,不引入任何前视。
+    """
+    s = pd.to_datetime(tail["date"]).min().strftime("%Y-%m-%d")
+    e = pd.to_datetime(tail["date"]).max().strftime("%Y-%m-%d")
+    b = bs_fetch(code, s, e, adjust=settings.KLINE_ADJUST)
+    bd = pd.to_datetime(b["date"]).dt.normalize()
+    for c in _ENRICH_COLS:
+        m = dict(zip(bd, pd.to_numeric(b[c], errors="coerce")))
+        src = pd.to_datetime(tail["date"]).map(m)
+        if c in tail.columns:
+            tail[c] = pd.to_numeric(tail[c], errors="coerce").fillna(src)
+        else:
+            tail[c] = src
+
+
+def _fill_one_with_retry(bs_fetch, code: str, tail, attempts: int) -> None:
+    """同一会话内补齐单票;**会话级/网络级**错误退避重试至多 attempts 次(吸收瞬时抖动,
+    不动会话);**数据级**错误立即上抛(交上层 skip,不浪费重试);会话级重试耗尽仍失败 →
+    上抛(交上层判会话已死、重建)。"""
+    for i in range(1, attempts + 1):
+        try:
+            _fill_one_from_baostock(bs_fetch, code, tail)
+            return
+        except Exception as ex:  # noqa: BLE001
+            from tools.collectors import baostock_src
+            if not baostock_src.is_session_error(ex):
+                raise  # 数据级:本就没数据/源不支持,不重试
+            if i >= attempts:
+                raise  # 会话级但同会话重试耗尽 → 交上层重建
+            logger.info("回退补齐 %s 会话级错误,同会话退避重试 %d/%d: %s", code, i, attempts, ex)
+            time.sleep(_enrich_backoff(i))
+
+
+def _run_enrich_batch(need: dict) -> tuple[int, int, bool, int]:
+    """在**可重建**的 baostock 会话上跑完 need 的补齐。返回 (filled, failed, session_failed, rebuilds)。
+
+    编排(纯 reactive,不做主动体检——首次真实 query 即等于体检):
+      · 开一个会话尽量多跑;单票**数据级**错误 → skip(会话仍活,continue 下一票,failed++);
+      · 单票**会话级**错误(同会话重试已耗尽)→ 退出当前会话 logout、重登(计一次 rebuild)、
+        从**未成功的那票**继续——死会话不再毒化其后整批;
+      · 重建次数封顶 `_rebuild_cap()`:达上界仍会话级失败 → 判 baostock 真不可用,剩余票
+        全部记 failed、session_failed=True(交每日止血兜底,不无限 churn 招登录频控);
+      · **绝不上抛**(best-effort,回退本就是降级路径);**数据级错误从不触发重建**(防误伤正常会话)。
+    """
+    from tools.collectors import baostock_src
+    items = list(need.items())
+    cap = _rebuild_cap()
+    attempts = _single_attempts()
+    filled = failed = rebuilds = 0
+    idx = 0
+    while idx < len(items):
+        try:
+            with baostock_src.session():
+                while idx < len(items):
+                    code, tail = items[idx]
+                    try:
+                        _fill_one_with_retry(baostock_src.fetch_one, code, tail, attempts)
+                        filled += 1
+                        idx += 1
+                    except Exception as ex:  # noqa: BLE001
+                        if baostock_src.is_session_error(ex):
+                            raise _SessionBroken(ex)  # 退出会话去重建(idx 不前进,重建后重试该票)
+                        failed += 1                    # 数据级:skip,会话仍活,下一票
+                        idx += 1
+                        logger.warning("回退补齐额/换手失败 %s: %s(保持 NaN,交下游现算兜底)", code, ex)
+        except Exception as ex:  # noqa: BLE001 —— 会话建立失败(login fail)或 _SessionBroken(中途坏)
+            cause = ex.cause if isinstance(ex, _SessionBroken) else ex
+            if rebuilds >= cap:
+                remaining = len(items) - idx
+                failed += remaining
+                logger.error("回退补齐额/换手:baostock 会话重建 %d 次后仍失败(%s);剩余 %d 只 "
+                             "turnover/amount 保持 NaN,交下游现算兜底——请排查 baostock 会话",
+                             rebuilds, cause, remaining)
+                return filled, failed, True, rebuilds
+            rebuilds += 1
+            logger.warning("回退补齐额/换手:baostock 会话坏,第 %d/%d 次重建(logout+重登):%s",
+                           rebuilds, cap, cause)
+            continue
+        else:
+            break  # 内层跑完(idx 到底),正常收尾
+    return filled, failed, False, rebuilds
 
 
 def _enrich_turnover_amount(tails: dict) -> dict:
@@ -177,46 +294,19 @@ def _enrich_turnover_amount(tails: dict) -> dict:
     if not need or not _enrich_enabled():
         return _empty_enrich_stats()
     n = len(need)
-    from tools.collectors import baostock_src
-    filled = failed = 0
-    session_failed = False
-    try:
-        with baostock_src.session():
-            for code, tail in need.items():
-                try:
-                    s = pd.to_datetime(tail["date"]).min().strftime("%Y-%m-%d")
-                    e = pd.to_datetime(tail["date"]).max().strftime("%Y-%m-%d")
-                    b = baostock_src.fetch_one(code, s, e, adjust=settings.KLINE_ADJUST)
-                    bd = pd.to_datetime(b["date"]).dt.normalize()
-                    for c in _ENRICH_COLS:
-                        m = dict(zip(bd, pd.to_numeric(b[c], errors="coerce")))
-                        src = pd.to_datetime(tail["date"]).map(m)
-                        if c in tail.columns:
-                            tail[c] = pd.to_numeric(tail[c], errors="coerce").fillna(src)
-                        else:
-                            tail[c] = src
-                    filled += 1
-                except Exception as ex:
-                    failed += 1
-                    logger.warning("回退补齐额/换手失败 %s: %s(保持 NaN,交下游现算兜底)",
-                                   code, ex)
-    except Exception as ex:
-        # baostock 会话整体失败:need 里的票一个都没补上,全部记为 failed(区别于单票失败)。
-        session_failed = True
-        failed = n
-        logger.error("回退补齐额/换手整体失败(baostock 不可用: %s);%d 只需补票 turnover/amount "
-                     "全部保持 NaN,交下游现算兜底——补齐网整体失效,请排查 baostock 会话", ex, n)
+    # 可重建会话编排:坏会话检测→logout+重登→重试,不再让一次登录态老化毒化整批(见 _run_enrich_batch)。
+    filled, failed, session_failed, rebuilds = _run_enrich_batch(need)
 
     # 补齐后仍整段缺失(NaN)的票:这才是真正会污染下游(chip 集中度 / S04 单日放量)的口子。
     still_missing = sum(1 for t in need.values() if _lacks_amount_turnover(t))
     ratio = still_missing / n if n else 0.0
     stats = {"need": n, "filled": filled, "failed": failed,
              "session_failed": session_failed, "still_missing": still_missing,
-             "ratio": round(ratio, 4)}
+             "ratio": round(ratio, 4), "rebuilds": rebuilds}
 
     # 按严重度升级日志级别,让日常巡检/告警能抓到"补齐网静默失败"这类根因。
     if session_failed:
-        pass  # 已在上面 error 过,避免重复刷屏
+        pass  # _run_enrich_batch 已在重建耗尽处 error 过,避免重复刷屏
     elif filled == 0:
         logger.error("回退补齐额/换手:需补 %d 只但成功 0 只(全部单票失败);turnover/amount "
                      "仍整段 NaN,下游换手类信号将大面积降级", n)
