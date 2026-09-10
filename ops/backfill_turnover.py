@@ -27,12 +27,37 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 
 import pandas as pd
 
 from tools.config import units
 from tools.store import repo as store
+
+
+def _write_alert_marker(path: str, summary: dict, reps: list) -> None:
+    """把"当日 volume 自证回填量异常大"落成结构化告警文件(主动信号,非埋进大日志)。
+
+    语义:每日兜底 step 正常应回填 ~0 行(补齐网在位时当日 turnover 不缺)。一旦单日
+    回填量冲高,等价于**当日 baostock 补齐网大面积失效、靠 volume 自证兜底救回**——这正是
+    需要主动看见的根因事件(补齐网 error 埋在 72MB pull_refresh.log 里没人翻)。marker 落在
+    当日产物目录,供巡检/上层一眼可见;写失败不抛(告警不得拖垮兜底主流程)。
+    """
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        payload = {
+            "at": pd.Timestamp.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "reason": "当日 turnover 自证回填量异常——疑 baostock 补齐网大面积失效,已用 volume 兜底救回",
+            "summary": summary,
+            "top_codes": [{"code": r["code"], "filled": r["filled"]}
+                          for r in sorted(reps, key=lambda r: -r["filled"])[:20]],
+        }
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False, indent=2)
+    except Exception as e:                            # 告警不得拖垮兜底主流程
+        print(f"[WARN] 写 turnover 兜底告警 marker 失败({path}): "
+              f"{type(e).__name__} {e}", file=sys.stderr)
 
 
 def backfill_code(code: str, *, apply: bool) -> dict:
@@ -61,6 +86,11 @@ def main(argv=None) -> int:
     ap.add_argument("--codes", help="只处理这些票(逗号分隔);缺省=全部主档")
     ap.add_argument("--apply", action="store_true", help="真写盘(缺省只报告)")
     ap.add_argument("--json", dest="as_json", action="store_true", help="报告输出 JSON")
+    ap.add_argument("--alert-marker", metavar="PATH",
+                    help="回填量 ≥ --alert-threshold 时,把结构化告警写到此路径"
+                         "(补齐网当日大面积失效的主动信号,非埋进大日志)")
+    ap.add_argument("--alert-threshold", type=int, default=200,
+                    help="rows_filled ≥ 此值视为补齐网当日大面积失效并触发 --alert-marker(默认 200)")
     args = ap.parse_args(argv)
 
     codes = ([c.strip() for c in args.codes.split(",") if c.strip()]
@@ -96,6 +126,13 @@ def main(argv=None) -> int:
                   f" refused={rep['refused']} {rep['refused_dates'][:5]}")
         if len(reps) > 20:
             print(f"  ...(其余 {len(reps) - 20} 票省略,用 --json 看全量)")
+
+    # 补齐网健康主动告警:回填量冲高 ⇒ 当日 baostock 补齐网大面积失效、靠本步救回。
+    if args.alert_marker and tot_fill >= args.alert_threshold:
+        _write_alert_marker(args.alert_marker, summary, reps)
+        print(f"[ALERT] 当日 turnover 自证回填 {tot_fill} 行(≥{args.alert_threshold} 阈值)"
+              f"——疑 baostock 补齐网大面积失效,已 volume 兜底救回;告警已写 {args.alert_marker}",
+              file=sys.stderr)
     return 1 if dirty else 0
 
 

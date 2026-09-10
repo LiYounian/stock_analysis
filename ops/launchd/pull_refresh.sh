@@ -80,6 +80,17 @@ trap 'rmdir "$LOCK" 2>/dev/null' EXIT
   echo "-- ①.6 个股两融采集(沪深北融资买入额/融资余额;供 expert_资金流 做'主力净流入vs融资盘'背离甄别) --"
   # 必须排在②screenall之前:合议 expert_资金流 命中背离→看多降级,需当日两融在 store。akshare 单日增量,快;失败不阻断(甄别缺数据→保守no-op)。
   "$PY" -c "from tools.collectors import margin; margin.fetch_margin(start='$D', end='$D')" || echo "!! 两融采集失败(背离甄别当日 no-op,不阻断)"
+  echo "-- ①.7 turnover 每日兜底(volume 自证回填 fallback_advance 落下的 NaN,~45s 纯本地读盘) --"
+  # 必须排在①主档推进之后、②screenall之前:①的回退补齐网(baostock)best-effort,失败时当日
+  #   turnover 静默落 NaN → S04 单日放量哑火 / 筹码集中度·成本降级。这里用本票自身近端正常行的
+  #   ratio=turnover%/volume 中位数 × 当日 volume 还原 turnover(恒等式、无外部源、无未来函数:
+  #   当日行是主档最新行,参考全取历史行;参考不足/流通股阶跃/volume 缺一律 refuse 留 NaN)。
+  # 幂等:只填 turnover 为 NaN 的行,填过即非 NaN、下轮跳过;refused 行下轮再试仍 refuse(无副作用)。
+  #   单实例由 wrapper 顶部 LOCK 目录保证,不会与上一轮重叠。best-effort:失败不阻断②选股。
+  # --alert-marker:回填量冲高=当日补齐网大面积失效被 volume 救回 → 落主动告警(非埋进大日志)。
+  "$PY" -m ops.backfill_turnover --apply \
+      --alert-marker "$REPO/data/analysis/$D/_TURNOVER_BACKFILL_ALARM.json" \
+      || echo "!! turnover 每日兜底失败(不阻断,下游现算兜底+下轮重试)"
   echo "-- ② 全A多策略选股(策略0/1/2/3/4)+ 对(选出并集∪自选)做新闻/LLM/合议 + M2财报(数值+审计双闸门+LLM文本,仅news_subset) --"
   # --no-fetch:不触发 master_sync 回填/重采,直接用现有主档(近史护栏);财报三步在 run_screen_all 内对 news_subset 自然跑
   "$PY" -m tools.run screenall --no-fetch || echo "!! screenall 失败"
