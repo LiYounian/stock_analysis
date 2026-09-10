@@ -375,18 +375,29 @@ def get_master_kline(code: str):
     return pd.read_parquet(p)
 
 
-def put_master_kline(code: str, df, meta: dict | None = None) -> str:
+def put_master_kline(code: str, df, meta: dict | None = None,
+                     provisional_dates=None, cover_dates=None) -> str:
     """全量覆盖写单票主档(原子写)+ meta sidecar。df 需含 date 列。
 
     写入前按 date 去重(同日**逐列**取最后一个非空值)+ 升序,保证主档规整。
     写入前还跑一次 **turnover 单位护栏**(见 `_guard_turnover_unit`)。返回数据文件路径。
+
+    provisional_dates(P0-2):本次写入中属"盘中临时价"(伪 close)的交易日集合(YYYY-MM-DD
+    或 Timestamp)。标记**旁挂 meta json**(`provisional_dates` 字段),不动 K线 parquet 列结构 →
+    下游默认读取零影响;仅需"已收盘确定价"的消费方按 provisional 过滤/降级(见
+    get_master_kline_confirmed / master_provisional_dates)。
+    cover_dates(P0-2):本次写"决定 provisional 归属"的交易日集合;这些日里不在 provisional_dates
+    的即写成 final → **清除**其旧 provisional 标记(收盘正式 bar 覆盖即除标)。缺省(None)=df 全部
+    日期(全量覆盖/backfill 语义:整段重写为定稿,清全部标记)。append 只传增量 bar 的日期,
+    避免"合并全历史后误把历史日都当本次 final、清掉别的日 provisional"。
     """
     import pandas as pd
     df = _dedup_sort_by_date(df)
     anomaly = _guard_turnover_unit(code, df)
     p = _master_path(code)
     data_path = _write_parquet(p, df)
-    _write_master_meta(code, df, meta, anomaly=anomaly)
+    _write_master_meta(code, df, meta, anomaly=anomaly,
+                       provisional_dates=provisional_dates, cover_dates=cover_dates)
     return data_path
 
 
@@ -424,11 +435,13 @@ def _guard_turnover_unit(code: str, df) -> dict | None:
     return {"rows": res["rows"], "dates": dates[:20]}
 
 
-def append_master_kline(code: str, df_new, meta: dict | None = None) -> str:
+def append_master_kline(code: str, df_new, meta: dict | None = None,
+                        provisional_dates=None) -> str:
     """增量 append 到主档:与现有合并 → 按 date 去重(同日以新数据覆盖,幂等)→
     升序 → 原子写。主档不存在时等价于首次落地。返回数据文件路径。
 
     幂等性:盘中/盘后多次跑同一天,同 date 只保留最后写入的一条,不产生重复行。
+    provisional_dates(P0-2):本次 append 中属盘中临时价的交易日集合;语义见 put_master_kline。
     """
     import pandas as pd
     p = _master_path(code)
@@ -437,7 +450,14 @@ def append_master_kline(code: str, df_new, meta: dict | None = None) -> str:
         merged = pd.concat([old, df_new], ignore_index=True)
     else:
         merged = df_new
-    return put_master_kline(code, merged, meta)
+    # cover_dates = 本次增量 bar 的日期(只这些日由本次写决定 provisional 归属;合并进来的
+    # 历史日不参与 → 不误清别的日的 provisional 标记)。
+    try:
+        cover = set(pd.to_datetime(df_new["date"]).dt.strftime("%Y-%m-%d")) if len(df_new) else set()
+    except (KeyError, TypeError, ValueError):
+        cover = None
+    return put_master_kline(code, merged, meta, provisional_dates=provisional_dates,
+                            cover_dates=cover)
 
 
 def _dedup_sort_by_date(df):
@@ -463,9 +483,28 @@ def _dedup_sort_by_date(df):
     return out.sort_values("date").reset_index(drop=True)
 
 
+def _norm_dates(dates) -> set:
+    """把 provisional_dates 入参(str/Timestamp 混合可迭代)归一为 {YYYY-MM-DD} 字符串集。"""
+    if not dates:
+        return set()
+    import pandas as pd
+    out = set()
+    for d in dates:
+        try:
+            out.add(pd.Timestamp(d).strftime("%Y-%m-%d"))
+        except (ValueError, TypeError):
+            continue
+    return out
+
+
 def _write_master_meta(code: str, df, meta: dict | None,
-                       anomaly: dict | None = None) -> None:
+                       anomaly: dict | None = None, provisional_dates=None,
+                       cover_dates=None) -> None:
     m = {"fetched_at": _now_iso(), "code": code}
+    # P0-2 provisional 标记:先读旧 meta(sidecar 此刻尚未被本次覆盖)拿历史 provisional 集,
+    # 本次写为 final 的日清标记、本次标 provisional 的日加标记 → 收盘覆盖即自动除标。
+    _old_meta = get_master_kline_meta(code) or {}
+    _prov = set(_old_meta.get("provisional_dates") or [])
     try:
         m["rows"] = int(len(df))
         if len(df):
@@ -473,6 +512,14 @@ def _write_master_meta(code: str, df, meta: dict | None,
             d = pd.to_datetime(df["date"])
             m["first_date"] = d.min().strftime("%Y-%m-%d")
             m["last_date"] = d.max().strftime("%Y-%m-%d")
+            # P0-3:落最新 bar 的 close(前复权口径)进 meta,供除权事件驱动的"跳变判定"读
+            # meta 即得昨收 qfq、无需读全量 parquet(除权 pre-scan 走 json,全A 成本可控)。
+            try:
+                last_close = pd.to_numeric(df.loc[d.idxmax(), "close"], errors="coerce")
+                if pd.notna(last_close):
+                    m["last_close"] = float(last_close)
+            except (KeyError, ValueError, TypeError):
+                pass
     except (TypeError, KeyError):
         pass
     if meta:
@@ -480,13 +527,50 @@ def _write_master_meta(code: str, df, meta: dict | None,
     # turnover 单位护栏结论进 meta:巡检脚本/测试能"读 meta 就知道这票脏没脏",
     # 不必重跑检测;干净时显式写 0,便于区分"检过是干净"与"没检过"。
     m["turnover_unit_anomaly"] = anomaly or {"rows": 0, "dates": []}
+    # P0-2:更新 provisional 集。cover=本次写决定 provisional 归属的日(append 只增量日、
+    # 全量覆盖=全部日);new_prov=本次标临时价的日;final=cover-new_prov(本次写成定稿的日)→ 清标记。
+    if cover_dates is not None:
+        cover = _norm_dates(cover_dates)
+    else:
+        try:
+            import pandas as pd
+            cover = set(pd.to_datetime(df["date"]).dt.strftime("%Y-%m-%d")) if len(df) else set()
+        except (KeyError, TypeError, ValueError):
+            cover = set()
+    new_prov = _norm_dates(provisional_dates) & cover
+    _prov = (_prov - (cover - new_prov)) | new_prov
+    m["provisional_dates"] = sorted(_prov)
     _write_json(_master_meta_path(code), m)
 
 
 def get_master_kline_meta(code: str) -> dict | None:
-    """读主档 meta(fetched_at/rows/first_date/last_date/source);无则 None。"""
+    """读主档 meta(fetched_at/rows/first_date/last_date/last_close/source/provisional_dates);无则 None。"""
     p = _master_meta_path(code)
     return _read_json(p) if p.exists() else None
+
+
+def master_provisional_dates(code: str) -> set[str]:
+    """P0-2 读取约定:主档中被标为盘中临时价(伪 close)的交易日集合({YYYY-MM-DD})。
+
+    默认读取路径(get_master_kline)不受影响;需"已收盘确定价"的消费方读此集自行过滤/降级。
+    """
+    meta = get_master_kline_meta(code)
+    return set((meta or {}).get("provisional_dates") or [])
+
+
+def get_master_kline_confirmed(code: str):
+    """P0-2 读取约定:读主档但**剔除 provisional(盘中伪 close)日**,只留已收盘确定价。
+
+    供盘中 chip / 形态等"必须用定稿价"的消费方按需调用;不改默认 get_master_kline 行为。
+    无 provisional 标记时等价于 get_master_kline。缺失抛 FileNotFoundError。
+    """
+    df = get_master_kline(code)
+    prov = master_provisional_dates(code)
+    if prov and len(df):
+        import pandas as pd
+        keep = ~pd.to_datetime(df["date"]).dt.strftime("%Y-%m-%d").isin(prov)
+        df = df[keep].reset_index(drop=True)
+    return df
 
 
 def list_master_codes() -> list[str]:

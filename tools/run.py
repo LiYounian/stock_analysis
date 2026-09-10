@@ -1125,8 +1125,12 @@ def run_screen_all(codes_all: list[str], as_of: str, no_llm: bool = False,
     if no_fetch:
         logger.info("K线主档同步:跳过(no_fetch,直接用现有 raw/主档)")
     else:
-        ms = _safe("K线主档同步", lambda: master_sync.sync_master(codes_all, as_of=as_of)) or {}
-        logger.info("K线主档同步:模式=%s 成功 %d", ms.get("mode"), ms.get("ok", 0))
+        # P0-2:lean=午盘精简(盘中未收盘)→ provisional=True,当日 bar 在主档 meta 标临时价;
+        # 收盘跑(lean=False)覆盖同日除标。仅 meta 标记,默认读取零影响。
+        ms = _safe("K线主档同步",
+                   lambda: master_sync.sync_master(codes_all, as_of=as_of, provisional=lean)) or {}
+        logger.info("K线主档同步:模式=%s 成功 %d%s",
+                    ms.get("mode"), ms.get("ok", 0), "(盘中 provisional)" if lean else "")
 
     # —— 步骤②:跑各在产全A screener(fetch=False 只读主档);_safe 逐个隔离,单个失败不中止其余 ——
     # 策略1·趋势深跌反包(S01)与 策略3·箱体形态(箱体3)已因显著负下线,不再编排(存档见 screen_s01/screen_box)。

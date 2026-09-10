@@ -423,7 +423,8 @@ def fetch_spot_all_tencent(codes: list[str]) -> pd.DataFrame:
 
 def update_master_from_spot(codes: list[str] | None = None, date: str | None = None,
                             spot: pd.DataFrame | None = None,
-                            source: str = "akshare_spot") -> dict[str, int]:
+                            source: str = "akshare_spot",
+                            provisional: bool = False) -> dict[str, int]:
     """每日增量:一次 spot 拿全A当日 bar → 逐股按 date 去重 append 到主档(幂等)。
 
     codes=None → 更新所有已有主档的股票(spot 缺该股=停牌,跳过)+ 新股首次落。
@@ -434,11 +435,16 @@ def update_master_from_spot(codes: list[str] | None = None, date: str | None = N
     幂等:同日多次跑,append_master_kline 按 date 覆盖,不产生重复行。
     注:spot 为未复权当日价;前复权主档在无新除权时"最新 bar 的 qfq 值=其实际价",
     故追加正确;发生除权后需 backfill_master 全量重算(见方案文档 §4)。
+    provisional(P0-2):盘中(未收盘)跑时置 True,把当日 bar 在主档 meta 标 provisional
+    (伪 close,午间价);收盘正式 bar 再跑(provisional=False)覆盖同日即自动除标。
     """
     if spot is None:
         spot = fetch_spot_all()
     _assert_spot_amount_volume(spot, source, hard=False)   # 统一入口:任何源喂入的量额口径软校验
-    d = date or pd.Timestamp.today().strftime("%Y-%m-%d")
+    # P0-1:主档写入的"当日"必须接 store.active_date()(编排开始 set 的 as_of),与 raw 采集
+    # 同一逻辑日;缺省再退今天。此前直接 Timestamp.today() → 历史补算/跨日重跑时主档 bar 落"今天"、
+    # raw 落 as_of,同一逻辑日错位、下游按 as_of join 对不齐(诊断风险 F)。
+    d = date or store.active_date() or pd.Timestamp.today().strftime("%Y-%m-%d")
     spot = spot.set_index("code")
     if codes is None:
         codes = sorted(set(store.list_master_codes()) | set(spot.index))
@@ -456,19 +462,23 @@ def update_master_from_spot(codes: list[str] | None = None, date: str | None = N
             "amount": row.get("amount"), "turnover": row.get("turnover"),
             "pct_chg": row.get("pct_chg"),
         }])
-        store.append_master_kline(code, bar, meta={"source": source})
+        store.append_master_kline(code, bar, meta={"source": source},
+                                  provisional_dates={d} if provisional else None)
         ok += 1
     logger.info("spot 增量 append:更新 %d 只,跳过(停牌/无 bar)%d 只 @ %s(源 %s)",
                 ok, skipped, d, source)
     return {"ok": ok, "skipped": skipped}
 
 
-def update_hk_master(codes: list[str], date: str | None = None) -> dict[str, int]:
+def update_hk_master(codes: list[str], date: str | None = None,
+                     provisional: bool = False) -> dict[str, int]:
     """港股每日增量:逐只拉最新 K线尾部 append 到主档(幂等)。
 
     港股没有"全A spot 一次拉全部"的批量接口,用腾讯日K取最后一根 bar 做增量。
+    provisional(P0-2):盘中跑时标当日 bar 为临时价;收盘覆盖除标(同 A 股路径)。
     """
-    d = date or pd.Timestamp.today().strftime("%Y-%m-%d")
+    # P0-1:同 A 股主档路径,当日缺省接 store.active_date() 而非 Timestamp.today()(诊断风险 F)。
+    d = date or store.active_date() or pd.Timestamp.today().strftime("%Y-%m-%d")
     ok = 0
     skipped = 0
     for code in codes:
@@ -480,7 +490,8 @@ def update_hk_master(codes: list[str], date: str | None = None) -> dict[str, int
             tail = df[df["date"] == pd.Timestamp(d)]
             if len(tail) == 0:
                 tail = df.tail(1)
-            store.append_master_kline(code, tail, meta={"source": "tencent_hk"})
+            store.append_master_kline(code, tail, meta={"source": "tencent_hk"},
+                                      provisional_dates={d} if provisional else None)
             ok += 1
         except Exception as e:
             skipped += 1
