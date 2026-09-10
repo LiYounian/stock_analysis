@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import random
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -133,6 +134,37 @@ def _fetch_eastmoney(code, start, end, adjust) -> pd.DataFrame:
 
 _FETCHERS = {"tencent": _fetch_tencent, "sina": _fetch_sina, "eastmoney": _fetch_eastmoney}
 
+
+# ————————————————————————————————————————————————
+# A1 单票单源采集看门狗(根治 RC-2:诊断-market_forecast停更 §6.1)
+# ————————————————————————————————————————————————
+def _src_timeout() -> float:
+    """单票单源硬超时秒数(env FETCH_SRC_TIMEOUT 可调,默认 40s)。
+
+    默认 40s 覆盖 tencent 内部两端点各 FETCH_TIMEOUT(默认 15s)的最坏串行(~30s)再留余量,
+    避免看门狗抢在 tencent 自己换端点前误超时;sina/eastmoney 本无上界,被此看门狗兜住。
+    """
+    return float(os.getenv("FETCH_SRC_TIMEOUT", "40"))
+
+
+def _call_with_watchdog(fn, timeout: float, *args, **kwargs):
+    """在独立线程跑单源采集,超过 timeout 秒抛 TimeoutError,主线程立即返回换下一个源。
+
+    RC-2 根治:sina(akshare 内部 `requests.get` 未传 timeout)、eastmoney(`timeout=None`)
+    在 read 阶段可无限挂起,`socket.setdefaulttimeout` 对显式 timeout=None 不生效(requests 已知坑)
+    → 一只票挂起就拖死整个采集阶段(直到被外部强杀)。这里套外层硬超时上界,超时即换源,
+    **不改各源采集口径/源优先级**,只加上界。
+
+    注:Python 线程不可强杀,超时后底层线程仍会在后台跑完(bounded、极少发生),但主流程不再被它
+    阻塞;故 shutdown(wait=False) 不 join 挂起线程(否则 with 上下文退出会 join、又退化成无限等)。
+    """
+    ex = ThreadPoolExecutor(max_workers=1, thread_name_prefix="fetch-wd")
+    fut = ex.submit(fn, *args, **kwargs)
+    try:
+        return fut.result(timeout=timeout)
+    finally:
+        ex.shutdown(wait=False)
+
 # ————————————————————————————————————————————————
 # 港股行情(腾讯 fqkline 端点,代码格式 hk{5位})
 # ————————————————————————————————————————————————
@@ -167,7 +199,7 @@ def fetch_one_hk(code: str, start: str, end: str, adjust: str = "",
     errors = []
     for src in sources:
         try:
-            df = _HK_FETCHERS[src](code, start, end, adjust)
+            df = _call_with_watchdog(_HK_FETCHERS[src], _src_timeout(), code, start, end, adjust)
             if df is None or len(df) == 0:
                 raise ValueError("空数据")
             out = _normalize(df, src)
@@ -188,7 +220,7 @@ def _fetch_one_with_source(code: str, start: str, end: str, adjust: str,
     errors = []
     for src in sources:
         try:
-            df = _FETCHERS[src](code, start, end, adjust)
+            df = _call_with_watchdog(_FETCHERS[src], _src_timeout(), code, start, end, adjust)
             if df is None or len(df) == 0:
                 raise ValueError("空数据")
             out = _normalize(df, src)
