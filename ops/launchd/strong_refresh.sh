@@ -26,10 +26,21 @@ PY="${STOCK_PYTHON:-$HOME/.conda/envs/stock_analysis/bin/python}"
 D="$(date +%Y-%m-%d)"
 LOG="${STOCK_STRONG_LOG:-$HOME/.local/state/stock/strong_refresh.log}"
 mkdir -p "$(dirname "$LOG")"
-# 单实例锁:避免与上一轮重叠
+# 单实例锁:避免与上一轮重叠。A3 陈旧锁抢占(诊断 §6.2,同 pull_refresh):锁内写 PID+启动时间,
+#   死持有者/超龄自动清理抢占,活实例不误抢;lib 缺失退回旧 mkdir 锁不硬失败。
 LOCK="$HOME/.local/state/stock/strong_refresh.lock"
-if ! mkdir "$LOCK" 2>/dev/null; then echo "$(date) 已有实例在跑,跳过" >> "$LOG"; exit 0; fi
-trap 'rmdir "$LOCK" 2>/dev/null' EXIT
+if [ -f "$REPO/ops/launchd/lib/lock.sh" ]; then
+  . "$REPO/ops/launchd/lib/lock.sh"
+  acquire_lock_or_exit "$LOCK" "$LOG"
+else
+  if ! mkdir "$LOCK" 2>/dev/null; then echo "$(date) 已有实例在跑,跳过" >> "$LOG"; exit 0; fi
+  trap 'rmdir "$LOCK" 2>/dev/null' EXIT
+fi
+
+# A2 电源护栏(诊断 §6.1 RC-3.a):进程级防空闲/系统睡眠;仅进程级,不改系统电源设置、不碰 launchd。
+if command -v caffeinate >/dev/null 2>&1; then
+  caffeinate -i -m -s -w "$$" &
+fi
 
 {
   echo "==================== $(date) strong_refresh $D ===================="
