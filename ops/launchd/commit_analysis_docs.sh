@@ -7,6 +7,9 @@
 set -uo pipefail   # 不用 -e:git 失败要自己兜、不外溢
 
 MAIN_REPO="$(cd "$(dirname "$0")/../.." && pwd)"
+# dailyjob 生产 worktree:launchd 午盘/盘后 wrapper 在此写产出(如午盘全A 日内全A_*.md),
+# 它不在主仓工作树里 → 若不把这里也作为白名单 md 来源,这些产出永远进不了库。
+DAILYJOB="${STOCK_DAILYJOB_WORKTREE:-$HOME/Documents/projects/worktrees/stock_analysis/dailyjob}"
 WT="${STOCK_COMMITDOCS_WORKTREE:-$HOME/Documents/projects/worktrees/stock_analysis/commitdocs}"
 LOG="${STOCK_COMMITDOCS_LOG:-$HOME/.local/state/stock/commitdocs.log}"
 mkdir -p "$(dirname "$LOG")"
@@ -26,11 +29,13 @@ else
   git -C "$WT" reset --hard origin/main >>"$LOG" 2>&1 || { log "!! worktree reset 失败,中止"; exit 3; }
 fi
 
-# 3) 把主仓工作树里白名单三目录的 *.md 覆盖 copy 进 worktree
+# 3) 把两个产出来源(dailyjob 生产 worktree + 主仓工作树)白名单三目录的 *.md 覆盖 copy 进 worktree。
+#    顺序:dailyjob 先拷、主仓后拷 → 同名文件以主仓为准(主仓是人/定时任务的权威副本,
+#    行为与旧版字节一致);dailyjob-only 的产出(如午盘 日内全A_*)得以纳入,修复其从不入库的缺口。
 for p in "${PATHS[@]}"; do
-  [ -d "$MAIN_REPO/$p" ] || continue
   mkdir -p "$WT/$p"
-  cp -f "$MAIN_REPO/$p/"*.md "$WT/$p/" 2>/dev/null || true
+  [ -d "$DAILYJOB/$p" ] && cp -f "$DAILYJOB/$p/"*.md "$WT/$p/" 2>/dev/null || true
+  [ -d "$MAIN_REPO/$p" ] && cp -f "$MAIN_REPO/$p/"*.md "$WT/$p/" 2>/dev/null || true
 done
 
 # 4) 只 add 白名单(绝不 -A)
