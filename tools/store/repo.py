@@ -473,6 +473,14 @@ def _write_master_meta(code: str, df, meta: dict | None,
             d = pd.to_datetime(df["date"])
             m["first_date"] = d.min().strftime("%Y-%m-%d")
             m["last_date"] = d.max().strftime("%Y-%m-%d")
+            # P0-3:落最新 bar 的 close(前复权口径)进 meta,供除权事件驱动的"跳变判定"读
+            # meta 即得昨收 qfq、无需读全量 parquet(除权 pre-scan 走 json,全A 成本可控)。
+            try:
+                last_close = pd.to_numeric(df.loc[d.idxmax(), "close"], errors="coerce")
+                if pd.notna(last_close):
+                    m["last_close"] = float(last_close)
+            except (KeyError, ValueError, TypeError):
+                pass
     except (TypeError, KeyError):
         pass
     if meta:

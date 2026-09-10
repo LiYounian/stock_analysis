@@ -81,3 +81,162 @@ def test_p0_1_sync_master_sets_active_date_for_raw_alignment(monkeypatch, tmp_pa
     assert store.active_date() == _TODAY, "sync_master 未 set_active_date(as_of)"
     assert seen["date"] == _TODAY, "update_master_from_spot 未收到 as_of 作 date"
     store.set_active_date(None)
+
+
+# ———————————— P0-3 · 除权事件驱动强制 backfill(风险 D)————————————
+def test_p0_3_jump_condition_pure():
+    """条件A(跳变判定,纯函数):送转级跳变 True;普通涨跌停 False;缺基线 False。"""
+    assert master_sync._exright_jump_exceeds(10.0, 5.0) is True     # 10送10 → 腰斩,断层
+    assert master_sync._exright_jump_exceeds(10.0, 6.6) is True     # -34% 送转级
+    assert master_sync._exright_jump_exceeds(10.0, 9.0) is False    # -10% 跌停,未超阈值
+    assert master_sync._exright_jump_exceeds(10.0, 11.0) is False   # +10% 涨停,未超阈值
+    assert master_sync._exright_jump_exceeds(None, 5.0) is False    # 无昨收基线
+    assert master_sync._exright_jump_exceeds(0.0, 5.0) is False     # 非正数
+    assert master_sync._exright_jump_exceeds(10.0, None) is False
+
+
+def test_p0_3_meta_carries_last_close(monkeypatch, tmp_path):
+    """主档 meta 落 last_close(前复权口径),供除权 pre-scan 读 json 即得昨收 qfq。"""
+    _master_to_tmp(monkeypatch, tmp_path)
+    code = "000001"
+    store.put_master_kline(code, pd.DataFrame([_bar("2026-09-08", 10.0), _bar("2026-09-09", 12.34)]),
+                           meta={"source": "seed"})
+    meta = store.get_master_kline_meta(code)
+    assert meta["last_close"] == 12.34, "meta 未落最新 bar 的 close"
+
+
+def _mk_spot_indexed(monkeypatch, tmp_path, code, prev_qfq, new_unadj):
+    """造一票主档(昨收 qfq=prev_qfq)+ 当日 spot(未复权 close=new_unadj);返回 spot df。"""
+    _master_to_tmp(monkeypatch, tmp_path)
+    store.put_master_kline(code, pd.DataFrame([_bar("2026-09-09", prev_qfq)]), meta={"source": "seed"})
+    return pd.DataFrame([_spot_row(code, new_unadj)])
+
+
+def test_p0_3_real_exright_triggers_backfill(monkeypatch, tmp_path):
+    """真除权:跳变超阈值 且 日历命中 → 强制全量 backfill,且该票进 forced 集(将从 spot 剔除)。"""
+    code = "600000"
+    spot = _mk_spot_indexed(monkeypatch, tmp_path, code, prev_qfq=20.0, new_unadj=10.0)  # 腰斩
+    monkeypatch.setattr(master_sync, "_exright_calendar_hit", lambda c, s, e: True)   # 日历命中
+    called = {}
+
+    def fake_backfill(codes, *a, **k):
+        called["codes"] = list(codes)
+        return {"ok": 1, "failed": 0}
+
+    monkeypatch.setattr(market, "backfill_master", fake_backfill)
+    forced = master_sync._force_backfill_exright([code], spot, _TODAY)
+    assert forced == {code} and called["codes"] == [code], "真除权未触发强制 backfill"
+
+
+def test_p0_3_high_volatility_no_calendar_no_trigger(monkeypatch, tmp_path):
+    """高波动误伤防护:跳变超阈值但日历未命中 → 不触发(宁可漏判走陈旧度兜底)。"""
+    code = "300001"
+    spot = _mk_spot_indexed(monkeypatch, tmp_path, code, prev_qfq=20.0, new_unadj=10.0)
+    monkeypatch.setattr(master_sync, "_exright_calendar_hit", lambda c, s, e: False)  # 日历未命中
+    monkeypatch.setattr(market, "backfill_master",
+                        lambda *a, **k: (_ for _ in ()).throw(AssertionError("日历未命中不应 backfill")))
+    forced = master_sync._force_backfill_exright([code], spot, _TODAY)
+    assert forced == set(), "日历未命中却触发了全量 backfill(误伤)"
+
+
+def test_p0_3_normal_day_skips_calendar_query(monkeypatch, tmp_path):
+    """条件A不过(普通波动)→ 连日历都不查(省网络),更不触发。"""
+    code = "000001"
+    spot = _mk_spot_indexed(monkeypatch, tmp_path, code, prev_qfq=20.0, new_unadj=21.0)  # +5%
+    monkeypatch.setattr(master_sync, "_exright_calendar_hit",
+                        lambda c, s, e: (_ for _ in ()).throw(AssertionError("条件A不过不应查日历")))
+    monkeypatch.setattr(market, "backfill_master",
+                        lambda *a, **k: (_ for _ in ()).throw(AssertionError("正常日不应 backfill")))
+    assert master_sync._force_backfill_exright([code], spot, _TODAY) == set()
+
+
+def test_p0_3_no_baseline_no_trigger(monkeypatch, tmp_path):
+    """无昨收基线(新股首次/旧 meta 无 last_close)→ 不判、不触发。"""
+    _master_to_tmp(monkeypatch, tmp_path)
+    code = "000001"
+    monkeypatch.setattr(store, "get_master_kline_meta", lambda c: {"last_date": "2026-09-09"})  # 无 last_close
+    monkeypatch.setattr(market, "backfill_master",
+                        lambda *a, **k: (_ for _ in ()).throw(AssertionError("无基线不应 backfill")))
+    spot = pd.DataFrame([_spot_row(code, 10.0)])
+    assert master_sync._force_backfill_exright([code], spot, _TODAY) == set()
+
+
+def test_p0_3_sync_master_excludes_forced_from_spot(monkeypatch, tmp_path):
+    """集成:除权票被强制 backfill 后,不再进 update_master_from_spot 的 codes(防 qfq 重算又被覆盖)。"""
+    _master_to_tmp(monkeypatch, tmp_path)
+    exright_code, normal_code = "600000", "000002"
+    codes = [exright_code, normal_code]
+    monkeypatch.setattr(store, "list_master_codes", lambda: list(codes))
+    monkeypatch.setattr(store, "get_master_kline_meta",
+                        lambda c: {"last_date": "2026-09-09", "last_close": 20.0})
+    from tools.config import settings, stock_pool
+    monkeypatch.setattr(settings, "TUSHARE_ENABLED", False)
+    monkeypatch.setattr(stock_pool, "is_hk", lambda c: False)
+    # spot:除权票腰斩、正常票平;两票都在 spot
+    monkeypatch.setattr(market, "fetch_spot_all_tencent",
+                        lambda cs: pd.DataFrame([_spot_row(exright_code, 10.0), _spot_row(normal_code, 20.0)]))
+    monkeypatch.setattr(master_sync, "_exright_calendar_hit",
+                        lambda c, s, e: c == exright_code)                # 只有除权票日历命中
+    bf = {}
+
+    def fake_backfill(codes, *a, **k):
+        bf["codes"] = list(codes)
+        return {"ok": 1, "failed": 0}
+
+    monkeypatch.setattr(market, "backfill_master", fake_backfill)
+    seen = {}
+
+    def fake_update(codes=None, date=None, spot=None, source=None, **k):
+        seen["codes"] = list(codes)
+        return {"ok": len(codes), "skipped": 0}
+
+    monkeypatch.setattr(market, "update_master_from_spot", fake_update)
+    master_sync.sync_master(codes, as_of=_TODAY)
+    assert bf["codes"] == [exright_code], "除权票未被强制全量 backfill"
+    assert seen["codes"] == [normal_code], "除权票未从 spot 增量集剔除"
+    store.set_active_date(None)
+
+
+def test_p0_3_calendar_hit_window_semantics(monkeypatch):
+    """条件B 日历窗口语义:除权日须 (last_date, as_of] 内才命中——早于/等于 last_date 不算,
+    晚于 as_of 不算。用假 baostock 会话锁死,不触网。"""
+    class _FakeRS:
+        def __init__(self, dates):
+            self.error_code = "0"
+            self.fields = ["dividOperateDate"]
+            self._rows = [[d] for d in dates]
+            self._i = -1
+
+        def next(self):
+            self._i += 1
+            return self._i < len(self._rows)
+
+        def get_row_data(self):
+            return self._rows[self._i]
+
+    class _FakeBS:
+        def __init__(self, dates):
+            self._dates = dates
+
+        def query_dividend_data(self, code, year, yearType):
+            return _FakeRS([d for d in self._dates if d.startswith(year)])
+
+    from contextlib import contextmanager
+    from tools.collectors import baostock_src
+
+    def make_session(dates):
+        @contextmanager
+        def _sess():
+            yield _FakeBS(dates)
+        return _sess
+
+    monkeypatch.setattr(baostock_src, "bs_code", lambda c: "sh.600000")
+    # 除权日 2026-09-10 落在 (2026-09-09, 2026-09-10] → 命中
+    monkeypatch.setattr(baostock_src, "session", make_session(["2026-09-10"]))
+    assert master_sync._exright_calendar_hit("600000", "2026-09-09", "2026-09-10") is True
+    # 除权日 == last_date(边界左开)→ 不命中
+    monkeypatch.setattr(baostock_src, "session", make_session(["2026-09-09"]))
+    assert master_sync._exright_calendar_hit("600000", "2026-09-09", "2026-09-10") is False
+    # 除权日晚于 as_of → 不命中
+    monkeypatch.setattr(baostock_src, "session", make_session(["2026-09-11"]))
+    assert master_sync._exright_calendar_hit("600000", "2026-09-09", "2026-09-10") is False

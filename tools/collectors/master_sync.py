@@ -32,6 +32,14 @@ _MIN_COVERAGE = 0.9      # 请求票在主档中的覆盖率下限,低于此视�
 _MAX_GAP_DAYS = 7        # 主档最新交易日距今超过此天数视为陈旧,需全量重算
 _SAMPLE = 30             # 抽样多少只读 meta 判新鲜度(避免全量读)
 
+# ———————————— P0-3 · 除权事件驱动强制 backfill(诊断风险 D)————————————
+# 未复权当日 close 对昨收 qfq 的跳变阈值:超过此比例视为"除权级别跳变"(条件A)。
+# 取值 0.11:主板日内涨跌幅上限 10%,>11% 已超普通涨跌停量级,属送转/大额除权断层级别;
+# 创业板/科创板 20% 的合法大涨、ST 高波动等由**"且除权日历命中"(条件B)双条件**挡住误触发。
+# 宁可漏判(小额现金分红 <11% 的平滑 qfq 偏差 <2%,不构成断层 → 交陈旧度 _MAX_GAP_DAYS 兜底),
+# 绝不误触发全量 backfill(高波动日别误伤)。
+_EXRIGHT_JUMP_THRESHOLD = 0.11
+
 
 def _latest_master_date(codes: list[str], master: set[str]):
     """抽样已有主档的 meta,取最新 last_date(Timestamp);全无则 None。"""
@@ -68,6 +76,110 @@ def _needs_backfill(codes: list[str], as_of: str) -> tuple[bool, str]:
 
 def _fetch_timeout() -> float:
     return float(os.getenv("FETCH_TIMEOUT", "10"))
+
+
+def _exright_jump_exceeds(prev_qfq_close, new_unadj_close) -> bool:
+    """条件A(纯判定):未复权当日 close 对昨收 qfq 的跳变是否超"除权级别"阈值。
+
+    昨收取主档 meta.last_close(前复权口径);无近期除权时最新 qfq bar ≈ 实际价,故正常日
+    该比值 ≈ 1+当日涨跌幅(≤ 涨跌停);送转/大额除权当天未复权价对昨收 qfq 断层跳变(如
+    10 送 10 → 价近腰斩、比值 ≈ 0.5)。返回 True 表示"疑似除权",需再查日历(条件B)确认。
+    数据缺失/非正数 → False(无基线,不判、交陈旧度兜底)。
+    """
+    try:
+        prev = float(prev_qfq_close)
+        new = float(new_unadj_close)
+    except (TypeError, ValueError):
+        return False
+    if prev <= 0 or new <= 0:
+        return False
+    return abs(new / prev - 1.0) > _EXRIGHT_JUMP_THRESHOLD
+
+
+def _exright_calendar_hit(code: str, start: str, end: str) -> bool:
+    """条件B:baostock 除权除息日历在 (start, end] 区间内是否命中该票的除权除息日。
+
+    仅在条件A(跳变)已命中的**单票**上调用(省网络);任何异常/查不到 → False(不触发,
+    交陈旧度兜底)。start=主档 last_date、end=as_of;严格晚于 last_date 的除权日才算"新发生"。
+    可被测试 monkeypatch,离线单测不触网。
+    """
+    from tools.collectors import baostock_src
+    sym = baostock_src.bs_code(code)
+    if sym is None:                       # 北交所/判不出:该源不覆盖 → 视为未命中
+        return False
+    lo = pd.Timestamp(start).normalize()
+    hi = pd.Timestamp(end).normalize()
+    with baostock_src.session() as bs:
+        for yr in range(lo.year, hi.year + 1):
+            rs = bs.query_dividend_data(code=sym, year=str(yr), yearType="operate")
+            if rs.error_code != "0":
+                continue
+            while rs.next():
+                row = dict(zip(rs.fields, rs.get_row_data()))
+                d = row.get("dividOperateDate") or ""
+                if not d:
+                    continue
+                try:
+                    dt = pd.Timestamp(d).normalize()
+                except (ValueError, TypeError):
+                    continue
+                if lo < dt <= hi:         # 严格晚于主档 last_date、不晚于 as_of
+                    return True
+    return False
+
+
+def _force_backfill_exright(a_codes: list[str], spot, as_of: str) -> set[str]:
+    """除权事件驱动:增量前逐票判"是否发生除权",命中即强制全量 backfill(qfq 重算)。
+
+    双条件(诊断风险 D 缓解,宁可漏判绝不误触发):
+      条件A 未复权 close 对昨收 qfq 跳变 > 阈值(读 meta.last_close,不触网、先筛);
+      条件B 除权日历在 (last_date, as_of] 命中(仅对条件A命中的单票查,省网络)。
+    两条都过 → market.backfill_master([code]) 全量重算,并从本轮 spot 增量集**剔除**该票
+    (避免刚 qfq 重算又被未复权当日 bar 覆盖回断层)。返回被强制全量的票集合。
+
+    任何环节异常/缺基线 → 跳过该票(不触发),交陈旧度 _MAX_GAP_DAYS 兜底。
+    """
+    try:
+        sp = spot.set_index("code") if "code" in getattr(spot, "columns", []) else spot
+    except Exception:
+        return set()
+    forced: set[str] = set()
+    for code in a_codes:
+        try:
+            if code not in sp.index:
+                continue
+            meta = store.get_master_kline_meta(code)
+            prev_close = (meta or {}).get("last_close")
+            last_date = (meta or {}).get("last_date")
+            if prev_close is None or not last_date:
+                continue                  # 无基线(新股首次/旧 meta 无 last_close)→ 不判
+            new_close = sp.loc[code].get("close")
+            if not _exright_jump_exceeds(prev_close, new_close):
+                continue                  # 条件A不过 → 不查日历(省网络)
+            try:
+                hit = _exright_calendar_hit(code, last_date, as_of)
+            except Exception as e:
+                logger.warning("除权日历查询失败 %s: %s(不触发强制 backfill,交陈旧度兜底)", code, e)
+                continue
+            if not hit:
+                logger.info("除权疑似跳变 %s(未复权价对昨收 qfq 超阈值)但日历未命中 → 不触发"
+                            "(高波动兜底,防误伤)", code)
+                continue
+            logger.warning("除权确认 %s(跳变超阈值 且 日历命中)→ 强制全量 backfill(qfq 重算),"
+                           "本轮不再 spot 增量", code)
+            try:
+                r = market.backfill_master([code])
+                if r.get("ok", 0) > 0:
+                    forced.add(code)
+                else:
+                    logger.error("除权强制 backfill 未成功 %s(%s)→ 交陈旧度兜底", code, r)
+            except Exception as e:
+                logger.error("除权强制 backfill 异常 %s: %s(交陈旧度兜底)", code, e)
+        except Exception as e:
+            logger.warning("除权判定跳过 %s: %s(不影响其余票)", code, e)
+    if forced:
+        logger.info("除权事件驱动:%d 只已强制全量 backfill(qfq 重算),本轮从 spot 增量剔除", len(forced))
+    return forced
 
 
 def _advance_master_from_raw(fetched: dict) -> tuple[int, dict]:
@@ -310,6 +422,17 @@ def sync_master(codes: list[str], as_of: str | None = None, *,
                 logger.warning("腾讯批量 spot 失败,回退 akshare spot:%s", qe)
                 spot = market.fetch_spot_all()
                 src_tag = "akshare_spot"
+
+        # P0-3:spot 增量前,除权事件驱动强制 backfill——未复权当日价对昨收 qfq 跳变超阈值
+        # 且除权日历命中的单票,强制全量 qfq 重算并从本轮 spot 增量剔除(避免除权后拿"qfq 历史+
+        # 未复权新 bar"混存的断层价污染 chip/形态/动量);未命中票不受影响、不增网络。
+        try:
+            forced = _force_backfill_exright(a_codes, spot, as_of)
+            if forced:
+                a_codes = [c for c in a_codes if c not in forced]
+        except Exception as e:
+            logger.warning("除权事件驱动 backfill 整体跳过(不影响 spot 增量): %s", e)
+
         r = market.update_master_from_spot(codes=a_codes, date=as_of, spot=spot, source=src_tag)
 
         if hk_codes:
