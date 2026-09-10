@@ -1395,6 +1395,18 @@ def cmd_intraday_screen(argv):
     intraday_screen._main(argv[2:])   # argv[0]=脚本 argv[1]=intraday_screen,其余透传
 
 
+def cmd_intraday_review(argv):
+    """午盘选股复盘入口(当日 15:xx,下午 α · D-0 当日闭环):
+    python -m tools.run intraday_review [--date YYYY-MM-DD] [--force] [--no-inbox]。
+
+    对当日午盘选出的买入 5(主评价)/规避 3(纠偏)逐票算下午 α(=下午涨跌% − 全A下午等权基准),
+    产 docs/每日分析/复盘/午盘_<date>.md + 追加结论到经验 inbox。切分复用 intraday_screen(单一真源),
+    基准复用 breadth.equal_weight_mean_pct(唯一真源)。⚠️ 研究模拟,非投资建议。
+    """
+    from tools.pipeline import intraday_review
+    intraday_review._main(argv[2:])   # argv[0]=脚本 argv[1]=intraday_review,其余透传
+
+
 def cmd_findata(argv):
     """全A 财报三大表增量回填入口:python -m tools.run findata [--universe N] [--force] [--dry-run]。
 
@@ -1415,7 +1427,8 @@ _CMDS = {"collect": cmd_collect, "message": cmd_message, "sentiment": cmd_sentim
          "pattern": cmd_pattern, "sepa": cmd_sepa, "strong": cmd_strong,
          "analyze": cmd_analyze, "findata": cmd_findata, "all": cmd_all,
          "ticks": cmd_ticks, "enrich": cmd_enrich, "candmsg": cmd_candmsg,
-         "intraday_screen": cmd_intraday_screen}
+         "intraday_screen": cmd_intraday_screen,
+         "intraday_review": cmd_intraday_review}
 
 
 def main(argv: list[str]) -> int:
