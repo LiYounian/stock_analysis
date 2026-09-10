@@ -250,3 +250,100 @@ def test_render_md_empty_view(monkeypatch, tmp_path):
                         lambda name, date=None: (_ for _ in ()).throw(FileNotFoundError()))
     path = isr.render_intraday_md("2026-09-08", out_dir=tmp_path)
     assert "降级空跑" in path.read_text(encoding="utf-8")
+
+
+# ————————————————————————————————————————————————
+# ⑦ 侧重点重构:买入5(主评价)/规避3(纠偏)切分——单一真源(输出与复盘共用)
+# ————————————————————————————————————————————————
+def _mk(code, score, direction):
+    return {"code": code, "name": code, "完整分": score, "数据面综合分": score,
+            "消息面方向": direction, "消息面分": 0.0, "候选来源": [], "理由": []}
+
+
+def test_split_buy_top5_excludes_bearish():
+    """买入 = 排除看空后完整分 Top5;看空票绝不进买入(即便分高)。"""
+    reranked = [_mk("B0", 9.0, "看空")] + [_mk(f"P{i}", 8.0 - i, "看多") for i in range(8)]
+    买入, 规避 = isr.split_buy_avoid(reranked)
+    assert len(买入) == 5
+    codes = [x["code"] for x in 买入]
+    assert "B0" not in codes                                  # 看空不进买入(即便完整分最高)
+    assert codes == ["P0", "P1", "P2", "P3", "P4"]            # 非看空按完整分降序 Top5
+
+
+def test_split_avoid_prefers_bearish_then_lowest():
+    """规避 = 看空优先(最弱在前),不足补最低分;买入/规避不相交。"""
+    reranked = ([_mk(f"P{i}", 8.0 - i, "看多") for i in range(6)]
+                + [_mk("S1", 2.0, "看空"), _mk("S2", 1.0, "看空")])
+    买入, 规避 = isr.split_buy_avoid(reranked)
+    codes_avoid = [x["code"] for x in 规避]
+    assert len(规避) == 3
+    assert codes_avoid[:2] == ["S2", "S1"]                    # 看空优先、完整分升序(最弱在前)
+    assert codes_avoid[2] == "P5"                             # 看空不足 → 补最低分非看空票
+    assert set(x["code"] for x in 买入).isdisjoint(codes_avoid)  # 买入/规避不相交
+
+
+def test_split_small_pool_disjoint():
+    """池子小于 8 只时买入/规避仍不相交、不重复取同一只。"""
+    reranked = [_mk(f"P{i}", 5.0 - i, "看多") for i in range(4)]  # 只有 4 只非看空
+    买入, 规避 = isr.split_buy_avoid(reranked)
+    assert len(买入) == 4                                     # 不足 5 只全进买入
+    assert set(x["code"] for x in 买入).isdisjoint(x["code"] for x in 规避)
+
+
+def test_action_tag_rules():
+    assert isr.action_tag(_mk("A", 1, "看多"), "买入") == "尾盘可买"
+    assert isr.action_tag(_mk("A", 1, "中性"), "买入") == "次日观察"
+    assert isr.action_tag(_mk("A", 1, "看多"), "规避") == "仅规避"
+
+
+def test_counts_sourced_from_config():
+    """买入/规避条数是配置真源 THRESHOLDS['午盘选股'] 的投影(改一处生效,不散落硬编码)。"""
+    from tools.config import strategy
+    cfg = strategy.THRESHOLDS["午盘选股"]
+    assert isr.N_BUY == cfg["买入条数"] == 5
+    assert isr.N_AVOID == cfg["规避条数"] == 3
+    assert isr.noon_cfg()["规避条数"] == 3
+
+
+def test_render_two_columns_and_ledger(monkeypatch, tmp_path):
+    """render 产出【今日可买入】+【今日规避】两栏 + 折叠完整台账;看空票不进买入栏。"""
+    reranked = ([_mk(f"P{i}", 8.0 - i, "看多") for i in range(6)]
+                + [_mk("S1", 1.0, "看空")])
+    view = {"候选池规模": 7, "上限命中": False, "统计": {}, "回灌参数": {},
+            "重排": reranked}
+    monkeypatch.setattr(isr.store, "get_view", lambda name, date=None: view)
+    text = isr.render_intraday_md("2026-09-08", out_dir=tmp_path).read_text(encoding="utf-8")
+    assert "今日可买入" in text and "今日规避" in text
+    assert "主评价对象" in text and "纠偏参照" in text
+    assert "完整候选台账" in text and "<details>" in text     # 全序台账保留(折叠)
+    assert "行动/时效" in text and "尾盘可买" in text
+    # 看空票 S1 出现在规避/台账,但买入栏只应有 P0..P4(前 5 非看空)
+    买入段 = text.split("今日规避")[0]
+    assert "S1" not in 买入段
+
+
+# ————————————————————————————————————————————————
+# ⑧ D1:11:30 快照落盘(供当日午盘复盘算下午口径)——只存 ≤11:30、不碰主档
+# ————————————————————————————————————————————————
+def test_persist_noon_snapshot(tmp_path):
+    quotes = {"000001": dict(_Q), "SUSPEND": {"price": None}}   # price 缺失的票不落盘
+    path = isr.persist_noon_snapshot(quotes, "2026-09-08", out_root=tmp_path)
+    assert path == isr.noon_snapshot_path("2026-09-08", out_root=tmp_path)
+    import json as _json
+    payload = _json.loads(path.read_text(encoding="utf-8"))
+    assert payload["as_of"] == "2026-09-08" and payload["count"] == 1
+    assert "000001" in payload["quotes"] and "SUSPEND" not in payload["quotes"]
+    assert payload["quotes"]["000001"]["price"] == 11.0        # 11:30 冻结价
+    # 只存 ≤11:30 冻结口径:不得混入收盘/未来字段
+    assert set(payload["quotes"]["000001"]) == {"price", "open", "pct_chg", "turnover"}
+
+
+def test_run_intraday_screen_persists_snapshot(monkeypatch, tmp_path):
+    """编排默认落盘快照;可用 snapshot_root 重定向到 tmp(不碰生产 data/)。"""
+    rep = isr.run_intraday_screen(
+        "2026-09-08", quotes={"000001": _Q}, codes=["000001"],
+        run_screen_all_fn=lambda *a, **k: {"union": 1, "llm_subset": 1, "各策略入选": {}},
+        cand_msg_fn=lambda *a, **k: {"候选池规模": 1, "统计": {}},
+        write_md=False, snapshot_root=tmp_path)
+    assert rep["快照落盘"] == str(isr.noon_snapshot_path("2026-09-08", out_root=tmp_path))
+    assert isr.noon_snapshot_path("2026-09-08", out_root=tmp_path).exists()
