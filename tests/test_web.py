@@ -250,3 +250,51 @@ def test_financial_detail_exposes_dates(monkeypatch):
     assert d["披露日"] == "2026-04-30"                    # 财报发布时间正常(无缺口)
     assert d["分析日期"] == "2026-09-07"                  # 无块内分析日期 → 回退 as_of
     assert d["上传时间"] == "2026-09-07T20:15:03+08:00"   # 分析上传时间字段暴露
+
+
+# ———— 个股详情页头部:行业/概念缺失(None)不得渲染成 "None·None"(展示层兜底) ————
+def _render_stock_head(meta: dict) -> str:
+    """孤立渲染 stock.html 头部:用桩 base.html 只保留 content 块,喂一条最小记录。
+
+    避开 base.html 自身的上下文依赖(data_source/导航),只验证 stock.html 头部的
+    None 兜底行为。record 其余字段留 None,模板内各区块 {% if %} 守卫会自动跳过。
+    """
+    from pathlib import Path
+
+    from jinja2 import ChoiceLoader, DictLoader, Environment, FileSystemLoader, select_autoescape
+
+    tpl_dir = Path(da.__file__).resolve().parent / "templates"
+    env = Environment(
+        loader=ChoiceLoader([
+            DictLoader({"base.html": "{% block content %}{% endblock %}"}),
+            FileSystemLoader(str(tpl_dir)),
+        ]),
+        autoescape=select_autoescape(["html", "xml"]), cache_size=0)
+    rec = {"meta": meta, "snapshot": None, "signals": None, "prediction": None,
+           "valuation": None, "fundamental": None, "fundflow": None,
+           "financial": None, "council": None, "events": []}
+    return env.get_template("stock.html").render(
+        r=rec, news_count=0, _d="latest", kline={"dates": []})
+
+
+def test_stock_head_industry_none_not_leaked():
+    """行业/概念全缺(None)→ 头部显示 "—",绝不露出字面量 "None"。"""
+    html = _render_stock_head({"code": "000001", "name": "测试", "sector": None, "industry": None})
+    head = html.split("</h1>", 1)[0]
+    assert "None" not in head            # 不再有 None·None
+    assert "—" in head                   # 兜底占位现身
+
+
+def test_stock_head_partial_industry_no_none():
+    """只有 sector(industry 缺)→ 显示 sector,不出现 " · None"。"""
+    html = _render_stock_head({"code": "000001", "name": "测试", "sector": "半导体", "industry": None})
+    head = html.split("</h1>", 1)[0]
+    assert "半导体" in head
+    assert "None" not in head            # 不拖一个 "· None" 尾巴
+
+
+def test_stock_head_both_present_unchanged():
+    """行业/概念齐全 → 保持 "sector · industry" 原行为不变(回归)。"""
+    html = _render_stock_head({"code": "000001", "name": "测试", "sector": "半导体", "industry": "芯片设计"})
+    head = html.split("</h1>", 1)[0]
+    assert "半导体 · 芯片设计" in head
