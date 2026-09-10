@@ -11,7 +11,7 @@ A/B 编码:字符串 "A"/"B";弃权用 None。
 """
 from __future__ import annotations
 
-from typing import Optional
+from typing import Callable, Optional
 
 import numpy as np
 import pandas as pd
@@ -113,3 +113,48 @@ def score_row(
         ab_valuation(val_pctile, val_cut),
         ab_turnover(turn_pctile, turn_cut),
     )
+
+
+# ————————————————————— 面板 → 温度序列 —————————————————————
+def build_temperature_series(
+    panel_df: pd.DataFrame,
+    rs_momentum_of: Callable[[str, str], Optional[float]],
+    *,
+    val_col: str = "pe_median",
+    turn_col: str = "turnover_mean",
+    win: int = PCTILE_WIN,
+    min_periods: int = PCTILE_MIN,
+    val_cut: float = VAL_CUT,
+    turn_cut: float = TURN_CUT,
+    mom_center: float = MOM_CENTER,
+) -> pd.DataFrame:
+    """行业面板(industry×date×原始聚合值)→ 温度序列。
+
+    - 估值/换手分位:在**各行业自身历史**上因果 rolling(只用≤date),防未来。
+    - 动量:rs_momentum_of(industry, date) 注入(真实跑用截断收盘序列的 RS-Momentum,因果)。
+    - 任一维弃权 → 该 (行业,date) k=NaN(不进回测)。
+    返回 [date, industry, k, mom_ab, val_ab, turn_ab, val_pctile, turn_pctile]。
+    """
+    parts = []
+    for industry, g in panel_df.groupby("industry"):
+        g = g.sort_values("date").reset_index(drop=True)
+        val_p = causal_rolling_pctile(g[val_col], win, min_periods)
+        turn_p = causal_rolling_pctile(g[turn_col], win, min_periods)
+        recs = []
+        for i, row in g.iterrows():
+            date = row["date"]
+            mom = rs_momentum_of(industry, date)
+            vp, tp = val_p.iloc[i], turn_p.iloc[i]
+            sc = score_row(mom, vp, tp, val_cut=val_cut, turn_cut=turn_cut, mom_center=mom_center)
+            recs.append({
+                "date": date, "industry": industry,
+                "k": sc["k"] if not sc["弃权"] else np.nan,
+                "mom_ab": sc["维度"]["动量"], "val_ab": sc["维度"]["估值"],
+                "turn_ab": sc["维度"]["换手"],
+                "val_pctile": vp, "turn_pctile": tp,
+            })
+        parts.append(pd.DataFrame(recs))
+    if not parts:
+        return pd.DataFrame(columns=["date", "industry", "k", "mom_ab", "val_ab",
+                                     "turn_ab", "val_pctile", "turn_pctile"])
+    return pd.concat(parts, ignore_index=True)

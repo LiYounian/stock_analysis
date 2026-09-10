@@ -138,3 +138,34 @@ def panel_to_frame(rows: list[dict]) -> pd.DataFrame:
     if not df.empty:
         df = df.sort_values(["industry", "date"]).reset_index(drop=True)
     return df
+
+
+# ————————————————————— 编排(reader/provider 注入,可单测) —————————————————————
+def build_panel(
+    dates: list[str],
+    universe: list[str],
+    members_provider: Callable[[list[str], str], dict],
+    pe_reader: Callable[[str, str], Optional[float]],
+    pb_reader: Callable[[str, str], Optional[float]],
+    turnover_reader: Callable[[str, str], Optional[float]],
+    *,
+    min_members: int,
+) -> pd.DataFrame:
+    """逐日构建行业面板。所有数据源以 callable 注入 → 纯编排、可用 stub 单测。
+
+    - members_provider(universe, date) → {code: 申万一级名}(as-of 归属)。
+    - pe_reader/pb_reader(code, date) → as-of PE_TTM/PB(防未来,读≤date);无 → None。
+    - turnover_reader(code, date) → 当日换手率%;无 → None。
+    返回 industry×date 面板 DataFrame(PANEL_COLS)。
+    """
+    all_rows = []
+    for date in dates:
+        members = members_provider(universe, date)
+        codes = list(members.keys())
+        pe_map = {c: pe_reader(c, date) for c in codes}
+        pb_map = {c: pb_reader(c, date) for c in codes}
+        turn_map = {c: turnover_reader(c, date) for c in codes}
+        all_rows.extend(
+            aggregate_date(date, members, pe_map, pb_map, turn_map, min_members=min_members)
+        )
+    return panel_to_frame(all_rows)

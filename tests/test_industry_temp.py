@@ -100,6 +100,47 @@ def test_rolling_pctile_causal():
     assert p2.iloc[3] == 1.0
 
 
+def test_build_temperature_series():
+    # 单行业 5 日面板,pe/turnover 递增;动量 stub 恒 A(≥100)
+    panel = pd.DataFrame({
+        "date": [f"2024-01-0{i}" for i in range(1, 6)],
+        "industry": ["电子"] * 5,
+        "pe_median": [10.0, 12.0, 14.0, 16.0, 18.0],
+        "pb_median": [1.0] * 5,
+        "turnover_mean": [1.0, 2.0, 3.0, 4.0, 5.0],
+    })
+    mom = lambda ind, date: 105.0        # 恒 A 面
+    ser = T.build_temperature_series(panel, mom, win=100, min_periods=1)
+    assert len(ser) == 5
+    # 末日 pe/turnover 都是历史最高 → 分位=1.0 ≥0.5 → 估值A、换手A,动量A → k=3
+    last = ser[ser["date"] == "2024-01-05"].iloc[0]
+    assert last["val_pctile"] == 1.0 and last["turn_pctile"] == 1.0
+    assert last["k"] == 3
+    # 首日 pe/turnover 是当时唯一值 → 分位=1.0 → 同样 A(注:因果,窗内只自身)
+    first = ser[ser["date"] == "2024-01-01"].iloc[0]
+    assert first["k"] == 3
+    # 动量弃权 → 整行业弃权(k=NaN)
+    ser2 = T.build_temperature_series(panel, lambda i, d: None, win=100, min_periods=1)
+    assert ser2["k"].isna().all()
+
+
+def test_temperature_series_causal_per_industry():
+    # 两行业各自历史独立算分位(不串味)
+    panel = pd.DataFrame({
+        "date": ["d1", "d2", "d1", "d2"],
+        "industry": ["电子", "电子", "银行", "银行"],
+        "pe_median": [10.0, 50.0, 100.0, 5.0],
+        "pb_median": [1.0, 1.0, 1.0, 1.0],
+        "turnover_mean": [1.0, 1.0, 1.0, 1.0],
+    })
+    ser = T.build_temperature_series(panel, lambda i, d: 100.0, win=100, min_periods=1)
+    # 电子 d2 pe=50 是自身历史新高 → 估值分位1.0=A;银行 d2 pe=5 是自身新低 → 分位=0.5? {100,5}中≤5占1/2=0.5→A(≥0.5)
+    e2 = ser[(ser.industry == "电子") & (ser.date == "d2")].iloc[0]
+    b2 = ser[(ser.industry == "银行") & (ser.date == "d2")].iloc[0]
+    assert e2["val_pctile"] == 1.0
+    assert b2["val_pctile"] == 0.5     # 银行自身序列内算,不受电子影响
+
+
 def test_pctile_nan_handling():
     # 含 NaN 的序列:NaN 点自身出 NaN,但不破坏其后有效点的窗口统计
     s = pd.Series([10.0, np.nan, 20.0, 15.0])

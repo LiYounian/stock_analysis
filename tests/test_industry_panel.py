@@ -51,6 +51,22 @@ def test_aggregate_date_groups_and_drops():
     assert (df["industry"] == "电子").all()
 
 
+def test_build_panel_orchestration():
+    # stub 注入:两日、两行业成分、固定读数
+    universe = ["A", "B", "C"]
+    members = {"A": "电子", "B": "电子", "C": "银行"}
+    prov = lambda uni, date: {c: members[c] for c in uni}
+    pe = lambda c, d: {"A": 10.0, "B": 20.0, "C": 30.0}[c]
+    pb = lambda c, d: 1.5
+    turn = lambda c, d: 2.0
+    df = P.build_panel(["2024-01-02", "2024-01-03"], universe, prov, pe, pb, turn, min_members=2)
+    # 银行单只<2弃权;电子每日一行,共2日 → 2行
+    assert set(df["industry"]) == {"电子"}
+    assert len(df) == 2
+    row = df[df["date"] == "2024-01-02"].iloc[0]
+    assert row["pe_median"] == 15.0 and row["n_members"] == 2
+
+
 def test_members_snapshot_normalize():
     snap = {"000001": "银行", "600519": "食品饮料", "999999": "不存在行业xyz"}
     out = P.members_snapshot(["000001", "600519", "999999", "000002"], "d", snap)
