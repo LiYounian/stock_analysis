@@ -7,7 +7,8 @@
   <key>ProgramArguments</key>
   <array>
     <string>/bin/bash</string>
-    <string>/Users/yqg/Documents/projects/stock_analysis/ops/launchd/commit_analysis_docs.sh</string>
+    <string>/Users/yqg/.local/state/stock/bin/stock-launchd-bootstrap.sh</string>
+    <string>commit_analysis_docs.sh</string>
   </array>
   <!-- 分析文档(选股/复盘/经验)自动提交:工作日 11:00-22:00 每小时:20 扫一次,幂等 -->
   <key>StartCalendarInterval</key>

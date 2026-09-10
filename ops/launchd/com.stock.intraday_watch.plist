@@ -7,7 +7,8 @@
   <key>ProgramArguments</key>
   <array>
     <string>/bin/bash</string>
-    <string>/Users/yqg/Documents/projects/stock_analysis/ops/launchd/intraday_watch.sh</string>
+    <string>/Users/yqg/.local/state/stock/bin/stock-launchd-bootstrap.sh</string>
+    <string>intraday_watch.sh</string>
   </array>
   <!-- 下午实时观测循环:13:00 开盘起动,盯 当日午盘候选∪持仓,14:57 收盘前自停(脚本内 --until)。
        候选无、持仓空 → 脚本自身直接退出。单实例锁在 wrapper 内。 -->
