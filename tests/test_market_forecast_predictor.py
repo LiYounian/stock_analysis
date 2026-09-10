@@ -174,3 +174,34 @@ def test_walk_forward_train_strictly_before_test(monkeypatch):
     monkeypatch.setattr(P.CompositeModel, "fit", spy_fit)
     BT.walk_forward(pan, model_name="composite", min_train=40, stride=5)
     assert violations, "未触发任何训练"
+
+
+def test_资金流killswitch_权重默认为0():
+    """情绪B(资金流维)kill-switch·默认不接 —— 锁定默认权重=0,防未来被无意改回。
+
+    背景:大盘预测「资金流」维经 A/B 回测(独立复算)判定结构性无经济 alpha,统筹/用户
+    决策=**默认不接**(资金流组权重=0),仅保留采集管道攒数据、可 config 显式打开。
+    语义是「默认关、可开」而非删除维度,故维度映射须仍在。
+
+    这条断言的意义:权重默认值是可解释综合模型直接读的组权重,若未来有人顺手改回
+    1.0(与其它三维对齐)会静默把无 alpha 的维度接回预测。本测试把它焊死。
+    """
+    from tools.config.strategy import THRESHOLDS
+
+    # 1) 配置层默认值 = 0
+    assert THRESHOLDS["大盘预测"]["因子权重"]["资金流"] == 0.0, (
+        "资金流 kill-switch:因子权重默认必须为 0(默认不接);"
+        "要显式接回请走 config 并同步更新本测试的决策依据")
+
+    # 2) 模型读到的组权重 = 0
+    m = P.CompositeModel()
+    assert m.group_w["资金流"] == 0.0
+
+    # 3) fit 后按覆盖率调整的有效权重仍 = 0(0×覆盖率恒为 0,合成时该维零贡献)
+    pan = _synth_panel()
+    y = (pan["fwd_ret"] > 0).astype(float).to_numpy()
+    m.fit(pan, y)
+    assert m.eff_group_w["资金流"] == 0.0
+
+    # 4) 维度未被删除(可 config 显式打开):分组映射保留资金流
+    assert "资金流" in m._groups and m._groups["资金流"]
