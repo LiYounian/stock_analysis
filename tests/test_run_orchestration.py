@@ -227,6 +227,10 @@ def test_reattach_council_picks_up_factor_and_event(monkeypatch):
         kv[(name, code)] = obj
         return f"mem://{name}/{code}"
 
+    def fake_put_view(name, obj, date=None):       # precompute 现会落「估值位监控」按日视图→存根,不落真盘
+        kv[(name,)] = obj
+        return f"mem://{name}"
+
     def fake_get_code_view(name, code, date="latest"):
         if (name, code) in kv:
             return kv[(name, code)]
@@ -237,6 +241,7 @@ def test_reattach_council_picks_up_factor_and_event(monkeypatch):
     import tools.store.repo as store
     monkeypatch.setattr(store, "set_active_date", lambda d: None)
     monkeypatch.setattr(store, "put_code_view", fake_put_code_view)
+    monkeypatch.setattr(store, "put_view", fake_put_view)
     monkeypatch.setattr(store, "get_code_view", fake_get_code_view)
     monkeypatch.setattr(store, "get_record", fake_get_record)
     monkeypatch.setattr(store, "put_record", fake_put_record)

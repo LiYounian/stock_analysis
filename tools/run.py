@@ -714,6 +714,10 @@ def run_factor(codes: list[str], as_of: str) -> None:
     r = score.precompute(as_of=as_of, codes=codes, 北向=北向)
     logger.info("多因子截面预算:打分 %d/%d 只,北向可得 %d,因子可得性 %s",
                 r.get("打分数"), r.get("扫描数"), len(北向), r.get("因子可得性"))
+    # 估值位监控:precompute 已把读数落按日视图「估值位监控」(store.get_view 可回读);此处
+    # 一并转发到编排日志,让"小市值倾斜"敞口在池级流程日志里也有痕(开关关→None,不刷屏)。
+    if r.get("估值位监控"):
+        logger.info("估值位监控(小市值敞口,已落按日视图):%s", r.get("估值位监控"))
 
 
 def run_council(codes: list[str], as_of: str) -> None:
