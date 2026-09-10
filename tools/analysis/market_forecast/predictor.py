@@ -10,6 +10,13 @@
 
 标准化统计量 / 定向 / 系数**只用训练集拟合**(walk-forward 时训练集严格早于测试日),
 保证无未来函数。predict_one 供每日生产:吃单日特征 → market_forecast.json。
+
+⚠️ 效力诚实标注(2026-09-10 维度贡献研究):虽名义四维,**每天真正参与判别的只有技术+广度**——
+资金流组权重=0(kill-switch,见 config 因子权重注释);消息面历史仅~1月,`fit` 里按训练集覆盖率
+自动降权后长样本里有效权重≈0.01,事实上不参与。整体方向命中~55% 是**弱统计边际(较惯性 +4.8pp
+显著),但多空收益价差≈0(无经济 alpha)**;技术与广度高度冗余。合成机制是"手工维间权重 + 维内等权 +
+训练集定向 + 单参逻辑校准"的混合,不是投票也不是端到端回归(全特征 logistic 对照反而更差)。
+一句话:方向可微弱猜、收益换不出,勿当能赚钱的信号。详见 docs/计划/2026-09-10_市场情绪预测维度贡献研究.md。
 """
 from __future__ import annotations
 
@@ -123,7 +130,13 @@ class CompositeModel:
                         "消息面": _SENTI_COLS, "资金流": _FUNDFLOW_COLS}
 
     def _dim_scores(self, Xs: np.ndarray) -> dict:
-        """标准化+定向后,按维取均值 → {维: 分数向量}。"""
+        """标准化+定向后,按维取均值 → {维: 分数向量}。
+
+        ⚠️ 维内**等权**:技术维内 tech_atr(波动率,全表最强单特征 IC≈0.08-0.10)被其余 9 个
+        弱/符号不稳的列稀释到 1/10 权重(广度里 br_limit_up 同理)。2026-09-10 A/B 实验试过
+        "ATR/涨停广度提维 或 维内 |IC| 加权"提权,命中未升、多空价差未显著转正(proxy h5/hs300
+        不稳),**结构性无 alpha 得到确认,未接生产**;实验见 tools/backtest/market_forecast_atr_ab.py。
+        """
         col_idx = {c: i for i, c in enumerate(self.cols)}
         oriented = Xs * self.orient
         dims = {}
