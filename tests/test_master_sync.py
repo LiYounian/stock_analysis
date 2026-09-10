@@ -65,7 +65,7 @@ def test_spot_when_master_fresh(monkeypatch):
     def fake_tencent(cs):                               # 免费源主源=腾讯批量 spot
         return pd.DataFrame({"code": list(cs)})
 
-    def fake_update(codes=None, date=None, spot=None, source=None):
+    def fake_update(codes=None, date=None, spot=None, source=None, **k):
         seen["date"] = date
         seen["codes"] = codes
         seen["source"] = source
@@ -96,7 +96,7 @@ def test_spot_falls_back_to_akshare_when_tencent_fails(monkeypatch):
                         lambda cs: (_ for _ in ()).throw(ConnectionError("腾讯 spot 挂")))
     monkeypatch.setattr(market, "fetch_spot_all", lambda: pd.DataFrame({"code": codes}))
 
-    def fake_update(codes=None, date=None, spot=None, source=None):
+    def fake_update(codes=None, date=None, spot=None, source=None, **k):
         seen["source"] = source
         return {"ok": len(codes), "skipped": 0}
 
@@ -123,7 +123,7 @@ def test_spot_prefers_tushare_when_enabled(monkeypatch):
     monkeypatch.setattr(market, "fetch_spot_all",
                         lambda: (_ for _ in ()).throw(AssertionError("配了 Tushare 不应调免费源 spot")))
 
-    def fake_update(codes=None, date=None, spot=None, source=None):
+    def fake_update(codes=None, date=None, spot=None, source=None, **k):
         seen["source"] = source
         return {"ok": len(codes), "skipped": 0}
 
@@ -150,7 +150,7 @@ def test_spot_falls_back_to_free_when_tushare_fails(monkeypatch):
         called["free_spot"] = True
         return pd.DataFrame({"code": list(cs)})
 
-    def fake_update(codes=None, date=None, spot=None, source=None):
+    def fake_update(codes=None, date=None, spot=None, source=None, **k):
         seen["source"] = source
         return {"ok": len(codes), "skipped": 0}
 

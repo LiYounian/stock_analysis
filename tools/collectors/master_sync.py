@@ -364,12 +364,16 @@ def _fallback(codes: list[str], workers: int | None, reason: str) -> dict:
 
 
 def sync_master(codes: list[str], as_of: str | None = None, *,
-                workers: int | None = None, fallback: bool = True) -> dict:
+                workers: int | None = None, fallback: bool = True,
+                provisional: bool = False) -> dict:
     """闭环 K线采集编排(主档 + spot 增量,失败回退逐只)。
 
     codes:本轮分析票池(全A 或子集)。as_of:当日 YYYY-MM-DD(缺省今天)。
     workers:回退逐只路径的并发度(None→settings.FETCH_WORKERS)。
     fallback=False:主档路径失败时不回退(直接抛出/返回失败),仅测试用。
+    provisional(P0-2):盘中(午盘未收盘)跑时置 True,当日 spot bar 在主档 meta 标 provisional
+      (伪 close);收盘再跑(provisional=False,默认)覆盖同日即除标。仅影响 meta 标记,
+      默认读取行为不变。
     """
     if not codes:
         return {"mode": "noop", "ok": 0}
@@ -433,10 +437,11 @@ def sync_master(codes: list[str], as_of: str | None = None, *,
         except Exception as e:
             logger.warning("除权事件驱动 backfill 整体跳过(不影响 spot 增量): %s", e)
 
-        r = market.update_master_from_spot(codes=a_codes, date=as_of, spot=spot, source=src_tag)
+        r = market.update_master_from_spot(codes=a_codes, date=as_of, spot=spot,
+                                           source=src_tag, provisional=provisional)
 
         if hk_codes:
-            hk_r = market.update_hk_master(hk_codes, date=as_of)
+            hk_r = market.update_hk_master(hk_codes, date=as_of, provisional=provisional)
             r["ok"] = r.get("ok", 0) + hk_r.get("ok", 0)
             r["skipped"] = r.get("skipped", 0) + hk_r.get("skipped", 0)
 

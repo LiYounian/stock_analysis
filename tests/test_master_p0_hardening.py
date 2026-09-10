@@ -240,3 +240,66 @@ def test_p0_3_calendar_hit_window_semantics(monkeypatch):
     # 除权日晚于 as_of → 不命中
     monkeypatch.setattr(baostock_src, "session", make_session(["2026-09-11"]))
     assert master_sync._exright_calendar_hit("600000", "2026-09-09", "2026-09-10") is False
+
+
+# ———————————— P0-2 · 盘中 provisional 标记,收盘覆盖除标(风险 G)————————————
+def test_p0_2_intraday_bar_marked_provisional(monkeypatch, tmp_path):
+    """盘中写入(provisional=True)→ 当日 bar 在主档 meta 标 provisional;默认读取不受影响。"""
+    _master_to_tmp(monkeypatch, tmp_path)
+    code = "000001"
+    store.put_master_kline(code, pd.DataFrame([_bar("2026-09-09", 10.0)]), meta={"source": "seed"})
+    store.set_active_date(_TODAY)
+    spot = pd.DataFrame([_spot_row(code, 10.8)])   # 盘中午间价
+    market.update_master_from_spot(codes=[code], date=_TODAY, spot=spot, source="test", provisional=True)
+    assert store.master_provisional_dates(code) == {_TODAY}, "盘中 bar 未标 provisional"
+    # 默认读取路径含该 bar(零影响);confirmed 读取剔除临时价日
+    assert len(store.get_master_kline(code)) == 2
+    assert pd.Timestamp(_TODAY) not in pd.to_datetime(store.get_master_kline_confirmed(code)["date"]).values
+    store.set_active_date(None)
+
+
+def test_p0_2_close_overwrite_clears_provisional(monkeypatch, tmp_path):
+    """收盘正式 bar(provisional=False)覆盖同日 → provisional 标记清除,confirmed 读取重新含该日。"""
+    _master_to_tmp(monkeypatch, tmp_path)
+    code = "000001"
+    store.put_master_kline(code, pd.DataFrame([_bar("2026-09-09", 10.0)]), meta={"source": "seed"})
+    store.set_active_date(_TODAY)
+    # 盘中:临时价 10.8 标 provisional
+    market.update_master_from_spot(codes=[code], date=_TODAY, spot=pd.DataFrame([_spot_row(code, 10.8)]),
+                                   source="test", provisional=True)
+    assert store.master_provisional_dates(code) == {_TODAY}
+    # 收盘:正式价 11.2 覆盖同日,provisional=False → 除标
+    market.update_master_from_spot(codes=[code], date=_TODAY, spot=pd.DataFrame([_spot_row(code, 11.2)]),
+                                   source="test", provisional=False)
+    assert store.master_provisional_dates(code) == set(), "收盘覆盖后未清除 provisional 标记"
+    m = store.get_master_kline_confirmed(code)
+    assert float(m[m["date"] == pd.Timestamp(_TODAY)]["close"].iloc[0]) == 11.2, "收盘定稿价未进 confirmed"
+    store.set_active_date(None)
+
+
+def test_p0_2_default_off_no_provisional(monkeypatch, tmp_path):
+    """默认(provisional=False)写入零影响:不产生任何 provisional 标记。"""
+    _master_to_tmp(monkeypatch, tmp_path)
+    code = "000001"
+    store.put_master_kline(code, pd.DataFrame([_bar("2026-09-09", 10.0)]), meta={"source": "seed"})
+    store.set_active_date(_TODAY)
+    market.update_master_from_spot(codes=[code], date=_TODAY, spot=pd.DataFrame([_spot_row(code, 10.8)]),
+                                   source="test")   # provisional 缺省 False
+    assert store.master_provisional_dates(code) == set()
+    # confirmed 与默认读取一致(无标记 → 等价)
+    assert len(store.get_master_kline_confirmed(code)) == len(store.get_master_kline(code)) == 2
+    store.set_active_date(None)
+
+
+def test_p0_2_provisional_persists_across_other_day_writes(monkeypatch, tmp_path):
+    """provisional 标记跨"写别的日"持久:只有覆盖被标日本身(写成 final)才除标。"""
+    _master_to_tmp(monkeypatch, tmp_path)
+    code = "000001"
+    store.put_master_kline(code, pd.DataFrame([_bar("2026-09-09", 10.0)]), meta={"source": "seed"})
+    # 09-10 标 provisional
+    store.append_master_kline(code, pd.DataFrame([_bar("2026-09-10", 10.8)]),
+                              provisional_dates={"2026-09-10"})
+    assert store.master_provisional_dates(code) == {"2026-09-10"}
+    # 再写 09-11(别的日,非 provisional)→ 09-10 标记应保留(未被覆盖成 final)
+    store.append_master_kline(code, pd.DataFrame([_bar("2026-09-11", 11.0)]))
+    assert store.master_provisional_dates(code) == {"2026-09-10"}, "写别的日误清了 provisional"
