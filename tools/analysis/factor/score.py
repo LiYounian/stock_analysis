@@ -198,8 +198,24 @@ def precompute(as_of: str | None = None, codes: list[str] | None = None,
     mon = _estvalue_monitor(raw_by_code, scored)     # 估值位(市值分位)前向观测:小市值敞口
     if mon:
         logger.info("估值位监控:%s", mon)
+    _persist_estvalue_monitor(mon, as_of)            # 落按日视图「估值位监控」→ 可按交易日回查小市值敞口
     return {"扫描数": len(codes), "打分数": len(scored), "因子可得性": avail,
             "估值位监控": mon, "as_of": as_of}
+
+
+def _persist_estvalue_monitor(mon: dict | None, as_of: str) -> str | None:
+    """把估值位监控读数落成按日视图「估值位监控」,供事后按交易日跟踪小市值敞口(风格回撤纪律的落点)。
+
+    · 为何要落盘:开启「价值市值分位」后收益含小市值溢价+幸存者偏差,风格切换/risk-off 会大幅回撤,
+      承诺"持续盯小市值敞口"——但读数原先只在 console 即时 log、不留痕。落成按日视图后
+      `store.get_view("估值位监控", date)` 可回读,风格 risk-off 时「小市值倾斜」异常偏低即可被发现。
+    · 开关关(mon=None,无敞口)→ 不落盘,返回 None(不误建空视图)。
+    · date-pin 到 as_of(防未来函数);payload 仅聚合读数(中位市值/倾斜比)+as_of,无个股代码→无脱敏面。
+    """
+    if not mon:
+        return None
+    from tools.store import repo as store
+    return store.put_view("估值位监控", {**mon, "as_of": as_of}, date=as_of)
 
 
 def _estvalue_monitor(raw_by_code: dict, scored: dict) -> dict | None:
