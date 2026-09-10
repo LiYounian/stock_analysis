@@ -260,6 +260,9 @@ _ALLOWED: dict[str, str] = {
         "_board 是回测分档标签(沪主板/深主板/创业板/科创板/北交所);已知漏 920(归'其他'),口径变更另开任务",
     "tools/backtest/backtest_newhigh.py":
         "_is_20cm 判 20cm 涨跌幅板(300/301/688/689),是涨跌停口径不是交易所",
+    "tools/backtest/backtest_midday_q.py":
+        "判 30/68 取涨跌停幅度上限(创业/科创 20% vs 主板 10%),是涨跌停口径不是交易所,"
+        "与 backtest_newhigh._is_20cm 同构",
     "tools/strategy/reversal_turnover.py":
         "_code_head_excluded 策略排除口径(剥离创业/科创/北交/B股);含 '9' 故 920 与 900 都被排除",
     "tools/strategy/small_cap.py":
@@ -273,6 +276,9 @@ _ALLOWED: dict[str, str] = {
     "tools/collectors/fundflow.py":
         "_secid 输出东财市场编号(1./0.)不是交易所前缀;920 段疑判成沪市但本机被东财指纹墙"
         "拦住无法实证(curl 56),不据猜改",
+    "tools/collectors/fundflow_intraday.py":
+        "_secid 输出东财市场编号(1./0.)不是交易所前缀;刻意与 fundflow.py._secid 行为一致"
+        "(其为模块私有,跨模块引私有函数违反宪法边界),同 fundflow.py 条目同因无法实证不据猜改",
 }
 
 
