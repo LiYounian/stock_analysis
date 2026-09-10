@@ -282,6 +282,22 @@ def main(argv=None) -> int:
         print(f"只补传 {sorted(only)}")
     print(f"上传完成 {args.date}:共 {s['total']} 分片,成功 {s['ok']},失败 {s['failed']}")
     print(f"回执:{_receipt_dir() / (args.date + '.json')}")
+
+    # 闭环产出回写主仓(Phase-1·方案B):闭环从 dailyjob worktree 跑,产出写在 dailyjob,
+    # 主仓消费者(选股门控/eod-review/web)读不到 → 选股误跳过。这里在 upload(闭环已调的
+    # python 步)末尾、receipt 落盘后把当日 analysis+scorecard+receipt 原子回写主仓(receipt 最后写)。
+    # best-effort:回写失败只告警不破上传(与闭环各步一致);源==目标(主仓自身跑)自动 no-op。
+    try:
+        from tools.sync.mirror_to_main import mirror_daily_to_main
+        m = mirror_daily_to_main(args.date)
+        if m["mirrored"]:
+            print(f"回写主仓 {m['target']}:analysis={m['analysis_files']} "
+                  f"scorecard={m['scorecard_files']} receipt={m['receipt']}")
+        elif m["reason"]:
+            print(f"回写主仓跳过:{m['reason']}")
+    except Exception as e:  # 回写异常绝不影响上传结果码
+        logger.warning("回写主仓失败(不阻断上传):%r", e)
+
     return 0 if s["failed"] == 0 else 1
 
 
