@@ -281,14 +281,44 @@ def persist_noon_snapshot(quotes: dict, as_of: str, *, out_root: Path | None = N
     return path
 
 
+# 快照样本率下限:低于此视为采集异常 → 拉取重试 / 落盘后告警(与复盘取样率下限对齐,单一口径)。
+# P0-2/P0-1(2026-09-13 复盘):堵「快照缺失/半空 → 复盘 α=None、丢当日样本、10日闸门永远凑不齐」。
+SNAPSHOT_MIN_COVERAGE = 0.60
+
+
+def snapshot_self_check(as_of: str, universe_n: int, *, out_root: Path | None = None,
+                        min_coverage: float = SNAPSHOT_MIN_COVERAGE) -> dict:
+    """落盘后自检:11:30 快照是否存在 + 样本率是否达标(不达标 → ok=False,上层告警不静默降级)。
+
+    universe_n = 本次全A只数(样本率分母)。文件缺失/解析失败/样本率不足 → ok=False + reason。
+    """
+    path = noon_snapshot_path(as_of, out_root=out_root)
+    if not path.exists():
+        return {"ok": False, "reason": "快照文件未生成", "count": 0, "coverage": 0.0,
+                "universe": universe_n, "path": str(path)}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception as e:                                     # noqa: BLE001 解析失败也算自检不过
+        return {"ok": False, "reason": f"快照解析失败:{e}", "count": 0, "coverage": 0.0,
+                "universe": universe_n, "path": str(path)}
+    count = int(payload.get("count") or 0)
+    coverage = (count / universe_n) if universe_n else 0.0
+    ok = count > 0 and coverage >= min_coverage
+    return {"ok": ok, "count": count, "coverage": round(coverage, 4),
+            "universe": universe_n, "min_coverage": min_coverage, "path": str(path),
+            "reason": None if ok else f"样本率不足({count}/{universe_n}={coverage:.0%}<{min_coverage:.0%})"}
+
+
 # ————————————————————————————————————————————————
 # 产出 日内_<date>.md
 # ————————————————————————————————————————————————
 def render_intraday_md(as_of: str, *, breadth: dict | None = None,
-                       out_dir: Path | None = None) -> Path:
+                       out_dir: Path | None = None, quotes: dict | None = None,
+                       load_kline_fn=None) -> Path:
     """读候选池消息面确认 view → 写 `docs/每日分析/选股/日内_<date>.md`(全A午盘候选+买入排序)。
 
     确定性渲染(不跑 LLM):买入排序 = candidate_message 回灌后的完整分榜。缺 view → 写降级 stub。
+    quotes 传入时(P0-2)给买入组渲染「D-0 交易计划」表(进场/止损/止盈/了结);缺则跳过该表(向后兼容)。
     """
     out_dir = out_dir or SELECTION_DIR
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -423,10 +453,21 @@ def run_intraday_screen(as_of: str | None = None, *, universe_limit: int | None 
         codes = universe.universe_codes(limit=universe_limit)
     if quotes is None:
         quotes = fetch_universe_quotes(codes)
+        # P0-1:覆盖率过低疑似采集异常 → 重试一次拉取(取更全的一次),避免快照空/半空丢当日复盘样本。
+        cov = (len(quotes) / len(codes)) if codes else 0.0
+        if cov < SNAPSHOT_MIN_COVERAGE:
+            logger.warning("午盘行情覆盖率过低 %.0f%%(%d/%d),重试一次拉取", cov * 100, len(quotes), len(codes))
+            retry = fetch_universe_quotes(codes)
+            if len(retry) > len(quotes):
+                quotes = retry
     breadth = breadth_from_quotes(quotes)
 
     # D1:落盘 11:30 全A快照,供当日午盘复盘(intraday_review)算「下午」口径。已在内存,零额外采集。
     snap_path = persist_noon_snapshot(quotes, as_of, out_root=snapshot_root) if persist_snapshot else None
+    # P0-1:落盘后自检(存在性+样本率),不达标即 ERROR 告警(不静默降级)——复盘届时会走降级回退,但先在此暴露。
+    snap_check = snapshot_self_check(as_of, len(codes), out_root=snapshot_root) if persist_snapshot else None
+    if snap_check and not snap_check["ok"]:
+        logger.error("⚠️ 午盘 11:30 快照自检未通过:%s(复盘将走降级口径,请关注采集健康)", snap_check["reason"])
 
     if run_screen_all_fn is None or cand_msg_fn is None:
         from tools import run as _run
@@ -437,6 +478,7 @@ def run_intraday_screen(as_of: str | None = None, *, universe_limit: int | None 
     report: dict = {"as_of": as_of, "slot": SLOT, "全A": len(codes),
                     "快照命中": len(quotes), "市场环境": breadth,
                     "快照落盘": str(snap_path) if snap_path else None,
+                    "快照自检": snap_check,
                     "裁策略": sorted(INTRADAY_SKIP_STRATEGIES)}
 
     # 阶段1+阶段2 全程在午盘注入下跑(serialize 也读午盘 bar → record 反映午盘)。
