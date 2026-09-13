@@ -1,0 +1,1136 @@
+[
+  {
+    "date": "2026-09-03",
+    "n_codes": 5,
+    "claude_buy": [
+      "300802",
+      "300866",
+      "688612"
+    ],
+    "ds_buy": [
+      "300802",
+      "300866",
+      "688612"
+    ],
+    "qw_buy": [
+      "300866"
+    ],
+    "ds_stance": {
+      "300802": "可参与",
+      "300866": "可参与",
+      "688612": "可参与",
+      "603333": "观望",
+      "000157": "观望"
+    },
+    "qw_stance": {
+      "300802": "观望",
+      "300866": "可参与",
+      "688612": "观望",
+      "603333": "规避",
+      "000157": "观望"
+    },
+    "buyset_agree_vs_claude": 1.0,
+    "dryrun": null,
+    "dual_overall": 0.486,
+    "dual_field": {
+      "type": 0.8,
+      "stance": 0.4,
+      "dir_1d": 0.4,
+      "dir_1d_conf": 0.6,
+      "dir_5d": 0.4,
+      "dir_5d_conf": 0.2,
+      "sentiment_quality": 0.6
+    },
+    "dual_forward": {
+      "T+1": {
+        "fwd_available": 3,
+        "codes_total": 5,
+        "arm_a_hit_rate": 0.5,
+        "arm_b_hit_rate": 0.0,
+        "arm_a_scored": 2,
+        "arm_b_scored": 1,
+        "rows": [
+          {
+            "code": "300802",
+            "fwd_ret": null,
+            "a_dir": "偏多",
+            "b_dir": "不给方向",
+            "a_hit": null,
+            "b_hit": null
+          },
+          {
+            "code": "300866",
+            "fwd_ret": -0.0091,
+            "a_dir": "偏多",
+            "b_dir": "偏多",
+            "a_hit": false,
+            "b_hit": false
+          },
+          {
+            "code": "688612",
+            "fwd_ret": 0.0728,
+            "a_dir": "偏多",
+            "b_dir": "中性",
+            "a_hit": true,
+            "b_hit": null
+          },
+          {
+            "code": "603333",
+            "fwd_ret": -0.0275,
+            "a_dir": "不给方向",
+            "b_dir": "不给方向",
+            "a_hit": null,
+            "b_hit": null
+          },
+          {
+            "code": "000157",
+            "fwd_ret": null,
+            "a_dir": "偏空",
+            "b_dir": "低波待动",
+            "a_hit": null,
+            "b_hit": null
+          }
+        ]
+      },
+      "T+5": {
+        "fwd_available": 2,
+        "codes_total": 5,
+        "arm_a_hit_rate": 0.5,
+        "arm_b_hit_rate": 0.0,
+        "arm_a_scored": 2,
+        "arm_b_scored": 1,
+        "rows": [
+          {
+            "code": "300802",
+            "fwd_ret": null,
+            "a_dir": "偏多",
+            "b_dir": "不给方向",
+            "a_hit": null,
+            "b_hit": null
+          },
+          {
+            "code": "300866",
+            "fwd_ret": -0.0763,
+            "a_dir": "偏多",
+            "b_dir": "偏多",
+            "a_hit": false,
+            "b_hit": false
+          },
+          {
+            "code": "688612",
+            "fwd_ret": 0.0824,
+            "a_dir": "偏多",
+            "b_dir": "中性",
+            "a_hit": true,
+            "b_hit": null
+          },
+          {
+            "code": "603333",
+            "fwd_ret": null,
+            "a_dir": "不给方向",
+            "b_dir": "不给方向",
+            "a_hit": null,
+            "b_hit": null
+          },
+          {
+            "code": "000157",
+            "fwd_ret": null,
+            "a_dir": "中性",
+            "b_dir": "偏空",
+            "a_hit": null,
+            "b_hit": null
+          }
+        ]
+      }
+    },
+    "fwd_score": {
+      "T+1": {
+        "claude_buy": {
+          "n": 3,
+          "n_req": 3,
+          "hit": 0.333,
+          "mean": 0.46,
+          "bench": -0.7302,
+          "alpha": 1.1902
+        },
+        "deepseek_buy": {
+          "n": 3,
+          "n_req": 3,
+          "hit": 0.333,
+          "mean": 0.46,
+          "bench": -0.7302,
+          "alpha": 1.1902
+        },
+        "qwen_buy": {
+          "n": 1,
+          "n_req": 1,
+          "hit": 0.0,
+          "mean": -0.9113,
+          "bench": -0.7302,
+          "alpha": -0.1811
+        },
+        "claude_all": {
+          "n": 5,
+          "n_req": 5,
+          "hit": 0.4,
+          "mean": -0.182,
+          "bench": -0.7302,
+          "alpha": 0.5483
+        }
+      },
+      "T+5": {
+        "claude_buy": {
+          "n": 3,
+          "n_req": 3,
+          "hit": 0.333,
+          "mean": 0.0321,
+          "bench": -1.0482,
+          "alpha": 1.0804
+        },
+        "deepseek_buy": {
+          "n": 3,
+          "n_req": 3,
+          "hit": 0.333,
+          "mean": 0.0321,
+          "bench": -1.0482,
+          "alpha": 1.0804
+        },
+        "qwen_buy": {
+          "n": 1,
+          "n_req": 1,
+          "hit": 0.0,
+          "mean": -5.716,
+          "bench": -1.0482,
+          "alpha": -4.6677
+        },
+        "claude_all": {
+          "n": 5,
+          "n_req": 5,
+          "hit": 0.4,
+          "mean": -1.273,
+          "bench": -1.0482,
+          "alpha": -0.2247
+        }
+      }
+    },
+    "elapsed_s": 83.6
+  },
+  {
+    "date": "2026-09-08",
+    "n_codes": 7,
+    "claude_buy": [
+      "601061",
+      "600356",
+      "601339"
+    ],
+    "ds_buy": [
+      "600356",
+      "000035",
+      "601000"
+    ],
+    "qw_buy": [],
+    "ds_stance": {
+      "601061": "观望",
+      "600356": "可参与",
+      "601339": "观望",
+      "688712": "观望",
+      "000035": "可参与",
+      "000019": "观望",
+      "601000": "可参与"
+    },
+    "qw_stance": {
+      "601061": "观望",
+      "600356": "观望",
+      "601339": "观望",
+      "688712": "观望",
+      "000035": "观望",
+      "000019": "规避",
+      "601000": "观望"
+    },
+    "buyset_agree_vs_claude": 0.429,
+    "dryrun": null,
+    "dual_overall": 0.571,
+    "dual_field": {
+      "type": 0.857,
+      "stance": 0.429,
+      "dir_1d": 0.429,
+      "dir_1d_conf": 0.714,
+      "dir_5d": 0.286,
+      "dir_5d_conf": 0.286,
+      "sentiment_quality": 1.0
+    },
+    "dual_forward": {
+      "T+1": {
+        "fwd_available": 4,
+        "codes_total": 7,
+        "arm_a_hit_rate": 0.0,
+        "arm_b_hit_rate": 0.0,
+        "arm_a_scored": 2,
+        "arm_b_scored": 1,
+        "rows": [
+          {
+            "code": "601061",
+            "fwd_ret": 0.0491,
+            "a_dir": "中性",
+            "b_dir": "中性",
+            "a_hit": null,
+            "b_hit": null
+          },
+          {
+            "code": "600356",
+            "fwd_ret": -0.0064,
+            "a_dir": "偏多",
+            "b_dir": "不给方向",
+            "a_hit": false,
+            "b_hit": null
+          },
+          {
+            "code": "601339",
+            "fwd_ret": null,
+            "a_dir": "不给方向",
+            "b_dir": "低波待动",
+            "a_hit": null,
+            "b_hit": null
+          },
+          {
+            "code": "688712",
+            "fwd_ret": -0.0258,
+            "a_dir": "不给方向",
+            "b_dir": "不给方向",
+            "a_hit": null,
+            "b_hit": null
+          },
+          {
+            "code": "000035",
+            "fwd_ret": null,
+            "a_dir": "偏多",
+            "b_dir": "中性",
+            "a_hit": null,
+            "b_hit": null
+          },
+          {
+            "code": "000019",
+            "fwd_ret": 0.1001,
+            "a_dir": "偏空",
+            "b_dir": "偏空",
+            "a_hit": false,
+            "b_hit": false
+          },
+          {
+            "code": "601000",
+            "fwd_ret": null,
+            "a_dir": "偏多",
+            "b_dir": "低波待动",
+            "a_hit": null,
+            "b_hit": null
+          }
+        ]
+      },
+      "T+5": {
+        "fwd_available": 0,
+        "codes_total": 7,
+        "arm_a_hit_rate": null,
+        "arm_b_hit_rate": null,
+        "arm_a_scored": 0,
+        "arm_b_scored": 0,
+        "rows": [
+          {
+            "code": "601061",
+            "fwd_ret": null,
+            "a_dir": "中性",
+            "b_dir": "中性",
+            "a_hit": null,
+            "b_hit": null
+          },
+          {
+            "code": "600356",
+            "fwd_ret": null,
+            "a_dir": "偏多",
+            "b_dir": "不给方向",
+            "a_hit": null,
+            "b_hit": null
+          },
+          {
+            "code": "601339",
+            "fwd_ret": null,
+            "a_dir": "不给方向",
+            "b_dir": "中性",
+            "a_hit": null,
+            "b_hit": null
+          },
+          {
+            "code": "688712",
+            "fwd_ret": null,
+            "a_dir": "不给方向",
+            "b_dir": "不给方向",
+            "a_hit": null,
+            "b_hit": null
+          },
+          {
+            "code": "000035",
+            "fwd_ret": null,
+            "a_dir": "偏多",
+            "b_dir": "中性",
+            "a_hit": null,
+            "b_hit": null
+          },
+          {
+            "code": "000019",
+            "fwd_ret": null,
+            "a_dir": "中性",
+            "b_dir": "偏空",
+            "a_hit": null,
+            "b_hit": null
+          },
+          {
+            "code": "601000",
+            "fwd_ret": null,
+            "a_dir": "偏多",
+            "b_dir": "中性",
+            "a_hit": null,
+            "b_hit": null
+          }
+        ]
+      }
+    },
+    "fwd_score": {
+      "T+1": {
+        "claude_buy": {
+          "n": 3,
+          "n_req": 3,
+          "hit": 0.667,
+          "mean": 1.872,
+          "bench": -0.3148,
+          "alpha": 2.1868
+        },
+        "deepseek_buy": {
+          "n": 3,
+          "n_req": 3,
+          "hit": 0.667,
+          "mean": 0.3635,
+          "bench": -0.3148,
+          "alpha": 0.6783
+        },
+        "qwen_buy": {
+          "n": 0,
+          "n_req": 0,
+          "hit": null,
+          "mean": null,
+          "bench": null,
+          "alpha": null
+        },
+        "claude_all": {
+          "n": 7,
+          "n_req": 7,
+          "hit": 0.714,
+          "mean": 2.1111,
+          "bench": -0.3148,
+          "alpha": 2.426
+        }
+      },
+      "T+5": {
+        "claude_buy": {
+          "n": 0,
+          "n_req": 3,
+          "hit": null,
+          "mean": null,
+          "bench": null,
+          "alpha": null
+        },
+        "deepseek_buy": {
+          "n": 0,
+          "n_req": 3,
+          "hit": null,
+          "mean": null,
+          "bench": null,
+          "alpha": null
+        },
+        "qwen_buy": {
+          "n": 0,
+          "n_req": 0,
+          "hit": null,
+          "mean": null,
+          "bench": null,
+          "alpha": null
+        },
+        "claude_all": {
+          "n": 0,
+          "n_req": 7,
+          "hit": null,
+          "mean": null,
+          "bench": null,
+          "alpha": null
+        }
+      }
+    },
+    "elapsed_s": 106.6
+  },
+  {
+    "date": "2026-09-09",
+    "n_codes": 5,
+    "claude_buy": [
+      "601061",
+      "600356"
+    ],
+    "ds_buy": [
+      "601061"
+    ],
+    "qw_buy": [],
+    "ds_stance": {
+      "601061": "可参与",
+      "600356": "观望",
+      "688262": "观望",
+      "688130": "观望",
+      "000019": "规避"
+    },
+    "qw_stance": {
+      "601061": "观望",
+      "600356": "观望",
+      "688262": "观望",
+      "688130": "观望",
+      "000019": "规避"
+    },
+    "buyset_agree_vs_claude": 0.8,
+    "dryrun": {
+      "type_agreement": 1.0,
+      "stance_agreement": 0.6,
+      "dir5_posture_agreement": 0.8,
+      "downgrades": [],
+      "upgrades": [],
+      "coverage": {
+        "claude_codes": 5,
+        "generated": 5,
+        "missing": []
+      },
+      "parsed_codes": [
+        "601061",
+        "600356",
+        "688262",
+        "688130",
+        "000019"
+      ]
+    },
+    "dual_overall": 0.657,
+    "dual_field": {
+      "type": 0.8,
+      "stance": 0.8,
+      "dir_1d": 0.6,
+      "dir_1d_conf": 0.4,
+      "dir_5d": 0.6,
+      "dir_5d_conf": 0.4,
+      "sentiment_quality": 1.0
+    },
+    "dual_forward": {
+      "T+1": {
+        "fwd_available": 4,
+        "codes_total": 5,
+        "arm_a_hit_rate": 1.0,
+        "arm_b_hit_rate": null,
+        "arm_a_scored": 2,
+        "arm_b_scored": 0,
+        "rows": [
+          {
+            "code": "601061",
+            "fwd_ret": 0.0378,
+            "a_dir": "偏多",
+            "b_dir": "中性",
+            "a_hit": true,
+            "b_hit": null
+          },
+          {
+            "code": "600356",
+            "fwd_ret": -0.0053,
+            "a_dir": "偏空",
+            "b_dir": "中性",
+            "a_hit": true,
+            "b_hit": null
+          },
+          {
+            "code": "688262",
+            "fwd_ret": -0.0071,
+            "a_dir": "中性",
+            "b_dir": "中性",
+            "a_hit": null,
+            "b_hit": null
+          },
+          {
+            "code": "688130",
+            "fwd_ret": -0.0107,
+            "a_dir": "不给方向",
+            "b_dir": "不给方向",
+            "a_hit": null,
+            "b_hit": null
+          },
+          {
+            "code": "000019",
+            "fwd_ret": null,
+            "a_dir": "不给方向",
+            "b_dir": "不给方向",
+            "a_hit": null,
+            "b_hit": null
+          }
+        ]
+      },
+      "T+5": {
+        "fwd_available": 0,
+        "codes_total": 5,
+        "arm_a_hit_rate": null,
+        "arm_b_hit_rate": null,
+        "arm_a_scored": 0,
+        "arm_b_scored": 0,
+        "rows": [
+          {
+            "code": "601061",
+            "fwd_ret": null,
+            "a_dir": "偏多",
+            "b_dir": "中性",
+            "a_hit": null,
+            "b_hit": null
+          },
+          {
+            "code": "600356",
+            "fwd_ret": null,
+            "a_dir": "中性",
+            "b_dir": "偏多",
+            "a_hit": null,
+            "b_hit": null
+          },
+          {
+            "code": "688262",
+            "fwd_ret": null,
+            "a_dir": "中性",
+            "b_dir": "中性",
+            "a_hit": null,
+            "b_hit": null
+          },
+          {
+            "code": "688130",
+            "fwd_ret": null,
+            "a_dir": "不给方向",
+            "b_dir": "不给方向",
+            "a_hit": null,
+            "b_hit": null
+          },
+          {
+            "code": "000019",
+            "fwd_ret": null,
+            "a_dir": "不给方向",
+            "b_dir": "不给方向",
+            "a_hit": null,
+            "b_hit": null
+          }
+        ]
+      }
+    },
+    "fwd_score": {
+      "T+1": {
+        "claude_buy": {
+          "n": 2,
+          "n_req": 2,
+          "hit": 0.5,
+          "mean": 1.621,
+          "bench": -1.7818,
+          "alpha": 3.4027
+        },
+        "deepseek_buy": {
+          "n": 1,
+          "n_req": 1,
+          "hit": 1.0,
+          "mean": 3.7767,
+          "bench": -1.7818,
+          "alpha": 5.5585
+        },
+        "qwen_buy": {
+          "n": 0,
+          "n_req": 0,
+          "hit": null,
+          "mean": null,
+          "bench": null,
+          "alpha": null
+        },
+        "claude_all": {
+          "n": 5,
+          "n_req": 5,
+          "hit": 0.2,
+          "mean": -1.5505,
+          "bench": -1.7818,
+          "alpha": 0.2313
+        }
+      },
+      "T+5": {
+        "claude_buy": {
+          "n": 0,
+          "n_req": 2,
+          "hit": null,
+          "mean": null,
+          "bench": null,
+          "alpha": null
+        },
+        "deepseek_buy": {
+          "n": 0,
+          "n_req": 1,
+          "hit": null,
+          "mean": null,
+          "bench": null,
+          "alpha": null
+        },
+        "qwen_buy": {
+          "n": 0,
+          "n_req": 0,
+          "hit": null,
+          "mean": null,
+          "bench": null,
+          "alpha": null
+        },
+        "claude_all": {
+          "n": 0,
+          "n_req": 5,
+          "hit": null,
+          "mean": null,
+          "bench": null,
+          "alpha": null
+        }
+      }
+    },
+    "elapsed_s": 80.4
+  },
+  {
+    "date": "2026-09-10",
+    "n_codes": 5,
+    "claude_buy": [
+      "300453",
+      "000893"
+    ],
+    "ds_buy": [
+      "300453"
+    ],
+    "qw_buy": [],
+    "ds_stance": {
+      "300453": "可参与",
+      "000893": "观望",
+      "688262": "观望",
+      "300124": "观望",
+      "603193": "观望"
+    },
+    "qw_stance": {
+      "300453": "观望",
+      "000893": "观望",
+      "688262": "观望",
+      "300124": "观望",
+      "603193": "观望"
+    },
+    "buyset_agree_vs_claude": 0.8,
+    "dryrun": null,
+    "dual_overall": 0.543,
+    "dual_field": {
+      "type": 1.0,
+      "stance": 0.8,
+      "dir_1d": 0.0,
+      "dir_1d_conf": 0.2,
+      "dir_5d": 0.4,
+      "dir_5d_conf": 0.4,
+      "sentiment_quality": 1.0
+    },
+    "dual_forward": {
+      "T+1": {
+        "fwd_available": 5,
+        "codes_total": 5,
+        "arm_a_hit_rate": 0.0,
+        "arm_b_hit_rate": null,
+        "arm_a_scored": 1,
+        "arm_b_scored": 0,
+        "rows": [
+          {
+            "code": "300453",
+            "fwd_ret": -0.0022,
+            "a_dir": "偏多",
+            "b_dir": "低波待动",
+            "a_hit": false,
+            "b_hit": null
+          },
+          {
+            "code": "000893",
+            "fwd_ret": -0.0329,
+            "a_dir": "不给方向",
+            "b_dir": "中性",
+            "a_hit": null,
+            "b_hit": null
+          },
+          {
+            "code": "688262",
+            "fwd_ret": -0.0277,
+            "a_dir": "中性",
+            "b_dir": "低波待动",
+            "a_hit": null,
+            "b_hit": null
+          },
+          {
+            "code": "300124",
+            "fwd_ret": -0.0173,
+            "a_dir": "不给方向",
+            "b_dir": "低波待动",
+            "a_hit": null,
+            "b_hit": null
+          },
+          {
+            "code": "603193",
+            "fwd_ret": -0.0392,
+            "a_dir": "不给方向",
+            "b_dir": "低波待动",
+            "a_hit": null,
+            "b_hit": null
+          }
+        ]
+      },
+      "T+5": {
+        "fwd_available": 0,
+        "codes_total": 5,
+        "arm_a_hit_rate": null,
+        "arm_b_hit_rate": null,
+        "arm_a_scored": 0,
+        "arm_b_scored": 0,
+        "rows": [
+          {
+            "code": "300453",
+            "fwd_ret": null,
+            "a_dir": "偏多",
+            "b_dir": "中性",
+            "a_hit": null,
+            "b_hit": null
+          },
+          {
+            "code": "000893",
+            "fwd_ret": null,
+            "a_dir": "偏多",
+            "b_dir": "偏多",
+            "a_hit": null,
+            "b_hit": null
+          },
+          {
+            "code": "688262",
+            "fwd_ret": null,
+            "a_dir": "偏空",
+            "b_dir": "中性",
+            "a_hit": null,
+            "b_hit": null
+          },
+          {
+            "code": "300124",
+            "fwd_ret": null,
+            "a_dir": "偏空",
+            "b_dir": "偏空",
+            "a_hit": null,
+            "b_hit": null
+          },
+          {
+            "code": "603193",
+            "fwd_ret": null,
+            "a_dir": "偏多",
+            "b_dir": "中性",
+            "a_hit": null,
+            "b_hit": null
+          }
+        ]
+      }
+    },
+    "fwd_score": {
+      "T+1": {
+        "claude_buy": {
+          "n": 2,
+          "n_req": 2,
+          "hit": 0.0,
+          "mean": -1.7523,
+          "bench": -1.9798,
+          "alpha": 0.2275
+        },
+        "deepseek_buy": {
+          "n": 1,
+          "n_req": 1,
+          "hit": 0.0,
+          "mean": -0.2191,
+          "bench": -1.9798,
+          "alpha": 1.7607
+        },
+        "qwen_buy": {
+          "n": 0,
+          "n_req": 0,
+          "hit": null,
+          "mean": null,
+          "bench": null,
+          "alpha": null
+        },
+        "claude_all": {
+          "n": 5,
+          "n_req": 5,
+          "hit": 0.0,
+          "mean": -2.3829,
+          "bench": -1.9798,
+          "alpha": -0.4032
+        }
+      },
+      "T+5": {
+        "claude_buy": {
+          "n": 0,
+          "n_req": 2,
+          "hit": null,
+          "mean": null,
+          "bench": null,
+          "alpha": null
+        },
+        "deepseek_buy": {
+          "n": 0,
+          "n_req": 1,
+          "hit": null,
+          "mean": null,
+          "bench": null,
+          "alpha": null
+        },
+        "qwen_buy": {
+          "n": 0,
+          "n_req": 0,
+          "hit": null,
+          "mean": null,
+          "bench": null,
+          "alpha": null
+        },
+        "claude_all": {
+          "n": 0,
+          "n_req": 5,
+          "hit": null,
+          "mean": null,
+          "bench": null,
+          "alpha": null
+        }
+      }
+    },
+    "elapsed_s": 80.6
+  },
+  {
+    "date": "2026-09-11",
+    "n_codes": 5,
+    "claude_buy": [
+      "601872"
+    ],
+    "ds_buy": [
+      "601872"
+    ],
+    "qw_buy": [],
+    "ds_stance": {
+      "601872": "可参与",
+      "002913": "规避",
+      "002064": "观望",
+      "300124": "观望",
+      "688262": "观望"
+    },
+    "qw_stance": {
+      "601872": "观望",
+      "002913": "规避",
+      "002064": "观望",
+      "300124": "观望",
+      "688262": "观望"
+    },
+    "buyset_agree_vs_claude": 1.0,
+    "dryrun": {
+      "type_agreement": 0.6,
+      "stance_agreement": 0.6,
+      "dir5_posture_agreement": 0.8,
+      "downgrades": [],
+      "upgrades": [],
+      "coverage": {
+        "claude_codes": 5,
+        "generated": 5,
+        "missing": []
+      },
+      "parsed_codes": [
+        "601872",
+        "002913",
+        "002064",
+        "300124",
+        "688262"
+      ]
+    },
+    "dual_overall": 0.486,
+    "dual_field": {
+      "type": 0.8,
+      "stance": 0.8,
+      "dir_1d": 0.2,
+      "dir_1d_conf": 0.2,
+      "dir_5d": 0.2,
+      "dir_5d_conf": 0.2,
+      "sentiment_quality": 1.0
+    },
+    "dual_forward": {
+      "T+1": {
+        "fwd_available": 0,
+        "codes_total": 5,
+        "arm_a_hit_rate": null,
+        "arm_b_hit_rate": null,
+        "arm_a_scored": 0,
+        "arm_b_scored": 0,
+        "rows": [
+          {
+            "code": "601872",
+            "fwd_ret": null,
+            "a_dir": "偏空",
+            "b_dir": "偏空",
+            "a_hit": null,
+            "b_hit": null
+          },
+          {
+            "code": "002913",
+            "fwd_ret": null,
+            "a_dir": "不给方向",
+            "b_dir": "偏空",
+            "a_hit": null,
+            "b_hit": null
+          },
+          {
+            "code": "002064",
+            "fwd_ret": null,
+            "a_dir": "不给方向",
+            "b_dir": "中性",
+            "a_hit": null,
+            "b_hit": null
+          },
+          {
+            "code": "300124",
+            "fwd_ret": null,
+            "a_dir": "偏空",
+            "b_dir": "低波待动",
+            "a_hit": null,
+            "b_hit": null
+          },
+          {
+            "code": "688262",
+            "fwd_ret": null,
+            "a_dir": "不给方向",
+            "b_dir": "偏空",
+            "a_hit": null,
+            "b_hit": null
+          }
+        ]
+      },
+      "T+5": {
+        "fwd_available": 0,
+        "codes_total": 5,
+        "arm_a_hit_rate": null,
+        "arm_b_hit_rate": null,
+        "arm_a_scored": 0,
+        "arm_b_scored": 0,
+        "rows": [
+          {
+            "code": "601872",
+            "fwd_ret": null,
+            "a_dir": "偏多",
+            "b_dir": "中性",
+            "a_hit": null,
+            "b_hit": null
+          },
+          {
+            "code": "002913",
+            "fwd_ret": null,
+            "a_dir": "不给方向",
+            "b_dir": "偏空",
+            "a_hit": null,
+            "b_hit": null
+          },
+          {
+            "code": "002064",
+            "fwd_ret": null,
+            "a_dir": "中性",
+            "b_dir": "偏空",
+            "a_hit": null,
+            "b_hit": null
+          },
+          {
+            "code": "300124",
+            "fwd_ret": null,
+            "a_dir": "偏空",
+            "b_dir": "偏空",
+            "a_hit": null,
+            "b_hit": null
+          },
+          {
+            "code": "688262",
+            "fwd_ret": null,
+            "a_dir": "不给方向",
+            "b_dir": "偏空",
+            "a_hit": null,
+            "b_hit": null
+          }
+        ]
+      }
+    },
+    "fwd_score": {
+      "T+1": {
+        "claude_buy": {
+          "n": 0,
+          "n_req": 1,
+          "hit": null,
+          "mean": null,
+          "bench": null,
+          "alpha": null
+        },
+        "deepseek_buy": {
+          "n": 0,
+          "n_req": 1,
+          "hit": null,
+          "mean": null,
+          "bench": null,
+          "alpha": null
+        },
+        "qwen_buy": {
+          "n": 0,
+          "n_req": 0,
+          "hit": null,
+          "mean": null,
+          "bench": null,
+          "alpha": null
+        },
+        "claude_all": {
+          "n": 0,
+          "n_req": 5,
+          "hit": null,
+          "mean": null,
+          "bench": null,
+          "alpha": null
+        }
+      },
+      "T+5": {
+        "claude_buy": {
+          "n": 0,
+          "n_req": 1,
+          "hit": null,
+          "mean": null,
+          "bench": null,
+          "alpha": null
+        },
+        "deepseek_buy": {
+          "n": 0,
+          "n_req": 1,
+          "hit": null,
+          "mean": null,
+          "bench": null,
+          "alpha": null
+        },
+        "qwen_buy": {
+          "n": 0,
+          "n_req": 0,
+          "hit": null,
+          "mean": null,
+          "bench": null,
+          "alpha": null
+        },
+        "claude_all": {
+          "n": 0,
+          "n_req": 5,
+          "hit": null,
+          "mean": null,
+          "bench": null,
+          "alpha": null
+        }
+      }
+    },
+    "elapsed_s": 91.4
+  }
+]

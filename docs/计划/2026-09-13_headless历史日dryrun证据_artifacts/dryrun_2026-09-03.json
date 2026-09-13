@@ -1,0 +1,175 @@
+{
+  "pick_date": "2026-09-03",
+  "provider": "deepseek_v4pro",
+  "coverage": {
+    "claude_codes": 7,
+    "generated": 7,
+    "missing": []
+  },
+  "summary": {
+    "type_agreement": 0.714,
+    "stance_agreement": 0.429,
+    "dir5_posture_agreement": 0.857,
+    "downgrades": [],
+    "upgrades": []
+  },
+  "per_code": [
+    {
+      "code": "600233",
+      "name": "0.7355",
+      "type": {
+        "claude": "检验样本",
+        "gen": "检验样本",
+        "same": true
+      },
+      "stance": {
+        "claude": "观望",
+        "gen": "可参与",
+        "same": false,
+        "claude_raw": "-4.5%"
+      },
+      "dir5_posture": {
+        "claude_commits": false,
+        "gen_commits": true,
+        "same": false,
+        "claude_raw": "",
+        "gen": "偏多"
+      }
+    },
+    {
+      "code": "688411",
+      "name": "0.6323",
+      "type": {
+        "claude": "检验样本",
+        "gen": "检验样本",
+        "same": true
+      },
+      "stance": {
+        "claude": "观望",
+        "gen": "观望",
+        "same": true,
+        "claude_raw": "-10.6%"
+      },
+      "dir5_posture": {
+        "claude_commits": false,
+        "gen_commits": false,
+        "same": true,
+        "claude_raw": "",
+        "gen": "中性"
+      }
+    },
+    {
+      "code": "000157",
+      "name": "0.6224",
+      "type": {
+        "claude": "检验样本",
+        "gen": "检验样本",
+        "same": true
+      },
+      "stance": {
+        "claude": "观望",
+        "gen": "观望",
+        "same": true,
+        "claude_raw": "-5.2%"
+      },
+      "dir5_posture": {
+        "claude_commits": false,
+        "gen_commits": false,
+        "same": true,
+        "claude_raw": "",
+        "gen": "中性"
+      }
+    },
+    {
+      "code": "688472",
+      "name": "0.6001",
+      "type": {
+        "claude": "检验样本",
+        "gen": "规避",
+        "same": false
+      },
+      "stance": {
+        "claude": "观望",
+        "gen": "规避",
+        "same": false,
+        "claude_raw": "-12.9%"
+      },
+      "dir5_posture": {
+        "claude_commits": false,
+        "gen_commits": false,
+        "same": true,
+        "claude_raw": "",
+        "gen": "不给方向"
+      }
+    },
+    {
+      "code": "688599",
+      "name": "0.5914",
+      "type": {
+        "claude": "检验样本",
+        "gen": "检验样本",
+        "same": true
+      },
+      "stance": {
+        "claude": "观望",
+        "gen": "规避",
+        "same": false,
+        "claude_raw": "-12.7%"
+      },
+      "dir5_posture": {
+        "claude_commits": false,
+        "gen_commits": false,
+        "same": true,
+        "claude_raw": "",
+        "gen": "不给方向"
+      }
+    },
+    {
+      "code": "002487",
+      "name": "0.5614",
+      "type": {
+        "claude": "检验样本",
+        "gen": "检验样本",
+        "same": true
+      },
+      "stance": {
+        "claude": "观望",
+        "gen": "观望",
+        "same": true,
+        "claude_raw": "-13.1%"
+      },
+      "dir5_posture": {
+        "claude_commits": false,
+        "gen_commits": false,
+        "same": true,
+        "claude_raw": "",
+        "gen": "不给方向"
+      }
+    },
+    {
+      "code": "601799",
+      "name": "0.5610",
+      "type": {
+        "claude": "检验样本",
+        "gen": "规避",
+        "same": false
+      },
+      "stance": {
+        "claude": "观望",
+        "gen": "规避",
+        "same": false,
+        "claude_raw": "-14.1%"
+      },
+      "dir5_posture": {
+        "claude_commits": false,
+        "gen_commits": false,
+        "same": true,
+        "claude_raw": "",
+        "gen": "不给方向"
+      }
+    }
+  ],
+  "notes": [
+    "方向姿态为粗比(Claude 自由文本 vs 枚举);表态已归一到 4 枚举。"
+  ]
+}

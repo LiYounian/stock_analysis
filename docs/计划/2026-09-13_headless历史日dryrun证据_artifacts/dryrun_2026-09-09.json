@@ -1,0 +1,131 @@
+{
+  "pick_date": "2026-09-09",
+  "provider": "deepseek_v4pro",
+  "coverage": {
+    "claude_codes": 5,
+    "generated": 5,
+    "missing": []
+  },
+  "summary": {
+    "type_agreement": 1.0,
+    "stance_agreement": 0.6,
+    "dir5_posture_agreement": 0.8,
+    "downgrades": [],
+    "upgrades": []
+  },
+  "per_code": [
+    {
+      "code": "601061",
+      "name": "中信金属",
+      "type": {
+        "claude": "检验样本",
+        "gen": "检验样本",
+        "same": true
+      },
+      "stance": {
+        "claude": "观望",
+        "gen": "可参与",
+        "same": false,
+        "claude_raw": "偏多(中)"
+      },
+      "dir5_posture": {
+        "claude_commits": false,
+        "gen_commits": true,
+        "same": false,
+        "claude_raw": "",
+        "gen": "偏多"
+      }
+    },
+    {
+      "code": "600356",
+      "name": "恒丰纸业",
+      "type": {
+        "claude": "检验样本",
+        "gen": "检验样本",
+        "same": true
+      },
+      "stance": {
+        "claude": "观望",
+        "gen": "观望",
+        "same": true,
+        "claude_raw": "中性偏多(中低)"
+      },
+      "dir5_posture": {
+        "claude_commits": false,
+        "gen_commits": false,
+        "same": true,
+        "claude_raw": "",
+        "gen": "中性"
+      }
+    },
+    {
+      "code": "688262",
+      "name": "国芯科技",
+      "type": {
+        "claude": "检验样本",
+        "gen": "检验样本",
+        "same": true
+      },
+      "stance": {
+        "claude": "观望",
+        "gen": "观望",
+        "same": true,
+        "claude_raw": "中性(低)"
+      },
+      "dir5_posture": {
+        "claude_commits": false,
+        "gen_commits": false,
+        "same": true,
+        "claude_raw": "",
+        "gen": "中性"
+      }
+    },
+    {
+      "code": "688130",
+      "name": "晶华微",
+      "type": {
+        "claude": "检验样本",
+        "gen": "检验样本",
+        "same": true
+      },
+      "stance": {
+        "claude": "观望",
+        "gen": "观望",
+        "same": true,
+        "claude_raw": "低波待动(不给方向)"
+      },
+      "dir5_posture": {
+        "claude_commits": false,
+        "gen_commits": false,
+        "same": true,
+        "claude_raw": "",
+        "gen": "不给方向"
+      }
+    },
+    {
+      "code": "000019",
+      "name": "深粮控股",
+      "type": {
+        "claude": "规避",
+        "gen": "规避",
+        "same": true
+      },
+      "stance": {
+        "claude": "观望",
+        "gen": "规避",
+        "same": false,
+        "claude_raw": "不给方向"
+      },
+      "dir5_posture": {
+        "claude_commits": false,
+        "gen_commits": false,
+        "same": true,
+        "claude_raw": "",
+        "gen": "不给方向"
+      }
+    }
+  ],
+  "notes": [
+    "方向姿态为粗比(Claude 自由文本 vs 枚举);表态已归一到 4 枚举。"
+  ]
+}

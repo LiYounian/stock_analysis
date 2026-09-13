@@ -1,0 +1,65 @@
+{
+  "pick_date": "2026-09-08",
+  "provider": "deepseek_v4pro",
+  "coverage": {
+    "claude_codes": 2,
+    "generated": 2,
+    "missing": []
+  },
+  "summary": {
+    "type_agreement": 1.0,
+    "stance_agreement": 0.5,
+    "dir5_posture_agreement": 0.5,
+    "downgrades": [],
+    "upgrades": []
+  },
+  "per_code": [
+    {
+      "code": "688712",
+      "name": "北芯生命",
+      "type": {
+        "claude": "检验样本",
+        "gen": "检验样本",
+        "same": true
+      },
+      "stance": {
+        "claude": "观望",
+        "gen": "观望",
+        "same": true,
+        "claude_raw": "0.650"
+      },
+      "dir5_posture": {
+        "claude_commits": false,
+        "gen_commits": false,
+        "same": true,
+        "claude_raw": "",
+        "gen": "不给方向"
+      }
+    },
+    {
+      "code": "600356",
+      "name": "恒丰纸业",
+      "type": {
+        "claude": "检验样本",
+        "gen": "检验样本",
+        "same": true
+      },
+      "stance": {
+        "claude": "观望",
+        "gen": "可参与",
+        "same": false,
+        "claude_raw": "0.732"
+      },
+      "dir5_posture": {
+        "claude_commits": false,
+        "gen_commits": true,
+        "same": false,
+        "claude_raw": "",
+        "gen": "偏多"
+      }
+    }
+  ],
+  "notes": [
+    "方向姿态为粗比(Claude 自由文本 vs 枚举);表态已归一到 4 枚举。"
+  ]
+}

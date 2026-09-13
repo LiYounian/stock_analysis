@@ -1,0 +1,519 @@
+{
+  "pick_date": "2026-09-08",
+  "arm_a": "deepseek_v4pro",
+  "arm_b": "qwen_max",
+  "codes": [
+    "601061",
+    "600356",
+    "601339",
+    "688712",
+    "000035",
+    "000019",
+    "601000"
+  ],
+  "overall_agreement": 0.571,
+  "field_agreement": {
+    "type": 0.857,
+    "stance": 0.429,
+    "dir_1d": 0.429,
+    "dir_1d_conf": 0.714,
+    "dir_5d": 0.286,
+    "dir_5d_conf": 0.286,
+    "sentiment_quality": 1.0
+  },
+  "per_code": [
+    {
+      "code": "601061",
+      "fields": {
+        "type": {
+          "a": "检验样本",
+          "b": "检验样本",
+          "same": true
+        },
+        "stance": {
+          "a": "观望",
+          "b": "观望",
+          "same": true
+        },
+        "dir_1d": {
+          "a": "中性",
+          "b": "中性",
+          "same": true
+        },
+        "dir_1d_conf": {
+          "a": "中低",
+          "b": "中低",
+          "same": true
+        },
+        "dir_5d": {
+          "a": "中性",
+          "b": "中性",
+          "same": true
+        },
+        "dir_5d_conf": {
+          "a": "中低",
+          "b": "中低",
+          "same": true
+        },
+        "sentiment_quality": {
+          "a": "ok",
+          "b": "ok",
+          "same": true
+        }
+      },
+      "disagreements": [],
+      "enum_agreement": 1.0,
+      "narrative_similarity": {
+        "key_reason": 0.165,
+        "key_risk": 0.075,
+        "alpha_beta": 0.046
+      }
+    },
+    {
+      "code": "600356",
+      "fields": {
+        "type": {
+          "a": "检验样本",
+          "b": "检验样本",
+          "same": true
+        },
+        "stance": {
+          "a": "可参与",
+          "b": "观望",
+          "same": false
+        },
+        "dir_1d": {
+          "a": "偏多",
+          "b": "不给方向",
+          "same": false
+        },
+        "dir_1d_conf": {
+          "a": "中",
+          "b": "-",
+          "same": false
+        },
+        "dir_5d": {
+          "a": "偏多",
+          "b": "不给方向",
+          "same": false
+        },
+        "dir_5d_conf": {
+          "a": "中低",
+          "b": "-",
+          "same": false
+        },
+        "sentiment_quality": {
+          "a": "ok",
+          "b": "ok",
+          "same": true
+        }
+      },
+      "disagreements": [
+        "stance",
+        "dir_1d",
+        "dir_1d_conf",
+        "dir_5d",
+        "dir_5d_conf"
+      ],
+      "enum_agreement": 0.286,
+      "narrative_similarity": {
+        "key_reason": 0.175,
+        "key_risk": 0.137,
+        "alpha_beta": 0.034
+      }
+    },
+    {
+      "code": "601339",
+      "fields": {
+        "type": {
+          "a": "检验样本",
+          "b": "检验样本",
+          "same": true
+        },
+        "stance": {
+          "a": "观望",
+          "b": "观望",
+          "same": true
+        },
+        "dir_1d": {
+          "a": "不给方向",
+          "b": "低波待动",
+          "same": false
+        },
+        "dir_1d_conf": {
+          "a": "-",
+          "b": "中",
+          "same": false
+        },
+        "dir_5d": {
+          "a": "不给方向",
+          "b": "中性",
+          "same": false
+        },
+        "dir_5d_conf": {
+          "a": "-",
+          "b": "中低",
+          "same": false
+        },
+        "sentiment_quality": {
+          "a": "ok",
+          "b": "ok",
+          "same": true
+        }
+      },
+      "disagreements": [
+        "dir_1d",
+        "dir_1d_conf",
+        "dir_5d",
+        "dir_5d_conf"
+      ],
+      "enum_agreement": 0.429,
+      "narrative_similarity": {
+        "key_reason": 0.162,
+        "key_risk": 0.078,
+        "alpha_beta": 0.124
+      }
+    },
+    {
+      "code": "688712",
+      "fields": {
+        "type": {
+          "a": "检验样本",
+          "b": "检验样本",
+          "same": true
+        },
+        "stance": {
+          "a": "观望",
+          "b": "观望",
+          "same": true
+        },
+        "dir_1d": {
+          "a": "不给方向",
+          "b": "不给方向",
+          "same": true
+        },
+        "dir_1d_conf": {
+          "a": "-",
+          "b": "-",
+          "same": true
+        },
+        "dir_5d": {
+          "a": "不给方向",
+          "b": "不给方向",
+          "same": true
+        },
+        "dir_5d_conf": {
+          "a": "-",
+          "b": "-",
+          "same": true
+        },
+        "sentiment_quality": {
+          "a": "ok",
+          "b": "ok",
+          "same": true
+        }
+      },
+      "disagreements": [],
+      "enum_agreement": 1.0,
+      "narrative_similarity": {
+        "key_reason": 0.208,
+        "key_risk": 0.03,
+        "alpha_beta": 0.094
+      }
+    },
+    {
+      "code": "000035",
+      "fields": {
+        "type": {
+          "a": "检验样本",
+          "b": "检验样本",
+          "same": true
+        },
+        "stance": {
+          "a": "可参与",
+          "b": "观望",
+          "same": false
+        },
+        "dir_1d": {
+          "a": "偏多",
+          "b": "中性",
+          "same": false
+        },
+        "dir_1d_conf": {
+          "a": "中低",
+          "b": "中低",
+          "same": true
+        },
+        "dir_5d": {
+          "a": "偏多",
+          "b": "中性",
+          "same": false
+        },
+        "dir_5d_conf": {
+          "a": "中",
+          "b": "低",
+          "same": false
+        },
+        "sentiment_quality": {
+          "a": "ok",
+          "b": "ok",
+          "same": true
+        }
+      },
+      "disagreements": [
+        "stance",
+        "dir_1d",
+        "dir_5d",
+        "dir_5d_conf"
+      ],
+      "enum_agreement": 0.429,
+      "narrative_similarity": {
+        "key_reason": 0.177,
+        "key_risk": 0.057,
+        "alpha_beta": 0.383
+      }
+    },
+    {
+      "code": "000019",
+      "fields": {
+        "type": {
+          "a": "检验样本",
+          "b": "规避",
+          "same": false
+        },
+        "stance": {
+          "a": "观望",
+          "b": "规避",
+          "same": false
+        },
+        "dir_1d": {
+          "a": "偏空",
+          "b": "偏空",
+          "same": true
+        },
+        "dir_1d_conf": {
+          "a": "中",
+          "b": "中",
+          "same": true
+        },
+        "dir_5d": {
+          "a": "中性",
+          "b": "偏空",
+          "same": false
+        },
+        "dir_5d_conf": {
+          "a": "中低",
+          "b": "中",
+          "same": false
+        },
+        "sentiment_quality": {
+          "a": "ok",
+          "b": "ok",
+          "same": true
+        }
+      },
+      "disagreements": [
+        "type",
+        "stance",
+        "dir_5d",
+        "dir_5d_conf"
+      ],
+      "enum_agreement": 0.429,
+      "narrative_similarity": {
+        "key_reason": 0.163,
+        "key_risk": 0.038,
+        "alpha_beta": 0.108
+      }
+    },
+    {
+      "code": "601000",
+      "fields": {
+        "type": {
+          "a": "检验样本",
+          "b": "检验样本",
+          "same": true
+        },
+        "stance": {
+          "a": "可参与",
+          "b": "观望",
+          "same": false
+        },
+        "dir_1d": {
+          "a": "偏多",
+          "b": "低波待动",
+          "same": false
+        },
+        "dir_1d_conf": {
+          "a": "中",
+          "b": "中",
+          "same": true
+        },
+        "dir_5d": {
+          "a": "偏多",
+          "b": "中性",
+          "same": false
+        },
+        "dir_5d_conf": {
+          "a": "中",
+          "b": "中低",
+          "same": false
+        },
+        "sentiment_quality": {
+          "a": "ok",
+          "b": "ok",
+          "same": true
+        }
+      },
+      "disagreements": [
+        "stance",
+        "dir_1d",
+        "dir_5d",
+        "dir_5d_conf"
+      ],
+      "enum_agreement": 0.429,
+      "narrative_similarity": {
+        "key_reason": 0.225,
+        "key_risk": 0.04,
+        "alpha_beta": 0.122
+      }
+    }
+  ],
+  "forward": {
+    "horizons": {
+      "T+1": {
+        "fwd_available": 4,
+        "codes_total": 7,
+        "arm_a_hit_rate": 0.0,
+        "arm_b_hit_rate": 0.0,
+        "arm_a_scored": 2,
+        "arm_b_scored": 1,
+        "rows": [
+          {
+            "code": "601061",
+            "fwd_ret": 0.0491,
+            "a_dir": "中性",
+            "b_dir": "中性",
+            "a_hit": null,
+            "b_hit": null
+          },
+          {
+            "code": "600356",
+            "fwd_ret": -0.0064,
+            "a_dir": "偏多",
+            "b_dir": "不给方向",
+            "a_hit": false,
+            "b_hit": null
+          },
+          {
+            "code": "601339",
+            "fwd_ret": null,
+            "a_dir": "不给方向",
+            "b_dir": "低波待动",
+            "a_hit": null,
+            "b_hit": null
+          },
+          {
+            "code": "688712",
+            "fwd_ret": -0.0258,
+            "a_dir": "不给方向",
+            "b_dir": "不给方向",
+            "a_hit": null,
+            "b_hit": null
+          },
+          {
+            "code": "000035",
+            "fwd_ret": null,
+            "a_dir": "偏多",
+            "b_dir": "中性",
+            "a_hit": null,
+            "b_hit": null
+          },
+          {
+            "code": "000019",
+            "fwd_ret": 0.1001,
+            "a_dir": "偏空",
+            "b_dir": "偏空",
+            "a_hit": false,
+            "b_hit": false
+          },
+          {
+            "code": "601000",
+            "fwd_ret": null,
+            "a_dir": "偏多",
+            "b_dir": "低波待动",
+            "a_hit": null,
+            "b_hit": null
+          }
+        ]
+      },
+      "T+5": {
+        "fwd_available": 0,
+        "codes_total": 7,
+        "arm_a_hit_rate": null,
+        "arm_b_hit_rate": null,
+        "arm_a_scored": 0,
+        "arm_b_scored": 0,
+        "rows": [
+          {
+            "code": "601061",
+            "fwd_ret": null,
+            "a_dir": "中性",
+            "b_dir": "中性",
+            "a_hit": null,
+            "b_hit": null
+          },
+          {
+            "code": "600356",
+            "fwd_ret": null,
+            "a_dir": "偏多",
+            "b_dir": "不给方向",
+            "a_hit": null,
+            "b_hit": null
+          },
+          {
+            "code": "601339",
+            "fwd_ret": null,
+            "a_dir": "不给方向",
+            "b_dir": "中性",
+            "a_hit": null,
+            "b_hit": null
+          },
+          {
+            "code": "688712",
+            "fwd_ret": null,
+            "a_dir": "不给方向",
+            "b_dir": "不给方向",
+            "a_hit": null,
+            "b_hit": null
+          },
+          {
+            "code": "000035",
+            "fwd_ret": null,
+            "a_dir": "偏多",
+            "b_dir": "中性",
+            "a_hit": null,
+            "b_hit": null
+          },
+          {
+            "code": "000019",
+            "fwd_ret": null,
+            "a_dir": "中性",
+            "b_dir": "偏空",
+            "a_hit": null,
+            "b_hit": null
+          },
+          {
+            "code": "601000",
+            "fwd_ret": null,
+            "a_dir": "偏多",
+            "b_dir": "中性",
+            "a_hit": null,
+            "b_hit": null
+          }
+        ]
+      }
+    },
+    "note": ""
+  },
+  "notes": []
+}
