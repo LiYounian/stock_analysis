@@ -34,6 +34,7 @@ import pandas as pd
 from tools.analysis.market_forecast import breadth as B
 from tools.collectors import calendar as cal
 from tools.collectors import market
+from tools.collectors import universe
 from tools.config import settings
 from tools.pipeline import intraday_screen as isr
 from tools.store import repo as store
@@ -65,22 +66,56 @@ def load_noon_snapshot(as_of: str, *, root: Path | None = None) -> dict:
             if q.get("price") is not None}
 
 
-def close_of(code: str, as_of: str, *, load_kline_fn=None) -> float | None:
-    """主档 K 线里 date == as_of 的当日收盘价。防未来:只取当日行,不碰 as_of 之后的行。"""
+def _col_of(code: str, as_of: str, col: str, *, load_kline_fn=None) -> float | None:
+    """主档 K 线里 date == as_of 当日行的某列(close/open)。防未来:只取当日行,不碰 as_of 之后的行。"""
     load_kline_fn = load_kline_fn or market.load_kline
     try:
         df = load_kline_fn(code)
-    except Exception as e:                                  # noqa: BLE001 缺档/异常 → 无收盘
+    except Exception as e:                                  # noqa: BLE001 缺档/异常 → 无值
         logger.debug("load_kline 失败 %s:%s", code, e)
         return None
     if df is None or "date" not in getattr(df, "columns", []) or df.empty:
         return None
-    ts = pd.Timestamp(as_of)
-    row = df[pd.to_datetime(df["date"]) == ts]
-    if row.empty:
+    row = df[pd.to_datetime(df["date"]) == pd.Timestamp(as_of)]
+    if row.empty or col not in row.columns:
         return None
-    c = row.iloc[-1]["close"]
-    return None if pd.isna(c) else float(c)                 # NaN 收盘(停牌/缺值)→ 无收盘
+    v = row.iloc[-1][col]
+    return None if pd.isna(v) else float(v)                 # NaN(停牌/缺值)→ 无值
+
+
+def close_of(code: str, as_of: str, *, load_kline_fn=None) -> float | None:
+    """主档 K 线里 date == as_of 的当日收盘价。防未来:只取当日行,不碰 as_of 之后的行。"""
+    return _col_of(code, as_of, "close", load_kline_fn=load_kline_fn)
+
+
+def open_of(code: str, as_of: str, *, load_kline_fn=None) -> float | None:
+    """主档 K 线里 date == as_of 的当日开盘价(P0-1 降级基价用)。防未来:只取当日行。"""
+    return _col_of(code, as_of, "open", load_kline_fn=load_kline_fn)
+
+
+def _fallback_universe(as_of: str, extra_codes=(), *, universe_fn=None) -> list[str]:
+    """降级口径的全A票池:优先 universe.universe_codes,并入候选票兜底(确保候选票可记分)。"""
+    universe_fn = universe_fn or universe.universe_codes
+    try:
+        codes = list(universe_fn())
+    except Exception as e:                                  # noqa: BLE001 取不到全A → 仅候选票兜底
+        logger.warning("降级 universe 获取失败:%s(仅用候选票兜底基准)", e)
+        codes = []
+    return sorted(set(codes) | {c for c in extra_codes if c})
+
+
+def build_fallback_base(as_of: str, codes: list[str], *, load_kline_fn=None) -> dict:
+    """11:30 快照缺失时的**降级基价源**:用主档当日**开盘价**近似(口径由「下午」降级为「全日开→收」)。
+
+    返回 {code: open}(>0)。仅取当日行,防未来天然成立。这是「保样本、不静默丢一天」的兜底
+    ——个股与基准都用同一 open→close 口径,α 仍可算、纳入 10 日窗口,只是解读时降权(标注降级)。
+    """
+    base: dict = {}
+    for code in codes:
+        o = open_of(code, as_of, load_kline_fn=load_kline_fn)
+        if o is not None and o > 0:
+            base[code] = o
+    return base
 
 
 def afternoon_pct(price_1130: float | None, close: float | None) -> float | None:
@@ -195,8 +230,12 @@ def _group_table(as_of: str, rows: list[dict]) -> list[str]:
 
 
 def render_review_md(as_of: str, 买入: list[dict], 规避: list[dict], summ: dict,
-                     bench: dict, *, out_dir: Path | None = None) -> Path:
-    """写 复盘/午盘_<date>.md。节标题避开「逐票收盘记分」,不与盘后复盘表竞争 web 选表。"""
+                     bench: dict, *, out_dir: Path | None = None,
+                     base_kind: str = "下午(11:30→收盘)", degraded_reason: str | None = None) -> Path:
+    """写 复盘/午盘_<date>.md。节标题避开「逐票收盘记分」,不与盘后复盘表竞争 web 选表。
+
+    degraded_reason 非空(P0-1 快照缺失回退)时打降级横幅:α 为降级口径下的相对表现,纳入样本但降权解读。
+    """
     out_dir = out_dir or REVIEW_DIR
     out_dir.mkdir(parents=True, exist_ok=True)
     path = out_dir / f"{MD_PREFIX}_{as_of}.md"
@@ -206,6 +245,9 @@ def render_review_md(as_of: str, 买入: list[dict], 规避: list[dict], summ: d
     L.append("")
     L.append("> ⚠️ 测试环境研究模拟,**非投资建议**。防未来函数:11:30 冻结价来自采集时刻冻结的快照,"
              "收盘只取主档当日行(≤ 当日),下午基准与个股同口径同源。")
+    if degraded_reason:
+        L.append(f"> 🟠 **降级口径**({base_kind}):{degraded_reason}。本次 α 为该降级口径下的相对表现,"
+                 f"**纳入样本但降权解读**(非「下午」标准口径)。")
     L.append(f"> 口径:**下午涨跌% = (当日收盘 − 11:30 冻结价)/11:30 冻结价**;"
              f"**α = 个股下午涨跌% − 全A下午等权基准**。")
     deg = "(⚠️取样率不足,基准仅参考)" if bench.get("degraded") else ""
@@ -270,20 +312,33 @@ def append_experience_inbox(as_of: str, summ: dict, *, inbox: Path | None = None
 def run_intraday_review(as_of: str | None = None, *, snapshot_root: Path | None = None,
                         out_dir: Path | None = None, load_kline_fn=None,
                         write_inbox: bool = True, inbox: Path | None = None,
-                        view_fn=None) -> dict:
+                        view_fn=None, universe_fn=None) -> dict:
     """午盘选股复盘节点主入口(读午盘 view + 11:30 快照 + 当日收盘 → 下午 α 记分 → 产出)。
 
     view_fn:注入桩(测试);默认读 store view「候选池消息面确认」(午盘节点落盘的那份)。
+    P0-1:11:30 快照缺失 → 走降级回退(主档当日开盘价近似基价,口径「下午」→「全日开→收」),
+    保证有记录、不丢样本(10 日闸门凑得满),render 显式打降级横幅、report 标 degraded_reason。
     """
     if as_of is None:
         as_of = store.active_date() or store._today()
-
-    snapshot = load_noon_snapshot(as_of, root=snapshot_root)
 
     view_fn = view_fn or (lambda: _load_view(as_of))
     view = view_fn()
     reranked = (view or {}).get("重排") or []
     买入, 规避 = isr.split_buy_avoid(reranked)
+
+    snapshot = load_noon_snapshot(as_of, root=snapshot_root)
+    base_kind = "下午(11:30→收盘)"
+    degraded_reason = None
+    if not snapshot:
+        # P0-1 降级回退:快照缺失 → 主档当日开盘价近似,个股与基准同口径(全日开→收),纳入样本不丢天。
+        cand_codes = [x.get("code") for x in (买入 + 规避)]
+        uni = _fallback_universe(as_of, cand_codes, universe_fn=universe_fn)
+        snapshot = build_fallback_base(as_of, uni, load_kline_fn=load_kline_fn)
+        base_kind = "降级·全日(开盘→收盘)"
+        degraded_reason = ("11:30 全A快照缺失,回退主档当日开盘价近似基价(口径由『下午』降级为『全日开→收』);"
+                           "非最优但保留样本、不丢当日,解读时降权")
+        logger.warning("午盘复盘走降级口径:%s(降级基价命中 %d 只)", degraded_reason, len(snapshot))
 
     bench = afternoon_benchmark(snapshot, as_of, load_kline_fn=load_kline_fn)
     base = bench["下午等权基准"]
@@ -291,14 +346,16 @@ def run_intraday_review(as_of: str | None = None, *, snapshot_root: Path | None 
     规避s = score_group(规避, snapshot, as_of, base, "规避", load_kline_fn=load_kline_fn)
     summ = summarize(买入s, 规避s)
 
-    path = render_review_md(as_of, 买入s, 规避s, summ, bench, out_dir=out_dir)
+    path = render_review_md(as_of, 买入s, 规避s, summ, bench, out_dir=out_dir,
+                            base_kind=base_kind, degraded_reason=degraded_reason)
     if write_inbox:
         append_experience_inbox(as_of, summ, inbox=inbox)
 
     report = {"as_of": as_of, "买入": len(买入s), "规避": len(规避s),
-              "下午等权基准": base, "小结": summ, "基准": bench, "产出": str(path)}
-    logger.info("午盘选股复盘完成:as_of=%s,买入均值α=%s,分离度=%s,产出=%s",
-                as_of, summ.get("买入均值α"), summ.get("分离度"), path)
+              "下午等权基准": base, "小结": summ, "基准": bench, "产出": str(path),
+              "口径": base_kind, "degraded_reason": degraded_reason}
+    logger.info("午盘选股复盘完成:as_of=%s,口径=%s,买入均值α=%s,分离度=%s,产出=%s",
+                as_of, base_kind, summ.get("买入均值α"), summ.get("分离度"), path)
     return report
 
 

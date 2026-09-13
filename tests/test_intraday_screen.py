@@ -347,3 +347,121 @@ def test_run_intraday_screen_persists_snapshot(monkeypatch, tmp_path):
         write_md=False, snapshot_root=tmp_path)
     assert rep["快照落盘"] == str(isr.noon_snapshot_path("2026-09-08", out_root=tmp_path))
     assert isr.noon_snapshot_path("2026-09-08", out_root=tmp_path).exists()
+
+
+# ————————————————————————————————————————————————
+# ⑨ P0-2:D-0 交易计划——买入票必含止损/止盈/收盘了结;止损随波动锚缩放且夹在上下限
+# ————————————————————————————————————————————————
+def _atr_hist(atr_pct):
+    """构造一段日线,使 ATR≈close×atr_pct%(每根 high-low=close×atr_pct%,close 平)。"""
+    close = 10.0
+    rng = close * atr_pct / 100.0
+    dates = pd.to_datetime(["2026-09-01", "2026-09-02", "2026-09-03", "2026-09-04", "2026-09-07"])
+    return pd.DataFrame({"date": dates, "open": [close] * 5,
+                         "high": [close + rng / 2] * 5, "low": [close - rng / 2] * 5,
+                         "close": [close] * 5, "volume": [1e6] * 5, "amount": [1e7] * 5,
+                         "turnover": [1.0] * 5, "pct_chg": [0.0] * 5})
+
+
+def test_trade_plan_has_stop_target_and_eod_exit():
+    """买入票交易计划必含止损位/止盈位/收盘强制了结(补 1b 缺口)。"""
+    q = {"price": 10.0, "open": 10.0, "high": 10.2, "low": 9.8}
+    tp = isr.compute_trade_plan("X", q, "2026-09-08", load_kline_fn=lambda c: _atr_hist(4.0))
+    assert tp is not None
+    assert tp["止损位"] < tp["现价11:30"] < tp["止盈位"]          # 止损在下、止盈在上
+    assert "收盘无条件平仓" in tp["了结"]                          # 当日了结纪律
+    assert "跳空" in tp["了结"]                                    # #20 跳空保护
+    assert "ATR" in tp["波动锚"]                                   # 波动锚锚定 ATR(非拍脑袋)
+
+
+def test_trade_plan_stop_scales_with_volatility_and_clamped():
+    """止损距离随波动锚缩放;且夹在 [止损下限, 止损上限] 内(高波不无限放、低波不贴太近)。"""
+    q = {"price": 10.0, "open": 10.0, "high": 10.1, "low": 9.9}
+    cfg = isr.trade_plan_cfg()
+    lo, hi = cfg["止损下限pct"], cfg["止损上限pct"]
+    # 低波(ATR 0.5%×倍数1.0=0.5% < 下限)→ 夹到下限
+    tp_lo = isr.compute_trade_plan("X", q, "2026-09-08", load_kline_fn=lambda c: _atr_hist(0.5))
+    assert tp_lo["止损距离%"] == pytest.approx(lo)
+    # 高波(ATR 20%×1.0=20% > 上限)→ 夹到上限
+    tp_hi = isr.compute_trade_plan("X", q, "2026-09-08", load_kline_fn=lambda c: _atr_hist(20.0))
+    assert tp_hi["止损距离%"] == pytest.approx(hi)
+    # 中波(ATR 4%)→ 落在区间内、严格大于低波档
+    tp_mid = isr.compute_trade_plan("X", q, "2026-09-08", load_kline_fn=lambda c: _atr_hist(4.0))
+    assert lo < tp_mid["止损距离%"] < hi
+
+
+def test_trade_plan_falls_back_to_intraday_range_when_no_atr():
+    """历史不足算不出 ATR → 回退当日振幅锚(仍是可算口径,不缺省除非振幅也无)。"""
+    q = {"price": 10.0, "open": 10.0, "high": 10.6, "low": 9.6}    # 当日振幅=(10.6-9.6)/10=10%
+    only_prev = pd.DataFrame({"date": pd.to_datetime(["2026-09-07"]), "open": [10.0],
+                              "high": [10.1], "low": [9.9], "close": [10.0], "volume": [1e6],
+                              "amount": [1e7], "turnover": [1.0], "pct_chg": [0.0]})  # 仅 1 根 → ATR None
+    tp = isr.compute_trade_plan("X", q, "2026-09-08", load_kline_fn=lambda c: only_prev)
+    assert "振幅" in tp["波动锚"]                                   # 回退到当日振幅锚
+
+
+def test_trade_plan_none_when_no_price():
+    """停牌/无午盘价 → 无法定计划(None),render 侧会打「无法定价位」而非乱造。"""
+    assert isr.compute_trade_plan("X", {"price": None}, "2026-09-08",
+                                  load_kline_fn=lambda c: _atr_hist(4.0)) is None
+    assert isr.compute_trade_plan("X", None, "2026-09-08",
+                                  load_kline_fn=lambda c: _atr_hist(4.0)) is None
+
+
+def test_atr_pct_excludes_as_of_and_future(monkeypatch):
+    """防未来:ATR 只用 date<as_of 的历史,午盘 bar/当日/未来行绝不进 ATR。"""
+    hist = _atr_hist(4.0)
+    dirty = pd.concat([hist, pd.DataFrame({
+        "date": pd.to_datetime(["2026-09-08", "2026-09-09"]),
+        "open": [99, 99], "high": [999, 999], "low": [1, 1], "close": [99, 99],
+        "volume": [9, 9], "amount": [9, 9], "turnover": [9, 9], "pct_chg": [9, 9]})],
+        ignore_index=True)
+    clean = isr._atr_pct("X", "2026-09-08", load_kline_fn=lambda c: hist)
+    with_dirty = isr._atr_pct("X", "2026-09-08", load_kline_fn=lambda c: dirty)
+    assert clean == pytest.approx(with_dirty)                       # 脏的当日/未来行不改变 ATR
+
+
+def test_render_includes_trade_plan_table(monkeypatch, tmp_path):
+    """render 传 quotes → 买入组产 D-0 交易计划表(止损/止盈/收盘了结);缺 quotes 则不产该表。"""
+    reranked = [_mk(f"P{i}", 8.0 - i, "看多") for i in range(6)]
+    view = {"候选池规模": 6, "上限命中": False, "统计": {}, "回灌参数": {}, "重排": reranked}
+    monkeypatch.setattr(isr.store, "get_view", lambda name, date=None: view)
+    quotes = {f"P{i}": {"price": 10.0, "open": 10.0, "high": 10.2, "low": 9.8} for i in range(6)}
+    text = isr.render_intraday_md("2026-09-08", out_dir=tmp_path, quotes=quotes,
+                                  load_kline_fn=lambda c: _atr_hist(4.0)).read_text(encoding="utf-8")
+    assert "D-0 交易计划" in text and "止损位" in text and "止盈位" in text
+    assert "收盘无条件了结" in text or "收盘无条件平仓" in text
+    # 不传 quotes → 无交易计划表(向后兼容)
+    text2 = isr.render_intraday_md("2026-09-08", out_dir=tmp_path).read_text(encoding="utf-8")
+    assert "D-0 交易计划" not in text2
+
+
+# ————————————————————————————————————————————————
+# ⑩ P0-1:11:30 快照自检(存在性+样本率)——不达标即暴露,别静默丢当日复盘样本
+# ————————————————————————————————————————————————
+def test_snapshot_self_check_ok(tmp_path):
+    isr.persist_noon_snapshot({f"{i:06d}": {"price": 10.0} for i in range(8)}, "2026-09-08",
+                              out_root=tmp_path)
+    chk = isr.snapshot_self_check("2026-09-08", 10, out_root=tmp_path)       # 8/10=80%≥60%
+    assert chk["ok"] is True and chk["count"] == 8
+
+
+def test_snapshot_self_check_flags_missing_and_low_coverage(tmp_path):
+    # 文件缺失 → 不过
+    miss = isr.snapshot_self_check("2026-09-08", 10, out_root=tmp_path)
+    assert miss["ok"] is False and "未生成" in miss["reason"]
+    # 半空(2/10=20%<60%)→ 不过
+    isr.persist_noon_snapshot({f"{i:06d}": {"price": 10.0} for i in range(2)}, "2026-09-08",
+                              out_root=tmp_path)
+    low = isr.snapshot_self_check("2026-09-08", 10, out_root=tmp_path)
+    assert low["ok"] is False and "样本率不足" in low["reason"]
+
+
+def test_run_intraday_screen_reports_self_check(tmp_path):
+    """编排把快照自检结果带进 report(可观测,便于告警/追因)。"""
+    rep = isr.run_intraday_screen(
+        "2026-09-08", quotes={"000001": _Q}, codes=["000001"],
+        run_screen_all_fn=lambda *a, **k: {"union": 1, "llm_subset": 1, "各策略入选": {}},
+        cand_msg_fn=lambda *a, **k: {"候选池规模": 1, "统计": {}},
+        write_md=False, snapshot_root=tmp_path)
+    assert rep["快照自检"]["ok"] is True and rep["快照自检"]["count"] == 1

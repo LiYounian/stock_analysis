@@ -18,12 +18,16 @@ from tools.pipeline import intraday_review as rv
 from tools.pipeline import intraday_screen as isr
 
 
-def _kline(as_of_close: float | None, *, as_of="2026-09-08", with_future=False):
-    """构造单票主档 K 线:含 as_of 当日行(收盘=as_of_close);with_future 时额外塞一根未来行(脏档)。"""
-    rows = [{"date": pd.Timestamp("2026-09-07"), "close": 10.0},
-            {"date": pd.Timestamp(as_of), "close": as_of_close}]
+def _kline(as_of_close: float | None, *, as_of="2026-09-08", with_future=False, as_of_open=None):
+    """构造单票主档 K 线:含 as_of 当日行(收盘=as_of_close);with_future 时额外塞一根未来行(脏档)。
+
+    as_of_open:当日开盘价(P0-1 降级口径用);默认回落 10.0。
+    """
+    rows = [{"date": pd.Timestamp("2026-09-07"), "open": 10.0, "close": 10.0},
+            {"date": pd.Timestamp(as_of), "open": (10.0 if as_of_open is None else as_of_open),
+             "close": as_of_close}]
     if with_future:
-        rows.append({"date": pd.Timestamp("2026-09-09"), "close": 999.0})  # 未来行,绝不能被用
+        rows.append({"date": pd.Timestamp("2026-09-09"), "open": 999.0, "close": 999.0})  # 未来行,绝不能被用
     return pd.DataFrame(rows)
 
 
@@ -145,11 +149,58 @@ def test_review_split_matches_screen_single_source():
     assert "isr.split_buy_avoid" in src or "split_buy_avoid" in src
 
 
-def test_missing_snapshot_degrades_not_crash(tmp_path):
-    """快照缺失(午盘节点没跑/没落盘)→ 复盘不崩,产降级产物(基准 NaN、票记 —)。"""
-    view = {"重排": [_cand("P0", 5, "看多"), _cand("S1", 1, "看空")]}
+def test_open_of_takes_as_of_row_not_future():
+    """P0-1 降级基价:open_of 只取 as_of 当日开盘,脏档未来行绝不使用。"""
+    lk = lambda code: _kline(11.0, as_of_open=10.2, with_future=True)
+    assert rv.open_of("X", "2026-09-08", load_kline_fn=lk) == 10.2
+    lk_missing = lambda code: _kline(None).iloc[[0]]              # 只有 09-07 行
+    assert rv.open_of("X", "2026-09-08", load_kline_fn=lk_missing) is None
+
+
+def test_missing_snapshot_fallback_keeps_sample(tmp_path):
+    """P0-1 核心语义:11:30 快照缺失 → 走降级回退(主档当日开盘价近似),**不丢样本**——
+    买入组 α 可算(非全 None)、report 标 degraded_reason、md 打降级横幅、口径降为『全日开→收』。
+    """
+    # 候选:买入 P0/P1(看多),规避 S1(看空)。快照缺失(tmp_path 无快照文件)。
+    view = {"重排": [_cand("P0", 5, "看多"), _cand("P1", 4, "看多"), _cand("S1", 1, "看空")]}
+    # 降级 universe = 候选 3 只 + 一只填充 F0(仅进基准);当日 open→close:P0 +10%、P1 −5%、S1 0、F0 0。
+    closes = {"P0": 11.0, "P1": 9.5, "S1": 10.0, "F0": 10.0}
+    lk = lambda code: _kline(closes[code], as_of_open=10.0)
     rep = rv.run_intraday_review("2026-09-08", snapshot_root=tmp_path, out_dir=tmp_path,
-                                 load_kline_fn=lambda c: _kline(11.0),
-                                 view_fn=lambda: view, write_inbox=False)
-    assert rep["基准"]["样本"] == 0 and rep["基准"]["degraded"] is True
+                                 load_kline_fn=lk, view_fn=lambda: view, write_inbox=False,
+                                 universe_fn=lambda: ["P0", "P1", "S1", "F0"])
+    # 降级但不丢样本:基准有样本、买入组 α 非全 None
+    assert rep["degraded_reason"] is not None
+    assert rep["口径"].startswith("降级")
+    assert rep["基准"]["样本"] == 4                               # 全 4 只都用 open→close 记进基准
+    买入α = [r for r in [rep["小结"]["买入均值α"]] if r is not None]
+    assert 买入α, "降级口径下买入组均值 α 必须可算(不丢样本)"
+    text = (tmp_path / "午盘_2026-09-08.md").read_text(encoding="utf-8")
+    assert "降级口径" in text and "全日" in text                  # md 显式打降级横幅
     assert (tmp_path / "午盘_2026-09-08.md").exists()
+
+
+def test_missing_snapshot_no_universe_still_scores_candidates(tmp_path):
+    """降级时即便 universe 取不到,候选票仍并入兜底基准、可记分(不崩、不丢候选)。"""
+    view = {"重排": [_cand("P0", 5, "看多"), _cand("S1", 1, "看空")]}
+    closes = {"P0": 11.0, "S1": 9.8}
+    lk = lambda code: _kline(closes[code], as_of_open=10.0)
+    rep = rv.run_intraday_review("2026-09-08", snapshot_root=tmp_path, out_dir=tmp_path,
+                                 load_kline_fn=lk, view_fn=lambda: view, write_inbox=False,
+                                 universe_fn=lambda: (_ for _ in ()).throw(RuntimeError("no net")))
+    assert rep["degraded_reason"] is not None
+    assert rep["基准"]["样本"] >= 1                               # 候选票兜底,基准非空
+    assert (tmp_path / "午盘_2026-09-08.md").exists()
+
+
+def test_snapshot_present_no_degradation(tmp_path):
+    """快照在 → 正常口径(下午),不打降级横幅。"""
+    isr.persist_noon_snapshot({"P0": {"price": 10.0}, "S1": {"price": 10.0}}, "2026-09-08",
+                              out_root=tmp_path)
+    view = {"重排": [_cand("P0", 5, "看多"), _cand("S1", 1, "看空")]}
+    lk = lambda code: _kline({"P0": 11.0, "S1": 9.7}[code])
+    rep = rv.run_intraday_review("2026-09-08", snapshot_root=tmp_path, out_dir=tmp_path,
+                                 load_kline_fn=lk, view_fn=lambda: view, write_inbox=False)
+    assert rep["degraded_reason"] is None
+    assert not rep["口径"].startswith("降级")
+    assert "降级口径" not in (tmp_path / "午盘_2026-09-08.md").read_text(encoding="utf-8")
