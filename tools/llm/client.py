@@ -78,21 +78,29 @@ def _extract_json(content: str) -> dict:
 
 
 class OpenAICompatClient:
-    """OpenAI 兼容客户端(deepseek-v4-pro @ 内部网关)。"""
+    """OpenAI 兼容客户端(DeepSeek / 千问网关等,均走此实现,由注册表 model/凭证区分)。
 
-    def __init__(self, base_url: str, api_key: str, model: str):
+    timeout / disable_thinking 支持按 provider 覆盖(缺省 None → 沿用 settings 全局默认,
+    保证注册表未指定时行为与改动前完全一致)。
+    """
+
+    def __init__(self, base_url: str, api_key: str, model: str,
+                 *, timeout: int | None = None, disable_thinking: bool | None = None):
         if not base_url or not api_key:
             raise RuntimeError(
-                "LLM 未配置:请在环境变量设置 LLM_BASE_URL + LLM_API_KEY"
-                "(只在本机 shell,不入库;model 写死 deepseek-v4-pro)。")
+                "LLM 未配置:请在环境变量设置对应 provider 的 base_url + api_key "
+                "(只在本机 shell,不入库;变量名见 tools/config/model_registry.yaml)。")
         from openai import OpenAI
-        self._cli = OpenAI(api_key=api_key, base_url=base_url, timeout=settings.LLM_TIMEOUT)
+        self._timeout = timeout if timeout is not None else settings.LLM_TIMEOUT
+        self._disable_thinking = (
+            disable_thinking if disable_thinking is not None else settings.LLM_DISABLE_THINKING)
+        self._cli = OpenAI(api_key=api_key, base_url=base_url, timeout=self._timeout)
         self.model = model
 
     def chat(self, messages, *, temperature=0.0, max_tokens=2048) -> str:
         # 关思考模式:实测对当前模型中性(该网关本就不花时间思考),
         # 为将来换带思考模型自动生效预留;网关接受该参数、不报错。
-        extra = {"extra_body": {"enable_thinking": False}} if settings.LLM_DISABLE_THINKING else {}
+        extra = {"extra_body": {"enable_thinking": False}} if self._disable_thinking else {}
         r = self._cli.chat.completions.create(
             model=self.model, messages=messages,
             temperature=temperature, max_tokens=max_tokens, **extra)
@@ -151,9 +159,44 @@ class OpenAICompatClient:
         return out
 
 
+def _build_client(spec) -> LLMClient:
+    """按 ProviderSpec.kind 构造对应 client。
+
+    P1 只实现 openai_compat(DeepSeek / 千问网关皆走此);其余 kind(如 anthropic)
+    显式抛错,不静默降级——避免"路由到未实现 provider 却假装成功"。
+    timeout / enable_thinking 从注册表 params 取,缺省则沿用 settings 全局默认。
+    """
+    if spec.kind == "openai_compat":
+        params = spec.params or {}
+        timeout = params.get("timeout")
+        et = params.get("enable_thinking")
+        disable_thinking = (not et) if et is not None else None
+        return OpenAICompatClient(
+            spec.resolve_base_url(), spec.resolve_api_key(), spec.model,
+            timeout=timeout, disable_thinking=disable_thinking)
+    raise NotImplementedError(
+        f"provider {spec.id!r} kind={spec.kind!r} 尚未实现(P1 只支持 openai_compat;"
+        f"anthropic 等留待后续波次)。")
+
+
 def get_client(purpose: str = "extract") -> LLMClient:
-    """工厂:返回配置好的 LLM 客户端。purpose 预留(未来可路由不同 provider)。"""
-    return OpenAICompatClient(settings.LLM_BASE_URL, settings.LLM_API_KEY, settings.LLM_MODEL)
+    """工厂:按注册表路由表 purpose → 主 provider,返回对应 client。
+
+    P1(行为零变化):注册表所有 purpose 的 primary 都指向现 DeepSeek,故任意 purpose
+    的返回与改动前一致;千问已注册但暂不默认路由。fallback 链在注册表里是设计意向数据,
+    P1 **不执行跨 provider 自动降级**(避免静默换模型掩盖故障)。
+
+    健壮性:注册表加载/解析异常时,回退到旧的固定 DeepSeek 构造(降级不崩,约法第5条),
+    保证 P1 严格不劣于改动前。
+    """
+    try:
+        from tools.config import model_registry as mr
+        spec = mr.primary_spec_for(purpose)
+        return _build_client(spec)
+    except Exception as e:                        # noqa: BLE001 注册表异常一律回退旧路径
+        logger.warning("模型注册表路由失败(purpose=%s),回退固定 DeepSeek 构造:%s",
+                       purpose, str(e)[:120])
+        return OpenAICompatClient(settings.LLM_BASE_URL, settings.LLM_API_KEY, settings.LLM_MODEL)
 
 
 def is_configured() -> bool:
