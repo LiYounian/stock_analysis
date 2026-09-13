@@ -1,0 +1,62 @@
+# 模型注册表(SSOT · 单一真源)—— provider 声明 + purpose→provider 路由表
+#
+# 设计:docs/计划/2026-09-13_选股系统架构设计_程序化与模型迁移.md §1
+# 消费者:tools/config/model_registry.py(加载/校验)、tools/llm/client.py::get_client(路由分流)
+#
+# ⚠️ 凭证纪律:此文件**只写环境变量名**(base_url_env / api_key_env),
+#    URL/Key/token 的**真实值绝不入库、绝不写进本 YAML**——运行时由代码读 os.getenv。
+#
+# ⚠️ P1 = 骨架 + 可切换,**不做实际迁移**:
+#    - 所有 purpose 的 primary 全指向现 DeepSeek → 行为与改动前完全一致(灰度即等价)。
+#    - 千问(网关 OpenAI 兼容)已注册、可切换,但**暂不默认路由**过去(迁移在 P2)。
+#    - 换更新款模型 = 在 providers 加/改一条 + 把 route 的 primary 指过去,**不改业务代码**。
+
+version: 1
+
+# —— provider 声明:每个模型端点一条 ——
+# kind 决定用哪个 client 实现:
+#   openai_compat → tools/llm/client.py::OpenAICompatClient(DeepSeek / 千问网关皆走此)
+#   anthropic     → Claude(§2 兜底,P1 未实现,仅占位说明)
+providers:
+  deepseek_v4pro:
+    kind: openai_compat
+    model: deepseek-v4-pro          # 升级 DeepSeek 只改这一行
+    base_url_env: LLM_BASE_URL      # 只存变量名,值在本机 shell(~/.zshrc),不入库
+    api_key_env: LLM_API_KEY
+    params:
+      enable_thinking: false        # 关思考(与 settings.LLM_DISABLE_THINKING 默认一致)
+      timeout: 60                   # 秒(与 settings.LLM_TIMEOUT 默认一致)
+    enabled: true
+    notes: 内部网关;DeepSeek 主力。P1 全 purpose 默认路由至此,保证行为零变化。
+
+  qwen_max:
+    kind: openai_compat             # 用户拍板:千问走 fintopia 网关 OpenAI 兼容(非 qwen-delegate CLI)
+    model: qwen3.8-max              # 升级千问只改这一行
+    base_url_env: QWEN_BASE_URL     # 网关地址变量名(值在本机 shell,不入库)
+    api_key_env: QWEN_API_KEY
+    params:
+      enable_thinking: false
+      timeout: 60
+    enabled: true
+    notes: fintopia 网关 OpenAI 兼容。P1 已注册可切换,但暂不默认路由(迁移在 P2 影子跑达标后切主)。
+
+# —— 任务路由表:purpose(用途)→ primary(主 provider)[+ fallback 链] ——
+# purpose 覆盖现有全部 LLM 触点(见设计 §1.1):
+#   extract           事件/新闻结构化抽取(event.py 新闻抽取、政策打分)
+#   sentiment         UGC/情绪打分(event.py UGC、analysis/sentiment.py)
+#   summary           摘要类
+#   relevance         新闻扩召回相关性初筛(collectors/news_recall.py)
+#   financial_verdict 财报定性研判(analysis/financial/llm_text.py)
+#
+# ⚠️ P1:primary 一律 deepseek_v4pro(= 今天的行为)。fallback 为**设计意向数据**,
+#    P1 的 get_client 只构造 primary、**不执行跨 provider 自动降级**(避免"静默换模型"
+#    掩盖故障 + 保证行为零变化);fallback 的执行留待后续波次(见设计 §1.7 待拍板项3)。
+routes:
+  extract:           {primary: deepseek_v4pro, fallback: [qwen_max]}
+  sentiment:         {primary: deepseek_v4pro, fallback: [qwen_max]}
+  summary:           {primary: deepseek_v4pro, fallback: []}
+  relevance:         {primary: deepseek_v4pro, fallback: [qwen_max]}
+  financial_verdict: {primary: deepseek_v4pro, fallback: [qwen_max]}
+
+# purpose 未在 routes 命中时的兜底用途(与今天"忽略 purpose 恒走 DeepSeek"等价)
+default_purpose: extract
