@@ -1,0 +1,120 @@
+# 统一定时任务注册表(SSOT · 架构⑥ P1)
+# ────────────────────────────────────────────────────────────────────────
+# 加任务 = 加一条 → 注册即被调度;改时间 = 改 cron → 热生效(无需 launchctl)。
+# cron 为标准 5 段 crontab:分 时 日 月 周。
+#   ⚠️ 周字段务必用名字 mon-fri:APScheduler from_crontab 的数字周是 0=周一,
+#      写 "1-5" 会错成 周二~周六;用 mon-fri 才是周一~周五。
+# 凭证不入库:命令里不含任何 key/token;告警 webhook 走 env 变量名(见 notifier)。
+#
+# ⚠️ P1 影子期:本表仅供 APScheduler dry-run/影子排期与告警验证,
+#    与 live launchd 并行观察一致性;**不替代、不改动 live launchd**。
+#    实际切换是 P3 人工 gated 步骤(见 docs/参考 runbook)。
+# ────────────────────────────────────────────────────────────────────────
+tasks:
+  - id: intraday
+    description: 盘中快照(上午 10:30 slot)
+    cmd: ["python", "-m", "tools.pipeline.intraday_snapshot", "--slot", "1030"]
+    cron: "30 10 * * mon-fri"
+    timeout_sec: 600
+    retries: 1
+    notify_on: [failure, misfire]
+    tags: [local, intraday]
+
+  - id: intraday_noon
+    description: 午盘快照(11:31 slot,与 intraday 同脚本不同 slot)
+    cmd: ["python", "-m", "tools.pipeline.intraday_snapshot", "--slot", "1131"]
+    cron: "31 11 * * mon-fri"
+    timeout_sec: 600
+    retries: 1
+    notify_on: [failure, misfire]
+    tags: [local, intraday]
+
+  - id: intraday_screen
+    description: 午盘全A选股(11:32,午休对全A挑票)
+    cmd: ["python", "-m", "tools.run", "intraday_screen"]
+    cron: "32 11 * * mon-fri"
+    timeout_sec: 1800
+    retries: 1
+    depends_on: [intraday_noon]
+    notify_on: [failure, misfire]
+    tags: [local, intraday, screen]
+
+  - id: intraday_watch
+    description: 下午实时观测循环(13:00 起动,脚本内 --until 14:57 自停)
+    cmd: ["python", "-m", "tools.pipeline.intraday_watch", "--until", "14:57", "--interval", "300"]
+    cron: "0 13 * * mon-fri"
+    timeout_sec: 7800
+    retries: 0
+    notify_on: [failure, misfire]
+    tags: [local, intraday, watch]
+
+  - id: breadth
+    description: 市场宽度(收盘后 15:05)
+    cmd: ["python", "-m", "tools.pipeline.market_breadth", "--slot", "1505"]
+    cron: "5 15 * * mon-fri"
+    timeout_sec: 900
+    retries: 1
+    notify_on: [failure, misfire]
+    tags: [local, eod]
+
+  - id: pullrefresh
+    description: 盘后全量刷新/全A选股(15:40,约 1 小时)
+    cmd: ["python", "-m", "tools.run", "screenall"]
+    cron: "40 15 * * mon-fri"
+    timeout_sec: 5400
+    retries: 1
+    retry_backoff_sec: 60
+    notify_on: [failure, misfire]
+    tags: [local, eod, heavy]
+
+  - id: intraday_review
+    description: 盘尾复盘(17:00)
+    cmd: ["python", "-m", "tools.run", "intraday_review"]
+    cron: "0 17 * * mon-fri"
+    timeout_sec: 1800
+    retries: 1
+    depends_on: [pullrefresh]
+    notify_on: [failure, misfire]
+    tags: [local, eod]
+
+  - id: strong
+    description: 最强票刷新(20:00,复用已拉数据 --no-fetch)
+    cmd: ["python", "-m", "tools.run", "strong", "--no-fetch"]
+    cron: "0 20 * * mon-fri"
+    timeout_sec: 1800
+    retries: 1
+    notify_on: [failure, misfire]
+    tags: [local, eod]
+
+  - id: commitdocs
+    description: 分析文档定时提交(每工作日 11:20-22:20 每小时)
+    cmd: ["bash", "ops/launchd/commit_analysis_docs.sh"]
+    cron: "20 11-22 * * mon-fri"
+    timeout_sec: 300
+    retries: 0
+    notify_on: [failure]
+    tags: [local, docs]
+
+  # ── 以下为历史冗余定义收敛的落点(默认 disabled,不参与影子排期)──
+  # SEPA 午收监控:旧在 launchd(已停用)/systemd/进程内 APScheduler 三处;
+  # 注册表统一为单条,启用与否由 enabled 控制(收编冗余,SSOT)。
+  - id: sepa
+    description: "SEPA+VCP 监控(午 11:35 + 收 15:35);收编三处冗余为单条,默认关"
+    cmd: ["python", "-m", "tools.run", "sepa"]
+    cron: "35 11,15 * * mon-fri"
+    timeout_sec: 1200
+    retries: 1
+    enabled: false
+    notify_on: [failure, misfire]
+    tags: [local, sepa, consolidated]
+
+  # git autopush:非业务产出,守护类,默认关(影子期不排期)
+  - id: autopush
+    description: git 自动推送(15:30);非选股业务,默认关
+    cmd: ["bash", "ops/launchd/autopush.sh"]
+    cron: "30 15 * * mon-fri"
+    timeout_sec: 300
+    retries: 0
+    enabled: false
+    notify_on: [failure]
+    tags: [local, git]
