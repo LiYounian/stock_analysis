@@ -145,6 +145,101 @@ def action_tag(x: dict, group: str) -> str:
 
 
 # ————————————————————————————————————————————————
+# D-0 交易计划(P0-2,2026-09-13 复盘补):给买入票补「可执行的当日进出场纪律」
+# ————————————————————————————————————————————————
+# 缺口:午盘买入表原只有「尾盘可买/次日观察」,无止损位/目标位 → 无法执行、无法回答「达没达目标」。
+# 修整方向不是调目标数值,而是补一套 **D-0 专用**进出场规则:止损/止盈按**当日波动自适应锚定**
+# (ATR/振幅,非拍脑袋固定百分比),**收盘无条件了结**(午盘选股定位=尾盘前当日买卖,天然了结点=收盘)。
+def trade_plan_cfg() -> dict:
+    """午盘交易计划配置(THRESHOLDS['午盘选股']['交易计划']);缺失/异常 → 空 dict(调用方用硬默认)。"""
+    return (noon_cfg().get("交易计划", {}) or {})
+
+
+def _atr_pct(code: str, as_of: str, *, load_kline_fn=None, window: int = 14) -> float | None:
+    """历史日线 ATR(真实波幅均值)占最近收盘价的百分比,作波动锚。
+
+    防未来红线:只用 `date < as_of` 的**完整**历史日线(绝不含午盘 bar / 当日 / 未来行);
+    真实波幅 TR = max(high−low, |high−prev_close|, |low−prev_close|)。历史不足(<2 根)→ None。
+    """
+    load_kline_fn = load_kline_fn or market.load_kline
+    try:
+        df = load_kline_fn(code)
+    except Exception:                                          # noqa: BLE001 缺档/异常 → 无 ATR
+        return None
+    if df is None or "date" not in getattr(df, "columns", []) or df.empty:
+        return None
+    hist = df[pd.to_datetime(df["date"]) < pd.Timestamp(as_of)].tail(window + 1)
+    if len(hist) < 2:
+        return None
+    high = hist["high"].astype(float).tolist()
+    low = hist["low"].astype(float).tolist()
+    close = hist["close"].astype(float).tolist()
+    trs = [max(high[i] - low[i], abs(high[i] - close[i - 1]), abs(low[i] - close[i - 1]))
+           for i in range(1, len(hist))]
+    trs = [t for t in trs[-window:] if t == t]                 # 去 NaN
+    last_close = close[-1]
+    if not trs or last_close is None or last_close <= 0 or last_close != last_close:
+        return None
+    return sum(trs) / len(trs) / last_close * 100.0
+
+
+def _intraday_range_pct(quote: dict | None) -> float | None:
+    """当日(≤11:30 半日)振幅占现价的百分比 = (high−low)/price×100。缺失 → None。
+
+    诚实边界:午盘只累计半日,振幅系统性偏低,仅作 ATR 不可算时的回退锚。
+    """
+    if not quote:
+        return None
+    hi, lo, price = quote.get("high"), quote.get("low"), quote.get("price")
+    if hi is None or lo is None or price is None or price <= 0:
+        return None
+    return (float(hi) - float(lo)) / float(price) * 100.0
+
+
+def compute_trade_plan(code: str, quote: dict | None, as_of: str, *,
+                       load_kline_fn=None, cfg: dict | None = None) -> dict | None:
+    """给一只午盘买入票算 D-0 交易计划(进场/止损/止盈/了结)。price 缺失(停牌)→ None。
+
+    波动锚优先级:ATR(N 日真实波幅%)→ 当日半日振幅% → 缺省锚(均不可算时)。
+    止损距离 = 止损倍数×锚,夹在 [止损下限, 止损上限];止盈距离 = 止盈倍数×锚。了结=当日收盘无条件平仓。
+    """
+    cfg = cfg if cfg is not None else trade_plan_cfg()
+    price = (quote or {}).get("price")
+    if price is None or price <= 0:
+        return None
+    window = int(cfg.get("ATR窗口", 14))
+    atr_pct = _atr_pct(code, as_of, load_kline_fn=load_kline_fn, window=window)
+    range_pct = _intraday_range_pct(quote)
+    if atr_pct is not None and atr_pct > 0:
+        anchor_pct, anchor_src = atr_pct, f"ATR{window}(日线真实波幅)"
+    elif range_pct is not None and range_pct > 0:
+        anchor_pct, anchor_src = range_pct, "当日半日振幅(历史不足回退)"
+    else:
+        anchor_pct, anchor_src = float(cfg.get("波动锚缺省pct", 3.0)), "缺省锚(无ATR/振幅)"
+
+    k_stop = float(cfg.get("止损ATR倍数", 1.0))
+    k_tgt = float(cfg.get("止盈ATR倍数", 1.5))
+    lo_pct = float(cfg.get("止损下限pct", 1.5))
+    hi_pct = float(cfg.get("止损上限pct", 7.0))
+    up_tol = float(cfg.get("进场上浮容忍pct", 0.5))
+
+    stop_dist = min(max(k_stop * anchor_pct, lo_pct), hi_pct)
+    tgt_dist = k_tgt * anchor_pct
+    price = float(price)
+    stop_price = round(price * (1 - stop_dist / 100.0), 2)
+    tgt_price = round(price * (1 + tgt_dist / 100.0), 2)
+    entry_cap = round(price * (1 + up_tol / 100.0), 2)
+    return {
+        "现价11:30": round(price, 2),
+        "进场触发": f"尾盘买入,现价≤{entry_cap}不追高;已跌破止损 {stop_price} 则放弃进场",
+        "止损位": stop_price, "止损距离%": round(stop_dist, 2),
+        "止盈位": tgt_price, "止盈距离%": round(tgt_dist, 2),
+        "波动锚": f"{anchor_src} {anchor_pct:.2f}%",
+        "了结": "当日收盘无条件平仓(D-0 当日买卖);盘中先触止损/止盈即离场;次日跳空低开破止损开盘即走",
+    }
+
+
+# ————————————————————————————————————————————————
 # 午盘 K 线注入(核心新能力)
 # ————————————————————————————————————————————————
 def midday_bar_row(code: str, quote: dict, as_of: str) -> pd.DataFrame | None:
@@ -374,6 +469,31 @@ def render_intraday_md(as_of: str, *, breadth: dict | None = None,
         lines.append("| — | — | _无非看空候选_ | | | | | | | |")
     lines.append("")
 
+    # 【D-0 交易计划】(仅买入组;P0-2 补「可执行纪律」缺口)——止损/止盈按当日波动锚定、收盘强制了结。
+    if quotes is not None and 买入:
+        lines.append("## 今日可买入 · D-0 交易计划(进场/止损/止盈/了结)")
+        lines.append("")
+        lines.append("> 午盘选股定位=**尾盘前当日买卖**:止损/止盈按**当日波动(ATR·振幅)自适应锚定**"
+                     "(非拍脑袋固定百分比),**当日收盘无条件了结**;盘中先触止损/止盈即离场,"
+                     "次日跳空低开破止损开盘即走(#20 跳空保护)。⚠️ 研究模拟,**非投资建议**;"
+                     "量能仅累计半日,进场以价形/趋势为主。")
+        lines.append("")
+        lines.append("| 序 | 代码 | 名称 | 现价(11:30) | 进场触发 | 止损位 | 止盈位 | 波动锚 | 了结纪律 |")
+        lines.append("|---|---|---|---|---|---|---|---|---|")
+        for i, x in enumerate(买入, 1):
+            code = x.get("code", "")
+            tp = compute_trade_plan(code, (quotes or {}).get(code), as_of,
+                                    load_kline_fn=load_kline_fn)
+            if tp is None:
+                lines.append(f"| {i} | {code} | {x.get('name', '')} | — | "
+                             f"_无午盘快照(停牌?),无法定价位_ | — | — | — | 当日收盘了结 |")
+                continue
+            lines.append(
+                f"| {i} | {code} | {x.get('name', '')} | {tp['现价11:30']} | {tp['进场触发']} "
+                f"| {tp['止损位']}(−{tp['止损距离%']}%) | {tp['止盈位']}(+{tp['止盈距离%']}%) "
+                f"| {tp['波动锚']} | {tp['了结']} |")
+        lines.append("")
+
     # 【今日规避】(3 只,纠偏参照)。
     lines.append(f"## 今日规避(精选 {len(规避)} 只 · 纠偏参照)")
     lines.append("")
@@ -503,7 +623,8 @@ def run_intraday_screen(as_of: str | None = None, *, universe_limit: int | None 
         report["阶段2"] = {"候选池规模": stage2.get("候选池规模"), "统计": stage2.get("统计")}
 
     if write_md:
-        path = render_intraday_md(as_of, breadth=breadth)
+        # 传 quotes 给 render:买入组产 D-0 交易计划(P0-2);此处在注入已还原后跑,load_kline 读净收盘历史算 ATR。
+        path = render_intraday_md(as_of, breadth=breadth, quotes=quotes)
         report["产出"] = str(path)
     logger.info("午盘全A选股完成:as_of=%s,全A %d,候选池 %d,产出 %s",
                 as_of, len(codes), report.get("阶段2", {}).get("候选池规模"),
