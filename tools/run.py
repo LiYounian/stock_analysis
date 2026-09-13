@@ -1317,6 +1317,26 @@ def run_screen_all(codes_all: list[str], as_of: str, no_llm: bool = False,
             "候选富集": enrich_report}
 
 
+# 收盘 screenall 默认裁剪的策略:策略11·指标条件化状态排序(状态参考·非alpha,回测聚合无超额、
+# 1日弱区分/5-10日近噪声,页面已诚实标注)。午盘早已裁(见 intraday_screen.INTRADAY_SKIP_STRATEGIES),
+# 收盘此前仍全量跑,白耗 ~87s CPU/step②的 32%(见 docs/计划/2026-09-13_B1选股提速profile报告.md)。
+# 与午盘同 label 同口径,但各自独立声明(便于未来分别调整)。
+# 下游对该 view 均容错:candidate_message 按目录取各策略 view(缺则少一路候选)、
+# strategy_scorecard 扫存在的 view 文件(缺则该日不计分),均不硬依赖、不会因缺该 view 报错。
+CLOSE_SKIP_STRATEGIES: set[str] = {"策略11·指标条件化状态排序"}
+
+
+def _close_skip_strategies() -> set[str] | None:
+    """收盘 screenall 的策略裁剪集(默认裁策略11,与午盘同口径)。
+
+    kill-switch:环境变量 SCREENALL_KEEP_STRATEGY11=1/true/yes → 返回 None(重新纳入策略11,
+    回退到裁剪前行为),无需改代码。
+    """
+    if os.getenv("SCREENALL_KEEP_STRATEGY11", "").strip().lower() in ("1", "true", "yes"):
+        return None
+    return set(CLOSE_SKIP_STRATEGIES)
+
+
 def cmd_screenall(argv):
     """全A 多策略选股入口:python -m tools.run screenall [--universe N] [--no-llm]。
 
@@ -1336,7 +1356,8 @@ def cmd_screenall(argv):
     logger.info("全A多策略选股票池:全A%s共 %d 只%s%s",
                 f"前{n}只" if n else "全量", len(codes_all),
                 "(数据-only)" if no_llm else "", "(no-fetch)" if no_fetch else "")
-    run_screen_all(codes_all, as_of, no_llm=no_llm, no_fetch=no_fetch)
+    run_screen_all(codes_all, as_of, no_llm=no_llm, no_fetch=no_fetch,
+                   skip_strategies=_close_skip_strategies())   # 收盘也裁策略11(非alpha,与午盘同口径;env SCREENALL_KEEP_STRATEGY11=1 回退)
 
 
 def cmd_enrich(argv):
