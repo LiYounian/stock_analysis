@@ -177,3 +177,39 @@ def test_unsupported_kind_raises_in_build():
         base_url_env="X_URL", api_key_env="X_KEY")
     with pytest.raises(NotImplementedError):
         lc._build_client(spec)
+
+
+# ---------- 9. deep_analysis 新用途已登记(§3 headless 研判)----------
+def test_deep_analysis_route_registered():
+    """deep_analysis purpose 已入表;P2 primary 仍 DeepSeek(行为零变化),千问在 fallback。"""
+    reg = mr.load_registry()
+    route = reg.route_for("deep_analysis")
+    assert route.primary == "deepseek_v4pro"
+    assert "qwen_max" in route.fallback
+    # get_client("deep_analysis") 拿到的仍是今天在用的 DeepSeek
+    assert reg.primary_spec_for("deep_analysis").model == settings.LLM_MODEL
+
+
+# ---------- 10. get_client_for:按 provider id 直接构造(双跑两臂 / think A-B)----------
+def test_get_client_for_selects_provider_by_id(_dummy_env, monkeypatch):
+    """get_client_for 绕过路由,按 provider id 直取——双跑框架显式指定两臂用。"""
+    monkeypatch.setenv("QWEN_BASE_URL", "http://dummy.local/qwen/v1")
+    monkeypatch.setenv("QWEN_API_KEY", "dummy-qwen-key")
+    ds = lc.get_client_for("deepseek_v4pro")
+    qw = lc.get_client_for("qwen_max")
+    assert ds.model == "deepseek-v4-pro"
+    assert qw.model == "qwen3.8-max"          # 确实取到了另一个 provider,而非路由主 provider
+
+
+def test_get_client_for_think_ab_override(_dummy_env):
+    """think A/B:同 provider,enable_thinking 覆盖注册表 params。"""
+    off = lc.get_client_for("deepseek_v4pro", enable_thinking=False)
+    on = lc.get_client_for("deepseek_v4pro", enable_thinking=True)
+    assert off._disable_thinking is True      # enable_thinking=False → disable=True
+    assert on._disable_thinking is False      # enable_thinking=True  → disable=False
+
+
+def test_get_client_for_unknown_provider_raises():
+    """未知 provider id → fail loud(双跑是研发工具,故障要显式暴露,不静默降级)。"""
+    with pytest.raises(KeyError):
+        lc.get_client_for("不存在的provider")

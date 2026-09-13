@@ -57,6 +57,9 @@ routes:
   summary:           {primary: deepseek_v4pro, fallback: []}
   relevance:         {primary: deepseek_v4pro, fallback: [qwen_max]}
   financial_verdict: {primary: deepseek_v4pro, fallback: [qwen_max]}
+  # deep_analysis:逐票深度研判(设计 §3 headless 化的新用途;§1.3B 已标注)。
+  #   P2 primary 仍指 deepseek_v4pro(行为零变化);双跑框架用 get_client_for 显式指定两臂对比。
+  deep_analysis:     {primary: deepseek_v4pro, fallback: [qwen_max]}
 
 # purpose 未在 routes 命中时的兜底用途(与今天"忽略 purpose 恒走 DeepSeek"等价)
 default_purpose: extract
