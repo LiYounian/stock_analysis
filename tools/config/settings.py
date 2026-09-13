@@ -66,9 +66,13 @@ LLM_MAX_RETRY = 3               # JSON 解析失败重试次数(client.extract �
 LLM_RETRY_MAX = int(os.getenv("LLM_RETRY_MAX", "3"))               # 瞬时错误重试次数(初次外额外几次)
 LLM_RETRY_BACKOFF_BASE = float(os.getenv("LLM_RETRY_BACKOFF_BASE", "0.5"))  # 退避基数秒(第k次退避 base*2^k)
 # —— LLM 抽取提速(I/O 型,有界并发 + 送 LLM 条数上限)——
-# 并发度 09-03 由 8 下调到 4:高并发把内部网关打爆导致条目级 66% 失败(Connection error),
-# 4 是稳妥值——仍并行提速但不打爆端点;需要更快可经 env 覆盖但注意端点承压。
-LLM_EXTRACT_WORKERS = int(os.getenv("LLM_EXTRACT_WORKERS", "4"))   # 逐条抽取并发度(ThreadPool)
+# 并发度 09-03 曾由 8 下调到 4:当时高并发把内部网关打爆致条目级 66% 失败(Connection error),
+# 但那是**在瞬时错误指数退避(_chat_with_retry,见上 LLM_RETRY_*)接入之前**;退避接入后
+# 429/连接错误会被重试压低失败率。09-13 B1 提速(I/O 主导,见 docs/计划/2026-09-13_B1选股提速profile报告.md)
+# 上调 4→10 直击 I/O 主体;仍可经 env 覆盖(想回退稳妥值即 LLM_EXTRACT_WORKERS=4,无需改代码)。
+# ⚠️上线首日盯网关 429/Connection error 日志(client.py 会 WARNING「LLM 瞬时错误…退避」),
+#   若失败率抬头就经 env 回调到 6/8。
+LLM_EXTRACT_WORKERS = int(os.getenv("LLM_EXTRACT_WORKERS", "10"))   # ↑并发直击I/O(4→10);盯429限流,超标 env 回调
 NEWS_EXTRACT_MAX = int(os.getenv("NEWS_EXTRACT_MAX", "40"))        # 单票送 LLM 抽取的最近条数上限(原文仍全量落盘)
 # 关思考模式开关:实测对当前 deepseek-v4-pro 中性(网关本就不花时间思考),
 # 为将来换带思考模型自动生效预留;走 extra_body={"enable_thinking": False}。
@@ -82,8 +86,9 @@ LLM_CACHE = DATA_RAW / "llm_cache"             # 抽取结果缓存,改下游免
 # 并发 8 无封禁(bench_fetch 自证);需对特定源限速时再经 env 调高。
 FETCH_SLEEP_SEC = float(os.getenv("FETCH_SLEEP_SEC", "0"))
 # 方案B 兜底并发(仅主档缺失时逐只回退用):有界线程池 + jitter。
-# 默认 8:全A 逐只回退从数十分钟(串行)降到分钟级;源被打封时经 env 调低。
-FETCH_WORKERS = int(os.getenv("FETCH_WORKERS", "8"))
+# 09-13 B1 提速(见 profile 报告)由 8 上调到 16:直击逐只网络采集这块 I/O;源被打封时经 env 调低。
+# ⚠️上线首日盯采集源 429/封禁(腾讯/新浪/baostock),异常就 env 回调到 8/12,无需改代码。
+FETCH_WORKERS = int(os.getenv("FETCH_WORKERS", "16"))   # ↑并发直击I/O(8→16);盯源限流/封禁,超标 env 回调
 FETCH_JITTER_SEC = 0.2      # 并发路径每请求前随机抖动上限(秒)
 
 # —— screenall 深采分层门控:边缘候选集上界(#23,防对全A深采)——
