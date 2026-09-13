@@ -17,6 +17,7 @@ import pytest
 
 from tools.analysis import deep_analysis as da
 from tools.analysis import deep_analysis_inputs as di
+from tools.analysis import dryrun_vs_claude as dvc
 from tools.analysis import dualrun
 from tools.analysis import experience_recall as er
 from tools.analysis import picks_schema as ps
@@ -304,3 +305,70 @@ def test_compare_with_injected_units(tmp_path: Path):
     assert rep.field_agreement["dir_1d"] == 1.0
     md = dualrun.render_report_md(rep)
     assert "双跑对比报告" in md and "总字段一致率" in md
+
+
+# ============================================================
+# 5. 历史日 dry-run vs Claude
+# ============================================================
+_CLAUDE_MD = """<!-- PICKS: 601872,002913,300124 -->
+# 2026-09-11 选股
+
+## 三、买入建议排序
+
+| 排序 | 代码 | 名称 | 类型 | 表态 | 方向（1日/5日） | 核心逻辑 | β 风险 |
+|---|---|---|---|---|---|---|---|
+| 1 | 601872 | 招商轮船 | 买入候选 | **可参与买入（条件式）** | 偏多待触发 / 偏多 | x | y |
+| 2 | 002913 | 奥士康 | 检验样本 | **观望（不建仓）** | 不给方向 / 不给方向 | x | y |
+| 3 | 300124 | 汇川技术 | 检验样本 | **规避/观望** | 不给方向 / 弱 | x | y |
+"""
+
+
+def test_parse_anchor_and_table():
+    assert dvc.parse_picks_anchor(_CLAUDE_MD) == ["601872", "002913", "300124"]
+    vs = dvc.parse_ranking_table(_CLAUDE_MD)
+    assert [v.code for v in vs] == ["601872", "002913", "300124"]
+    assert vs[0].name == "招商轮船"
+    assert vs[0].dir1_raw == "偏多待触发" and vs[0].dir5_raw == "偏多"
+
+
+def test_norm_stance_and_type():
+    assert dvc.norm_type("买入候选") == "买入候选"
+    assert dvc.norm_type("检验样本 · 观望") == "检验样本"
+    assert dvc.norm_stance("可参与买入（条件式）") == "可参与"
+    assert dvc.norm_stance("观望（不建仓）") == "观望"
+    assert dvc.norm_stance("规避/观望") == "规避"
+
+
+def test_commits_direction():
+    assert dvc.commits_direction("偏多") is True
+    assert dvc.commits_direction("偏多待触发") is False    # 待触发=不承诺
+    assert dvc.commits_direction("不给方向") is False
+    assert dvc.commits_direction("弱") is False
+    assert dvc.gen_commits_direction("偏空") is True
+    assert dvc.gen_commits_direction("低波待动") is False
+
+
+def test_dryrun_compare_flags_and_agreement():
+    vs = dvc.parse_ranking_table(_CLAUDE_MD)
+    gen = [
+        {"code": "601872", "type": "检验样本", "stance": "可参与", "dir_5d": "偏多"},
+        {"code": "002913", "type": "规避", "stance": "规避", "dir_5d": "不给方向"},
+        {"code": "300124", "type": "检验样本", "stance": "观望", "dir_5d": "偏空"},
+    ]
+    rep = dvc.compare("2026-09-11", vs, gen)
+    assert rep.coverage["generated"] == 3 and rep.coverage["missing"] == []
+    # type: 601872✗ 002913✗ 300124✓ → 1/3
+    assert rep.summary["type_agreement"] == round(1 / 3, 3)
+    # stance: 601872✓(可参与) 002913✗(观望vs规避) 300124✗(规避/观望→规避 vs 观望) → 1/3
+    assert rep.summary["stance_agreement"] == round(1 / 3, 3)
+    # 无 ≥2 档退化(观望↔规避仅 1 档)
+    assert rep.summary["downgrades"] == [] and rep.summary["upgrades"] == []
+    md = dvc.render_md(rep)
+    assert "dry-run 对比" in md and "非投资建议" in md
+
+
+def test_dryrun_missing_generation_marked():
+    vs = dvc.parse_ranking_table(_CLAUDE_MD)
+    gen = [{"code": "601872", "type": "买入候选", "stance": "买入", "dir_5d": "偏多"}]
+    rep = dvc.compare("2026-09-11", vs, gen)
+    assert set(rep.coverage["missing"]) == {"002913", "300124"}
