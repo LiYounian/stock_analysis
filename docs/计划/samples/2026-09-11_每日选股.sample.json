@@ -1,0 +1,193 @@
+{
+  "schema_version": "1.0",
+  "meta": {
+    "pick_date": "2026-09-11",
+    "predict_for": "2026-09-14",
+    "as_of": "2026-09-11",
+    "generated_at": "2026-09-13T18:54:28+08:00",
+    "generator": "daily-stock-selection",
+    "status": "ok",
+    "skip_reason": null,
+    "market_regime": "普跌重挫日、连续第二个普跌×下行背离日，偏空非capitulation",
+    "market_forecast_ref": null,
+    "picks_count": 5,
+    "source_md": "docs/每日分析/选股/2026-09-11.md",
+    "drift_note": null
+  },
+  "picks": [
+    {
+      "code": "601872",
+      "name": "招商轮船",
+      "industry": "交通运输",
+      "close": 20.0,
+      "pct_chg": -2.82,
+      "strategies": [
+        {
+          "name": "最强选股",
+          "rank": 5,
+          "score": null
+        },
+        {
+          "name": "最大范围选股",
+          "rank": 74,
+          "score": null
+        },
+        {
+          "name": "扣非质量",
+          "rank": null,
+          "score": null
+        }
+      ],
+      "type": "买入候选",
+      "buy_rank": 1,
+      "stance": "可参与",
+      "stance_qualifier": "条件式：放量站上20.98才入，普跌日降级",
+      "dir_1d": "低波待动",
+      "dir_1d_conf": "中",
+      "dir_5d": "偏多",
+      "dir_5d_conf": "中高",
+      "sentiment_quality": "ok",
+      "key_reason": "油运超级周期兑现+净利+227%+便宜前瞻PE约11+MA多头pullback+地缘催化",
+      "key_risk": "高获利盘兑现压力+今日盘口净卖+地缘属事件型β可反转",
+      "alpha_beta": "α=油运超级周期兑现+航运板块相对强度；β=大盘+航运地缘β（可反转）",
+      "watch_points": [
+        "周一是否放量站上20.98？",
+        "周一量比是否≥1.3？",
+        "收盘是否守住MA5 19.87？",
+        "航运板块当日是否收涨？",
+        "中东地缘catalyst有无新进展或降温？"
+      ],
+      "detail_anchor": "选股/2026-09-11.md#1-601872-招商轮船"
+    },
+    {
+      "code": "002913",
+      "name": "奥士康",
+      "industry": "电子",
+      "close": 72.49,
+      "pct_chg": 2.11,
+      "strategies": [
+        {
+          "name": "最强选股",
+          "rank": 3,
+          "score": null
+        },
+        {
+          "name": "最大范围选股",
+          "rank": 24,
+          "score": null
+        }
+      ],
+      "type": "检验样本",
+      "stance": "观望",
+      "dir_1d": "不给方向",
+      "dir_1d_conf": "-",
+      "dir_5d": "不给方向",
+      "dir_5d_conf": "-",
+      "sentiment_quality": "partial",
+      "key_reason": "PCB算力逆势+2.11%，命中最强选股/最大范围（同源按一票）",
+      "key_risk": "超买共振3+融资盘近一年高位+净利−57.8%+主力流出",
+      "alpha_beta": "α弱（题材/融资盘驱动非基本面）；β=PCB/算力题材",
+      "watch_points": [
+        "明日是否放量续创新高？",
+        "融资余额是否继续攀升？",
+        "是否出现超买回落？"
+      ],
+      "detail_anchor": "选股/2026-09-11.md#2-002913-奥士康",
+      "stance_qualifier": ""
+    },
+    {
+      "code": "002064",
+      "name": "华峰化学",
+      "industry": "基础化工",
+      "close": 10.0,
+      "pct_chg": -5.66,
+      "strategies": [
+        {
+          "name": "扣非质量",
+          "rank": null,
+          "score": null
+        }
+      ],
+      "type": "检验样本",
+      "stance": "观望",
+      "dir_1d": "不给方向",
+      "dir_1d_conf": "-",
+      "dir_5d": "低波待动",
+      "dir_5d_conf": "中低",
+      "sentiment_quality": "partial",
+      "key_reason": "quality良73.48本批最高+分红value，化纤超跌−5.66%测高质量value超跌是否可接",
+      "key_risk": "化纤板块杀跌+非capitulation接飞刀+短线无止跌信号",
+      "alpha_beta": "α=高质量+分红value修复（需触发）；β=化纤板块（强负）",
+      "watch_points": [
+        "化纤板块是否企稳？",
+        "是否放量收阳站上MA5 10.65？",
+        "是否出现止跌信号？"
+      ],
+      "detail_anchor": "选股/2026-09-11.md#5-002064-华峰化学",
+      "stance_qualifier": ""
+    },
+    {
+      "code": "300124",
+      "name": "汇川技术",
+      "industry": "电力设备",
+      "close": 53.52,
+      "pct_chg": -1.73,
+      "strategies": [
+        {
+          "name": "反转低换手组合",
+          "rank": 5,
+          "score": 1.4405
+        }
+      ],
+      "type": "检验样本",
+      "stance": "观望",
+      "dir_1d": "不给方向",
+      "dir_1d_conf": "-",
+      "dir_5d": "低波待动",
+      "dir_5d_conf": "低",
+      "sentiment_quality": "partial",
+      "key_reason": "工控白马超跌待反弹，命中反转低换手组合（综合分1.44）",
+      "key_risk": "空头排列+临近解禁+无催化+非恐慌反弹环境",
+      "alpha_beta": "α=超跌修复（需触发）；β=大盘超跌修复",
+      "watch_points": [
+        "是否放量收阳站上MA5 55.99？",
+        "解禁前后筹码是否承压？",
+        "工控板块是否企稳？"
+      ],
+      "detail_anchor": "选股/2026-09-11.md#3-300124-汇川技术",
+      "stance_qualifier": ""
+    },
+    {
+      "code": "688262",
+      "name": "国芯科技",
+      "industry": "计算机",
+      "close": 25.99,
+      "pct_chg": -2.77,
+      "strategies": [
+        {
+          "name": "半导体多因子",
+          "rank": 1,
+          "score": 1.8094
+        }
+      ],
+      "type": "检验样本",
+      "stance": "观望",
+      "dir_1d": "不给方向",
+      "dir_1d_conf": "-",
+      "dir_5d": "低波待动",
+      "dir_5d_conf": "低",
+      "sentiment_quality": "partial",
+      "key_reason": "半导体多因子综合分1.8094全行业第一（单策略极值），作连续性检验",
+      "key_risk": "空头排列+亏损+题材资金流出+抗跌thesis反复证伪",
+      "alpha_beta": "α弱（thesis证伪）；β=半导体/大基金题材",
+      "watch_points": [
+        "半导体板块当日是否收涨？",
+        "题材资金是否回流？",
+        "是否出现上行触发信号？"
+      ],
+      "detail_anchor": "选股/2026-09-11.md#4-688262-国芯科技",
+      "stance_qualifier": ""
+    }
+  ],
+  "review": null
+}
