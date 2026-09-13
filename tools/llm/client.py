@@ -159,17 +159,20 @@ class OpenAICompatClient:
         return out
 
 
-def _build_client(spec) -> LLMClient:
+def _build_client(spec, *, enable_thinking: bool | None = None) -> LLMClient:
     """按 ProviderSpec.kind 构造对应 client。
 
     P1 只实现 openai_compat(DeepSeek / 千问网关皆走此);其余 kind(如 anthropic)
     显式抛错,不静默降级——避免"路由到未实现 provider 却假装成功"。
     timeout / enable_thinking 从注册表 params 取,缺省则沿用 settings 全局默认。
+
+    enable_thinking(可选覆盖):双跑框架的 think A/B 用——传 True/False 覆盖注册表 params,
+    None 表示不覆盖(沿用注册表 params → settings 默认)。
     """
     if spec.kind == "openai_compat":
         params = spec.params or {}
         timeout = params.get("timeout")
-        et = params.get("enable_thinking")
+        et = enable_thinking if enable_thinking is not None else params.get("enable_thinking")
         disable_thinking = (not et) if et is not None else None
         return OpenAICompatClient(
             spec.resolve_base_url(), spec.resolve_api_key(), spec.model,
@@ -197,6 +200,21 @@ def get_client(purpose: str = "extract") -> LLMClient:
         logger.warning("模型注册表路由失败(purpose=%s),回退固定 DeepSeek 构造:%s",
                        purpose, str(e)[:120])
         return OpenAICompatClient(settings.LLM_BASE_URL, settings.LLM_API_KEY, settings.LLM_MODEL)
+
+
+def get_client_for(provider_id: str, *, enable_thinking: bool | None = None) -> LLMClient:
+    """按 provider **id** 直接构造 client(绕过 purpose 路由)。
+
+    双跑对比框架(§3)用:需显式指定"跑哪个 provider"作为对比两臂(如 DeepSeek vs 千问),
+    以及 think A/B(同 provider,enable_thinking 开/关)。与 get_client 的区别 = 不看 routes、
+    直接按 registry 里声明的 provider 取 spec。**additive,不改 get_client 现有行为**。
+
+    provider_id 不在注册表 → 抛 KeyError(fail loud,不静默降级);注册表加载失败原样上抛
+    (双跑是研发/验证工具,故障要显式暴露,不像日更主链路那样兜底回退)。
+    """
+    from tools.config import model_registry as mr
+    spec = mr.load_registry().spec_for(provider_id)
+    return _build_client(spec, enable_thinking=enable_thinking)
 
 
 def is_configured() -> bool:
