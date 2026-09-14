@@ -141,9 +141,13 @@ def generate_one(
     strategy_tags=None,
     strategies_hint=None,
     experience_top_k: int = 8,
+    news_time_cutoff: str | None = None,
 ) -> JudgeResult:
-    """对单票生成研判 unit。client 需实现 .extract(text, schema, instruction)(可注入桩)。"""
-    facts = di.assemble(code, pick_date, data_root)
+    """对单票生成研判 unit。client 需实现 .extract(text, schema, instruction)(可注入桩)。
+
+    news_time_cutoff(如 '<date> 11:30:00'):午盘 ≤11:30 intraday 防未来,透传 di.assemble。
+    """
+    facts = di.assemble(code, pick_date, data_root, news_time_cutoff=news_time_cutoff)
     if facts.record is None:
         return JudgeResult(code=code, unit={"code": code}, facts_notes=facts.notes,
                            error="record 缺失,跳过研判")
@@ -181,11 +185,13 @@ def generate(
     experience_base: Path | None = None,
     strategies_hint_map: dict | None = None,
     experience_top_k: int = 8,
+    news_time_cutoff: str | None = None,
 ) -> list[JudgeResult]:
     """对候选票逐个生成研判。
 
     client 优先注入(测试用桩);否则按 provider_id(get_client_for,双跑指定臂)
     或 purpose 路由(get_client(deep_analysis))构造。
+    news_time_cutoff:午盘 ≤11:30 intraday 防未来,透传每票 assemble。
     """
     if client is None:
         from tools.llm import client as lc
@@ -198,7 +204,7 @@ def generate(
         out.append(generate_one(
             code, pick_date, client=client, data_root=data_root,
             experience_base=experience_base, strategies_hint=hint,
-            experience_top_k=experience_top_k))
+            experience_top_k=experience_top_k, news_time_cutoff=news_time_cutoff))
     return out
 
 
