@@ -106,6 +106,56 @@ def test_recall_snippets_shape(tmp_path: Path):
 
 
 # ============================================================
+# 经验条目分级(状态字段 待验证/已验证)——④
+# ============================================================
+_EXP_MD_STATUS = """# 经验沉淀 v2026-09-14
+
+## 4. 经验条目（累积）
+
+**#1 · 游资情绪连板票，不能用方向信号赌次日方向。**
+- 为什么：连板惯性。
+- 怎么用：只推规避。
+
+**#30 · 新沉淀的单日教训示例。**
+- 为什么：单日样本。
+- 怎么用：小仓试。
+- 状态：待验证
+
+**#31 · 超跌反抽触发闸门下移到放量收阳。**
+- 为什么：回测坐实。
+- 怎么用：首入场用放量收阳。
+- 状态：已验证（2026-09-14 回测 CONFIRM）
+
+## 5. 已知陷阱
+- 陷阱1。
+"""
+
+
+def test_status_field_parsed_and_backward_compatible():
+    entries = er.parse_entries(_EXP_MD_STATUS)
+    by_id = {e.id: e for e in entries}
+    assert by_id[1].status is None                 # 存量无字段 → None(不回填)
+    assert by_id[30].status == "待验证"
+    assert by_id[31].status == "已验证"
+    # 状态字段不破坏标题正则/切片(id/title 仍正确)
+    assert by_id[31].id == 31 and "放量收阳" in by_id[31].title
+
+
+def test_status_tag_prefixes_snippet_without_eating_budget():
+    entries = er.parse_entries(_EXP_MD_STATUS)
+    by_id = {e.id: e for e in entries}
+    assert by_id[31].snippet().startswith("[✓已验证] #31")
+    assert by_id[30].snippet().startswith("[待验证] #30")
+    assert by_id[1].snippet().startswith("#1")      # 无状态 → 无 tag,不占预算
+
+
+def test_legacy_entries_still_parse_when_no_status():
+    # 全存量(无任何状态字段)照旧解析,status 全 None(锁向后兼容)
+    entries = er.parse_entries(_EXP_MD)
+    assert all(e.status is None for e in entries)
+
+
+# ============================================================
 # 2. 输入装配 + 防未来
 # ============================================================
 def _make_record(code: str, as_of: str, close=10.0, pct=1.0) -> dict:

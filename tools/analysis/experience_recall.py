@@ -25,6 +25,9 @@ _DEFAULT_SUBDIR = ("docs", "每日分析", "经验沉淀")
 _VER_RE = re.compile(r"^v(\d{4}-\d{2}-\d{2})\.md$")
 # 条目头:**#12 · 标题。**
 _ENTRY_RE = re.compile(r"^\*\*#(\d+)\s*·\s*(.+?)\*\*\s*$", re.M)
+# 条目状态字段(可选,第三子弹):`- 状态：已验证（…）` / `- 状态：待验证`。
+# 缺失 = None（存量条目 legacy,不回填、按既有红线沿用);新条目由 eod-review 默认写"待验证"。
+_STATUS_RE = re.compile(r"^\s*[-*]\s*状态[:：]\s*(已验证|待验证)", re.M)
 # §4 段起止锚点
 _SEC4_RE = re.compile(r"^##\s*4\.\s*经验条目", re.M)
 _SEC5_RE = re.compile(r"^##\s*5\.", re.M)
@@ -46,14 +49,20 @@ QUALITATIVE_KEYWORDS = {
 class ExperienceEntry:
     id: int
     title: str
-    body: str          # 含 为什么/怎么用 全文
+    body: str          # 含 为什么/怎么用/状态 全文
+    status: str | None = None    # "已验证" / "待验证" / None(存量未标注,按既有红线沿用)
 
     def snippet(self, max_chars: int = 320) -> str:
-        """单条紧凑片段(标题 + 截断正文),供拼进 prompt。"""
+        """单条紧凑片段(状态 tag + 标题 + 截断正文),供拼进 prompt。
+
+        状态 tag 前置(不占正文预算)让 headless 研判一眼看到条目可信度:
+        待验证条目只轻用/试仓、不当 firm 规则(选股 SOP 据此处理)。
+        """
         body = self.body.strip().replace("\n", " ")
         if len(body) > max_chars:
             body = body[:max_chars] + "…"
-        return f"#{self.id} {self.title} —— {body}"
+        tag = {"已验证": "[✓已验证] ", "待验证": "[待验证] "}.get(self.status, "")
+        return f"{tag}#{self.id} {self.title} —— {body}"
 
 
 def latest_version_file(pick_date: str, base_dir: Path | None = None) -> Path | None:
@@ -90,8 +99,11 @@ def parse_entries(text: str) -> list[ExperienceEntry]:
     for i, h in enumerate(heads):
         start = h.end()
         end = heads[i + 1].start() if i + 1 < len(heads) else len(section)
+        body = section[start:end].strip()
+        sm = _STATUS_RE.search(body)            # 可选状态字段;缺失=None(不回填存量)
         entries.append(ExperienceEntry(
-            id=int(h.group(1)), title=h.group(2).strip(), body=section[start:end].strip()))
+            id=int(h.group(1)), title=h.group(2).strip(), body=body,
+            status=(sm.group(1) if sm else None)))
     return entries
 
 
