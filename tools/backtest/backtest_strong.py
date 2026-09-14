@@ -233,12 +233,40 @@ def run_backtest(data_root: str, start: str | None, end: str | None,
                 len(test_days), stride, min(test_days) if test_days else "-",
                 max(test_days) if test_days else "-")
 
+    td_arr = np.array(sorted(test_days))
+    metric_labels = [(f"{N}日", N) for N in horizons] + [("次日oc", "oc")]
+    # 分维叠加累加器:{层: {口径: [sum, sumsq, cnt]}}(C4 层只在有 chip 的样本上,scan 内补)
+    layered_acc = {lay: {lab: [0.0, 0.0, 0] for lab, _ in metric_labels}
+                   for lay in ("C1", "C1∧C2", "C1∧C2∧C3")}
+
+    def _accum(mask, alpha_by_metric):
+        for lab, _ in metric_labels:
+            a = alpha_by_metric[lab][mask]
+            a = a[~np.isnan(a)]
+            if len(a):
+                cell = layered_acc[cur_layer][lab]
+                cell[0] += float(a.sum()); cell[1] += float((a * a).sum()); cell[2] += len(a)
+
     rows = []
     n_chip = 0
     for code, feat in feats.items():
         c1, c2, c3, big = cond123(feat, periods)
         core = c1 & c2 & c3
         dts = feat["dates"]
+        n = feat["n"]
+
+        # ---- 分维叠加(向量化,无 chip):C1 / C1∧C2 / C1∧C2∧C3 各层 α ----
+        arange = np.arange(n)
+        valid_t = np.isin(dts, td_arr) & (arange >= need - 1) & (arange + maxh < n)
+        alpha_by_metric = {}
+        for N in horizons:
+            base_arr = pd.Series(dts).map(baseline[N]).to_numpy(float)
+            alpha_by_metric[f"{N}日"] = feat["fwd"][N] - base_arr
+        base_ir_arr = pd.Series(feat["exec_date"]).map(baseline_ir).to_numpy(float)
+        alpha_by_metric["次日oc"] = feat["oc"] - base_ir_arr
+        for cur_layer, m in (("C1", c1), ("C1∧C2", c1 & c2), ("C1∧C2∧C3", core)):
+            _accum(m & valid_t, alpha_by_metric)
+
         idxs = np.nonzero(core)[0]
         for t in idxs:
             d = dts[t]
@@ -277,7 +305,23 @@ def run_backtest(data_root: str, start: str | None, end: str | None,
             + [f"{p}_{N}" for N in horizons for p in ("r", "base", "alpha")]
             + ["exec_date", "r_oc", "base_oc", "alpha_oc"])
     df = pd.DataFrame(rows, columns=cols)
-    return df.sort_values(["date", "code"]).reset_index(drop=True) if not df.empty else df
+    df = df.sort_values(["date", "code"]).reset_index(drop=True) if not df.empty else df
+
+    # 分维叠加累加器 → 统计(mean/t/胜率无法从累加器算,只给 mean/t/n;胜率见分桶 df)
+    layered = {}
+    for lay, mdict in layered_acc.items():
+        layered[lay] = {}
+        for lab, (s, ss, c) in mdict.items():
+            if c == 0:
+                layered[lay][lab] = {"n": 0, "mean": None, "t": None}
+                continue
+            mean = s / c
+            var = (ss - c * mean * mean) / (c - 1) if c > 1 else float("nan")
+            sd = var ** 0.5 if var and var > 0 else float("nan")
+            t = (mean / (sd / (c ** 0.5))) if (c > 1 and sd and sd > 0) else None
+            layered[lay][lab] = {"n": int(c), "mean": round(mean * 100, 3),
+                                 "t": (round(t, 2) if t is not None else None)}
+    return df, layered
 
 
 # ────────────────────────────── 分维/分桶诊断 ──────────────────────────────
@@ -343,11 +387,19 @@ def diagnose(df: pd.DataFrame, horizons) -> dict:
 
 def run(data_root: str, out_dir: str, start=None, end=None, stride=1,
         horizons=(1, 5), limit=None) -> dict:
-    df = run_backtest(data_root, start, end, stride, horizons, limit=limit)
+    df, layered = run_backtest(data_root, start, end, stride, horizons, limit=limit)
     os.makedirs(out_dir, exist_ok=True)
     raw_csv = os.path.join(out_dir, "s05_backtest_rows.csv")
     df.to_csv(raw_csv, index=False, encoding="utf-8-sig")
     diag = diagnose(df, horizons) if not df.empty else {"总样本(C1∧C2∧C3)": 0}
+    # ③b C1→C4 分维叠加(层层收窄看每条加/减 α;S05=+C4 从入选票直接算 mean/t)
+    labels = [lab for lab, _ in _metric_cols(horizons)]
+    sel = df[df["select"]] if not df.empty else df
+    s05_layer = {}
+    for lab, col in _metric_cols(horizons):
+        st = _stats(sel[col].to_numpy(float)) if len(sel) else {"n": 0, "mean": None, "t": None}
+        s05_layer[lab] = {"n": st["n"], "mean": st["mean"], "t": st["t"]}
+    diag["③b_C1-C4分维叠加"] = {**layered, "C1∧C2∧C3∧C4(=S05)": s05_layer}
     import json
     with open(os.path.join(out_dir, "s05_diagnose.json"), "w", encoding="utf-8") as f:
         json.dump(diag, f, ensure_ascii=False, indent=2)
@@ -365,6 +417,10 @@ def run(data_root: str, out_dir: str, start=None, end=None, stride=1,
         for name, b in diag["②_winner_rate分桶α"].items():
             cells = " | ".join(f"{lab} {b[f'{lab}α']['mean']}%/t{b[f'{lab}α']['t']}" for lab in labels)
             print(f"    {name:20s} n={b['n']:5d}  {cells}")
+        print("  C1→C4 分维叠加(mean%/t):")
+        for lay, cs in diag["③b_C1-C4分维叠加"].items():
+            s = " | ".join(f"{lab} {cs[lab]['mean']}%/t{cs[lab]['t']}(n={cs[lab]['n']})" for lab in labels)
+            print(f"    {lay:16s} {s}")
     return diag
 
 
