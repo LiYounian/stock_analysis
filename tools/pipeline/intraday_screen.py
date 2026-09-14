@@ -550,7 +550,12 @@ def render_intraday_md(as_of: str, *, breadth: dict | None = None,
 # 的机读候选,给 daily-stock-noon-analysis(Claude 深度)稳定消费。
 # **纯旁路铁律:不动阶段1/阶段2 主逻辑、不改评分、不写主档、gitignored;缺 view → 不写(返回 None),
 # 不阻断主流程。** 消费侧 read_noon_candidates 优先读它、缺失回退解析 日内全A_<date>.md 台账。
-NOON_CANDIDATES_NAME = "noon_candidates.json"
+NOON_CANDIDATES_NAME = "noon_candidates.json"            # 全量(阶段2 消息面回灌后)
+# 阶段1 早产候选(数据面综合分排序,免等阶段2 LLM 消息面 batch):供午盘 Claude 任务 ~11:50 就开跑。
+# 统筹 2026-09-14 拍板 Q2:门控只等阶段1(~11:50)、按数据面综合分选 Top-N、SKILL 自采 per-stock 消息面
+# → 窗口 11:50→13:00 有 ~70min、解耦 12:42 全量瓶颈。数据面综合分 = candidate_message 的 council
+# (base 专家组=默认组剔除消息面专家),no_llm 跳三层情绪即得(完整分≈数据面综合分)。
+NOON_CANDIDATES_STAGE1_NAME = "noon_candidates_stage1.json"
 
 # 只保留 Claude 深度分析需要的字段(机读稳,避免 view 内部字段漂移带出)。
 _CAND_FIELDS = ("候选排名", "code", "name", "完整分", "数据面综合分",
@@ -570,18 +575,25 @@ def _slim_candidate(x: dict) -> dict:
     return d
 
 
-def noon_candidates_path(as_of: str, *, out_root: Path | None = None) -> Path:
-    """旁路机读候选落盘路径(与 11:30 快照同根 data/intraday/,gitignored,单一真源)。"""
-    return (out_root or NOON_SNAPSHOT_DIR) / as_of / NOON_CANDIDATES_NAME
+def noon_candidates_path(as_of: str, *, out_root: Path | None = None,
+                         filename: str = NOON_CANDIDATES_NAME) -> Path:
+    """旁路机读候选落盘路径(与 11:30 快照同根 data/intraday/,gitignored,单一真源)。
+
+    filename=NOON_CANDIDATES_NAME(全量)/ NOON_CANDIDATES_STAGE1_NAME(阶段1 早产)。
+    """
+    return (out_root or NOON_SNAPSHOT_DIR) / as_of / filename
 
 
 def persist_noon_candidates(as_of: str, *, view: dict | None = None,
                             breadth: dict | None = None,
-                            out_root: Path | None = None) -> Path | None:
+                            out_root: Path | None = None,
+                            stage: str = "full",
+                            filename: str | None = None) -> Path | None:
     """把午盘候选池(view「候选池消息面确认」重排 + 买入/规避切分)落成 noon 冻结机读 JSON。
 
     纯旁路:view 缺失/无重排 → 返回 None(不写、不阻断)。原子写。**不碰主档、不改现有产物。**
     切分复用 split_buy_avoid(与 render_intraday_md 单一真源,避免两处漂移)。
+    stage="full"(阶段2 消息面回灌后)/ "stage1"(阶段1 数据面综合分排序,免等 LLM batch)。
     """
     if view is None:
         try:
@@ -590,13 +602,17 @@ def persist_noon_candidates(as_of: str, *, view: dict | None = None,
             view = None
     reranked = (view or {}).get("重排") if view else None
     if not reranked:
-        logger.info("旁路候选:无 view/重排,跳过落盘(as_of=%s)", as_of)
+        logger.info("旁路候选(%s):无 view/重排,跳过落盘(as_of=%s)", stage, as_of)
         return None
     买入, 规避 = split_buy_avoid(reranked)
+    fname = filename or (NOON_CANDIDATES_STAGE1_NAME if stage == "stage1" else NOON_CANDIDATES_NAME)
+    note = ("全A午盘候选池(≤11:30 冻结),供午盘逐票深度分析消费;close 不覆盖此文件。研究模拟,非投资建议。"
+            if stage != "stage1" else
+            "全A午盘候选池·阶段1早产(≤11:30 冻结,数据面综合分排序,未含阶段2消息面回灌;完整分≈数据面综合分)。"
+            "供午盘任务 ~11:50 门控/取数,Claude 自采 per-stock 消息面深挖。close 不覆盖。研究模拟,非投资建议。")
     payload = {
-        "as_of": as_of, "slot": SLOT, "freeze_label": FREEZE_LABEL,
-        "note": ("全A午盘候选池(≤11:30 冻结),供午盘逐票深度分析消费;close 不覆盖此文件。"
-                 "研究模拟,非投资建议。"),
+        "as_of": as_of, "slot": SLOT, "freeze_label": FREEZE_LABEL, "stage": stage,
+        "note": note,
         "候选池规模": (view or {}).get("候选池规模"),
         "market_breadth": breadth,
         "买入代码": [x.get("code") for x in 买入],
@@ -606,13 +622,13 @@ def persist_noon_candidates(as_of: str, *, view: dict | None = None,
         "台账": [_slim_candidate(x) for x in reranked],
         "统计": (view or {}).get("统计"),
     }
-    path = noon_candidates_path(as_of, out_root=out_root)
+    path = noon_candidates_path(as_of, out_root=out_root, filename=fname)
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(".json.tmp")
     tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
     tmp.replace(path)
-    logger.info("旁路候选落盘 → %s(台账 %d 只,买入 %d,规避 %d)",
-                path, len(reranked), len(买入), len(规避))
+    logger.info("旁路候选落盘(%s)→ %s(台账 %d 只,买入 %d,规避 %d)",
+                stage, path, len(reranked), len(买入), len(规避))
     return path
 
 
@@ -679,26 +695,48 @@ def parse_intraday_all_md(as_of: str, *, selection_dir: Path | None = None,
             "买入": 买入, "规避": 规避}
 
 
+def _read_candidates_json(path: Path, as_of: str, top: int | None) -> dict | None:
+    """读一份旁路候选 JSON → 统一结构;损坏 → None。"""
+    if not path.exists():
+        return None
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception as e:                                      # noqa: BLE001 损坏 → None
+        logger.warning("旁路候选 JSON 解析失败(%s):%s", path.name, e)
+        return None
+    台账 = payload.get("台账") or []
+    return {"source": "json", "stage": payload.get("stage", "full"), "as_of": as_of,
+            "台账": 台账[:top] if top else 台账,
+            "买入代码": payload.get("买入代码") or [],
+            "规避代码": payload.get("规避代码") or [],
+            "买入": payload.get("买入") or [], "规避": payload.get("规避") or []}
+
+
 def read_noon_candidates(as_of: str, *, root: Path | None = None,
                          selection_dir: Path | None = None,
-                         top: int | None = None) -> dict | None:
-    """供午盘 Claude 深度分析消费:**优先读旁路 JSON,缺失/损坏回退解析 日内全A_<date>.md 台账**。
+                         top: int | None = None, stage: str = "auto") -> dict | None:
+    """供午盘 Claude 深度分析消费:读旁路 JSON,缺失/损坏回退解析 日内全A_<date>.md 台账。
 
-    返回 {"source": "json"|"md", "as_of", "台账", "买入代码", "规避代码", "买入", "规避"};
-    两者都无 → None。top 给定时台账截断为 Top-N(买入/规避不截)。只读,无副作用。
+    stage:
+      - "stage1":只读阶段1早产候选(数据面综合分排序,~11:50 就绪)——午盘任务门控/取数用。
+      - "full"  :只读全量候选(阶段2 消息面回灌后)。
+      - "auto"(默认):全量优先 → 阶段1 → md 台账(取最富的可得源)。
+    返回 {"source","stage","as_of","台账","买入代码","规避代码","买入","规避"};都无 → None。
+    top 给定时台账截断 Top-N(买入/规避不截)。只读,无副作用。
     """
-    path = noon_candidates_path(as_of, out_root=root)
-    if path.exists():
-        try:
-            payload = json.loads(path.read_text(encoding="utf-8"))
-            台账 = payload.get("台账") or []
-            return {"source": "json", "as_of": as_of,
-                    "台账": 台账[:top] if top else 台账,
-                    "买入代码": payload.get("买入代码") or [],
-                    "规避代码": payload.get("规避代码") or [],
-                    "买入": payload.get("买入") or [], "规避": payload.get("规避") or []}
-        except Exception as e:                                  # noqa: BLE001 损坏 → 回退 md
-            logger.warning("旁路候选 JSON 解析失败(%s),回退解析 日内全A_ md", e)
+    full_path = noon_candidates_path(as_of, out_root=root, filename=NOON_CANDIDATES_NAME)
+    s1_path = noon_candidates_path(as_of, out_root=root, filename=NOON_CANDIDATES_STAGE1_NAME)
+    if stage == "stage1":
+        got = _read_candidates_json(s1_path, as_of, top)
+        return got if got is not None else parse_intraday_all_md(as_of, selection_dir=selection_dir, top=top)
+    if stage == "full":
+        got = _read_candidates_json(full_path, as_of, top)
+        return got if got is not None else parse_intraday_all_md(as_of, selection_dir=selection_dir, top=top)
+    # auto:全量优先 → 阶段1 → md
+    for p in (full_path, s1_path):
+        got = _read_candidates_json(p, as_of, top)
+        if got is not None:
+            return got
     return parse_intraday_all_md(as_of, selection_dir=selection_dir, top=top)
 
 
@@ -711,6 +749,7 @@ def run_intraday_screen(as_of: str | None = None, *, universe_limit: int | None 
                         run_screen_all_fn=None, cand_msg_fn=None,
                         write_md: bool = True, persist_snapshot: bool = True,
                         persist_candidates: bool = True,
+                        emit_stage1_candidates: bool = True,
                         snapshot_root: Path | None = None) -> dict:
     """午盘全A选股节点主入口(阶段1 数据初筛 + 阶段2 消息面精选 + 产出 日内 md)。
 
@@ -779,6 +818,19 @@ def run_intraday_screen(as_of: str | None = None, *, universe_limit: int | None 
         report["阶段1"] = {"union": stage1.get("union"), "llm_subset": stage1.get("llm_subset"),
                           "各策略入选": stage1.get("各策略入选")}
 
+        # 阶段1.5 旁路(统筹 Q2):早产「数据面综合分」候选(no_llm 跳三层情绪 batch),供午盘任务 ~11:50
+        # 门控/取数。**纯旁路:阶段1/阶段2 语义不变。** no_llm 采的新闻当日缓存 → 阶段2 全量复用不重采。
+        # 失败只 warning、不阻断(阶段2 全量仍会产出)。
+        if emit_stage1_candidates:
+            try:
+                cand_msg_fn(as_of, no_llm=True)               # 落 view「候选池消息面确认」(数据面综合分,情绪弃权)
+                s1_path = persist_noon_candidates(as_of, breadth=breadth, out_root=snapshot_root,
+                                                  stage="stage1")
+                report["阶段1候选"] = str(s1_path) if s1_path else None
+            except Exception as e:                            # noqa: BLE001 早产旁路不阻断主流程
+                logger.warning("阶段1早产候选失败(不阻断,阶段2全量仍产出):%s", e)
+                report["阶段1候选"] = None
+
         # 阶段2:消息面精选(仅 shortlist,candidate_message 内部各策略 top-K∪ ≤策略数×10 有界)。
         stage2 = cand_msg_fn(as_of, no_llm=stage2_no_llm)
         report["阶段2"] = {"候选池规模": stage2.get("候选池规模"), "统计": stage2.get("统计")}
@@ -817,6 +869,8 @@ def _main(argv: list[str] | None = None) -> int:
     ap.add_argument("--no-md", action="store_true", help="不写 日内_<date>.md")
     ap.add_argument("--read-candidates", action="store_true",
                     help="只读:打印当日午盘机读候选(旁路JSON优先,回退解析日内全A_ md),供 Claude 深度任务消费")
+    ap.add_argument("--stage", choices=["auto", "stage1", "full"], default="auto",
+                    help="配合 --read-candidates:stage1=阶段1早产(~11:50门控用)/full=全量/auto=全量优先")
     ap.add_argument("--top", type=int, default=None, help="配合 --read-candidates:台账截断 Top-N")
     args = ap.parse_args(argv)
 
@@ -825,7 +879,7 @@ def _main(argv: list[str] | None = None) -> int:
 
     # 只读模式:不跑选股,只吐当日机读候选(供 daily-stock-noon-analysis 门控/取数)。
     if args.read_candidates:
-        cand = read_noon_candidates(as_of, top=args.top)
+        cand = read_noon_candidates(as_of, top=args.top, stage=args.stage)
         print(json.dumps(cand, ensure_ascii=False, indent=2) if cand is not None
               else json.dumps({"as_of": as_of, "候选": None,
                                "note": "当日无旁路候选JSON且无日内全A_md(intraday_screen未就绪?)"},
