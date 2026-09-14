@@ -136,5 +136,12 @@ fi
   "$PY" -m tools.sync.upload --date "$D" || echo "!! 上传第一轮"
   sleep 65   # 限速窗口(120/60s);分片>120 时首轮部分 429,等窗口重置补齐
   "$PY" -m tools.sync.upload --date "$D" --pool-ack || echo "!! 上传补齐"
+  echo "-- ④ 每日 forward 影子跑(v2r 扩样·纯 dry-run 旁路,不接 live) --"
+  # 排在最末尾(③上传后):影子跑不需上传,放最后不拖累上传窗口;此时 ②screenall(council/record,
+  # v2r 输入)与 ②.5 forward_scorecard(α基准)均已就绪,LLM_* 网关 env 已在脚本头 export。
+  # 建 v2r 候选池→DeepSeek 研判全池→写 forward 证据库(data/shadow_forward/,gitignore 滚存)→
+  # 回填历史已到期 T+1/T+5 标签→打印样本外 α 快照。**只写证据目录,绝不写 live 选股产物/不动定时任务。**
+  # best-effort 非阻断(与 ①.5/①.6/①.7 同型):失败只记账,不影响闭环其它产出。⚠️ 研究模拟,非投资建议。
+  "$PY" -m tools.run shadow_forward --date "$D" || echo "!! ④ forward 影子跑失败(不阻断,下轮重试+回填自愈)"
   echo "==================== done $(date) ===================="
 } >> "$LOG" 2>&1

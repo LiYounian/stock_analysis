@@ -108,6 +108,22 @@ tasks:
     notify_on: [failure, misfire]
     tags: [local, sepa, consolidated]
 
+  # 每日 forward 影子跑(v2r 扩样·纯 dry-run 旁路):**当前作为 pull_refresh.sh 盘后闭环(=pullrefresh
+  # plist)的最末尾 best-effort 步骤执行,无独立 launchd plist**。本条为 SSOT 留痕 / P3 独立化候选:
+  # 若将来 P3 把它从闭环拆成独立任务,启用本条并建对应 plist(二选一,勿与闭环步骤双跑)。
+  # 无 plist → 不被 tasks.yaml↔launchd 等价测试比对;默认 disabled(不参与影子排期)。cron 取闭环
+  # 预计跑完后的名义时点(仅声明,enabled=false 不实际排期)。
+  - id: shadow_forward
+    description: "每日forward影子跑(v2r扩样,DeepSeek研判候选池→forward证据库→样本外α);当前为pull_refresh闭环末尾步骤,本条留痕/P3独立化候选,默认关"
+    cmd: ["python", "-m", "tools.run", "shadow_forward"]
+    cron: "30 17 * * mon-fri"
+    timeout_sec: 1800
+    retries: 0
+    enabled: false
+    depends_on: [pullrefresh]
+    notify_on: [failure]
+    tags: [local, eod, shadow, forward]
+
   # git autopush:非业务产出,守护类,默认关(影子期不排期)
   - id: autopush
     description: git 自动推送(15:30);非选股业务,默认关
