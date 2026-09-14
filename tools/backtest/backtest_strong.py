@@ -75,9 +75,20 @@ def precompute_features(df: pd.DataFrame, periods, horizons) -> dict:
     """
     close = df["close"].to_numpy(float)
     high = df["high"].to_numpy(float)
+    open_ = df["open"].to_numpy(float)
     dates = df["date"].dt.strftime("%Y-%m-%d").to_numpy()
     n = len(close)
     s_close = pd.Series(close)
+
+    # 次日开盘→次日收盘 当日内收益(实盘口径):ir[j]=close[j]/open[j]-1(该 bar 自身当日)。
+    # 信号日 t 的交易收益 = ir[t+1](次日开盘买入、次日收盘卖出);exec 日 = dates[t+1]。
+    with np.errstate(invalid="ignore", divide="ignore"):
+        ir = close / open_ - 1.0
+    ir[~(open_ > 0)] = np.nan
+    oc = np.full(n, np.nan)
+    oc[:-1] = ir[1:]                       # oc[t] = ir[t+1](次日当日内收益)
+    exec_date = np.empty(n, dtype=dates.dtype)
+    exec_date[:-1] = dates[1:]; exec_date[-1] = ""
 
     mas = {p: s_close.rolling(p, min_periods=p).mean().to_numpy() for p in periods}
     h52 = pd.Series(high).rolling(int(_CFG["H52窗口"]), min_periods=int(_CFG["H52窗口"])).max().to_numpy()
@@ -101,6 +112,7 @@ def precompute_features(df: pd.DataFrame, periods, horizons) -> dict:
 
     return {"dates": dates, "close": close, "high": high, "ma": mas,
             "h52": h52, "up": up, "fwd": fwd, "n": n,
+            "ir": ir, "oc": oc, "exec_date": exec_date,
             "didx": {d: i for i, d in enumerate(dates)}}
 
 
@@ -175,8 +187,9 @@ def run_backtest(data_root: str, start: str | None, end: str | None,
     logger.info("加载 %d 票 K线 + 预算特征 + 累加全A等权 baseline ...", len(codes))
     feats: dict[str, dict] = {}
     raw: dict[str, pd.DataFrame] = {}
-    # baseline 累加器:{N: {date: [sum, cnt]}}
+    # baseline 累加器:{N: {date: [sum, cnt]}}(close→close 前向);base_ir_acc 为次日当日内 ir 横截面
     base_acc: dict[int, dict[str, list]] = {N: {} for N in horizons}
+    base_ir_acc: dict[str, list] = {}     # {date: [sum, cnt]},每 bar 自身当日 ir=close/open-1
     for i, code in enumerate(codes):
         df = load_kline(data_root, code)
         if df is None or len(df) < need:
@@ -184,22 +197,29 @@ def run_backtest(data_root: str, start: str | None, end: str | None,
         feat = precompute_features(df, periods, horizons)
         feats[code] = feat
         raw[code] = df
+        dts = feat["dates"]
         for N in horizons:
             r = feat["fwd"][N]
-            dts = feat["dates"]
             acc = base_acc[N]
-            valid = ~np.isnan(r)
-            for j in np.nonzero(valid)[0]:
+            for j in np.nonzero(~np.isnan(r))[0]:
                 cell = acc.get(dts[j])
                 if cell is None:
                     acc[dts[j]] = [float(r[j]), 1]
                 else:
                     cell[0] += float(r[j]); cell[1] += 1
+        ir = feat["ir"]
+        for j in np.nonzero(~np.isnan(ir))[0]:      # 该 bar 当日内收益 → 计入该 bar 日期的横截面
+            cell = base_ir_acc.get(dts[j])
+            if cell is None:
+                base_ir_acc[dts[j]] = [float(ir[j]), 1]
+            else:
+                cell[0] += float(ir[j]); cell[1] += 1
         if (i + 1) % 1000 == 0:
             logger.info("  ...%d/%d", i + 1, len(codes))
 
     baseline = {N: {d: (s / c if c else np.nan) for d, (s, c) in acc.items()}
                 for N, acc in base_acc.items()}
+    baseline_ir = {d: (s / c if c else np.nan) for d, (s, c) in base_ir_acc.items()}
 
     # 测试日窗口:用票池并集交易日,截掉尾部 maxh(留前瞻余量)
     all_days = sorted({d for f in feats.values() for d in f["dates"]})
@@ -240,13 +260,22 @@ def run_backtest(data_root: str, start: str | None, end: str | None,
                 row[f"r_{N}"] = float(r) if not np.isnan(r) else np.nan
                 row[f"base_{N}"] = float(b) if not np.isnan(b) else np.nan
                 row[f"alpha_{N}"] = (float(r - b) if not (np.isnan(r) or np.isnan(b)) else np.nan)
+            # 次日开盘→次日收盘 当日内(实盘口径):r_oc=ir[t+1],base=exec 日全A横截面 ir 均值
+            oc_r = feat["oc"][t]
+            exec_d = feat["exec_date"][t]
+            b_oc = baseline_ir.get(exec_d, np.nan)
+            row["exec_date"] = exec_d
+            row["r_oc"] = float(oc_r) if not np.isnan(oc_r) else np.nan
+            row["base_oc"] = float(b_oc) if not np.isnan(b_oc) else np.nan
+            row["alpha_oc"] = (float(oc_r - b_oc) if not (np.isnan(oc_r) or np.isnan(b_oc)) else np.nan)
             rows.append(row)
 
     logger.info("扫描完成:C1∧C2∧C3 通过样本(=chip 调用)%d,入选(S05)%d",
                 n_chip, sum(1 for r in rows if r["select"]))
     cols = (["date", "code", "C1", "C2", "C3", "C4", "select", "winner_rate",
              "cost95", "close", "high", "big"]
-            + [f"{p}_{N}" for N in horizons for p in ("r", "base", "alpha")])
+            + [f"{p}_{N}" for N in horizons for p in ("r", "base", "alpha")]
+            + ["exec_date", "r_oc", "base_oc", "alpha_oc"])
     df = pd.DataFrame(rows, columns=cols)
     return df.sort_values(["date", "code"]).reset_index(drop=True) if not df.empty else df
 
@@ -265,54 +294,50 @@ def _stats(a: np.ndarray) -> dict:
             "win": round(float((a > 0).mean()) * 100, 1)}
 
 
+def _metric_cols(horizons):
+    """诊断用 α 口径:close→close 前向各 horizon + 次日开盘→次日收盘 当日内(实盘口径)。"""
+    return [(f"{N}日", f"alpha_{N}") for N in horizons] + [("次日oc", "alpha_oc")]
+
+
+def _cell(g: pd.DataFrame, horizons) -> dict:
+    """一组样本的分口径 α 统计 + 样本数。"""
+    return {"n": int(len(g)),
+            **{f"{lab}α": _stats(g[col].to_numpy(float)) for lab, col in _metric_cols(horizons)}}
+
+
 def diagnose(df: pd.DataFrame, horizons) -> dict:
-    """Phase 1 三块:①S05 前向 α;②winner_rate 分桶 α;③C1–C4 分维叠加 α。"""
-    out = {"总样本(C1∧C2∧C3)": int(len(df)), "入选(S05)": int(df["select"].sum())}
-
-    # ① S05 入选票前向 α
+    """Phase 1 三块:①S05 前向 α;②winner_rate 分桶 α;③C4 边际贡献。两套口径(前向 + 次日oc)。"""
+    out = {"总样本(C1∧C2∧C3)": int(len(df)), "入选(S05)": int(df["select"].sum()),
+           "口径说明": "α=个股−全A等权同期;{N}日=buy close[t]→close[t+N];次日oc=buy open[t+1]→close[t+1]"}
     sel = df[df["select"]]
-    out["①_S05前向α"] = {f"{N}日": _stats(sel[f"alpha_{N}"].to_numpy(float)) for N in horizons}
-    out["①_S05原始收益均值%"] = {
-        f"{N}日": (round(float(sel[f"r_{N}"].mean()) * 100, 3) if len(sel) else None)
-        for N in horizons}
 
-    # ② winner_rate 分桶(在 C1∧C2∧C3 全集内,含 C4=False 的低获利票)
+    # ① S05 入选票前向 α + 原始收益均值
+    out["①_S05_α"] = _cell(sel, horizons)
+    out["①_S05原始收益均值%"] = {
+        **{f"{N}日": (round(float(sel[f"r_{N}"].mean()) * 100, 3) if len(sel) else None) for N in horizons},
+        "次日oc": (round(float(np.nanmean(sel["r_oc"])) * 100, 3) if len(sel) else None)}
+
+    # ② winner_rate 分桶(预注册档位,C1∧C2∧C3 全集内,含 C4=False 的低获利票;不事后挪边界)
     wr = df["winner_rate"].to_numpy(float)
-    high = df["high"].to_numpy(float)
-    cost95 = df["cost95"].to_numpy(float)
     buckets = {
         "wr>99": df[wr > 99],
         "95<wr≤99": df[(wr > 95) & (wr <= 99)],
         "80<wr≤95": df[(wr > 80) & (wr <= 95)],
-        "wr≤80": df[(wr <= 80)],
+        "wr≤80": df[wr <= 80],
         "wr缺失(chip不可用)": df[np.isnan(wr)],
     }
-    out["②_winner_rate分桶α"] = {
-        name: {"n": int(len(g)),
-               **{f"{N}日α": _stats(g[f"alpha_{N}"].to_numpy(float)) for N in horizons}}
-        for name, g in buckets.items()}
-    # 入选票里"仅靠 high≥cost95 命中(wr≤95)"vs"wr>95" 两支
-    sel_hi_only = sel[(sel["winner_rate"].isna()) | (sel["winner_rate"] <= 95)]
-    sel_wr_hi = sel[sel["winner_rate"] > 95]
+    out["②_winner_rate分桶α"] = {name: _cell(g, horizons) for name, g in buckets.items()}
+    # 入选票两支:"wr>95 高获利支" vs "仅 high≥cost95 命中支(wr≤95/缺失)"
     out["②b_入选票两支"] = {
-        "wr>95(高获利支)": {"n": int(len(sel_wr_hi)),
-                            **{f"{N}日α": _stats(sel_wr_hi[f"alpha_{N}"].to_numpy(float)) for N in horizons}},
-        "仅high≥cost95支(wr≤95/缺失)": {"n": int(len(sel_hi_only)),
-                            **{f"{N}日α": _stats(sel_hi_only[f"alpha_{N}"].to_numpy(float)) for N in horizons}},
-    }
+        "wr>95(高获利支)": _cell(sel[sel["winner_rate"] > 95], horizons),
+        "仅high≥cost95支(wr≤95/缺失)": _cell(
+            sel[(sel["winner_rate"].isna()) | (sel["winner_rate"] <= 95)], horizons)}
 
-    # ③ C1–C4 分维叠加(C1/C2/C3 全集已是 C1∧C2∧C3;C4 支 = select)
-    #    注:本回测样本是 C1∧C2∧C3 通过集,故这里给"+C4 vs −C4"的对照(C4 的边际贡献)。
-    c4t = df[df["C4"]]
-    c4f = df[~df["C4"]]
+    # ③ C4 边际贡献(样本本就是 C1∧C2∧C3 通过集 → 给 +C4 vs −C4 对照)
     out["③_C4边际贡献"] = {
-        "C1∧C2∧C3(全集)": {"n": int(len(df)),
-                          **{f"{N}日α": _stats(df[f"alpha_{N}"].to_numpy(float)) for N in horizons}},
-        "+C4(=S05入选)": {"n": int(len(c4t)),
-                          **{f"{N}日α": _stats(c4t[f"alpha_{N}"].to_numpy(float)) for N in horizons}},
-        "−C4(被C4剔除)": {"n": int(len(c4f)),
-                          **{f"{N}日α": _stats(c4f[f"alpha_{N}"].to_numpy(float)) for N in horizons}},
-    }
+        "C1∧C2∧C3(全集)": _cell(df, horizons),
+        "+C4(=S05入选)": _cell(df[df["C4"]], horizons),
+        "−C4(被C4剔除)": _cell(df[~df["C4"]], horizons)}
     return out
 
 
@@ -331,13 +356,14 @@ def run(data_root: str, out_dir: str, start=None, end=None, stride=1,
     print(f"逐行样本 → {raw_csv}  ({len(df)} 行)")
     print(f"诊断摘要 → {os.path.join(out_dir, 's05_diagnose.json')}")
     if not df.empty:
+        labels = [lab for lab, _ in _metric_cols(horizons)]
         print(f"\nC1∧C2∧C3 样本 {diag['总样本(C1∧C2∧C3)']} | S05 入选 {diag['入选(S05)']}")
-        for N in horizons:
-            s = diag["①_S05前向α"][f"{N}日"]
-            print(f"  S05 {N}日 α: n={s['n']} mean={s['mean']}% t={s['t']} 胜率={s['win']}%")
-        print("  winner_rate 分桶 α:")
+        for lab in labels:
+            s = diag["①_S05_α"][f"{lab}α"]
+            print(f"  S05 {lab} α: n={s['n']} mean={s['mean']}% t={s['t']} 胜率={s['win']}%")
+        print("  winner_rate 分桶 α(mean%/t):")
         for name, b in diag["②_winner_rate分桶α"].items():
-            cells = " | ".join(f"{N}日 mean={b[f'{N}日α']['mean']}% t={b[f'{N}日α']['t']}" for N in horizons)
+            cells = " | ".join(f"{lab} {b[f'{lab}α']['mean']}%/t{b[f'{lab}α']['t']}" for lab in labels)
             print(f"    {name:20s} n={b['n']:5d}  {cells}")
     return diag
 

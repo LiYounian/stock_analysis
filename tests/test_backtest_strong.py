@@ -80,3 +80,16 @@ def test_forward_return_no_lookahead():
     assert np.isnan(r5[-1]) and np.isnan(r5[-5])  # 尾部 5 根无 t+5
     t = 40
     assert abs(r5[t] - (close[t + 5] / close[t] - 1.0)) < 1e-9
+
+
+def test_oc_next_day_intraday_no_lookahead():
+    """次日 oc 口径:oc[t]=close[t+1]/open[t+1]-1(次日开盘买、次日收盘卖);末根越界→NaN。"""
+    df = _synth_kline(n=100)
+    feat = bs.precompute_features(df, _PERIODS, (1, 5))
+    close = df["close"].to_numpy(float)
+    open_ = df["open"].to_numpy(float)
+    oc = feat["oc"]
+    assert np.isnan(oc[-1])                              # 末根无 t+1
+    t = 40
+    assert abs(oc[t] - (close[t + 1] / open_[t + 1] - 1.0)) < 1e-9
+    assert feat["exec_date"][t] == feat["dates"][t + 1]  # 交易发生在次日
