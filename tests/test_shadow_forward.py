@@ -235,23 +235,68 @@ def test_backfill_fills_matured_idempotent(tmp_path, monkeypatch):
     assert bf2["n_filled"] == 0 and bf2["days_touched"] == 0
 
 
-# ── ⑥ α 复用 shadow_score:样本外 α 可算、诚实标 N ───────────────────────────────
-def test_forward_alpha_reuses_score(tmp_path, monkeypatch):
+# ── ⑥ α 基准=全A等权(唯一真源):样本外 α 可算、诚实标基准来源 ─────────────────────
+def _make_breadth(tmp_path, mp_by_date):
+    """构造 data/breadth/<date>.json({date, mean_pct})→ equal_weight_index 读它当全A等权基准。"""
+    bd = tmp_path / "breadth"
+    bd.mkdir(parents=True, exist_ok=True)
+    for date, mp in mp_by_date.items():
+        (bd / f"{date}.json").write_text(
+            json.dumps({"date": date, "mean_pct": mp}, ensure_ascii=False), encoding="utf-8")
+    return str(bd)
+
+
+def test_forward_alpha_equal_weight_benchmark(tmp_path, monkeypatch):
     dr = _scene(tmp_path)
     ev = tmp_path / "evidence"
-    # 买入 000001(r_1=+10)、可参与 000010(r_1=-5);池外基准含 000011(r_1=0)
+    # 买入 000001(r_1=+10)、可参与 000010(r_1=-5);000011 观望不计
     _patch(monkeypatch, {"000001": "买入", "000010": "可参与", "000011": "观望"},
            {"000001": [(SIG, 10.0), (FUT[0], 11.0)],
             "000010": [(SIG, 10.0), (FUT[0], 9.5)],
             "000011": [(SIG, 10.0), (FUT[0], 10.0)]})
     sf.run_forward_day(SIG, dr, str(ev))
     sf.backfill_labels(str(ev))
-    a = sf.forward_alpha(str(ev), scorecard_path=None)
-    assert a["n_days"] == 1
-    assert a["total_buys"] == 2, "买入侧=000001+000010"
+    # 全A等权 r_1 = mean_pct[FUT0] = +1.0%(锚 SIG=0)
+    bdir = _make_breadth(tmp_path, {SIG: 0.0, FUT[0]: 1.0})
+    a = sf.forward_alpha(str(ev), breadth_dir=bdir, scorecard_path=None)
+    assert a["n_days"] == 1 and a["total_buys"] == 2
     b1 = a["buy_agg"]["r_1"]
     assert b1["pooled_n_buys"] == 2
-    # 买入侧均值 = (10 + -5)/2 = 2.5;基准(池内3票等权)= (10-5+0)/3 ≈ 1.667;α≈+0.833
-    assert b1["pooled_buy_mean_r"] == pytest.approx(2.5)
-    day_alpha = a["per_day"][0]["alpha_r1"]
-    assert day_alpha == pytest.approx(2.5 - (10.0 - 5.0 + 0.0) / 3)
+    assert b1["pooled_buy_mean_r"] == pytest.approx(2.5), "买入侧均值=(10-5)/2"
+    # α = 买入侧均值 − 全A等权基准 = 2.5 − 1.0 = +1.5
+    assert a["per_day"][0]["alpha_r1"] == pytest.approx(2.5 - 1.0)
+    assert a["per_day"][0]["bench_src_r1"] == "全A等权", "基准应取全A等权唯一真源"
+    assert "全A等权" in a["benchmark_note"] and "非投资建议" in a["benchmark_note"]
+
+
+# ── ⑥b 基准回退:全A等权窗口不全 → 回退 forward_scorecard 全样本代理,诚实标来源 ──────
+def test_forward_alpha_fallback_scorecard(tmp_path, monkeypatch):
+    dr = _scene(tmp_path)
+    ev = tmp_path / "evidence"
+    _patch(monkeypatch, {"000001": "买入", "000010": "可参与", "000011": "观望"},
+           {"000001": [(SIG, 10.0), (FUT[0], 11.0)],
+            "000010": [(SIG, 10.0), (FUT[0], 9.5)],
+            "000011": [(SIG, 10.0), (FUT[0], 10.0)]})
+    sf.run_forward_day(SIG, dr, str(ev))
+    sf.backfill_labels(str(ev))
+    # forward_scorecard 全样本(含 SIG 日 3 票 r_1=10/-5/0,均值 5/3)当回退基准
+    card = tmp_path / "sc.csv"
+    rows = "date,code,r_1,r_5\n" + \
+        f"{SIG},000001,10.0,\n{SIG},000010,-5.0,\n{SIG},000011,0.0,\n"
+    card.write_text(rows, encoding="utf-8")
+    empty_breadth = str(tmp_path / "no_breadth")   # 不存在 → 全A等权空 → 回退
+    a = sf.forward_alpha(str(ev), breadth_dir=empty_breadth, scorecard_path=str(card))
+    assert a["per_day"][0]["bench_src_r1"] == "scorecard代理", "全A等权缺 → 回退 scorecard 代理"
+    assert a["per_day"][0]["alpha_r1"] == pytest.approx(2.5 - (10.0 - 5.0 + 0.0) / 3)
+
+
+# ── ⑥c benchmark 口径写进每条 evidence(诚实标基准边界)──────────────────────────
+def test_benchmark_note_in_evidence(tmp_path, monkeypatch):
+    dr = _scene(tmp_path)
+    ev = tmp_path / "evidence"
+    _patch(monkeypatch, {"000001": "买入"},
+           {c: [(SIG, 10.0)] for c in ("000001", "000010", "000011")})
+    sf.run_forward_day(SIG, dr, str(ev))
+    rec = json.loads(sf.evidence_path(str(ev), SIG).read_text())
+    assert "benchmark_note" in rec
+    assert "全A等权" in rec["benchmark_note"] and "非投资建议" in rec["benchmark_note"]

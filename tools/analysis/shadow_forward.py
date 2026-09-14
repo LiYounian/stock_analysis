@@ -28,6 +28,7 @@ import json
 from pathlib import Path
 
 from tools.analysis import deep_analysis as da
+from tools.analysis import equal_weight_index as ewi
 from tools.analysis import shadow_recall as sr
 from tools.analysis import shadow_score as ss
 
@@ -35,6 +36,13 @@ BUY = ss.BUY                       # {"买入", "可参与"}(单一真源,复用
 DEFAULT_HORIZONS = (1, 5)          # T+1 / T+5 前向标签
 PROVIDER_DEFAULT = "deepseek_v4pro"
 VERSION = "v2r"
+
+# α 基准口径(写进每条 evidence + α 汇总,诚实标边界)——
+#   primary = 全A等权(data/breadth 的 mean_pct 逐日链成净值,项目唯一真源,与盘尾 α/大盘预测同源);
+#             日度近似(entry/exit≈收盘)、缺 breadth 日跳过、研究用非投资建议。
+#   fallback = forward_scorecard 全样本均值(picks 样本代理全A,含选择/幸存者偏差,同 16 日 AB 局限)。
+BENCHMARK_NOTE = ("α基准=全A等权(data/breadth mean_pct 链,项目唯一真源;日度近似;研究用非投资建议);"
+                  "breadth 窗口不全时回退 forward_scorecard 全样本均值(picks代理全A,含选择/幸存者局限)")
 
 
 # ── 证据文件 I/O ────────────────────────────────────────────────────────────
@@ -162,6 +170,7 @@ def run_forward_day(date: str, data_root, evidence_dir, provider: str = PROVIDER
         "generated_at": _dt.datetime.now().isoformat(timespec="seconds"),
         "code_commit": code_commit,
         "horizons": list(horizons),
+        "benchmark_note": BENCHMARK_NOTE,
         "pool": list(pool),
         "pool_meta": meta,
         "units": units,
@@ -224,48 +233,93 @@ def backfill_labels(evidence_dir, horizons=DEFAULT_HORIZONS) -> dict:
     return {"n_filled": n_filled, "days_touched": days_touched}
 
 
-# ── ③ 样本外 α(复用 shadow_score;买入侧 r 用证据自带标签→全覆盖)────────────
-def _day_card_from_labels(labels: dict, horizons) -> dict:
-    """把证据 labels 转成 shadow_score 记分卡当日切片 {code: {r_1, r_5}}。"""
-    return {c: {f"r_{N}": labels[c].get(f"r_{N}") for N in horizons} for c in labels}
+# ── ③ 样本外 α(基准=全A等权唯一真源,回退 scorecard 代理;买入侧 r 用证据标签→全覆盖)──
+def _ew_bench_return(date: str, N: int, ew_dates: list[str], ew_pos: dict, ew_level: dict):
+    """全A等权 N-交易日前向收益% = level[date_{t+N}]/level[date_t]-1(唯一真源,日度近似)。
+
+    ew_dates=breadth 升序日历(=交易日历);date 不在其中 / t+N 越界 → None(交给 scorecard 回退)。
+    收益口径与个股标签一致(close_idx→close_{idx+N} 的复利)。
+    """
+    i = ew_pos.get(date)
+    if i is None or i + N >= len(ew_dates):
+        return None
+    d0, dN = ew_dates[i], ew_dates[i + N]
+    l0, lN = ew_level.get(d0), ew_level.get(dN)
+    if not l0:
+        return None
+    return (lN / l0 - 1.0) * 100.0
 
 
-def forward_alpha(evidence_dir, scorecard_path=None, horizons=DEFAULT_HORIZONS) -> dict:
-    """跨已积累证据日算样本外 α:买入侧 & 看多方向侧,诚实标 N/SE。
+def _score_day(date, units, labels, hs, select, ew_dates, ew_pos, ew_level, real_card):
+    """仿 shadow_score.score_day 的返回形状(供 ss.aggregate 复用),但基准优先取全A等权、
+    买入侧收益取证据自带标签(全覆盖,不漏未进 picks 的影子票)。基准回退 scorecard 全样本均值。"""
+    buy = [u["code"] for u in units if select(u) and u.get("code")]
+    res = {"date": date, "n_units": len(units), "buy_side": buy, "n_buy": len(buy),
+           "horizons": {}}
+    real_day = real_card.get(date, {})
+    for N in hs:
+        hz = f"r_{N}"
+        bench = _ew_bench_return(date, N, ew_dates, ew_pos, ew_level)
+        bench_src = "全A等权"
+        if bench is None:                      # 全A等权窗口不全 → 回退 scorecard 代理
+            vals_all = [v.get(hz) for v in real_day.values() if v.get(hz) is not None]
+            bench = (sum(vals_all) / len(vals_all)) if vals_all else None
+            bench_src = "scorecard代理" if bench is not None else "无基准"
+        scored = [(c, labels.get(c, {}).get(hz)) for c in buy]
+        scored = [(c, r) for c, r in scored if r is not None]
+        vals = [r for _, r in scored]
+        mean_buy = (sum(vals) / len(vals)) if vals else None
+        res["horizons"][hz] = {
+            "bench_mean": bench, "bench_src": bench_src,
+            "n_scored": len(scored), "n_unscored": len(buy) - len(scored),
+            "buy_mean": mean_buy,
+            "hit_rate": (sum(1 for v in vals if v > 0) / len(vals)) if vals else None,
+            "alpha_pp": (mean_buy - bench) if (mean_buy is not None and bench is not None) else None,
+            "per_code": {c: r for c, r in scored},
+        }
+    return res
 
-    基准 = forward_scorecard 全样本当日均值(若可读);买入侧收益取证据自带标签(全覆盖)。
-    为让基准贴近全A、又不漏掉未进 picks 的影子票,当日记分卡 = 全样本卡 ∪ 本池标签(池票覆盖式并入)。
+
+def forward_alpha(evidence_dir, breadth_dir=None, scorecard_path=None,
+                  horizons=DEFAULT_HORIZONS) -> dict:
+    """跨已积累证据日算样本外 α:买入侧 & 看多方向侧,诚实标 N/SE + 基准来源。
+
+    基准优先=全A等权(equal_weight_index 唯一真源,读 data/breadth 小 JSON,轻);窗口不全回退
+    forward_scorecard 全样本均值(picks 代理)。买入侧收益取证据自带标签(全覆盖)。复用
+    shadow_score.aggregate 做日均 α±SE / pooled 统计。
     """
     evidence_dir = Path(evidence_dir)
+    ew_level = ewi.net_value_series(breadth_dir) if breadth_dir else ewi.net_value_series()
+    ew_dates = sorted(ew_level)
+    ew_pos = {d: i for i, d in enumerate(ew_dates)}
     real_card = ss.load_scorecard(scorecard_path) if (
         scorecard_path and Path(scorecard_path).exists()) else {}
 
-    buy_days, bull_days = [], []
-    per_day = []
+    buy_days, bull_days, per_day = [], [], []
     for p in sorted(evidence_dir.glob("evidence_*.json")):
         rec = _load_json(p)
         if not rec:
             continue
         date = rec.get("date")
         units = rec.get("units", [])
+        labels = rec.get("labels", {})
         hs = rec.get("horizons", list(horizons))
-        our_card = _day_card_from_labels(rec.get("labels", {}), hs)
-        merged = dict(real_card.get(date, {}))
-        merged.update(our_card)                    # 本池票覆盖式并入(全覆盖买入侧收益)
-        card = {date: merged}
-        rb = ss.score_day(date, units, card, want_t5=True, select=ss.is_buy)
-        rl = ss.score_day(date, units, card, want_t5=True, select=ss.is_bull)
+        rb = _score_day(date, units, labels, hs, ss.is_buy,
+                        ew_dates, ew_pos, ew_level, real_card)
+        rl = _score_day(date, units, labels, hs, ss.is_bull,
+                        ew_dates, ew_pos, ew_level, real_card)
         buy_days.append(rb)
         bull_days.append(rl)
         h1 = rb["horizons"].get("r_1", {})
         per_day.append({"date": date, "n_units": rb["n_units"], "n_buy": rb["n_buy"],
                         "buy": rb["buy_side"], "alpha_r1": h1.get("alpha_pp"),
-                        "hit_r1": h1.get("hit_rate"), "label_status": rec.get("label_status"),
-                        "bench_from_scorecard": date in real_card})
+                        "hit_r1": h1.get("hit_rate"), "bench_src_r1": h1.get("bench_src"),
+                        "label_status": rec.get("label_status")})
     return {
         "n_days": len(buy_days),
         "days_with_ge1_buy": sum(1 for r in buy_days if r["n_buy"] >= 1),
         "total_buys": sum(r["n_buy"] for r in buy_days),
+        "benchmark_note": BENCHMARK_NOTE,
         "buy_agg": {hz: ss.aggregate(buy_days, horizon=hz) for hz in ("r_1", "r_5")},
         "bull_agg": {hz: ss.aggregate(bull_days, horizon=hz) for hz in ("r_1", "r_5")},
         "per_day": per_day,

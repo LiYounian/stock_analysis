@@ -1463,6 +1463,7 @@ def cmd_shadow_forward(argv):
     ⚠️ 研究模拟,非投资建议。真调 DeepSeek 须在有网关 env 的 shell(zsh -ic)下跑。
     """
     import argparse
+    import json
     import subprocess
     from pathlib import Path
     from tools.analysis import shadow_forward as sf
@@ -1476,8 +1477,11 @@ def cmd_shadow_forward(argv):
     ap.add_argument("--think", choices=["on", "off"], default=None)
     ap.add_argument("--force", action="store_true")
     ap.add_argument("--no-backfill", action="store_true")
+    ap.add_argument("--breadth-dir", default=str(Path.cwd() / "data" / "breadth"),
+                    help="全A等权基准来源(data/breadth 的 mean_pct 唯一真源)")
     ap.add_argument("--scorecard",
-                    default=str(Path.cwd() / "data" / "analysis" / "backtest" / "forward_scorecard.csv"))
+                    default=str(Path.cwd() / "data" / "analysis" / "backtest" / "forward_scorecard.csv"),
+                    help="全A等权窗口不全时的回退基准(picks 代理)")
     args = ap.parse_args(argv[2:])
     think = {"on": True, "off": False}.get(args.think)
     try:
@@ -1496,11 +1500,12 @@ def cmd_shadow_forward(argv):
         print(f"[shadow_forward backfill] {json.dumps(bf, ensure_ascii=False)}", file=sys.stderr)
 
     try:
-        alpha = sf.forward_alpha(args.evidence_dir, args.scorecard)
+        alpha = sf.forward_alpha(args.evidence_dir, breadth_dir=args.breadth_dir,
+                                 scorecard_path=args.scorecard)
         b1 = alpha["buy_agg"]["r_1"]
         print(f"[shadow_forward α快照] n_days={alpha['n_days']} 总买入={alpha['total_buys']} "
               f"买入侧r_1: 日均α={b1['day_mean_alpha_pp']} pooled_n={b1['pooled_n_buys']} "
-              f"hit={b1['pooled_hit_rate']}", file=sys.stderr)
+              f"hit={b1['pooled_hit_rate']} | {sf.BENCHMARK_NOTE}", file=sys.stderr)
     except Exception as e:  # noqa: BLE001 - α 快照 best-effort,不阻断证据落盘
         print(f"[shadow_forward α快照] 跳过:{e}", file=sys.stderr)
 
