@@ -851,10 +851,12 @@ def cmd_sepa(argv):
 
 
 def cmd_strong(argv):
-    """策略9 最强选股(Tushare 筹码 cyq_perf,傍晚才发布)。单独跑,供 20:00 补跑任务用。
+    """策略9 最强选股。筹码源默认本地(STRONG_CHIP_SOURCE=local,chip.py 推演),
+    15:40 主流程当场可算、零 Tushare 依赖;Tushare(cyq_perf,傍晚发布)为可选源。
 
     --no-fetch 只读本地主档(K线);--universe N 截前 N;--date 指定日。
-    筹码当日未发布→写"需 Tushare"占位 view、不出;发布后补跑即出真结果。
+    仅当显式切 STRONG_CHIP_SOURCE=tushare 且当日筹码未发布时→写"需 Tushare"占位 view、不出。
+    注:20:00 Tushare 补跑 job(com.stock.strong)已退役(2026-09-14,本地源替代),存档见 ops/launchd/retired/。
     """
     from tools.pipeline import screen_strong
     rest = argv[2:] if argv else []
@@ -1152,7 +1154,9 @@ def run_screen_all(codes_all: list[str], as_of: str, no_llm: bool = False,
         # PR#15 提取:S03 最大范围 / S04 量价放量(纯 OHLCV,fetch=False 只读主档)
         ("S03·最大范围选股", lambda: screen_max_range.run_max_range_screen(codes_all, as_of=as_of, fetch=False)),
         ("S04·量价放量", lambda: screen_volume.run_volume_screen(codes_all, as_of=as_of, fetch=False)),
-        # S05 最强:硬依赖 Tushare 筹码(cyq_perf),run_strong_screen 自门控——未配 token / 取不到 → 写"需 Tushare"占位 view、不出选股
+        # S05 最强:筹码源默认本地(STRONG_CHIP_SOURCE=local,chip.py 推演),15:40 主闭环当场可算、零 Tushare 依赖。
+        #   Tushare(cyq_perf)为可选源,仅当显式切 tushare 且当日未发布时才写"需 Tushare"占位 view、不出。
+        #   20:00 Tushare 补跑 job(com.stock.strong)已退役(2026-09-14,本地源替代),存档见 ops/launchd/retired/。
         ("S05·最强选股", lambda: screen_strong.run_strong_screen(codes_all, as_of=as_of, fetch=False)),
         # 策略10·反转低换手组合(候选·前向观测中):纯量价横截面复合(rev5+turn20),fetch=False 只读主档。
         # 诚实边界见 docs/策略/策略总览:限可交易池+5-10日+TopK≤20;net 绝对水平存幸存者水分,以前向观测为准。
