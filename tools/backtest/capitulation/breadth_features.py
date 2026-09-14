@@ -39,35 +39,32 @@ def build_capitulation_flags(breadth: pd.DataFrame, grid=GRID,
     b = breadth.sort_index().copy()
     osr = b["below_ma20_ratio"].astype(float)
     mp = b["mean_pct"].astype(float)
+    warmup = osr.rolling(trailing, min_periods=trailing).count().isna()
 
-    out = pd.DataFrame(index=b.index)
-    out["mean_pct"] = mp
-    out["below_ma20_ratio"] = osr
-    out["net_adv"] = b["net_adv"].astype(float)
-    out["warmup"] = osr.rolling(trailing, min_periods=trailing).count().isna()
+    cols = {"mean_pct": mp, "below_ma20_ratio": osr,
+            "net_adv": b["net_adv"].astype(float), "warmup": warmup,
+            "down_day": (mp <= down_thresh) & (~warmup)}
 
-    os_thr_cache = {}
-    cum_cache = {}
+    os_thr_cache, cum_cache = {}, {}
+    cap_cols = {}
     for q_os, q_crash, w in grid:
         if q_os not in os_thr_cache:
             os_thr_cache[q_os] = osr.rolling(trailing, min_periods=trailing).quantile(q_os)
         if w not in cum_cache:
             cum_cache[w] = mp.rolling(w, min_periods=w).sum()
-        os_thr = os_thr_cache[q_os]
-        cum_w = cum_cache[w]
+        os_thr, cum_w = os_thr_cache[q_os], cum_cache[w]
         crash_thr = cum_w.rolling(trailing, min_periods=trailing).quantile(q_crash)
-        cap = (osr >= os_thr) & (cum_w <= crash_thr) & (~out["warmup"])
+        cap = ((osr >= os_thr) & (cum_w <= crash_thr) & (~warmup)).fillna(False)
         key = _grid_key(q_os, q_crash, w)
-        out[f"{key}_cum"] = cum_w
-        out[f"{key}_os_thr"] = os_thr
-        out[f"{key}_crash_thr"] = crash_thr
-        out[key] = cap.fillna(False)
-
-    out["down_day"] = (mp <= down_thresh) & (~out["warmup"])
-    for q_os, q_crash, w in grid:
-        key = _grid_key(q_os, q_crash, w)
-        out[f"ord_{key}"] = out["down_day"] & (~out[key])
-    return out
+        cols[f"{key}_cum"] = cum_w
+        cols[f"{key}_os_thr"] = os_thr
+        cols[f"{key}_crash_thr"] = crash_thr
+        cols[key] = cap
+        cap_cols[key] = cap
+    # ordinary_down 依赖各 cap 列,统一一次拼(避免逐列 insert 的碎片化)
+    for key, cap in cap_cols.items():
+        cols[f"ord_{key}"] = cols["down_day"] & (~cap)
+    return pd.DataFrame(cols, index=b.index)
 
 
 def event_dates(flags: pd.DataFrame, key: str) -> list[pd.Timestamp]:
