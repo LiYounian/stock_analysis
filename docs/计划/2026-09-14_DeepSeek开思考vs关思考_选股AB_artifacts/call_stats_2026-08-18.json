@@ -1,0 +1,101 @@
+[
+  {
+    "latency_s": 24.62,
+    "reasoning_chars": 1385,
+    "reasoning_tok": 777,
+    "completion_tok": 1105,
+    "prompt_tok": 1617,
+    "content_polluted": false,
+    "content_empty": false
+  },
+  {
+    "latency_s": 24.66,
+    "reasoning_chars": 1648,
+    "reasoning_tok": 901,
+    "completion_tok": 1182,
+    "prompt_tok": 1627,
+    "content_polluted": false,
+    "content_empty": false
+  },
+  {
+    "latency_s": 25.9,
+    "reasoning_chars": 1303,
+    "reasoning_tok": 767,
+    "completion_tok": 1136,
+    "prompt_tok": 1631,
+    "content_polluted": false,
+    "content_empty": false
+  },
+  {
+    "latency_s": 44.02,
+    "reasoning_chars": 2946,
+    "reasoning_tok": 1778,
+    "completion_tok": 2118,
+    "prompt_tok": 1623,
+    "content_polluted": false,
+    "content_empty": false
+  },
+  {
+    "latency_s": 46.67,
+    "reasoning_chars": 3167,
+    "reasoning_tok": 1831,
+    "completion_tok": 2140,
+    "prompt_tok": 1562,
+    "content_polluted": false,
+    "content_empty": false
+  },
+  {
+    "latency_s": 25.03,
+    "reasoning_chars": 1415,
+    "reasoning_tok": 807,
+    "completion_tok": 1103,
+    "prompt_tok": 1626,
+    "content_polluted": false,
+    "content_empty": false
+  },
+  {
+    "latency_s": 29.27,
+    "reasoning_chars": 1797,
+    "reasoning_tok": 1050,
+    "completion_tok": 1360,
+    "prompt_tok": 1638,
+    "content_polluted": false,
+    "content_empty": false
+  },
+  {
+    "latency_s": 37.04,
+    "reasoning_chars": 2534,
+    "reasoning_tok": 1498,
+    "completion_tok": 1811,
+    "prompt_tok": 2256,
+    "content_polluted": false,
+    "content_empty": false
+  },
+  {
+    "latency_s": 23.13,
+    "reasoning_chars": 1029,
+    "reasoning_tok": 606,
+    "completion_tok": 964,
+    "prompt_tok": 1618,
+    "content_polluted": false,
+    "content_empty": false
+  },
+  {
+    "latency_s": 37.52,
+    "reasoning_chars": 2454,
+    "reasoning_tok": 1497,
+    "completion_tok": 1795,
+    "prompt_tok": 1558,
+    "content_polluted": false,
+    "content_empty": false
+  },
+  {
+    "latency_s": 41.98,
+    "reasoning_chars": 2857,
+    "reasoning_tok": 1684,
+    "completion_tok": 1973,
+    "prompt_tok": 2142,
+    "content_polluted": false,
+    "content_empty": false
+  }
+]

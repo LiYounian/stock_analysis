@@ -1,0 +1,92 @@
+[
+  {
+    "latency_s": 31.81,
+    "reasoning_chars": 1683,
+    "reasoning_tok": 1057,
+    "completion_tok": 1439,
+    "prompt_tok": 2128,
+    "content_polluted": false,
+    "content_empty": false
+  },
+  {
+    "latency_s": 48.88,
+    "reasoning_chars": 2998,
+    "reasoning_tok": 1787,
+    "completion_tok": 2093,
+    "prompt_tok": 1835,
+    "content_polluted": false,
+    "content_empty": false
+  },
+  {
+    "latency_s": 49.0,
+    "reasoning_chars": 3372,
+    "reasoning_tok": 2009,
+    "completion_tok": 2349,
+    "prompt_tok": 1958,
+    "content_polluted": false,
+    "content_empty": false
+  },
+  {
+    "latency_s": 50.05,
+    "reasoning_chars": 3072,
+    "reasoning_tok": 1829,
+    "completion_tok": 2129,
+    "prompt_tok": 2064,
+    "content_polluted": false,
+    "content_empty": false
+  },
+  {
+    "latency_s": 37.27,
+    "reasoning_chars": 2180,
+    "reasoning_tok": 1303,
+    "completion_tok": 1604,
+    "prompt_tok": 1814,
+    "content_polluted": false,
+    "content_empty": false
+  },
+  {
+    "latency_s": 73.34,
+    "reasoning_chars": 4983,
+    "reasoning_tok": 3015,
+    "completion_tok": 3362,
+    "prompt_tok": 2196,
+    "content_polluted": false,
+    "content_empty": false
+  },
+  {
+    "latency_s": 34.82,
+    "reasoning_chars": 2159,
+    "reasoning_tok": 1309,
+    "completion_tok": 1579,
+    "prompt_tok": 2074,
+    "content_polluted": false,
+    "content_empty": false
+  },
+  {
+    "latency_s": 26.15,
+    "reasoning_chars": 1162,
+    "reasoning_tok": 720,
+    "completion_tok": 1056,
+    "prompt_tok": 1805,
+    "content_polluted": false,
+    "content_empty": false
+  },
+  {
+    "latency_s": 57.98,
+    "reasoning_chars": 3654,
+    "reasoning_tok": 2185,
+    "completion_tok": 2596,
+    "prompt_tok": 2062,
+    "content_polluted": false,
+    "content_empty": false
+  },
+  {
+    "latency_s": 59.01,
+    "reasoning_chars": 3673,
+    "reasoning_tok": 2228,
+    "completion_tok": 2626,
+    "prompt_tok": 1942,
+    "content_polluted": false,
+    "content_empty": false
+  }
+]

@@ -1,0 +1,20 @@
+[
+  {
+    "latency_s": 28.88,
+    "reasoning_chars": 1604,
+    "reasoning_tok": 968,
+    "completion_tok": 1323,
+    "prompt_tok": 1711,
+    "content_polluted": false,
+    "content_empty": false
+  },
+  {
+    "latency_s": 45.34,
+    "reasoning_chars": 2744,
+    "reasoning_tok": 1658,
+    "completion_tok": 1987,
+    "prompt_tok": 2120,
+    "content_polluted": false,
+    "content_empty": false
+  }
+]
