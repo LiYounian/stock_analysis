@@ -54,3 +54,8 @@ data/shadow_forward/
 
 # 运行日志不入库
 logs/
+
+# capitulation 信号节点(com.stock.capitulation_signal)每日生成的派生数据:
+# trailing 广度缓存(增量重建) + 逐日 β 择时信号。生产数据在主仓、按需重建,不入库。
+data/breadth_series/
+data/signals/
