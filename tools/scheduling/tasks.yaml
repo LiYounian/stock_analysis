@@ -39,6 +39,21 @@ tasks:
     notify_on: [failure, misfire]
     tags: [local, intraday, screen]
 
+  # headless 午盘深度选股(方案b·launchd 免漂移):读 intraday_screen 阶段1早产候选→逐票 DeepSeek 深度→
+  # 产 日内深度_<date>.md(灰度独立名,不碰 日内_/watch)。**灰度期草案,plist 未装载**(enabled:false):
+  # 换线(launchctl load + 停/改 Claude noon SKILL + 接 watch)由用户/统筹在灰度~3-5交易日确认后做。
+  # cron 须与 com.stock.intraday_deep.plist 的 11:50 mon-fri 等价(等价测试护)。
+  - id: intraday_deep
+    description: headless 午盘深度选股(11:50,读stage1候选逐票DeepSeek深度;灰度草案未装载)
+    cmd: ["python", "-m", "tools.run", "intraday_deep"]
+    cron: "50 11 * * mon-fri"
+    timeout_sec: 1800
+    retries: 1
+    depends_on: [intraday_screen]
+    notify_on: [failure, misfire]
+    enabled: false
+    tags: [local, intraday, deep, gray]
+
   - id: intraday_watch
     description: 下午实时观测循环(13:00 起动,脚本内 --until 14:57 自停)
     cmd: ["python", "-m", "tools.pipeline.intraday_watch", "--until", "14:57", "--interval", "300"]
