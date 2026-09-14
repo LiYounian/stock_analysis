@@ -570,3 +570,67 @@ def test_run_intraday_screen_persists_candidates(monkeypatch, tmp_path):
         write_md=False, snapshot_root=tmp_path)
     assert rep["旁路候选"] == str(isr.noon_candidates_path("2026-09-08", out_root=tmp_path))
     assert isr.noon_candidates_path("2026-09-08", out_root=tmp_path).exists()
+
+
+# ————————————————————————————————————————————————
+# ⑪ 统筹Q2:阶段1早产候选(数据面综合分排序,免等阶段2消息面batch)——门控~11:50即可开跑
+# ————————————————————————————————————————————————
+def test_persist_stage1_candidates_distinct_file_and_marker(monkeypatch, tmp_path):
+    """stage='stage1' 落独立文件名 + payload 带 stage 标记(与全量互不覆盖)。"""
+    monkeypatch.setattr(isr.store, "get_view", lambda name, date=None: _view_8())
+    p_full = isr.persist_noon_candidates("2026-09-08", out_root=tmp_path, stage="full")
+    p_s1 = isr.persist_noon_candidates("2026-09-08", out_root=tmp_path, stage="stage1")
+    assert p_full.name == isr.NOON_CANDIDATES_NAME
+    assert p_s1.name == isr.NOON_CANDIDATES_STAGE1_NAME
+    assert p_full != p_s1 and p_full.exists() and p_s1.exists()   # 两份并存、不覆盖
+    import json as _json
+    assert _json.loads(p_s1.read_text(encoding="utf-8"))["stage"] == "stage1"
+    assert _json.loads(p_full.read_text(encoding="utf-8"))["stage"] == "full"
+
+
+def test_run_intraday_screen_emits_stage1_early(monkeypatch, tmp_path):
+    """编排默认早产阶段1候选:cand_msg 先被 no_llm=True 调一次(早产)、再全量;两份候选都落盘。"""
+    monkeypatch.setattr(isr.store, "get_view", lambda name, date=None: _view_8())
+    calls = []
+    rep = isr.run_intraday_screen(
+        "2026-09-08", quotes={"000001": _Q}, codes=["000001"],
+        run_screen_all_fn=lambda *a, **k: {"union": 1, "llm_subset": 1, "各策略入选": {}},
+        cand_msg_fn=lambda as_of, no_llm=False: (calls.append(no_llm)
+                                                 or {"候选池规模": 1, "统计": {}}),
+        write_md=False, snapshot_root=tmp_path)
+    assert calls[0] is True                                   # 阶段1.5 早产先 no_llm
+    assert calls[-1] is False                                 # 阶段2 全量 no_llm=False
+    assert rep["阶段1候选"] == str(isr.noon_candidates_path(
+        "2026-09-08", out_root=tmp_path, filename=isr.NOON_CANDIDATES_STAGE1_NAME))
+    assert isr.noon_candidates_path("2026-09-08", out_root=tmp_path,
+                                    filename=isr.NOON_CANDIDATES_STAGE1_NAME).exists()
+    assert isr.noon_candidates_path("2026-09-08", out_root=tmp_path).exists()  # 全量也在
+
+
+def test_run_intraday_screen_can_disable_stage1(monkeypatch, tmp_path):
+    """可关早产(emit_stage1_candidates=False):只落全量、cand_msg 只全量调一次。"""
+    monkeypatch.setattr(isr.store, "get_view", lambda name, date=None: _view_8())
+    calls = []
+    isr.run_intraday_screen(
+        "2026-09-08", quotes={"000001": _Q}, codes=["000001"],
+        run_screen_all_fn=lambda *a, **k: {"union": 1, "llm_subset": 1, "各策略入选": {}},
+        cand_msg_fn=lambda as_of, no_llm=False: (calls.append(no_llm)
+                                                 or {"候选池规模": 1, "统计": {}}),
+        write_md=False, emit_stage1_candidates=False, snapshot_root=tmp_path)
+    assert calls == [False]                                   # 只全量一次(无早产 no_llm)
+    assert not isr.noon_candidates_path("2026-09-08", out_root=tmp_path,
+                                        filename=isr.NOON_CANDIDATES_STAGE1_NAME).exists()
+
+
+def test_read_noon_candidates_stage_selection(monkeypatch, tmp_path):
+    """消费侧 stage 选择:stage1 只读早产、full 只读全量、auto 全量优先。"""
+    monkeypatch.setattr(isr.store, "get_view", lambda name, date=None: _view_8())
+    isr.persist_noon_candidates("2026-09-08", out_root=tmp_path, stage="stage1")
+    # 此时只有 stage1:stage='stage1' 命中,stage='full' 落空回退(无 md → None)
+    assert isr.read_noon_candidates("2026-09-08", root=tmp_path, stage="stage1")["stage"] == "stage1"
+    assert isr.read_noon_candidates("2026-09-08", root=tmp_path, selection_dir=tmp_path,
+                                    stage="full") is None
+    # 再落全量:auto 应优先全量
+    isr.persist_noon_candidates("2026-09-08", out_root=tmp_path, stage="full")
+    assert isr.read_noon_candidates("2026-09-08", root=tmp_path, stage="auto")["stage"] == "full"
+    assert isr.read_noon_candidates("2026-09-08", root=tmp_path, stage="stage1")["stage"] == "stage1"
