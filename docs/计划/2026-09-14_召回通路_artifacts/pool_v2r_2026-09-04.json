@@ -1,0 +1,245 @@
+{
+  "pool": [
+    "603444",
+    "605007",
+    "603719",
+    "301048",
+    "002812",
+    "688269",
+    "601615",
+    "688009",
+    "002458",
+    "300662",
+    "603116",
+    "603334",
+    "603987",
+    "603407",
+    "301053",
+    "688130",
+    "688795",
+    "300862"
+  ],
+  "date": "2026-09-04",
+  "version": "v2r",
+  "base_pool_size": 15,
+  "recall_added": 3,
+  "pool_size": 18,
+  "recall_cap": 5,
+  "cap_r": 18,
+  "min_hits": 2,
+  "recalled": [
+    {
+      "code": "688130",
+      "hit_count": 2,
+      "行业": "信息传输、软件和信息技术服务业",
+      "origin": "recall/screen_x2",
+      "soft_tags": []
+    },
+    {
+      "code": "688795",
+      "hit_count": 2,
+      "行业": "信息技术",
+      "origin": "recall/screen_x2",
+      "soft_tags": [
+        "近5日主力净流出"
+      ]
+    },
+    {
+      "code": "300862",
+      "hit_count": 2,
+      "行业": "制造业",
+      "origin": "recall/screen_x2",
+      "soft_tags": [
+        "近5日主力净流出"
+      ]
+    }
+  ],
+  "recall_pool_candidates": 4,
+  "recall_skipped_industry": [],
+  "soft_tags": {
+    "603444": [
+      "高位获利盘96%",
+      "近5日主力净流出"
+    ],
+    "605007": [
+      "可转债摊薄9.7%"
+    ],
+    "603116": [
+      "近5日主力净流出"
+    ],
+    "603987": [
+      "近5日主力净流出"
+    ],
+    "688795": [
+      "近5日主力净流出"
+    ],
+    "300862": [
+      "近5日主力净流出"
+    ]
+  },
+  "base_meta": {
+    "date": "2026-09-04",
+    "version": "v2",
+    "council_flags": {
+      "命中高危红旗": 428,
+      "命中龙虎榜否决": 58,
+      "扫描数": 5556,
+      "top_n": 20
+    },
+    "base_size": 20,
+    "kept_after_gates": 19,
+    "dropped": [
+      {
+        "code": "002234",
+        "reason": "流动性偏薄(mktcap 25.3亿<27.1)"
+      }
+    ],
+    "pool_size": 15,
+    "soft_tags": {
+      "603444": [
+        "高位获利盘96%",
+        "近5日主力净流出"
+      ],
+      "605007": [
+        "可转债摊薄9.7%"
+      ],
+      "603116": [
+        "近5日主力净流出"
+      ],
+      "603987": [
+        "近5日主力净流出"
+      ]
+    },
+    "detail": [
+      {
+        "code": "603444",
+        "行业": "计算机",
+        "strength": 0.7788,
+        "final_score": 0.8788,
+        "screen_hits": 0,
+        "soft_tags": [
+          "高位获利盘96%",
+          "近5日主力净流出"
+        ]
+      },
+      {
+        "code": "605007",
+        "行业": "轻工制造",
+        "strength": 0.7828,
+        "final_score": 0.8728,
+        "screen_hits": 0,
+        "soft_tags": [
+          "可转债摊薄9.7%"
+        ]
+      },
+      {
+        "code": "603719",
+        "行业": "商贸零售",
+        "strength": 0.7334,
+        "final_score": 0.8234,
+        "screen_hits": 0,
+        "soft_tags": []
+      },
+      {
+        "code": "301048",
+        "行业": "国防军工",
+        "strength": 0.7243,
+        "final_score": 0.8143,
+        "screen_hits": 0,
+        "soft_tags": []
+      },
+      {
+        "code": "002812",
+        "行业": "基础化工",
+        "strength": 0.7094,
+        "final_score": 0.7794,
+        "screen_hits": 0,
+        "soft_tags": []
+      },
+      {
+        "code": "688269",
+        "行业": "基础化工",
+        "strength": 0.7094,
+        "final_score": 0.7794,
+        "screen_hits": 0,
+        "soft_tags": []
+      },
+      {
+        "code": "601615",
+        "行业": "机械设备",
+        "strength": 0.6625,
+        "final_score": 0.7625,
+        "screen_hits": 1,
+        "soft_tags": []
+      },
+      {
+        "code": "688009",
+        "行业": "国防军工",
+        "strength": 0.66,
+        "final_score": 0.75,
+        "screen_hits": 0,
+        "soft_tags": []
+      },
+      {
+        "code": "002458",
+        "行业": "农林牧渔",
+        "strength": 0.6592,
+        "final_score": 0.7492,
+        "screen_hits": 0,
+        "soft_tags": []
+      },
+      {
+        "code": "300662",
+        "行业": "社会服务",
+        "strength": 0.6538,
+        "final_score": 0.7438,
+        "screen_hits": 0,
+        "soft_tags": []
+      },
+      {
+        "code": "603116",
+        "行业": "纺织服饰",
+        "strength": 0.6504,
+        "final_score": 0.7404,
+        "screen_hits": 0,
+        "soft_tags": [
+          "近5日主力净流出"
+        ]
+      },
+      {
+        "code": "603334",
+        "行业": "环保",
+        "strength": 0.6491,
+        "final_score": 0.7391,
+        "screen_hits": 0,
+        "soft_tags": []
+      },
+      {
+        "code": "603987",
+        "行业": "机械设备",
+        "strength": 0.6451,
+        "final_score": 0.7351,
+        "screen_hits": 0,
+        "soft_tags": [
+          "近5日主力净流出"
+        ]
+      },
+      {
+        "code": "603407",
+        "行业": "基础化工",
+        "strength": 0.6647,
+        "final_score": 0.7347,
+        "screen_hits": 0,
+        "soft_tags": []
+      },
+      {
+        "code": "301053",
+        "行业": "机械设备",
+        "strength": 0.6625,
+        "final_score": 0.7325,
+        "screen_hits": 0,
+        "soft_tags": []
+      }
+    ]
+  }
+}

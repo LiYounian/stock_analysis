@@ -1,0 +1,200 @@
+{
+  "per_day": [
+    {
+      "date": "2026-08-11",
+      "n_units": 12,
+      "buy": [],
+      "alpha1": null,
+      "hit1": null,
+      "bull_n": 0,
+      "bull_alpha1": null
+    },
+    {
+      "date": "2026-08-13",
+      "n_units": 12,
+      "buy": [],
+      "alpha1": null,
+      "hit1": null,
+      "bull_n": 2,
+      "bull_alpha1": -2.4886171463338917
+    },
+    {
+      "date": "2026-08-14",
+      "n_units": 12,
+      "buy": [
+        "000009"
+      ],
+      "alpha1": -2.7163472432601816,
+      "hit1": 0.0,
+      "bull_n": 2,
+      "bull_alpha1": -2.6004155046513606
+    },
+    {
+      "date": "2026-08-18",
+      "n_units": 12,
+      "buy": [],
+      "alpha1": null,
+      "hit1": null,
+      "bull_n": 2,
+      "bull_alpha1": -2.8789160652497374
+    },
+    {
+      "date": "2026-08-20",
+      "n_units": 12,
+      "buy": [],
+      "alpha1": null,
+      "hit1": null,
+      "bull_n": 1,
+      "bull_alpha1": 2.669749774399192
+    },
+    {
+      "date": "2026-08-24",
+      "n_units": 9,
+      "buy": [
+        "000426"
+      ],
+      "alpha1": -6.9390163129843065,
+      "hit1": 0.0,
+      "bull_n": 1,
+      "bull_alpha1": -6.9390163129843065
+    },
+    {
+      "date": "2026-08-26",
+      "n_units": 12,
+      "buy": [
+        "600479"
+      ],
+      "alpha1": 8.300023481803509,
+      "hit1": 1.0,
+      "bull_n": 3,
+      "bull_alpha1": -0.3587039333766351
+    },
+    {
+      "date": "2026-08-28",
+      "n_units": 12,
+      "buy": [],
+      "alpha1": null,
+      "hit1": null,
+      "bull_n": 0,
+      "bull_alpha1": null
+    },
+    {
+      "date": "2026-08-31",
+      "n_units": 12,
+      "buy": [
+        "300684"
+      ],
+      "alpha1": 0.5232395967664896,
+      "hit1": 1.0,
+      "bull_n": 1,
+      "bull_alpha1": 0.5232395967664896
+    },
+    {
+      "date": "2026-09-01",
+      "n_units": 12,
+      "buy": [],
+      "alpha1": null,
+      "hit1": null,
+      "bull_n": 2,
+      "bull_alpha1": -0.776145182383549
+    },
+    {
+      "date": "2026-09-02",
+      "n_units": 12,
+      "buy": [],
+      "alpha1": null,
+      "hit1": null,
+      "bull_n": 0,
+      "bull_alpha1": null
+    },
+    {
+      "date": "2026-09-03",
+      "n_units": 12,
+      "buy": [
+        "300866"
+      ],
+      "alpha1": -0.18114056067240847,
+      "hit1": 0.0,
+      "bull_n": 2,
+      "bull_alpha1": 0.41644271603168603
+    },
+    {
+      "date": "2026-09-04",
+      "n_units": 12,
+      "buy": [
+        "000581"
+      ],
+      "alpha1": -1.5870097195301855,
+      "hit1": 0.0,
+      "bull_n": 1,
+      "bull_alpha1": -1.5870097195301855
+    },
+    {
+      "date": "2026-09-08",
+      "n_units": 8,
+      "buy": [],
+      "alpha1": null,
+      "hit1": null,
+      "bull_n": 0,
+      "bull_alpha1": null
+    },
+    {
+      "date": "2026-09-09",
+      "n_units": 12,
+      "buy": [],
+      "alpha1": null,
+      "hit1": null,
+      "bull_n": 0,
+      "bull_alpha1": null
+    },
+    {
+      "date": "2026-09-10",
+      "n_units": 12,
+      "buy": [],
+      "alpha1": null,
+      "hit1": null,
+      "bull_n": 2,
+      "bull_alpha1": 0.006079442452702866
+    }
+  ],
+  "buy_agg": {
+    "r_1": {
+      "horizon": "r_1",
+      "n_days": 6,
+      "day_mean_alpha_pp": -0.43337512631284736,
+      "day_se_alpha_pp": 2.0503429547590932,
+      "pooled_n_buys": 6,
+      "pooled_hit_rate": 0.3333333333333333,
+      "pooled_buy_mean_r": 0.2667369125917136
+    },
+    "r_5": {
+      "horizon": "r_5",
+      "n_days": 6,
+      "day_mean_alpha_pp": 2.084033784211495,
+      "day_se_alpha_pp": 3.976287663773873,
+      "pooled_n_buys": 6,
+      "pooled_hit_rate": 0.3333333333333333,
+      "pooled_buy_mean_r": 1.5101658001744513
+    }
+  },
+  "bull_agg": {
+    "r_1": {
+      "horizon": "r_1",
+      "n_days": 11,
+      "day_mean_alpha_pp": -1.273937484987236,
+      "day_se_alpha_pp": 0.7529691051430243,
+      "pooled_n_buys": 19,
+      "pooled_hit_rate": 0.21052631578947367,
+      "pooled_buy_mean_r": -1.7006898816469371
+    },
+    "r_5": {
+      "horizon": "r_5",
+      "n_days": 10,
+      "day_mean_alpha_pp": -0.9288629538000632,
+      "day_se_alpha_pp": 1.7206681039777805,
+      "pooled_n_buys": 17,
+      "pooled_hit_rate": 0.23529411764705882,
+      "pooled_buy_mean_r": -2.155462704383606
+    }
+  }
+}
