@@ -49,5 +49,8 @@ data/analysis/panel.json
 data/task_locks/
 data/intraday/
 
+# 每日 forward 影子跑证据库（v2r 扩样，纯 dry-run 旁路滚存，不入库；同 forward_scorecard 机制）
+data/shadow_forward/
+
 # 运行日志不入库
 logs/

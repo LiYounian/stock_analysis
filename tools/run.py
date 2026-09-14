@@ -1450,6 +1450,66 @@ def cmd_findata(argv):
     financial_backfill._main(argv[2:])   # argv[0]=脚本 argv[1]=findata,其余透传
 
 
+def cmd_shadow_forward(argv):
+    """每日 forward 影子跑(纯 dry-run 旁路,不接 live):
+    python -m tools.run shadow_forward [--date YYYY-MM-DD] [--data-root DIR] [--evidence-dir DIR]
+      [--provider deepseek_v4pro] [--experience-base DIR] [--think on|off] [--force] [--no-backfill]
+      [--scorecard PATH]。
+
+    建 v2r 候选池(shadow_recall.build_pool_v2r)→ DeepSeek headless 研判全池 → 写 forward 证据库
+    (evidence_<date>.json,待回填 r_1/r_5 标签)→ 回填历史已到期标签 → 打印当前样本外 α 快照。
+    每交易日盘后由 pull_refresh.sh 闭环末尾 best-effort 调用,无人值守增量攒证据。
+    **铁律**:只写 --evidence-dir(默认 <cwd>/data/shadow_forward),绝不写 live 选股产物 / 不动定时任务。
+    ⚠️ 研究模拟,非投资建议。真调 DeepSeek 须在有网关 env 的 shell(zsh -ic)下跑。
+    """
+    import argparse
+    import json
+    import subprocess
+    from pathlib import Path
+    from tools.analysis import shadow_forward as sf
+
+    ap = argparse.ArgumentParser(prog="tools.run shadow_forward")
+    ap.add_argument("--date", default=_as_of())
+    ap.add_argument("--data-root", default=str(Path.cwd() / "data" / "analysis"))
+    ap.add_argument("--evidence-dir", default=str(Path.cwd() / "data" / "shadow_forward"))
+    ap.add_argument("--provider", default=sf.PROVIDER_DEFAULT)
+    ap.add_argument("--experience-base", default=None)
+    ap.add_argument("--think", choices=["on", "off"], default=None)
+    ap.add_argument("--force", action="store_true")
+    ap.add_argument("--no-backfill", action="store_true")
+    ap.add_argument("--breadth-dir", default=str(Path.cwd() / "data" / "breadth"),
+                    help="全A等权基准来源(data/breadth 的 mean_pct 唯一真源)")
+    ap.add_argument("--scorecard",
+                    default=str(Path.cwd() / "data" / "analysis" / "backtest" / "forward_scorecard.csv"),
+                    help="全A等权窗口不全时的回退基准(picks 代理)")
+    args = ap.parse_args(argv[2:])
+    think = {"on": True, "off": False}.get(args.think)
+    try:
+        commit = subprocess.check_output(["git", "rev-parse", "--short", "HEAD"],
+                                         text=True).strip()
+    except Exception:  # noqa: BLE001
+        commit = None
+
+    summ = sf.run_forward_day(args.date, args.data_root, args.evidence_dir,
+                              provider=args.provider, exp_base=args.experience_base,
+                              think=think, force=args.force, code_commit=commit)
+    print(f"[shadow_forward {args.date}] {json.dumps(summ, ensure_ascii=False)}", file=sys.stderr)
+
+    if not args.no_backfill:
+        bf = sf.backfill_labels(args.evidence_dir)
+        print(f"[shadow_forward backfill] {json.dumps(bf, ensure_ascii=False)}", file=sys.stderr)
+
+    try:
+        alpha = sf.forward_alpha(args.evidence_dir, breadth_dir=args.breadth_dir,
+                                 scorecard_path=args.scorecard)
+        b1 = alpha["buy_agg"]["r_1"]
+        print(f"[shadow_forward α快照] n_days={alpha['n_days']} 总买入={alpha['total_buys']} "
+              f"买入侧r_1: 日均α={b1['day_mean_alpha_pp']} pooled_n={b1['pooled_n_buys']} "
+              f"hit={b1['pooled_hit_rate']} | {sf.BENCHMARK_NOTE}", file=sys.stderr)
+    except Exception as e:  # noqa: BLE001 - α 快照 best-effort,不阻断证据落盘
+        print(f"[shadow_forward α快照] 跳过:{e}", file=sys.stderr)
+
+
 _CMDS = {"collect": cmd_collect, "message": cmd_message, "sentiment": cmd_sentiment,
          "serialize": cmd_serialize, "panel": cmd_panel, "screen": cmd_screen,
          "events": cmd_events, "factor": cmd_factor, "council": cmd_council,
@@ -1459,7 +1519,8 @@ _CMDS = {"collect": cmd_collect, "message": cmd_message, "sentiment": cmd_sentim
          "analyze": cmd_analyze, "findata": cmd_findata, "all": cmd_all,
          "ticks": cmd_ticks, "enrich": cmd_enrich, "candmsg": cmd_candmsg,
          "intraday_screen": cmd_intraday_screen,
-         "intraday_review": cmd_intraday_review}
+         "intraday_review": cmd_intraday_review,
+         "shadow_forward": cmd_shadow_forward}
 
 
 def main(argv: list[str]) -> int:
