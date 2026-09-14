@@ -1,15 +1,14 @@
-"""编排层:市场状态 Market Regime(V1 模块一)。
+"""编排层:市场状态 Market Regime(V1 模块一;2026-09-14 P0/P1 改造为 4 因子)。
 
 数据流(读数 → 计算 → 落库):
-  沪深300 指数 K线(collectors.index)         → 指数多头 + 量能
-  + 模块二「形态选股」view 的达标占比(store 只读) → 宽度
-  + 核心龙头池当日涨跌(config + collectors.market)→ 科技共振(池空则降级)
-  + 涨跌停家数(暂无宽度采集 → None,降级)         → 涨跌停
-  → pattern_screener.regime.analyze(五因子平权 → 0–100 → 五档)
+  沪深300 指数 K线(collectors.index)              → 指数多头 + 量能
+  + 全市场广度(market_forecast.breadth,最近交易日)→ 宽度(above_ma20_ratio) + 涨跌停(家数)
+  → pattern_screener.regime.analyze(四因子平权 → 0–100 → 五档;描述性过热温度)
   → store.put_view("市场状态", ...)
 
-运行时耦合(#18):模块二先跑落达标占比,模块一后跑读之(双方不互相 import,只经 store view)。
-本轮只产"市场状态标签+分"落 view,**不接合议**(后续集成)。
+改造(诊断 docs/计划/2026-09-14_市场状态regime诊断与优化方案.md):原「宽度」读形态选股达标占比
+(历史几无数据)、「涨跌停」硬编码 None、「科技共振」龙头池空——三维形同虚设。现宽度/涨跌停统一从
+breadth 取(每日可得),科技共振移除。**不接合议**(后续集成)。
 入口:`python -m tools.pipeline.regime [--date YYYY-MM-DD] [--no-fetch]`。
 """
 from __future__ import annotations
@@ -17,7 +16,7 @@ from __future__ import annotations
 import logging
 
 from tools.analysis.pattern_screener import regime
-from tools.collectors import index, market
+from tools.collectors import index
 from tools.config.strategy import THRESHOLDS
 from tools.store import repo as store
 
@@ -34,30 +33,27 @@ def _index_df(fetch: bool):
         return index.fetch_index(["沪深300"]).get(_BENCH) if fetch else None
 
 
-def _breadth() -> float | None:
-    """读模块二「形态选股」view 的达标占比(宽度信号)。缺 → None。"""
+def _breadth_signals(as_of: str | None):
+    """全市场广度最近交易日(≤as_of)→ (宽度占比 above_ma20_ratio, 涨跌停{涨停,跌停})。缺→(None,None)。"""
     try:
-        return store.get_view("形态选股").get("达标占比")
-    except FileNotFoundError:
-        return None
-
-
-def _leader_pcts(fetch: bool) -> list | None:
-    """核心龙头池当日涨跌幅列表(config 名单)。池空 → None(科技共振降级)。"""
-    pool = _CFG.get("核心龙头池") or []
-    if not pool:
-        return None
-    pcts = []
-    for code in pool:
-        try:
-            kdf = market.load_kline_recent(code)
-        except FileNotFoundError:
-            kdf = market.fetch_kline([code]).get(code) if fetch else None
-        if kdf is not None and len(kdf) and "pct_chg" in kdf.columns:
-            v = kdf["pct_chg"].iloc[-1]
-            if v == v:                       # 非 NaN
-                pcts.append(float(v))
-    return pcts or None
+        from tools.analysis.market_forecast import breadth as mfb
+        bd = mfb.compute_breadth()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("广度计算失败(宽度/涨跌停降级): %s", str(exc)[:120])
+        return None, None
+    if bd is None or bd.empty:
+        return None, None
+    import pandas as pd
+    if as_of is not None:
+        sel = bd.loc[bd.index <= pd.Timestamp(as_of)]
+        row = sel.iloc[-1] if len(sel) else bd.iloc[-1]
+    else:
+        row = bd.iloc[-1]
+    width = float(row["above_ma20_ratio"]) if "above_ma20_ratio" in row else None
+    limits = None
+    if "limit_up" in row and "limit_down" in row:
+        limits = {"涨停": float(row["limit_up"]), "跌停": float(row["limit_down"])}
+    return width, limits
 
 
 def run_regime(as_of: str | None = None, fetch: bool = True) -> dict:
@@ -65,10 +61,8 @@ def run_regime(as_of: str | None = None, fetch: bool = True) -> dict:
     if as_of:
         store.set_active_date(as_of)
     idx = _index_df(fetch)
-    达标占比 = _breadth()
-    leaders = _leader_pcts(fetch)
-    result = regime.analyze(index_df=idx, 达标占比=达标占比, leader_pcts=leaders,
-                            涨跌停=None)          # 涨跌停家数暂无宽度采集 → 降级
+    宽度占比, 涨跌停 = _breadth_signals(as_of)
+    result = regime.analyze(index_df=idx, 宽度占比=宽度占比, 涨跌停=涨跌停)
     result["as_of"] = as_of
     p = store.put_view("市场状态", result)
     logger.info("市场状态:情绪分 %.1f / 标签 %s / 有效因子 %d/%d → %s",

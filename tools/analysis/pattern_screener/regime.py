@@ -1,11 +1,18 @@
-"""市场状态识别 Market Regime(V1 模块一)。
+"""市场状态识别 Market Regime(V1 模块一;2026-09-14 诊断后 P0/P1 改造为 4 因子)。
 
-五因子**平权**(#4 已定)→ 情绪分 0–100 → 五档标签(冰点/熊市共振/震荡/分化/牛市共振)。
-因子:① 指数多头(沪深300 MA5>10>20 试错 / 反之 避险)② 科技共振(核心龙头池同步性)
-     ③ 量能(成交额环比 + 相对历史天量)④ 宽度(**模块二全市场达标占比**,经 store 读 view,不重算)
-     ⑤ 涨跌停(反向股性/活跃度)。
-诚实降级(F1 可追溯):缺数据/未标定的因子不参与平权、其余照算,并在「降级」字段声明;
-五档边界/龙头池/宽度参考占比均为 Config 占位,**待策略端标定**。
+四因子**平权**→ 情绪分 0–100 → 五档标签(冰点/熊市共振/震荡/分化/牛市共振)。
+因子:① 指数多头(沪深300 MA5>10>20 试错 / 反之 避险)② 量能(成交额环比 + 相对历史天量)
+     ③ 宽度(**全市场上 MA20 占比 above_ma20_ratio**,∈[0,1] 直用为热度,每日可得)
+     ④ 涨跌停(反向股性/活跃度;涨停多→偏高)。
+定位=**描述性过热温度计(路线 A)**:分数高=市场热/过热(≈风险),不直接等价于"看多"——
+诊断显示情绪分与前瞻收益轻微倒挂(高温→未来收益偏低),故本层只报温度,方向解读交下游。
+诚实降级(可追溯):缺数据的因子不参与平权、其余照算,并在「降级」字段声明。
+
+改造记录(诊断:docs/计划/2026-09-14_市场状态regime诊断与优化方案.md):
+  · 移除「科技共振」——原龙头池长期为空、恒降级(降 5 因子→4 因子);
+  · 「涨跌停」原在编排层被硬编码 None、恒降级,现接线 breadth 家数复活;
+  · 「宽度」原 = 形态选股达标占比/ref(0.05 占位→几乎恒饱和且历史几无数据),改 above_ma20_ratio 直用;
+  · 五档边界由等分占位(20/40/60/80)改**按历史分布标定的语义锚**(25/45/60/75),使冰点/熊市档可触发。
 
 依赖方向:分析层,纯计算(输入由编排层 pipeline/regime.py 备好);参数走 Config THRESHOLDS["市场状态"]。
 需求见 docs/计划/V1_形态选股与市场状态系统.md 模块一 F1.1–F1.5。
@@ -62,21 +69,17 @@ def factor_量能(index_df, cfg=None) -> tuple:
     return round(sub, 4), f"{col}环比{chg:.2f}·相对天量{ratio_peak:.2f}"
 
 
-def factor_宽度(达标占比, cfg=None) -> tuple:
-    """宽度 = 模块二全市场达标占比 / 参考满档(占位),归一 [0,1]。缺 view→None。"""
-    cfg = cfg or _CFG
-    if 达标占比 is None:
-        return None, "无达标占比(先跑模块二形态选股)"
-    ref = float(cfg.get("宽度参考占比", 0.05)) or 0.05
-    return round(_clamp(float(达标占比) / ref), 4), f"达标占比{达标占比}/参考{ref}"
+def factor_宽度(宽度占比, cfg=None) -> tuple:
+    """宽度 = 全市场上 MA20 占比 above_ma20_ratio(∈[0,1] 直用为热度)。缺→None。
 
-
-def factor_科技共振(leader_pcts, cfg=None) -> tuple:
-    """核心龙头池当日涨跌同步性 = 上涨占比 [0,1]。龙头池空/无数据→None(降级)。"""
-    if not leader_pcts:
-        return None, "核心龙头池未配置(待策略端)"
-    ups = sum(1 for p in leader_pcts if isinstance(p, (int, float)) and p > 0)
-    return round(ups / len(leader_pcts), 4), f"龙头 {ups}/{len(leader_pcts)} 上涨"
+    2026-09-14 改造:原口径 = 形态选股达标占比/ref(0.05),ref 为未标定占位且达标占比历史几无数据,
+    导致该维恒饱和≈1、名存实亡。改用 breadth 的 above_ma20_ratio(每日可得、语义即市场宽度热度),
+    clamp 到 [0,1],**取消 ref 归一**。
+    """
+    if 宽度占比 is None:
+        return None, "无宽度占比(above_ma20_ratio 缺)"
+    r = _clamp(float(宽度占比))
+    return round(r, 4), f"上MA20占比{r:.3f}"
 
 
 def factor_涨跌停(涨跌停, cfg=None) -> tuple:
@@ -91,9 +94,8 @@ def factor_涨跌停(涨跌停, cfg=None) -> tuple:
 
 _FACTORS = {
     "指数多头": lambda inp, cfg: factor_指数多头(inp["index_df"], cfg),
-    "科技共振": lambda inp, cfg: factor_科技共振(inp.get("leader_pcts"), cfg),
     "量能": lambda inp, cfg: factor_量能(inp["index_df"], cfg),
-    "宽度": lambda inp, cfg: factor_宽度(inp.get("达标占比"), cfg),
+    "宽度": lambda inp, cfg: factor_宽度(inp.get("宽度占比"), cfg),
     "涨跌停": lambda inp, cfg: factor_涨跌停(inp.get("涨跌停"), cfg),
 }
 
@@ -106,15 +108,15 @@ def label_of(score, cfg=None) -> str:
     return (cfg or _CFG)["五档"][-1][0]
 
 
-def analyze(index_df=None, 达标占比=None, leader_pcts=None, 涨跌停=None,
-            cfg=None) -> dict:
-    """五因子平权 → 情绪分 0–100 → 五档标签。缺因子降级不崩,贡献可追溯。
+def analyze(index_df=None, 宽度占比=None, 涨跌停=None, cfg=None) -> dict:
+    """四因子平权 → 情绪分 0–100 → 五档标签。缺因子降级不崩,贡献可追溯。
 
-    返回 {情绪分, 标签, 因子贡献{因子:{子分,权重,可用,依据}}, 达标占比, 降级[], 口径}。
+    · 宽度占比 = 全市场 above_ma20_ratio(∈[0,1]);涨跌停 = {"涨停":n,"跌停":n}(编排层从 breadth 备好)。
+    · 情绪分=描述性过热温度(高=热≈风险),非方向预测(见模块 docstring 路线 A)。
+    返回 {情绪分, 标签, 因子贡献{因子:{子分,权重,可用,依据}}, 宽度占比, 降级[], 口径}。
     """
     cfg = cfg or _CFG
-    inp = {"index_df": index_df, "达标占比": 达标占比,
-           "leader_pcts": leader_pcts, "涨跌停": 涨跌停}
+    inp = {"index_df": index_df, "宽度占比": 宽度占比, "涨跌停": 涨跌停}
     贡献 = {}
     available = []
     降级 = []
@@ -131,12 +133,11 @@ def analyze(index_df=None, 达标占比=None, leader_pcts=None, 涨跌停=None,
 
     情绪分 = round(sum(available) / len(available) * 100, 2) if available else 0.0
     标签 = label_of(情绪分, cfg)
-    降级.append("五档边界/龙头池/宽度参考占比为占位默认,待策略端标定")
     return {
         "情绪分": 情绪分, "标签": 标签,
         "因子贡献": 贡献,
-        "达标占比": 达标占比,
+        "宽度占比": 宽度占比,
         "有效因子数": len(available), "总因子数": n,
         "降级": 降级,
-        "口径": f"五因子平权(有效{len(available)}/{n})·情绪分=有效因子子分均值×100·五档读Config",
+        "口径": f"四因子平权(有效{len(available)}/{n})·情绪分=有效因子子分均值×100(描述性过热温度)·五档读Config",
     }
