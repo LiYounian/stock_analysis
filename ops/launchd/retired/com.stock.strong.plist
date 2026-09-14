@@ -1,6 +1,9 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
+<!-- ⚠️ 已退役(2026-09-14):STRONG_CHIP_SOURCE 默认已切 local(本地 chip 推演),15:46 盘后闭环
+     当场即产出「最强选股」;此 20:00 Tushare cyq_perf 补跑纯冗余,且会 overwrite 用户 18:36 已读视图。
+     本文件仅代码存档留痕、可回滚,不再装载。launchctl unload + 从 ~/Library/LaunchAgents 移除由用户手动完成。 -->
 <dict>
   <key>Label</key>
   <string>com.stock.strong</string>

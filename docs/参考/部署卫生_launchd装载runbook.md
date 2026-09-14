@@ -72,12 +72,11 @@ launchctl load "$DST"
 launchctl list | grep "$LABEL"
 ```
 
-全部 9 个 job 的 LABEL:
+全部在产 job 的 LABEL(⚠️ `com.stock.strong` 已于 2026-09-14 退役,本地筹码源替代——**不要再装载**,存档见 `ops/launchd/retired/`):
 
 ```
 com.stock.pullrefresh
 com.stock.breadth
-com.stock.strong
 com.stock.commitdocs
 com.stock.intraday
 com.stock.intraday_noon
