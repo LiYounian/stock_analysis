@@ -1,0 +1,234 @@
+{
+  "pool": [
+    "000869",
+    "600559",
+    "600548",
+    "605499",
+    "301237",
+    "000543",
+    "000791",
+    "600025",
+    "600886",
+    "600998",
+    "601816",
+    "603309",
+    "688271",
+    "603444",
+    "300147",
+    "002274",
+    "002827",
+    "600722"
+  ],
+  "date": "2026-09-01",
+  "version": "v2r",
+  "base_pool_size": 15,
+  "recall_added": 3,
+  "pool_size": 18,
+  "recall_cap": 5,
+  "cap_r": 18,
+  "min_hits": 2,
+  "recalled": [
+    {
+      "code": "002274",
+      "hit_count": 2,
+      "行业": "原材料",
+      "origin": "recall/screen_x2",
+      "soft_tags": [
+        "高位获利盘91%"
+      ]
+    },
+    {
+      "code": "002827",
+      "hit_count": 2,
+      "行业": "制造业",
+      "origin": "recall/screen_x2",
+      "soft_tags": [
+        "高位获利盘100%"
+      ]
+    },
+    {
+      "code": "600722",
+      "hit_count": 2,
+      "行业": "制造业",
+      "origin": "recall/screen_x2",
+      "soft_tags": [
+        "高位获利盘100%"
+      ]
+    }
+  ],
+  "recall_pool_candidates": 3,
+  "recall_skipped_industry": [],
+  "soft_tags": {
+    "600025": [
+      "高位获利盘91%"
+    ],
+    "603444": [
+      "近5日主力净流出"
+    ],
+    "300147": [
+      "近5日主力净流出"
+    ],
+    "002274": [
+      "高位获利盘91%"
+    ],
+    "002827": [
+      "高位获利盘100%"
+    ],
+    "600722": [
+      "高位获利盘100%"
+    ]
+  },
+  "base_meta": {
+    "date": "2026-09-01",
+    "version": "v2",
+    "council_flags": {
+      "命中高危红旗": 96,
+      "命中龙虎榜否决": 12,
+      "扫描数": 5553,
+      "top_n": 20
+    },
+    "base_size": 20,
+    "kept_after_gates": 20,
+    "dropped": [],
+    "pool_size": 15,
+    "soft_tags": {
+      "600025": [
+        "高位获利盘91%"
+      ],
+      "603444": [
+        "近5日主力净流出"
+      ],
+      "300147": [
+        "近5日主力净流出"
+      ]
+    },
+    "detail": [
+      {
+        "code": "000869",
+        "行业": null,
+        "strength": 0.8,
+        "final_score": 0.8,
+        "screen_hits": 0,
+        "soft_tags": []
+      },
+      {
+        "code": "600559",
+        "行业": null,
+        "strength": 0.8,
+        "final_score": 0.8,
+        "screen_hits": 0,
+        "soft_tags": []
+      },
+      {
+        "code": "600548",
+        "行业": null,
+        "strength": 0.75,
+        "final_score": 0.75,
+        "screen_hits": 0,
+        "soft_tags": []
+      },
+      {
+        "code": "605499",
+        "行业": null,
+        "strength": 0.75,
+        "final_score": 0.75,
+        "screen_hits": 0,
+        "soft_tags": []
+      },
+      {
+        "code": "301237",
+        "行业": null,
+        "strength": 0.725,
+        "final_score": 0.725,
+        "screen_hits": 0,
+        "soft_tags": []
+      },
+      {
+        "code": "000543",
+        "行业": null,
+        "strength": 0.7,
+        "final_score": 0.7,
+        "screen_hits": 0,
+        "soft_tags": []
+      },
+      {
+        "code": "000791",
+        "行业": null,
+        "strength": 0.7,
+        "final_score": 0.7,
+        "screen_hits": 0,
+        "soft_tags": []
+      },
+      {
+        "code": "600025",
+        "行业": null,
+        "strength": 0.7,
+        "final_score": 0.7,
+        "screen_hits": 0,
+        "soft_tags": [
+          "高位获利盘91%"
+        ]
+      },
+      {
+        "code": "600886",
+        "行业": null,
+        "strength": 0.7,
+        "final_score": 0.7,
+        "screen_hits": 0,
+        "soft_tags": []
+      },
+      {
+        "code": "600998",
+        "行业": null,
+        "strength": 0.7,
+        "final_score": 0.7,
+        "screen_hits": 0,
+        "soft_tags": []
+      },
+      {
+        "code": "601816",
+        "行业": null,
+        "strength": 0.7,
+        "final_score": 0.7,
+        "screen_hits": 0,
+        "soft_tags": []
+      },
+      {
+        "code": "603309",
+        "行业": null,
+        "strength": 0.7,
+        "final_score": 0.7,
+        "screen_hits": 0,
+        "soft_tags": []
+      },
+      {
+        "code": "688271",
+        "行业": null,
+        "strength": 0.7,
+        "final_score": 0.7,
+        "screen_hits": 0,
+        "soft_tags": []
+      },
+      {
+        "code": "603444",
+        "行业": null,
+        "strength": 0.6576,
+        "final_score": 0.6576,
+        "screen_hits": 0,
+        "soft_tags": [
+          "近5日主力净流出"
+        ]
+      },
+      {
+        "code": "300147",
+        "行业": null,
+        "strength": 0.6497,
+        "final_score": 0.6497,
+        "screen_hits": 0,
+        "soft_tags": [
+          "近5日主力净流出"
+        ]
+      }
+    ]
+  }
+}

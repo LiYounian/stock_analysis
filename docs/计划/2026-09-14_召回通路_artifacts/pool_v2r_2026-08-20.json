@@ -1,0 +1,231 @@
+{
+  "pool": [
+    "002033",
+    "002275",
+    "300453",
+    "002749",
+    "300308",
+    "000650",
+    "002142",
+    "002399",
+    "002762",
+    "000421",
+    "002019",
+    "000603",
+    "001872",
+    "603221"
+  ],
+  "date": "2026-08-20",
+  "version": "v2r",
+  "base_pool_size": 13,
+  "recall_added": 1,
+  "pool_size": 14,
+  "recall_cap": 5,
+  "cap_r": 18,
+  "min_hits": 2,
+  "recalled": [
+    {
+      "code": "603221",
+      "hit_count": 2,
+      "行业": null,
+      "origin": "recall/screen_x2",
+      "soft_tags": [
+        "近5日主力净流出"
+      ]
+    }
+  ],
+  "recall_pool_candidates": 1,
+  "recall_skipped_industry": [],
+  "soft_tags": {
+    "002033": [
+      "近5日主力净流出"
+    ],
+    "002275": [
+      "近5日主力净流出"
+    ],
+    "300453": [
+      "近5日主力净流出"
+    ],
+    "002749": [
+      "近5日主力净流出"
+    ],
+    "300308": [
+      "近5日主力净流出"
+    ],
+    "002399": [
+      "近5日主力净流出"
+    ],
+    "001872": [
+      "近5日主力净流出"
+    ],
+    "603221": [
+      "近5日主力净流出"
+    ]
+  },
+  "base_meta": {
+    "date": "2026-08-20",
+    "version": "v2",
+    "council_flags": {
+      "命中高危红旗": 29,
+      "命中龙虎榜否决": 0,
+      "扫描数": 2000,
+      "top_n": 1997
+    },
+    "base_size": 15,
+    "kept_after_gates": 13,
+    "dropped": [
+      {
+        "code": "002702",
+        "reason": "流动性偏薄(mktcap 26.4亿<27.7)"
+      },
+      {
+        "code": "002715",
+        "reason": "流动性偏薄(mktcap 18.8亿<27.7)"
+      }
+    ],
+    "pool_size": 13,
+    "soft_tags": {
+      "002033": [
+        "近5日主力净流出"
+      ],
+      "002275": [
+        "近5日主力净流出"
+      ],
+      "300453": [
+        "近5日主力净流出"
+      ],
+      "002749": [
+        "近5日主力净流出"
+      ],
+      "300308": [
+        "近5日主力净流出"
+      ],
+      "002399": [
+        "近5日主力净流出"
+      ],
+      "001872": [
+        "近5日主力净流出"
+      ]
+    },
+    "detail": [
+      {
+        "code": "002033",
+        "行业": null,
+        "strength": 0.5594,
+        "final_score": 0.5594,
+        "screen_hits": 0,
+        "soft_tags": [
+          "近5日主力净流出"
+        ]
+      },
+      {
+        "code": "002275",
+        "行业": null,
+        "strength": 0.5237,
+        "final_score": 0.5237,
+        "screen_hits": 0,
+        "soft_tags": [
+          "近5日主力净流出"
+        ]
+      },
+      {
+        "code": "300453",
+        "行业": null,
+        "strength": 0.4218,
+        "final_score": 0.4218,
+        "screen_hits": 0,
+        "soft_tags": [
+          "近5日主力净流出"
+        ]
+      },
+      {
+        "code": "002749",
+        "行业": null,
+        "strength": 0.4012,
+        "final_score": 0.4012,
+        "screen_hits": 0,
+        "soft_tags": [
+          "近5日主力净流出"
+        ]
+      },
+      {
+        "code": "300308",
+        "行业": null,
+        "strength": 0.3553,
+        "final_score": 0.3553,
+        "screen_hits": 0,
+        "soft_tags": [
+          "近5日主力净流出"
+        ]
+      },
+      {
+        "code": "000650",
+        "行业": null,
+        "strength": 0.3293,
+        "final_score": 0.3293,
+        "screen_hits": 0,
+        "soft_tags": []
+      },
+      {
+        "code": "002142",
+        "行业": null,
+        "strength": 0.2665,
+        "final_score": 0.2665,
+        "screen_hits": 0,
+        "soft_tags": []
+      },
+      {
+        "code": "002399",
+        "行业": null,
+        "strength": 0.2646,
+        "final_score": 0.2646,
+        "screen_hits": 0,
+        "soft_tags": [
+          "近5日主力净流出"
+        ]
+      },
+      {
+        "code": "002762",
+        "行业": null,
+        "strength": 0.25,
+        "final_score": 0.25,
+        "screen_hits": 0,
+        "soft_tags": []
+      },
+      {
+        "code": "000421",
+        "行业": null,
+        "strength": 0.2098,
+        "final_score": 0.2398,
+        "screen_hits": 1,
+        "soft_tags": []
+      },
+      {
+        "code": "002019",
+        "行业": null,
+        "strength": 0.229,
+        "final_score": 0.229,
+        "screen_hits": 0,
+        "soft_tags": []
+      },
+      {
+        "code": "000603",
+        "行业": null,
+        "strength": 0.2145,
+        "final_score": 0.2145,
+        "screen_hits": 0,
+        "soft_tags": []
+      },
+      {
+        "code": "001872",
+        "行业": null,
+        "strength": 0.2142,
+        "final_score": 0.2142,
+        "screen_hits": 0,
+        "soft_tags": [
+          "近5日主力净流出"
+        ]
+      }
+    ]
+  }
+}

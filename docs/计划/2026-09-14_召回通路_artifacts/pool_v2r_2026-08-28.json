@@ -1,0 +1,117 @@
+{
+  "pool": [
+    "000651",
+    "000507",
+    "601886",
+    "688433",
+    "301591",
+    "600127",
+    "600613"
+  ],
+  "date": "2026-08-28",
+  "version": "v2r",
+  "base_pool_size": 2,
+  "recall_added": 5,
+  "pool_size": 7,
+  "recall_cap": 5,
+  "cap_r": 18,
+  "min_hits": 2,
+  "recalled": [
+    {
+      "code": "601886",
+      "hit_count": 2,
+      "行业": null,
+      "origin": "recall/screen_x2",
+      "soft_tags": [
+        "近5日主力净流出"
+      ]
+    },
+    {
+      "code": "688433",
+      "hit_count": 2,
+      "行业": null,
+      "origin": "recall/screen_x2",
+      "soft_tags": [
+        "近5日主力净流出"
+      ]
+    },
+    {
+      "code": "301591",
+      "hit_count": 2,
+      "行业": null,
+      "origin": "recall/screen_x2",
+      "soft_tags": []
+    },
+    {
+      "code": "600127",
+      "hit_count": 2,
+      "行业": null,
+      "origin": "recall/screen_x2",
+      "soft_tags": []
+    },
+    {
+      "code": "600613",
+      "hit_count": 2,
+      "行业": null,
+      "origin": "recall/screen_x2",
+      "soft_tags": [
+        "近5日主力净流出"
+      ]
+    }
+  ],
+  "recall_pool_candidates": 5,
+  "recall_skipped_industry": [],
+  "soft_tags": {
+    "000507": [
+      "近5日主力净流出"
+    ],
+    "601886": [
+      "近5日主力净流出"
+    ],
+    "688433": [
+      "近5日主力净流出"
+    ],
+    "600613": [
+      "近5日主力净流出"
+    ]
+  },
+  "base_meta": {
+    "date": "2026-08-28",
+    "version": "v2",
+    "council_flags": {
+      "命中高危红旗": 7,
+      "命中龙虎榜否决": 0,
+      "扫描数": 200,
+      "top_n": 30
+    },
+    "base_size": 2,
+    "kept_after_gates": 2,
+    "dropped": [],
+    "pool_size": 2,
+    "soft_tags": {
+      "000507": [
+        "近5日主力净流出"
+      ]
+    },
+    "detail": [
+      {
+        "code": "000651",
+        "行业": null,
+        "strength": 0.5562,
+        "final_score": 0.5562,
+        "screen_hits": 0,
+        "soft_tags": []
+      },
+      {
+        "code": "000507",
+        "行业": null,
+        "strength": 0.4034,
+        "final_score": 0.4034,
+        "screen_hits": 0,
+        "soft_tags": [
+          "近5日主力净流出"
+        ]
+      }
+    ]
+  }
+}
