@@ -15,7 +15,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from tools.backtest.capitulation.forward import forward_returns_panel, bootstrap_ci
+from tools.backtest.capitulation.forward import ForwardBook, bootstrap_ci
 
 VOL_RATIO_GATE = 1.5      # 放量阈值(镜像 technical 的 vol_state / _reversal 放量反包)
 FWD_WINDOW = 10           # 底部后扫触发的最大交易日窗口
@@ -43,9 +43,11 @@ GATES = ["G_MA5", "G_MA3", "G_prevhigh", "G_volup_close"]
 
 
 def run_h2(panels, oversold_panel, cap_dates, horizons=(1, 5),
-           window=FWD_WINDOW, oos_start=None):
+           window=FWD_WINDOW, oos_start=None, book=None):
     """遍历 capitulation 底部超跌票,对每档闸门找首触发 + 前向 α + 首段捕获。"""
     close_panel = panels["close"]
+    if book is None:
+        book = ForwardBook(close_panel, horizons, lag=1)
     idx = close_panel.index
     n = len(idx)
     # 每档:触发次数、前向 α/收益样本、首段捕获样本
@@ -95,16 +97,13 @@ def run_h2(panels, oversold_panel, cap_dates, horizons=(1, 5),
                 trig_px = close_panel.iloc[fi].get(c, np.nan)
                 if not pd.isna(trig_px) and base_px:
                     rec[g]["seg_capture"].append((trig_px / base_px - 1.0) * 100.0)
-                # 触发日 t+1 进场的前向 α / 收益
-                fwd = forward_returns_panel(close_panel, trig_date, horizons, lag=1)
+                # 触发日 t+1 进场的前向 α / 收益(ForwardBook O(1) 查询)
                 for N in horizons:
-                    r_all = fwd[N]
-                    if len(r_all) == 0 or c not in r_all.index:
+                    sa = book.stock_alpha(trig_date, c, N)
+                    if sa is None:
                         continue
-                    bench = float(r_all.mean())
-                    r_c = float(r_all[c])
-                    rec[g]["ret"][N].append(r_c)
-                    rec[g]["alpha"][N].append(r_c - bench)
+                    rec[g]["ret"][N].append(sa["r"])
+                    rec[g]["alpha"][N].append(sa["alpha"])
     return _summarize_h2(rec, horizons, n_samples)
 
 

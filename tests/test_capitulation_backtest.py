@@ -74,6 +74,24 @@ def test_forward_matches_event_study():
         assert es[0]["前瞻"][N] == pytest.approx(float(mine), abs=1e-5)
 
 
+def test_forwardbook_matches_panel():
+    """ForwardBook 的向量化前向收益与 forward_returns_panel 逐日一致。"""
+    idx = pd.bdate_range("2020-01-01", periods=25)
+    rng = np.random.default_rng(3)
+    panel = pd.DataFrame({c: 10 + np.cumsum(rng.normal(0, 0.2, 25)) for c in ["A", "B", "C"]},
+                         index=idx)
+    book = fwd.ForwardBook(panel, horizons=(1, 5), lag=1)
+    for d in idx[:15]:
+        got = fwd.forward_returns_panel(panel, d, horizons=(1, 5), lag=1)
+        for N in (1, 5):
+            _, row = book._day_row(d, N)
+            if len(got[N]) == 0:
+                assert len(row) == 0
+            else:
+                for c in got[N].index:
+                    assert row[c] == pytest.approx(float(got[N][c]), abs=1e-9)
+
+
 def test_forward_overflow_not_settled():
     idx = pd.bdate_range("2020-01-01", periods=8)
     panel = pd.DataFrame({"AAA": pd.Series(np.arange(1, 9, dtype=float), index=idx)})

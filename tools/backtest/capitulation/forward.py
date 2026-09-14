@@ -45,6 +45,68 @@ def forward_returns_panel(close_panel: pd.DataFrame, signal_date,
     return out
 
 
+class ForwardBook:
+    """预算 date×code 前向收益矩阵(t+1 进场),供 H1/H2 做 O(1) 查询。
+
+    fmat[N][信号日, code] = close[进场+N]/close[进场]−1(pp),进场=信号日+lag。
+    与 forward_returns_panel 同口径(test 断言二者一致),但向量化一次、复用多次。
+    """
+
+    def __init__(self, close_panel: pd.DataFrame, horizons=(1, 5), lag: int = 1):
+        self.horizons = tuple(horizons)
+        self.lag = lag
+        self.fmat = {N: (close_panel.shift(-(lag + N)) / close_panel.shift(-lag) - 1.0) * 100.0
+                     for N in self.horizons}
+        self._day_cache: dict = {}
+
+    def _day_row(self, date, N):
+        key = (date, N)
+        if key not in self._day_cache:
+            fm = self.fmat[N]
+            if date in fm.index:
+                row = fm.loc[date].replace([np.inf, -np.inf], np.nan).dropna()
+            else:
+                row = pd.Series(dtype=float)
+            bench = float(row.mean()) if len(row) else None
+            self._day_cache[key] = (bench, row)
+        return self._day_cache[key]
+
+    def alpha_for_subset(self, signal_date, subset_codes, horizons=None) -> dict:
+        horizons = horizons or self.horizons
+        subset = set(map(str, subset_codes))
+        res = {}
+        for N in horizons:
+            bench, row = self._day_row(signal_date, N)
+            if bench is None:
+                res[N] = None
+                continue
+            sub = row[row.index.isin(subset)].astype(float)
+            if len(sub) == 0:
+                res[N] = {"benchmark": round(bench, 6), "subset_mean": None, "alpha": None,
+                          "n_subset": 0, "n_universe": int(len(row)), "hit": None,
+                          "per_stock_r": [], "per_stock_alpha": []}
+                continue
+            per_alpha = sub - bench
+            res[N] = {
+                "benchmark": round(bench, 6),
+                "subset_mean": round(float(sub.mean()), 6),
+                "alpha": round(float(sub.mean()) - bench, 6),
+                "n_subset": int(len(sub)), "n_universe": int(len(row)),
+                "hit": round(float((per_alpha > 0).mean()), 6),
+                "per_stock_r": [round(x, 6) for x in sub.tolist()],
+                "per_stock_alpha": [round(x, 6) for x in per_alpha.tolist()],
+            }
+        return res
+
+    def stock_alpha(self, signal_date, code, N):
+        """单票在信号日的 (前向收益 r, 基准 benchmark, α=r−benchmark);缺则 None。"""
+        bench, row = self._day_row(signal_date, N)
+        if bench is None or code not in row.index:
+            return None
+        r = float(row[code])
+        return {"r": r, "benchmark": bench, "alpha": r - bench}
+
+
 def alpha_for_subset(close_panel: pd.DataFrame, signal_date, subset_codes,
                      horizons=(1, 5), lag: int = 1) -> dict:
     """一个信号日:子集(超跌票)前向收益、全样本(等权基准)前向收益、α=子集−基准。

@@ -41,6 +41,8 @@ def main():
 
     panels = build_panels(args.panels, data_root=args.data_root)
     close_panel, oversold_panel = panels["close"], panels["oversold"]
+    from tools.backtest.capitulation.forward import ForwardBook
+    book = ForwardBook(close_panel, horizons, lag=1)
 
     results = {"meta": {"oos_start": args.oos_start, "horizons": list(horizons),
                         "grid": GRID, "n_trading_days": int(len(breadth)),
@@ -58,9 +60,9 @@ def main():
             "capitulation_all": len(cap), "capitulation_oos": len(cap_oos),
             "ordinary_down_oos": len(ord_oos)}
         results["H1"][key] = compare_groups(
-            close_panel, oversold_panel, cap, ordd, horizons, args.oos_start)
+            book, oversold_panel, cap, ordd, horizons, args.oos_start)
         results["H2"][key] = run_h2(
-            panels, oversold_panel, cap, horizons, oos_start=args.oos_start)
+            panels, oversold_panel, cap, horizons, oos_start=args.oos_start, book=book)
 
     with open(args.out, "w") as f:
         json.dump(results, f, ensure_ascii=False, indent=1, default=str)

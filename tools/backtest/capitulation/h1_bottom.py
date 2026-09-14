@@ -13,7 +13,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from tools.backtest.capitulation.forward import alpha_for_subset, bootstrap_ci
+from tools.backtest.capitulation.forward import ForwardBook, bootstrap_ci
 
 
 def _aggregate(events, horizons):
@@ -48,8 +48,8 @@ def _aggregate(events, horizons):
     return agg
 
 
-def run_h1(close_panel, oversold_panel, dates, horizons=(1, 5)):
-    """给定一组事件日,算超跌票前向 α 聚合。"""
+def run_h1(book, oversold_panel, dates, horizons=(1, 5)):
+    """给定一组事件日,算超跌票前向 α 聚合(book=ForwardBook)。"""
     events = []
     for d in dates:
         d = pd.Timestamp(d)
@@ -58,12 +58,12 @@ def run_h1(close_panel, oversold_panel, dates, horizons=(1, 5)):
         subset = list(oversold_panel.columns[oversold_panel.loc[d].values])
         if not subset:
             continue
-        res = alpha_for_subset(close_panel, d, subset, horizons)
+        res = book.alpha_for_subset(d, subset, horizons)
         events.append((d, res))
     return _aggregate(events, horizons), events
 
 
-def compare_groups(close_panel, oversold_panel, cap_dates, ord_dates,
+def compare_groups(book, oversold_panel, cap_dates, ord_dates,
                    horizons=(1, 5), oos_start=None):
     """capitulation vs 普通普跌:两组各跑 run_h1,返回对比 dict。"""
     def _flt(ds):
@@ -71,6 +71,6 @@ def compare_groups(close_panel, oversold_panel, cap_dates, ord_dates,
         if oos_start:
             ds = [d for d in ds if d >= pd.Timestamp(oos_start)]
         return ds
-    cap_agg, _ = run_h1(close_panel, oversold_panel, _flt(cap_dates), horizons)
-    ord_agg, _ = run_h1(close_panel, oversold_panel, _flt(ord_dates), horizons)
+    cap_agg, _ = run_h1(book, oversold_panel, _flt(cap_dates), horizons)
+    ord_agg, _ = run_h1(book, oversold_panel, _flt(ord_dates), horizons)
     return {"capitulation": cap_agg, "ordinary_down": ord_agg}
