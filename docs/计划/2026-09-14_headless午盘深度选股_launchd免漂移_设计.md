@@ -258,6 +258,17 @@ stage1 是 `no_llm`（无消息面回灌）；deep_analysis 消费 `news_ai/<cod
 
 → 实现按上述：产物名 `日内深度_<date>.md` + canonical `日内深度选股.json`（独立名）；不动 watch/日内_/PICKS 生产语义。
 
+### 13.2 端到端手跑实测回填（2026-09-14，真调 DeepSeek，证据见 `docs/计划/2026-09-14_headless午盘深度_手跑证据/`）
+- **13:00 硬指标已实测达标**：DeepSeek 逐票 ~8s（7.9-10.5s，think 关）、5 只 deep 合计 **43.2s**、端到端 **43.8s**。
+  远快于设计估（30-70s/只）→ **13:00 余量极大**（即便 12:00 开工，~44s 深度 + 自采消息面 ~1-4min，总 <5min）。
+  免漂移（纯 headless、无 Claude 窗口）从根消除结构性漂移。**§4.1 最大未知量（deep 时延）已闭合。**
+- **深度对齐盘后已验证**：样例逐票走完整 SOP（定性/数据层引真实 record 值/α-β/盯点单问含供给面/退出/方向前提），
+  **DeepSeek 正确规避 *ST/超买妖股**（保守纪律生效）——对齐母本。
+- **生产隔离已核**：读根符号链接生产只读、写根 scratchpad 隔离、`--no-collect`；主仓零写入（核 `日内深度_`/
+  `日内深度选股.json` 均未落主仓）。**读/写根分离（`--data-root` 读 + `--write-root` 写）是只读隔离的关键。**
+- 样例 0 买入（候选为合成任选非真实高分票，DeepSeek 合理判观望/规避）；买入表/D-0/PICKS 渲染路径由
+  `tests/test_intraday_deep.py::test_end_to_end_headless` 确定性覆盖。
+
 ### 13.1 实现级防未来/隔离细化（读代码后确认，补 §3/§7）
 - **≤11:30 intraday cutoff 机制**：`deep_analysis_inputs.load_news` 现按 **date 粒度**剔除（`_date_of(time) > pick_date`）——同日 11:31-11:50 新闻**不会被剔**（confirmed 缺口）。→ 加**可选参数** `news_time_cutoff`（全时间戳，如 `<date> 11:30:00`）**贯穿** `di.load_news/load_sentiment/assemble` + `deep_analysis.generate/generate_one`，**默认 None=原行为**（向后兼容），设值时按全时间戳 ≤cutoff 过滤。**内存过滤、不改磁盘**（避免污染收盘共享 news_ai）。进测试锁死。
   - 前置校验：确认 news_ai/<code>.json 条目 `time` 带全时间戳（P2 手跑 §7.1 曾用 ≤11:30 切片成功，佐证有 HH:MM）；若仅 date 粒度则 intraday cutoff 退化为 date 级 + 文档标注 + 靠采集窗纪律。

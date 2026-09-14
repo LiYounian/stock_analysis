@@ -428,20 +428,28 @@ def _unit_name(unit: dict, doc: dict) -> str:
 
 
 def market_context(as_of: str, analysis_root: Path) -> str:
-    """读 market_forecast.json 出一句 β 背景定性。缺 → 空串。"""
+    """读 market_forecast.json（v1）出一句 β 背景定性。缺 → 空串。"""
     p = Path(analysis_root) / as_of / "market_forecast.json"
     try:
         mf = json.loads(p.read_text(encoding="utf-8"))
     except (FileNotFoundError, json.JSONDecodeError):
         return ""
-    bits = []
-    for k in ("市场环境", "regime", "定性", "结论"):
-        if isinstance(mf.get(k), str):
-            bits.append(mf[k])
-            break
-    breadth = mf.get("广度") or mf.get("breadth")
-    if isinstance(breadth, dict):
-        bits.append(f"广度：{json.dumps(breadth, ensure_ascii=False)}")
+    bits: list[str] = []
+    beta = mf.get("选股用β基准")
+    if isinstance(beta, dict) and beta.get("背景"):
+        bits.append(f"β基准背景：{beta['背景']}")
+    tg = (mf.get("targets") or {}).get("hs300") if isinstance(mf.get("targets"), dict) else None
+    if isinstance(tg, dict):
+        d1 = tg.get("t1") or tg.get("T+1") or {}
+        if isinstance(d1, dict) and (d1.get("方向") or d1.get("p_up") is not None):
+            bits.append(f"沪深300 T+1：{d1.get('方向','?')}（p_up={d1.get('p_up','?')}）")
+    br = mf.get("breadth_snapshot")
+    if isinstance(br, dict):
+        bits.append(f"广度：涨{br.get('adv','?')}/跌{br.get('dec','?')}、"
+                    f"above_MA20={br.get('above_ma20_ratio','?')}")
+    div = mf.get("分歧标记")
+    if isinstance(div, dict) and div.get("触发"):
+        bits.append(f"分歧：{div.get('说明') or '已触发'}")
     return "；".join(bits) if bits else "（market_forecast 已读，未取到定性字段）"
 
 
@@ -452,6 +460,7 @@ def run(
     as_of: str,
     *,
     data_root: Path | None = None,
+    write_root: Path | None = None,
     out_dir: Path | None = None,
     top: int = DEFAULT_TOP,
     stage: str = DEFAULT_STAGE,
@@ -469,7 +478,8 @@ def run(
     """端到端编排。返回退出码（0=成功/非交易日跳过/无买入候选；非 0=失败）。"""
     now_fn = now_fn or (lambda: _dt.datetime.now().astimezone())
     exec_dt = now_fn()
-    analysis_root, intraday_root = _data_roots(data_root)
+    analysis_root, intraday_root = _data_roots(data_root)          # 读根（手跑指生产只读）
+    write_analysis_root, _ = _data_roots(write_root or data_root)  # 写根（手跑指 scratchpad，隔离生产）
 
     # 0. 交易日门控
     if not gate_trading_day(as_of, force=force):
@@ -482,12 +492,12 @@ def run(
         selection_dir=selection_dir, now_fn=now_fn)
     if cand is None:
         logger.warning("候选不可用(%s)，产 PICKS:none 跳过留痕", source_note)
-        _write_skip(as_of, analysis_root, out_dir, reason=f"候选池未就绪:{source_note}", exec_dt=exec_dt)
+        _write_skip(as_of, write_analysis_root, out_dir, reason=f"候选池未就绪:{source_note}", exec_dt=exec_dt)
         return 0
     codes, hint_map = topn_codes(cand, top)
     if not codes:
         logger.warning("候选台账为空，产 PICKS:none 跳过留痕")
-        _write_skip(as_of, analysis_root, out_dir, reason="候选台账为空", exec_dt=exec_dt)
+        _write_skip(as_of, write_analysis_root, out_dir, reason="候选台账为空", exec_dt=exec_dt)
         return 0
     logger.info("Top-%d 候选(数据面综合分序)：%s（%s）", top, ",".join(codes), source_note)
 
@@ -509,7 +519,7 @@ def run(
     units = da.units_of(results)
     if not units:
         logger.warning("deep_analysis 全票失败，产 PICKS:none 跳过留痕")
-        _write_skip(as_of, analysis_root, out_dir, reason="deep_analysis 全票失败", exec_dt=exec_dt)
+        _write_skip(as_of, write_analysis_root, out_dir, reason="deep_analysis 全票失败", exec_dt=exec_dt)
         return 1
 
     # 4. D-0 计划（买入票）
@@ -531,7 +541,7 @@ def run(
         # 校验不过不落 canonical JSON，但仍产 md（灰度观察）+ 显式标注
         json_path = None
     else:
-        json_path = write_canonical_json(doc, analysis_root, as_of)
+        json_path = write_canonical_json(doc, write_analysis_root, as_of)
 
     # 6. 渲染 md
     drift_note = _drift_note(exec_dt)
@@ -611,8 +621,10 @@ def _main(argv=None) -> int:
     ap.add_argument("--stage", default=DEFAULT_STAGE, choices=["stage1", "full", "auto"])
     ap.add_argument("--provider", help="provider id（缺省走 deep_analysis 路由主 provider=DeepSeek）")
     ap.add_argument("--think", choices=["on", "off"], default="off", help="think 开关，默认关（午盘省时延）")
-    ap.add_argument("--data-root", help="data/ 父目录（手跑指生产只读）；缺省 PROJECT_ROOT/data")
+    ap.add_argument("--data-root", help="data/ 父目录·**读根**（手跑指生产只读）；缺省 PROJECT_ROOT/data")
+    ap.add_argument("--write-root", help="data/ 父目录·**写根**（canonical JSON 落此；手跑指 scratchpad 隔离生产）；缺省=--data-root")
     ap.add_argument("--out-dir", help="md 输出目录（手跑指 scratchpad 隔离）；缺省 docs/每日分析/选股")
+    ap.add_argument("--selection-dir", help="日内全A_ 台账目录（md 台账回退源；手跑指生产 docs 只读）；缺省 PROJECT_ROOT/docs/每日分析/选股")
     ap.add_argument("--no-collect", action="store_true", help="不自采消息面（手跑/隔离；只读现有档，绝不写生产）")
     ap.add_argument("--no-news-cutoff", action="store_true", help="关闭 ≤11:30 intraday 防未来 cutoff（联调用，慎用）")
     ap.add_argument("--poll-interval", type=float, default=DEFAULT_POLL_INTERVAL, help="候选未就绪重探间隔秒")
@@ -623,12 +635,15 @@ def _main(argv=None) -> int:
     from tools.store import repo as store
     as_of = args.date or store._today()
     data_root = Path(args.data_root) if args.data_root else None
+    write_root = Path(args.write_root) if args.write_root else None
     out_dir = Path(args.out_dir) if args.out_dir else None
+    selection_dir = Path(args.selection_dir) if args.selection_dir else None
     enable_thinking = {"on": True, "off": False}[args.think]
 
     return run(
         as_of,
-        data_root=data_root, out_dir=out_dir, top=args.top, stage=args.stage,
+        data_root=data_root, write_root=write_root, out_dir=out_dir,
+        selection_dir=selection_dir, top=args.top, stage=args.stage,
         provider_id=args.provider, enable_thinking=enable_thinking,
         collect=not args.no_collect, news_cutoff=not args.no_news_cutoff,
         force=args.force, poll_interval_s=args.poll_interval, poll_deadline=args.poll_deadline)
