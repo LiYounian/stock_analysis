@@ -465,3 +465,108 @@ def test_run_intraday_screen_reports_self_check(tmp_path):
         cand_msg_fn=lambda *a, **k: {"候选池规模": 1, "统计": {}},
         write_md=False, snapshot_root=tmp_path)
     assert rep["快照自检"]["ok"] is True and rep["快照自检"]["count"] == 1
+
+
+# ————————————————————————————————————————————————
+# ⑩ D1 旁路机读候选:noon 冻结、close 不覆盖,供午盘 Claude 逐票深度分析消费
+#   锁语义:①内容与 split_buy_avoid 单一真源一致 ②纯旁路不写主档/不改现有产物
+#          ③消费侧 JSON 优先、缺失回退解析 日内全A_ md ④防未来只带 ≤as_of 字段
+# ————————————————————————————————————————————————
+def _view_8():
+    reranked = ([_mk(f"P{i}", 8.0 - i, "看多") for i in range(6)]
+                + [_mk("S1", 1.0, "看空"), _mk("S2", 0.5, "看空")])
+    for i, x in enumerate(reranked):
+        x["候选排名"] = i + 1
+    return {"候选池规模": 8, "上限命中": False,
+            "统计": {"看多": 6, "看空": 2, "中性": 0}, "回灌参数": {}, "重排": reranked}
+
+
+def test_persist_noon_candidates_content_and_split(monkeypatch, tmp_path):
+    """旁路候选落盘:买入/规避切分与 split_buy_avoid 一致;全序台账保留;字段瘦身。"""
+    view = _view_8()
+    monkeypatch.setattr(isr.store, "get_view", lambda name, date=None: view)
+    path = isr.persist_noon_candidates("2026-09-08", breadth={"上涨": 1}, out_root=tmp_path)
+    assert path == isr.noon_candidates_path("2026-09-08", out_root=tmp_path)
+    import json as _json
+    payload = _json.loads(path.read_text(encoding="utf-8"))
+    买入, 规避 = isr.split_buy_avoid(view["重排"])
+    assert payload["买入代码"] == [x["code"] for x in 买入]      # 与单一真源切分一致
+    assert payload["规避代码"] == [x["code"] for x in 规避]
+    assert payload["规避代码"][:2] == ["S2", "S1"]               # 看空优先、最弱在前
+    assert "S1" not in payload["买入代码"]                       # 看空不进买入
+    assert len(payload["台账"]) == 8                            # 全序台账保留(复盘/审计)
+    assert payload["as_of"] == "2026-09-08" and payload["freeze_label"] == isr.FREEZE_LABEL
+    # 字段瘦身:只带机读稳定字段,理由拼成字符串
+    assert set(payload["台账"][0]) == set(isr._CAND_FIELDS)
+    assert isinstance(payload["台账"][0]["理由"], str)
+
+
+def test_persist_noon_candidates_no_view_returns_none(monkeypatch, tmp_path):
+    """无 view/重排 → 返回 None、不落盘、不阻断(纯旁路)。"""
+    monkeypatch.setattr(isr.store, "get_view",
+                        lambda name, date=None: (_ for _ in ()).throw(FileNotFoundError()))
+    assert isr.persist_noon_candidates("2026-09-08", out_root=tmp_path) is None
+    assert not isr.noon_candidates_path("2026-09-08", out_root=tmp_path).exists()
+
+
+def test_persist_noon_candidates_never_writes_master(monkeypatch, tmp_path):
+    """铁律:旁路落盘不触碰任何主档写入(防污染)。"""
+    def _boom(*a, **k):
+        raise AssertionError("旁路候选绝不应写主档")
+    monkeypatch.setattr(isr.store, "put_master_kline", _boom, raising=False)
+    monkeypatch.setattr(isr.store, "append_master_kline", _boom, raising=False)
+    monkeypatch.setattr(isr.store, "get_view", lambda name, date=None: _view_8())
+    isr.persist_noon_candidates("2026-09-08", out_root=tmp_path)
+
+
+def test_read_noon_candidates_prefers_json(monkeypatch, tmp_path):
+    """消费侧:旁路 JSON 存在 → 直接读它(source=json),不解析 md。"""
+    monkeypatch.setattr(isr.store, "get_view", lambda name, date=None: _view_8())
+    isr.persist_noon_candidates("2026-09-08", out_root=tmp_path)
+    got = isr.read_noon_candidates("2026-09-08", root=tmp_path, top=3)
+    assert got["source"] == "json"
+    assert len(got["台账"]) == 3                                # top 截断
+    assert got["买入代码"][0] == "P0"
+
+
+def test_read_noon_candidates_fallback_to_md(tmp_path):
+    """消费侧:无旁路 JSON → 回退解析 日内全A_<date>.md 台账(退化路径可用)。"""
+    md = tmp_path / "日内全A_2026-09-08.md"
+    md.write_text(
+        "# 全A午盘选股 · 日内_2026-09-08\n\n"
+        "## 今日可买入(精选 2 只 · 主评价对象)\n\n"
+        "| 序 | 代码 | 名称 | 完整分 |\n|---|---|---|---|\n"
+        "| 1 | 000001 | 甲 | 0.9 |\n| 2 | 000002 | 乙 | 0.8 |\n\n"
+        "## 今日规避(精选 1 只 · 纠偏参照)\n\n"
+        "| 序 | 代码 | 名称 | 完整分 |\n|---|---|---|---|\n"
+        "| 1 | 600001 | 丙 | -0.5 |\n\n"
+        "<details>\n<summary>完整候选台账 · 买入排序(共 3 只)</summary>\n\n"
+        "| 排名 | 代码 | 名称 | 完整分 | 数据面综合分 | 消息面方向 | 消息面分 | 候选来源 | 理由 |\n"
+        "|---|---|---|---|---|---|---|---|---|\n"
+        "| 1 | 000001 | 甲 | 0.9 | 0.6 | 看多 | 0.5 | 策略0合议 | 事件驱动:预告增速 |\n"
+        "| 2 | 000002 | 乙 | 0.8 | 0.5 | 中性 | 0.0 | 量价放量 | — |\n"
+        "| 3 | 600001 | 丙 | -0.5 | -0.3 | 看空 | -0.5 | 动量组合 | 减持 |\n\n"
+        "</details>\n", encoding="utf-8")
+    got = isr.read_noon_candidates("2026-09-08", root=tmp_path, selection_dir=tmp_path)
+    assert got["source"] == "md"
+    assert got["买入代码"] == ["000001", "000002"]
+    assert got["规避代码"] == ["600001"]
+    assert [x["code"] for x in got["台账"]] == ["000001", "000002", "600001"]
+    assert got["台账"][0]["消息面方向"] == "看多" and got["台账"][0]["候选来源"] == "策略0合议"
+
+
+def test_read_noon_candidates_none_when_absent(tmp_path):
+    """JSON 与 md 都无 → None(供门控识别未就绪)。"""
+    assert isr.read_noon_candidates("2026-09-08", root=tmp_path, selection_dir=tmp_path) is None
+
+
+def test_run_intraday_screen_persists_candidates(monkeypatch, tmp_path):
+    """编排默认落旁路候选;可 snapshot_root 重定向;report 带路径。"""
+    monkeypatch.setattr(isr.store, "get_view", lambda name, date=None: _view_8())
+    rep = isr.run_intraday_screen(
+        "2026-09-08", quotes={"000001": _Q}, codes=["000001"],
+        run_screen_all_fn=lambda *a, **k: {"union": 1, "llm_subset": 1, "各策略入选": {}},
+        cand_msg_fn=lambda *a, **k: {"候选池规模": 1, "统计": {}},
+        write_md=False, snapshot_root=tmp_path)
+    assert rep["旁路候选"] == str(isr.noon_candidates_path("2026-09-08", out_root=tmp_path))
+    assert isr.noon_candidates_path("2026-09-08", out_root=tmp_path).exists()
