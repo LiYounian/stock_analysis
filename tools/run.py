@@ -1426,6 +1426,21 @@ def cmd_intraday_screen(argv):
     intraday_screen._main(argv[2:])   # argv[0]=脚本 argv[1]=intraday_screen,其余透传
 
 
+def cmd_intraday_deep(argv):
+    """headless 午盘深度选股入口(方案b·launchd 免漂移,~11:50,13:00 前出):
+    python -m tools.run intraday_deep [--date YYYY-MM-DD] [--top 5] [--stage stage1]
+    [--provider ..] [--think on|off] [--data-root ..] [--out-dir ..] [--no-collect]
+    [--no-news-cutoff] [--force]。
+
+    纯 Python orchestrator(无 Claude 窗口):读 intraday_screen stage1 早产候选(数据面综合分序)
+    →(生产)自采 Top-N 消息面(≤11:30 防未来)→deep_analysis 逐票 DeepSeek 深度研判→write_picks 校验
+    →产 docs/每日分析/选股/日内深度_<date>.md + data/analysis/<date>/日内深度选股.json(灰度独立名,
+    不碰 日内_/每日选股.json/watch)。参数透传子模块 _main。⚠️ 研究模拟,非投资建议。
+    """
+    from tools.pipeline import intraday_deep
+    return intraday_deep._main(argv[2:])   # argv[0]=脚本 argv[1]=intraday_deep,其余透传
+
+
 def cmd_intraday_review(argv):
     """午盘选股复盘入口(当日 15:xx,下午 α · D-0 当日闭环):
     python -m tools.run intraday_review [--date YYYY-MM-DD] [--force] [--no-inbox]。
@@ -1519,6 +1534,7 @@ _CMDS = {"collect": cmd_collect, "message": cmd_message, "sentiment": cmd_sentim
          "analyze": cmd_analyze, "findata": cmd_findata, "all": cmd_all,
          "ticks": cmd_ticks, "enrich": cmd_enrich, "candmsg": cmd_candmsg,
          "intraday_screen": cmd_intraday_screen,
+         "intraday_deep": cmd_intraday_deep,
          "intraday_review": cmd_intraday_review,
          "shadow_forward": cmd_shadow_forward}
 
@@ -1527,8 +1543,7 @@ def main(argv: list[str]) -> int:
     if len(argv) < 2 or argv[1] not in _CMDS:
         print(f"用法: python -m tools.run [{'|'.join(_CMDS)}] [--all]")
         return 1
-    _CMDS[argv[1]](argv)
-    return 0
+    return _CMDS[argv[1]](argv) or 0   # 命令返回退出码(int)则透传;返回 None 视作 0
 
 
 if __name__ == "__main__":

@@ -241,3 +241,25 @@ stage1 是 `no_llm`（无消息面回灌）；deep_analysis 消费 `news_ai/<cod
 - **Q3（D4/D7）**：产物写 `日内_<date>.md`（替代 Claude noon SKILL、改 PICKS 语义为全A买入票、影响 watch）——**替代** 还是 **过渡期并跑**（先写 `日内深度_<date>.md` 新名对比一段）？
 - **Q4（D6）**：模型口径 DeepSeek + think 关 + Top-N=5——确认？千问网关就绪前先 DeepSeek 可接受？
 - **Q5（§5）**：深度「基本对齐、缺口透明（无自由 WebSearch + 经验 snippets）」——是否足以 greenlight 替代？还是要求先挂 WebSearch MCP 补齐再替代？
+
+---
+
+## 13. 统筹拍板（2026-09-14，已 greenlight，本线按此实现）
+
+统筹 review 后拍板（回声-0914）：
+- **Q1 ✓ 纯 Python 直调 DeepSeek**——最干净 headless 形态，免窗口漂移 + 对齐国产模型口径。orchestrator+renderer **= 架构§3 的 headless 研判生成器**，复用价值超午盘（将来盘后也能走它）。
+- **Q2 ✓ Top-N 自采消息面，≤11:30 cutoff 硬防未来**（比吃磁盘现有档新鲜、对齐盘后）。
+- **Q3 → 过渡并跑短灰度（采纳备选，不立即替代）**：首版产 **`日内深度_<date>.md`（新名）**，**不动 watch/PICKS/日内_**，跑 ~3-5 交易日观察 headless 深度质量，确认后再替代（改名 `日内_` + 连 watch）。**纪律=只建不切、先灰度再切。**
+  - **推论·JSON 落盘防碰撞**：canonical JSON 若走 `write_picks` 默认 `每日选股.json` 会与**盘后** `daily-stock-selection` 的 `每日选股.json` **同路径碰撞**（且被 import_to_db 双计）。→ 灰度期 canonical JSON 落**独立文件名** `日内深度选股.json`（或 scratchpad 隔离），不写 `每日选股.json`。PICKS 锚点仍渲染进 `日内深度_` md（供未来抢名 + 机读），但灰度期 watch 读 `日内_` 故天然不消费——解耦干净。
+- **Q4 ✓ DeepSeek + think 关 + N=5**（午盘 13:00 预算紧，think 关省时延、不改决策）。
+- **Q5 → 先 greenlight，不强制先挂 WebSearch**；缺口（无自由 WebSearch + 经验 top_k）**如实标进产物**；灰度期若消息面深度明显弱于盘后，再让 orchestrator 自调搜索喂 DeepSeek 补（follow-up），别为完美卡首版。
+- **13:00 硬约束**：手跑**必须实测 deepseek 5 只真实时延**；逼近 13:00 → 减 N 或**并发 DeepSeek 调用**保余量。
+- **换线押后**：plist `launchctl load`（用户）+ 停 Claude noon SKILL + 连 watch（统筹）**押后到灰度确认后**，非本线。
+
+→ 实现按上述：产物名 `日内深度_<date>.md` + canonical `日内深度选股.json`（独立名）；不动 watch/日内_/PICKS 生产语义。
+
+### 13.1 实现级防未来/隔离细化（读代码后确认，补 §3/§7）
+- **≤11:30 intraday cutoff 机制**：`deep_analysis_inputs.load_news` 现按 **date 粒度**剔除（`_date_of(time) > pick_date`）——同日 11:31-11:50 新闻**不会被剔**（confirmed 缺口）。→ 加**可选参数** `news_time_cutoff`（全时间戳，如 `<date> 11:30:00`）**贯穿** `di.load_news/load_sentiment/assemble` + `deep_analysis.generate/generate_one`，**默认 None=原行为**（向后兼容），设值时按全时间戳 ≤cutoff 过滤。**内存过滤、不改磁盘**（避免污染收盘共享 news_ai）。进测试锁死。
+  - 前置校验：确认 news_ai/<code>.json 条目 `time` 带全时间戳（P2 手跑 §7.1 曾用 ≤11:30 切片成功，佐证有 HH:MM）；若仅 date 粒度则 intraday cutoff 退化为 date 级 + 文档标注 + 靠采集窗纪律。
+- **自采消息面 = 门控步骤**：collectors（message/sentiment/events）经 `store` 写 `PROJECT_ROOT/data`，**无运行时 data-root 覆盖**。→ orchestrator 加 `--collect-sentiment`（默认**生产开、手跑关**）：手跑关采集、只读现有 news_ai/sentiment（`--data-root` 只读隔离，绝不写生产）；生产在 dailyjob worktree 开采集、写共享 data（job 本职）。
+- **canonical JSON 独立写**：`write_picks.write_picks` 硬编码 `每日选股.json` → 灰度期 orchestrator **自写** `data/analysis/<date>/日内深度选股.json`（复用 build_picks_json 的 doc + 自己的原子写），不调 `write_picks.write_picks`，避免碰撞盘后 `每日选股.json`。

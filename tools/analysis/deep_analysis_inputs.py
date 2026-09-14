@@ -42,6 +42,37 @@ def _date_of(ts: str) -> str:
     return ts[:10]
 
 
+def _norm_ts(ts: str) -> tuple[str, bool]:
+    """归一时间戳为可字典序比较的 'YYYY-MM-DD HH:MM:SS'。返回 (归一串, 是否含时刻)。
+
+    含时刻(len>10)→ 补足到秒；纯日期(len==10)→ 无时刻(标记 has_time=False)。
+    """
+    if not ts or not isinstance(ts, str):
+        return "", False
+    t = ts.replace("T", " ").strip()
+    if len(t) <= 10:
+        return t[:10], False
+    body = t[11:]                                    # 时刻部分 HH[:MM[:SS]]
+    parts = body.split(":")
+    while len(parts) < 3:
+        parts.append("00")
+    return f"{t[:10]} {parts[0][:2]}:{parts[1][:2]}:{parts[2][:2]}", True
+
+
+def _after_cutoff(ts: str, cutoff: str | None) -> bool:
+    """含**显式时刻**且 > cutoff(全时间戳)→ True(intraday 未来、应剔)。
+
+    纯日期同日项(无时刻)不在此判(交由 date 级 `> pick_date` 处理、保守保留),返回 False。
+    """
+    if not cutoff:
+        return False
+    norm, has_time = _norm_ts(ts)
+    if not has_time:
+        return False
+    cnorm, _ = _norm_ts(cutoff)
+    return norm > cnorm
+
+
 @dataclass
 class StockFacts:
     code: str
@@ -69,31 +100,44 @@ def load_record(code: str, pick_date: str, data_root: Path | None = None) -> dic
     return _read_json(_analysis_root(data_root) / pick_date / f"{code}.json")
 
 
-def load_news(code: str, pick_date: str, data_root: Path | None = None) -> tuple[list, int]:
-    """读 news_ai/<code>.json(list),剔除 time 晚于 pick_date 的条目(防未来)。返回 (保留, 剔除数)。"""
+def load_news(code: str, pick_date: str, data_root: Path | None = None,
+              *, news_time_cutoff: str | None = None) -> tuple[list, int]:
+    """读 news_ai/<code>.json(list),剔除 time 晚于 pick_date 的条目(防未来)。返回 (保留, 剔除数)。
+
+    news_time_cutoff(如 '2026-09-14 11:30:00'):额外剔除**含显式时刻且 > cutoff** 的条目
+    (午盘 ≤11:30 intraday 防未来;默认 None=仅 date 级、原行为)。
+    """
     raw = _read_json(_analysis_root(data_root) / pick_date / "news_ai" / f"{code}.json")
     if not isinstance(raw, list):
         return [], 0
     kept, dropped = [], 0
     for it in raw:
-        t = _date_of((it or {}).get("time", "")) if isinstance(it, dict) else ""
-        if t and t > pick_date:
+        ts = (it or {}).get("time", "") if isinstance(it, dict) else ""
+        d = _date_of(ts)
+        if (d and d > pick_date) or _after_cutoff(ts, news_time_cutoff):
             dropped += 1
             continue
         kept.append(it)
     return kept, dropped
 
 
-def load_sentiment(code: str, pick_date: str, data_root: Path | None = None) -> dict | None:
-    """读 sentiment/<code>.json;剔除 events 里 time 晚于 pick_date 的条目(防未来)。"""
+def load_sentiment(code: str, pick_date: str, data_root: Path | None = None,
+                   *, news_time_cutoff: str | None = None) -> dict | None:
+    """读 sentiment/<code>.json;剔除 events 里 time 晚于 pick_date 的条目(防未来)。
+
+    news_time_cutoff:额外剔除 events 里含显式时刻且 > cutoff 的条目(午盘 ≤11:30 intraday 防未来)。
+    """
     raw = _read_json(_analysis_root(data_root) / pick_date / "sentiment" / f"{code}.json")
     if not isinstance(raw, dict):
         return None
     evs = raw.get("events")
     if isinstance(evs, list):
         raw = dict(raw)
-        raw["events"] = [e for e in evs
-                         if not (_date_of((e or {}).get("time", "")) > pick_date)]
+        raw["events"] = [
+            e for e in evs
+            if not (_date_of((e or {}).get("time", "")) > pick_date)
+            and not _after_cutoff((e or {}).get("time", ""), news_time_cutoff)
+        ]
     return raw
 
 
@@ -102,8 +146,12 @@ def load_market_forecast(pick_date: str, data_root: Path | None = None) -> dict 
 
 
 def assemble(code: str, pick_date: str, data_root: Path | None = None,
-             *, news_limit: int = 12) -> StockFacts:
-    """装配单票事实(含防未来裁剪)。"""
+             *, news_limit: int = 12, news_time_cutoff: str | None = None) -> StockFacts:
+    """装配单票事实(含防未来裁剪)。
+
+    news_time_cutoff(如 '<date> 11:30:00'):午盘 ≤11:30 intraday 防未来——额外剔 news/events
+    里含显式时刻且晚于 cutoff 的条目。默认 None=仅 date 级(盘后原行为)。
+    """
     rec = load_record(code, pick_date, data_root)
     facts = StockFacts(code=code, pick_date=pick_date, record=rec)
 
@@ -115,12 +163,13 @@ def assemble(code: str, pick_date: str, data_root: Path | None = None,
             facts.future_leak = True
             facts.notes.append(f"record.as_of({as_of}) 晚于 pick_date({pick_date})——防未来违规")
 
-    news, dropped = load_news(code, pick_date, data_root)
+    news, dropped = load_news(code, pick_date, data_root, news_time_cutoff=news_time_cutoff)
     if dropped:
-        facts.notes.append(f"news_ai 剔除 {dropped} 条晚于 pick_date 的未来条目")
+        _tag = f"（含 ≤{news_time_cutoff} cutoff）" if news_time_cutoff else ""
+        facts.notes.append(f"news_ai 剔除 {dropped} 条晚于时窗的未来条目{_tag}")
     facts.news = news[:news_limit]
 
-    facts.sentiment = load_sentiment(code, pick_date, data_root)
+    facts.sentiment = load_sentiment(code, pick_date, data_root, news_time_cutoff=news_time_cutoff)
     facts.market_forecast = load_market_forecast(pick_date, data_root)
     return facts
 
