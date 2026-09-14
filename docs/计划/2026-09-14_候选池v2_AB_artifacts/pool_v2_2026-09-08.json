@@ -1,0 +1,91 @@
+{
+  "pool": [
+    "601061",
+    "600356",
+    "688712",
+    "300885",
+    "000963",
+    "301363",
+    "300725",
+    "300298"
+  ],
+  "date": "2026-09-08",
+  "version": "v2",
+  "council_flags": {
+    "命中高危红旗": 2300,
+    "命中龙虎榜否决": 80,
+    "扫描数": 5558,
+    "top_n": 20
+  },
+  "base_size": 8,
+  "kept_after_gates": 8,
+  "dropped": [],
+  "pool_size": 8,
+  "soft_tags": {},
+  "detail": [
+    {
+      "code": "601061",
+      "行业": "商贸零售",
+      "strength": 0.6929,
+      "final_score": 0.7829,
+      "screen_hits": 0,
+      "soft_tags": []
+    },
+    {
+      "code": "600356",
+      "行业": "轻工制造",
+      "strength": 0.662,
+      "final_score": 0.762,
+      "screen_hits": 0,
+      "soft_tags": []
+    },
+    {
+      "code": "688712",
+      "行业": "机械设备",
+      "strength": 0.6503,
+      "final_score": 0.7503,
+      "screen_hits": 0,
+      "soft_tags": []
+    },
+    {
+      "code": "300885",
+      "行业": "机械设备",
+      "strength": 0.6563,
+      "final_score": 0.7463,
+      "screen_hits": 0,
+      "soft_tags": []
+    },
+    {
+      "code": "000963",
+      "行业": "商贸零售",
+      "strength": 0.65,
+      "final_score": 0.74,
+      "screen_hits": 0,
+      "soft_tags": []
+    },
+    {
+      "code": "301363",
+      "行业": "机械设备",
+      "strength": 0.6313,
+      "final_score": 0.7213,
+      "screen_hits": 0,
+      "soft_tags": []
+    },
+    {
+      "code": "300725",
+      "行业": "综合",
+      "strength": 0.6148,
+      "final_score": 0.7148,
+      "screen_hits": 0,
+      "soft_tags": []
+    },
+    {
+      "code": "300298",
+      "行业": "机械设备",
+      "strength": 0.6135,
+      "final_score": 0.7035,
+      "screen_hits": 0,
+      "soft_tags": []
+    }
+  ]
+}

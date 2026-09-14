@@ -1,0 +1,43 @@
+{
+  "pool": [
+    "000651",
+    "000507"
+  ],
+  "date": "2026-08-28",
+  "version": "v2",
+  "council_flags": {
+    "命中高危红旗": 7,
+    "命中龙虎榜否决": 0,
+    "扫描数": 200,
+    "top_n": 30
+  },
+  "base_size": 2,
+  "kept_after_gates": 2,
+  "dropped": [],
+  "pool_size": 2,
+  "soft_tags": {
+    "000507": [
+      "近5日主力净流出"
+    ]
+  },
+  "detail": [
+    {
+      "code": "000651",
+      "行业": null,
+      "strength": 0.5562,
+      "final_score": 0.5562,
+      "screen_hits": 0,
+      "soft_tags": []
+    },
+    {
+      "code": "000507",
+      "行业": null,
+      "strength": 0.4034,
+      "final_score": 0.4034,
+      "screen_hits": 0,
+      "soft_tags": [
+        "近5日主力净流出"
+      ]
+    }
+  ]
+}
