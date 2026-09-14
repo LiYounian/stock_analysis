@@ -16,50 +16,55 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-GRID = [(0.85, 0.10), (0.90, 0.10), (0.95, 0.10),
-        (0.85, 0.05), (0.90, 0.05), (0.95, 0.05)]
+_QOS_QC = [(0.85, 0.10), (0.90, 0.10), (0.95, 0.10),
+           (0.85, 0.05), (0.90, 0.05), (0.95, 0.05)]
+CUM_WINDOWS = [1, 2, 3, 5]     # 累计跌幅 lookback 窗(统筹防偷看细化①:窗口进网格,'2日'不享特权)
+# 24 组合全交叉:(q_os, q_crash, w_cum)
+GRID = [(qos, qc, w) for w in CUM_WINDOWS for (qos, qc) in _QOS_QC]
 TRAILING = 500
 DOWN_THRESH = -1.0     # 普通普跌阈值(全A等权 mean_pct ≤ -1%)
 
 
-def _grid_key(q_os: float, q_crash: float) -> str:
-    return f"cap_os{int(q_os*100)}_cr{int(q_crash*100)}"
+def _grid_key(q_os: float, q_crash: float, w_cum: int = 2) -> str:
+    return f"cap_os{int(q_os*100)}_cr{int(q_crash*100)}_w{int(w_cum)}"
 
 
 def build_capitulation_flags(breadth: pd.DataFrame, grid=GRID,
                              trailing: int = TRAILING,
                              down_thresh: float = DOWN_THRESH) -> pd.DataFrame:
-    """返回逐日标记表:cum2 + 每个网格点的阈值列与 cap 布尔列 + ordinary_down + warmup。"""
+    """返回逐日标记表:每个网格点(q_os×q_crash×w_cum)的阈值列与 cap 布尔列 + ordinary_down + warmup。
+
+    cum_w[t]=最近 w_cum 日等权跌幅之和(rolling sum, 含当日, 只回看); crash 分位在其上取。
+    """
     b = breadth.sort_index().copy()
     osr = b["below_ma20_ratio"].astype(float)
     mp = b["mean_pct"].astype(float)
-    cum2 = mp + mp.shift(1)
+    warmup = osr.rolling(trailing, min_periods=trailing).count().isna()
 
-    out = pd.DataFrame(index=b.index)
-    out["mean_pct"] = mp
-    out["below_ma20_ratio"] = osr
-    out["net_adv"] = b["net_adv"].astype(float)
-    out["cum2"] = cum2
-    # warmup:trailing 窗口未喂满 → 不产生任何事件
-    out["warmup"] = osr.rolling(trailing, min_periods=trailing).count().isna() | \
-        cum2.rolling(trailing, min_periods=trailing).count().isna()
+    cols = {"mean_pct": mp, "below_ma20_ratio": osr,
+            "net_adv": b["net_adv"].astype(float), "warmup": warmup,
+            "down_day": (mp <= down_thresh) & (~warmup)}
 
-    for q_os, q_crash in grid:
-        # trailing 分位(窗口含当日 → 因果:只用 ≤t 的数据)
-        os_thr = osr.rolling(trailing, min_periods=trailing).quantile(q_os)
-        crash_thr = cum2.rolling(trailing, min_periods=trailing).quantile(q_crash)
-        cap = (osr >= os_thr) & (cum2 <= crash_thr) & (~out["warmup"])
-        key = _grid_key(q_os, q_crash)
-        out[f"{key}_os_thr"] = os_thr
-        out[f"{key}_crash_thr"] = crash_thr
-        out[key] = cap.fillna(False)
-
-    out["down_day"] = (mp <= down_thresh) & (~out["warmup"])
-    # ordinary_down 相对每个网格点:down 且非该网格 cap
-    for q_os, q_crash in grid:
-        key = _grid_key(q_os, q_crash)
-        out[f"ord_{key}"] = out["down_day"] & (~out[key])
-    return out
+    os_thr_cache, cum_cache = {}, {}
+    cap_cols = {}
+    for q_os, q_crash, w in grid:
+        if q_os not in os_thr_cache:
+            os_thr_cache[q_os] = osr.rolling(trailing, min_periods=trailing).quantile(q_os)
+        if w not in cum_cache:
+            cum_cache[w] = mp.rolling(w, min_periods=w).sum()
+        os_thr, cum_w = os_thr_cache[q_os], cum_cache[w]
+        crash_thr = cum_w.rolling(trailing, min_periods=trailing).quantile(q_crash)
+        cap = ((osr >= os_thr) & (cum_w <= crash_thr) & (~warmup)).fillna(False)
+        key = _grid_key(q_os, q_crash, w)
+        cols[f"{key}_cum"] = cum_w
+        cols[f"{key}_os_thr"] = os_thr
+        cols[f"{key}_crash_thr"] = crash_thr
+        cols[key] = cap
+        cap_cols[key] = cap
+    # ordinary_down 依赖各 cap 列,统一一次拼(避免逐列 insert 的碎片化)
+    for key, cap in cap_cols.items():
+        cols[f"ord_{key}"] = cols["down_day"] & (~cap)
+    return pd.DataFrame(cols, index=b.index)
 
 
 def event_dates(flags: pd.DataFrame, key: str) -> list[pd.Timestamp]:
