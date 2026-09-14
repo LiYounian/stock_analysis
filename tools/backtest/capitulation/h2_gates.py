@@ -21,25 +21,24 @@ VOL_RATIO_GATE = 1.5      # 放量阈值(镜像 technical 的 vol_state / _rever
 FWD_WINDOW = 10           # 底部后扫触发的最大交易日窗口
 
 
-def _gate_fired(panels, code, f_idx):
-    """返回该码在面板第 f_idx 行(某交易日)各闸门是否触发的 dict(NaN→False)。"""
-    def g(field):
-        v = panels[field].iloc[f_idx].get(code, np.nan)
-        return v
-    close = g("close"); openp = g("open"); ma3 = g("ma3"); ma5 = g("ma5")
-    vr = g("vol_ratio"); ph = g("prev_high")
-    if pd.isna(close):
-        return None
-    volup = (not pd.isna(vr)) and vr > VOL_RATIO_GATE
-    return {
-        "G_MA5": bool(volup and not pd.isna(ma5) and close >= ma5),
-        "G_MA3": bool(volup and not pd.isna(ma3) and close >= ma3),
-        "G_prevhigh": bool(not pd.isna(ph) and close >= ph),
-        "G_volup_close": bool(volup and not pd.isna(openp) and close > openp),
-    }
-
-
 GATES = ["G_MA5", "G_MA3", "G_prevhigh", "G_volup_close"]
+
+
+def build_gate_panels(panels) -> dict[str, pd.DataFrame]:
+    """向量化 4 档闸门的逐日触发布尔面板(date×code)。NaN → False。
+
+    因果:每格仅用当日面板值(面板本身由 ≤当日 K线算得),无未来泄露。
+    """
+    close, openp = panels["close"], panels["open"]
+    ma3, ma5 = panels["ma3"], panels["ma5"]
+    vr, ph = panels["vol_ratio"], panels["prev_high"]
+    volup = vr > VOL_RATIO_GATE
+    return {
+        "G_MA5": (volup & (close >= ma5)).fillna(False),
+        "G_MA3": (volup & (close >= ma3)).fillna(False),
+        "G_prevhigh": (close >= ph).fillna(False),
+        "G_volup_close": (volup & (close > openp)).fillna(False),
+    }
 
 
 def run_h2(panels, oversold_panel, cap_dates, horizons=(1, 5),
@@ -48,62 +47,54 @@ def run_h2(panels, oversold_panel, cap_dates, horizons=(1, 5),
     close_panel = panels["close"]
     if book is None:
         book = ForwardBook(close_panel, horizons, lag=1)
+    gate_panels = build_gate_panels(panels)
     idx = close_panel.index
     n = len(idx)
-    # 每档:触发次数、前向 α/收益样本、首段捕获样本
+    pos = {d: i for i, d in enumerate(idx)}
+    # 每档:触发次数、前向 α/收益样本(stock 级)、首段捕获、以及按 capitulation 日分组的 α(day 级)
     rec = {g: {"fires": 0, "alpha": {N: [] for N in horizons},
-               "ret": {N: [] for N in horizons}, "seg_capture": []} for g in GATES}
+               "ret": {N: [] for N in horizons}, "seg_capture": [],
+               "day_alpha": {N: {} for N in horizons}} for g in GATES}
     n_samples = 0
     for d in cap_dates:
         d = pd.Timestamp(d)
         if oos_start and d < pd.Timestamp(oos_start):
             continue
-        if d not in idx:
+        if d not in pos:
             continue
-        di = idx.get_loc(d)
-        if di + 1 >= n:
+        di = pos[d]
+        entry_bottom_i = di + 1              # 底部 t+1 进场价(首段捕获基准)
+        if entry_bottom_i >= n:
             continue
         subset = list(oversold_panel.columns[oversold_panel.loc[d].values]) \
             if d in oversold_panel.index else []
-        entry_bottom_i = di + 1              # 底部 t+1 进场价(首段捕获的基准)
-        if entry_bottom_i >= n:
-            continue
+        base_row = close_panel.iloc[entry_bottom_i]
+        # 窗口的行区间(含边界),各闸门在该区间内取该码列
+        w_hi = min(di + window, n - 1)
+        close_col_all = close_panel  # 复用
         for c in subset:
-            base_px = close_panel.iloc[entry_bottom_i].get(c, np.nan)
-            if pd.isna(base_px):
+            base_px = base_row.get(c, np.nan)
+            if pd.isna(base_px) or not base_px:
                 continue
             n_samples += 1
-            # 扫窗口找每档首触发
-            fired_at = {g: None for g in GATES}
-            for step in range(1, window + 1):
-                f_idx = di + step
-                if f_idx >= n:
-                    break
-                gf = _gate_fired(panels, c, f_idx)
-                if gf is None:
-                    continue
-                for g in GATES:
-                    if fired_at[g] is None and gf[g]:
-                        fired_at[g] = f_idx
-                if all(v is not None for v in fired_at.values()):
-                    break
             for g in GATES:
-                fi = fired_at[g]
-                if fi is None:
+                col = gate_panels[g][c].iloc[di + 1:w_hi + 1]
+                hit = col[col]
+                if len(hit) == 0:
                     continue
+                trig_date = hit.index[0]
+                fi = pos[trig_date]
                 rec[g]["fires"] += 1
-                trig_date = idx[fi]
-                # 首段捕获:从底部 t+1 到触发日收盘的区间收益(pp)
-                trig_px = close_panel.iloc[fi].get(c, np.nan)
-                if not pd.isna(trig_px) and base_px:
+                trig_px = close_panel[c].iloc[fi]     # 单列标量,避免整行materialize
+                if not pd.isna(trig_px):
                     rec[g]["seg_capture"].append((trig_px / base_px - 1.0) * 100.0)
-                # 触发日 t+1 进场的前向 α / 收益(ForwardBook O(1) 查询)
                 for N in horizons:
                     sa = book.stock_alpha(trig_date, c, N)
                     if sa is None:
                         continue
                     rec[g]["ret"][N].append(sa["r"])
                     rec[g]["alpha"][N].append(sa["alpha"])
+                    rec[g]["day_alpha"][N].setdefault(d, []).append(sa["alpha"])
     return _summarize_h2(rec, horizons, n_samples)
 
 
@@ -118,12 +109,16 @@ def _summarize_h2(rec, horizons, n_samples):
         for N in horizons:
             al = gd["alpha"][N]
             rt = gd["ret"][N]
-            mean_a, lo, hi, p = bootstrap_ci(al) if al else (None, None, None, None)
             row[f"alpha_{N}_mean"] = round(float(np.mean(al)), 4) if al else None
-            row[f"alpha_{N}_ci95"] = (lo, hi)
-            row[f"alpha_{N}_p"] = p
             row[f"ret_{N}_mean"] = round(float(np.mean(rt)), 4) if rt else None
             row[f"precision_{N}"] = round(float(np.mean([a > 0 for a in al])), 4) if al else None
             row[f"n_{N}"] = len(al)
+            # day 级(诚实显著性:先按 capitulation 日取均值,再 bootstrap 跨日 → 修正同日相关)
+            day_means = [float(np.mean(v)) for v in gd["day_alpha"][N].values() if v]
+            dmean, lo, hi, p = bootstrap_ci(day_means) if day_means else (None, None, None, None)
+            row[f"alpha_{N}_day_mean"] = round(dmean, 4) if dmean is not None else None
+            row[f"alpha_{N}_day_ci95"] = (lo, hi)
+            row[f"alpha_{N}_day_p"] = p
+            row[f"n_{N}_days"] = len(day_means)
         out["gates"][g] = row
     return out
