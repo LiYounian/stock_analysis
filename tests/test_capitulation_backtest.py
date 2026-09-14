@@ -134,6 +134,17 @@ def test_oversold_mirrors_resonance():
 
 
 # ————————————————————————— ⑤ 一般性(无例日/例票硬编码) —————————————————————————
+def test_lookback_window_in_grid():
+    """lookback 累计跌幅窗口必须是网格维度(含 1/2/3/5),防把'2日'写死=对 09-14 隐性拟合。"""
+    windows = sorted(set(w for _, _, w in bf.GRID))
+    assert windows == [1, 2, 3, 5], f"网格未覆盖 lookback 窗口 {windows}"
+    # 每个 (q_os,q_crash) 都应有全部 4 个窗口
+    from collections import Counter
+    c = Counter((qos, qc) for qos, qc, _ in bf.GRID)
+    assert all(v == 4 for v in c.values()), "部分 q_os×q_crash 缺窗口维度"
+    assert len(bf.GRID) == 24
+
+
 def test_no_hardcoded_examples():
     """capitulation 包源码不得出现动机例日/例票——防对着已知样本调参。"""
     pkg = pathlib.Path(__file__).resolve().parents[1] / "tools" / "backtest" / "capitulation"

@@ -50,8 +50,8 @@ def main():
                                          str(breadth.index.max().date())]},
                "event_counts": {}, "H1": {}, "H2": {}}
 
-    for q_os, q_crash in GRID:
-        key = _grid_key(q_os, q_crash)
+    for q_os, q_crash, w in GRID:
+        key = _grid_key(q_os, q_crash, w)
         cap = event_dates(flags, key)
         ordd = ordinary_dates(flags, key)
         cap_oos = [d for d in cap if d >= pd.Timestamp(args.oos_start)]
