@@ -57,6 +57,20 @@ tasks:
     notify_on: [failure, misfire]
     tags: [local, eod]
 
+  # Live capitulation 信号(收盘后 15:20,在 breadth 15:05 之后、选股之前):当日全A广度是否
+  # 触发极端底部(β 择时),供次日选股读。plist=com.stock.capitulation_signal.plist(草案);
+  # **enabled:false + 待统筹审后 launchctl 装载**(建-not-切,本条为 SSOT 留痕 + 等价测试比对锚)。
+  # cron 与 plist 的 15:20 mon-fri 排期严格等价(test_scheduler_launchd_equivalence 锁)。
+  - id: capitulation_signal
+    description: "capitulation 信号(收盘后 15:20);β择时豁免用,只门控t+1;草案待换线装载,默认关"
+    cmd: ["python", "-m", "tools.pipeline.capitulation_signal"]
+    cron: "20 15 * * mon-fri"
+    timeout_sec: 900
+    retries: 1
+    enabled: false
+    notify_on: [failure, misfire]
+    tags: [local, eod, capitulation]
+
   - id: pullrefresh
     description: 盘后全量刷新/全A选股(15:40,约 1 小时)
     cmd: ["python", "-m", "tools.run", "screenall"]
