@@ -37,12 +37,26 @@ def _bench(day_card: dict, horizon: str):
     return statistics.mean(vals) if vals else None, len(vals)
 
 
-def score_day(date, units, scorecard, want_t5=None):
-    """units: list[dict](含 code/stance)。返回该日买入侧打分。"""
+def is_buy(u):
+    """canonical 买入侧:stance ∈ {买入, 可参与}。"""
+    return u.get("stance") in BUY
+
+
+def is_bull(u):
+    """更软的"看多倾向"侧:1日或5日方向为偏多(即使 stance=观望)。
+
+    背景:headless DeepSeek 在程序化原始池上极保守、常给 0 买入;此侧用于在买入样本
+    极稀时,单独评估"模型看多方向"是否仍带 α(方向 tilt 的信息含量),与买入侧分开报。
+    """
+    return u.get("dir_1d") == "偏多" or u.get("dir_5d") == "偏多"
+
+
+def score_day(date, units, scorecard, want_t5=None, select=is_buy):
+    """units: list[dict](含 code/stance/dir)。select 决定计入哪一侧(默认买入侧)。"""
     if want_t5 is None:
         want_t5 = date <= T5_CUTOFF
     day_card = scorecard.get(date, {})
-    buy = [u["code"] for u in units if u.get("stance") in BUY and u.get("code")]
+    buy = [u["code"] for u in units if select(u) and u.get("code")]
     res = {"date": date, "n_units": len(units), "buy_side": buy, "n_buy": len(buy),
            "horizons": {}}
     for hz in (["r_1", "r_5"] if want_t5 else ["r_1"]):
