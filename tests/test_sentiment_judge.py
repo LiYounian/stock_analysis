@@ -74,6 +74,42 @@ def test_gather_pit_only_le_date(tmp_path):
     assert "未来银行" not in joined      # 09-12 > 评估日 09-11,防未来
 
 
+def test_net_a():
+    assert SJ._net_a({"a": "A", "b": "A", "c": "B", "d": None}) == (2 - 1) / 3
+    assert SJ._net_a({"a": "A", "b": "B"}) == 0.0
+    assert SJ._net_a({"a": None}) is None
+
+
+def test_debias_relative_corrects_bull_skew():
+    """全体偏A(利好skew)时,去偏后按相对全市场排序:高于中位→A、低于→B。"""
+    results = [
+        {"industry": "电子", "净A度": 1.0},    # 全A(最热)
+        {"industry": "医药", "净A度": 0.5},    # 中位
+        {"industry": "银行", "净A度": 0.0},    # 相对最冷(虽仍非负)
+    ]
+    baseline = SJ._debias(results)
+    assert baseline == 0.5
+    rel = {r["industry"]: r["情绪_相对"] for r in results}
+    assert rel["电子"] == "A" and rel["银行"] == "B" and rel["医药"] is None
+
+
+def test_news_rollup_pit_only_le_date(tmp_path):
+    """增强A:成分个股 news rollup 只取 ≤date;未来 news 不进。"""
+    root = tmp_path / "data"
+    mem = {"600000": "银行", "601398": "银行"}
+    for day, code, item in [
+        ("2026-09-10", "600000", {"title": "银行A股利好", "time": "2026-09-10 09:00:00"}),
+        ("2026-09-12", "601398", {"title": "未来银行新闻", "time": "2026-09-12 09:00:00"}),
+    ]:
+        d = root / "raw" / day / "news"
+        d.mkdir(parents=True)
+        json.dump([item], open(d / f"{code}.json", "w", encoding="utf-8"), ensure_ascii=False)
+    texts = SJ.gather_pit_news_text("银行", "2026-09-11", window_days=30,
+                                    data_root=str(root), membership=mem)
+    joined = " ".join(texts)
+    assert "银行A股利好" in joined and "未来银行新闻" not in joined
+
+
 def test_shadow_roundtrip_records_nonvalidated(tmp_path):
     """shadow 落盘=纯记录、标非validated;read_sentiment_shadow 回读综合。"""
     client = _MockClient({"投资者情绪": "乐观", "经济展望": "正面",

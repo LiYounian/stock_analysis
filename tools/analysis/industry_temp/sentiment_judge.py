@@ -87,6 +87,58 @@ def gather_pit_policy_text(industry: str, date: str, *, window_days: int = WINDO
     return texts
 
 
+def gather_pit_news_text(industry: str, date: str, *, window_days: int = WINDOW_DAYS,
+                         data_root: Optional[str] = None, membership: Optional[dict] = None,
+                         max_codes: int = 40, max_items: int = 25) -> list[str]:
+    """增强A:该行业成分个股 news(code→申万一级)截至 date 的标题,补 policy 的科技偏科覆盖。
+
+    防未来:只读 date_dir ≤date + item['time'] ≤date。为可控 I/O:成分截 max_codes、总条数截 max_items。
+    """
+    from datetime import datetime, timedelta
+    root = Path(data_root) if data_root else _MAIN / "data"
+    if membership is None:
+        from tools.collectors import code_industry
+        snap = code_industry.load()
+        membership = {c: industry_map.to_sw(r) for c, r in snap.items()
+                      if r and industry_map.to_sw(r)}
+    codes = [c for c, ind in membership.items() if ind == industry][:max_codes]
+    if not codes:
+        return []
+    start = (datetime.strptime(date, "%Y-%m-%d") - timedelta(days=window_days)).strftime("%Y-%m-%d")
+    day_dirs = [d for d in sorted(glob.glob(str(root / "raw" / "*" / "news")))
+                if start <= os.path.basename(os.path.dirname(d)) <= date]
+    texts = []
+    for dd in day_dirs:
+        for code in codes:
+            fp = os.path.join(dd, f"{code}.json")
+            if not os.path.exists(fp):
+                continue
+            try:
+                items = json.load(open(fp, encoding="utf-8"))
+            except Exception:
+                continue
+            for it in (items if isinstance(items, list) else []):
+                if str(it.get("time", ""))[:10] > date:      # 防未来
+                    continue
+                title = (it.get("title") or "").strip()
+                if title:
+                    texts.append(f"【{str(it.get('time'))[:10]}】{title}")
+                    if len(texts) >= max_items:
+                        return texts
+    return texts
+
+
+def gather_pit_text(industry: str, date: str, *, window_days: int = WINDOW_DAYS,
+                    data_root: Optional[str] = None, membership: Optional[dict] = None,
+                    with_news: bool = True) -> list[str]:
+    """情绪文本源 = policy(行业tag) + news(成分rollup,增强A)。均 ≤date。"""
+    texts = gather_pit_policy_text(industry, date, window_days=window_days, data_root=data_root)
+    if with_news:
+        texts = texts + gather_pit_news_text(industry, date, window_days=window_days,
+                                             data_root=data_root, membership=membership)
+    return texts
+
+
 def _aggregate(dim_ab: dict) -> Optional[str]:
     """4维 A/B → 综合情绪:多数 A/B;平局或全弃权→None。"""
     vals = [v for v in dim_ab.values() if v in ("A", "B")]
@@ -98,6 +150,14 @@ def _aggregate(dim_ab: dict) -> Optional[str]:
     return "A" if a > b else "B"
 
 
+def _net_a(dim_ab: dict) -> Optional[float]:
+    """净A度 = (#A − #B)/#非弃权,∈[-1,1];全弃权→None。供跨行业去偏(增强B)。"""
+    vals = [v for v in dim_ab.values() if v in ("A", "B")]
+    if not vals:
+        return None
+    return (vals.count("A") - vals.count("B")) / len(vals)
+
+
 # ————————————————————— 判官 —————————————————————
 def judge(industry: str, date: str, *, client=None, window_days: int = WINDOW_DAYS,
           data_root: Optional[str] = None, text: Optional[list[str]] = None) -> dict:
@@ -106,7 +166,7 @@ def judge(industry: str, date: str, *, client=None, window_days: int = WINDOW_DA
     防偷看:text 只来自 gather_pit_policy_text(≤date);client 缺省 get_client('extract')。
     """
     if text is None:
-        text = gather_pit_policy_text(industry, date, window_days=window_days, data_root=data_root)
+        text = gather_pit_text(industry, date, window_days=window_days, data_root=data_root)
     if not text:
         return {"industry": industry, "date": date, "n_text": 0, "abstain": True,
                 "维度": {d: None for d in DIMS}, "综合": None, "prompt_version": PROMPT_VERSION}
@@ -124,7 +184,7 @@ def judge(industry: str, date: str, *, client=None, window_days: int = WINDOW_DA
     dim_ab = {d: to_ab(raw.get(d)) for d in DIMS}
     return {
         "industry": industry, "date": date, "n_text": len(text), "abstain": False,
-        "维度": dim_ab, "综合": _aggregate(dim_ab),
+        "维度": dim_ab, "综合": _aggregate(dim_ab), "净A度": _net_a(dim_ab),
         "依据": (raw.get("依据") or "")[:40],
         "raw_labels": {d: raw.get(d) for d in DIMS},
         "prompt_version": PROMPT_VERSION,
@@ -132,6 +192,23 @@ def judge(industry: str, date: str, *, client=None, window_days: int = WINDOW_DA
 
 
 # ————————————————————— forward-shadow(纯记录·不 gate) —————————————————————
+def _debias(results: list[dict]) -> Optional[float]:
+    """增强B·跨行业去偏:净A度中位数为基线,每行业写 情绪_相对(相对全市场偏离,缓解利好skew)。
+
+    返回基线;就地给每个 result 加 '情绪_相对'(A>基线/B<基线/None=等于或弃权)。
+    """
+    import statistics
+    nets = [r["净A度"] for r in results if r.get("净A度") is not None]
+    baseline = float(statistics.median(nets)) if nets else None
+    for r in results:
+        na = r.get("净A度")
+        if na is None or baseline is None:
+            r["情绪_相对"] = None
+        else:
+            r["情绪_相对"] = "A" if na > baseline else ("B" if na < baseline else None)
+    return baseline
+
+
 def _all_industries(data_root: Optional[str] = None) -> list[str]:
     from tools.collectors import code_industry
     snap = code_industry.load()
@@ -150,7 +227,9 @@ def run_shadow(date: str, *, out_dir: str, data_root: Optional[str] = None,
     results = []
     for ind in inds:
         results.append(judge(ind, date, client=client, data_root=data_root))
+    baseline = _debias(results)     # 增强B:跨行业去偏 → 每行业写入 情绪_相对
     payload = {
+        "基线净A度中位数": baseline,
         "date": date, "prompt_version": PROMPT_VERSION,
         "非validated": True, "forward_shadow": True,
         "n_industries": len(inds),
@@ -175,7 +254,9 @@ def read_sentiment_shadow(date: str, shadow_dir: str) -> dict:
         payload = json.load(open(p, encoding="utf-8"))
     except Exception:
         return {}
-    return {r["industry"]: r.get("综合") for r in payload.get("results", [])}
+    # 板块层用**去偏后的情绪_相对**(缓解利好skew);缺则回退综合
+    return {r["industry"]: (r.get("情绪_相对") if "情绪_相对" in r else r.get("综合"))
+            for r in payload.get("results", [])}
 
 
 def _cli() -> None:
