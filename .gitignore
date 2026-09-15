@@ -45,6 +45,10 @@ data/analysis/backtest/finval/
 data/analysis/panel.csv
 data/analysis/panel.json
 
+# 次日实盘口径累积胜率牌（复盘任务每日 append 的派生 KPI 滚存，可从复盘 md 再生）。
+# 随 data/analysis/backtest/*forward_scorecard.csv 惯例:派生数据不入库,避免每日 diff 弄脏工作树。
+data/analysis/backtest/nextday_scorecard.csv
+
 # 定时任务运行期产物（护栏锁 / OS级盘中快照），纯滚存不入库
 data/task_locks/
 data/intraday/

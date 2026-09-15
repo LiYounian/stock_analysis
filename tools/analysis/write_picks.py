@@ -38,12 +38,14 @@ _SCORE_KEYS = ("综合分", "score", "动量分", "得分", "分值", "强度")
 _NESTED_SCORE_PARENTS = ("特征", "明细", "council")
 
 # 研判字段：Agent 提供、代码原样透传（客观字段由代码回填，不在此列）
+# 末尾追加次日实盘口径扩字段（ps.ENTRY_FIELDS，单一真源）：入场规则/类型/限价/观测窗/回踩位/
+# 卖出线/止损/收盘为正概率。全部 nullable——Agent 未给则不落该键（缺=None，向后兼容）。
 _JUDGE_FIELDS = (
     "type", "buy_rank", "stance", "stance_qualifier",
     "dir_1d", "dir_1d_conf", "dir_5d", "dir_5d_conf",
     "sentiment_quality", "key_reason", "key_risk", "alpha_beta",
     "watch_points", "detail_anchor",
-)
+) + ps.ENTRY_FIELDS
 
 
 # ————————————————————————————————————————————————————————————————

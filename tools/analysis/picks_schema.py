@@ -28,6 +28,18 @@ SENTIMENT_QUALITY = {"ok", "partial", "unknown", "missing"}
 # 情绪盲区：这两态下不得给"买入/首选"最强表态（机制 §4 规则7 的代码化闸门）
 SENTIMENT_BLIND = {"unknown", "missing"}
 
+# —— 次日实盘口径·研判扩字段（2026-09-15 整改设计 §3/§6，阶段2A）——
+# 全部 nullable、向后兼容：存量选股 json 无这些字段 → 缺=None，照常通过校验。
+# 冻结字段名（换线/复盘解析逐字引用，勿改）。
+ENTRY_TYPE = {"a", "b", "c", "open"}   # a=具体价 / b=集合竞价条件 / c=盘中条件 / open=以开盘价为 P_entry
+# 数值型扩字段（present 且非 None 时必须是数字，否则报错；缺=None 不报错）
+_ENTRY_NUM_FIELDS = ("P_entry", "P_dip", "expected_close_positive_prob")
+# 文本型扩字段（原样透传，不校验内容）
+_ENTRY_TEXT_FIELDS = ("entry_rule", "T_obs", "target_line", "stop_line")
+# 供 write_picks 透传的全部扩字段名（单一真源）
+ENTRY_FIELDS = ("entry_rule", "entry_type", "P_entry", "T_obs", "P_dip",
+                "target_line", "stop_line", "expected_close_positive_prob")
+
 _CODE6 = re.compile(r"^\d{6}$")
 _REQUIRED_PICK_FILLED = ("name", "close", "pct_chg")   # 回填后仍缺即报错，防"远端只有代码"复现
 
@@ -105,6 +117,8 @@ def validate_picks(doc: dict) -> list[str]:
             if p.get(d) == "不给方向" and p.get(c) != "-":
                 errors.append(f"{tag}.{d}=不给方向 但 {c}={p.get(c)!r}（应为 '-'）")
 
+        _validate_entry_fields(errors, tag, p)
+
         if isinstance(p.get("buy_rank"), int):
             ranks.append(p["buy_rank"])
 
@@ -118,6 +132,30 @@ def validate_picks(doc: dict) -> list[str]:
 def _enum(errors: list[str], tag: str, field: str, val, allowed: set[str]) -> None:
     if val not in allowed:
         errors.append(f"{tag}.{field} 非法：{val!r}（应 ∈ {sorted(allowed)}）")
+
+
+def _validate_entry_fields(errors: list[str], tag: str, p: dict) -> None:
+    """次日实盘口径研判扩字段校验（§3/§6）。**向后兼容硬要求：字段缺失=None 一律放行**——
+    只在字段 present 且值非法时报错，绝不因存量选股 json 缺这些字段而报错。
+
+    · entry_type：present 且非 None 时必须 ∈ ENTRY_TYPE，否则报错（设计点名的枚举校验）；
+    · P_entry/P_dip/expected_close_positive_prob：present 且非 None 时必须是数字（bool 除外），
+      否则报错；expected_close_positive_prob 另需 ∈ [0,1]（概率语义）；
+    · 文本字段（entry_rule/T_obs/target_line/stop_line）：不校验内容（原样透传）。
+    """
+    et = p.get("entry_type")
+    if et is not None and et not in ENTRY_TYPE:
+        errors.append(f"{tag}.entry_type 非法：{et!r}（应 ∈ {sorted(ENTRY_TYPE)} 或缺省）")
+
+    for field in _ENTRY_NUM_FIELDS:
+        v = p.get(field)
+        if v is None:
+            continue
+        if isinstance(v, bool) or not isinstance(v, (int, float)):
+            errors.append(f"{tag}.{field} 应为数字或缺省，实为 {v!r}")
+            continue
+        if field == "expected_close_positive_prob" and not (0.0 <= float(v) <= 1.0):
+            errors.append(f"{tag}.expected_close_positive_prob 越界：{v!r}（应 ∈ [0,1]）")
 
 
 # —— 样例 doc（供审阅 schema 形态）——
