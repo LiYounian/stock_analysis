@@ -266,3 +266,40 @@ def test_local_adapter_maps_units_directly(monkeypatch):
                         lambda df: {"获利比例": 0.965, "成本区间上沿": 12.34})
     out = ss._local_chip_of(_strong_frame(), as_of=None)
     assert out["winner_rate"] == 96.5 and out["cost_95pct"] == 12.34
+
+
+# ───── C(2026-09-15 换线):winner_rate 分档输出 + wr>99 gap-fade 标记(只加输出,不改入选) ─────
+def test_wr_band_boundaries():
+    """_wr_band 边界:默认档位 [99,95,80];缺失→NA(上闭下开,与报告口径一致)。"""
+    c = ss._CFG
+    assert ss._wr_band(None, c) == "NA"
+    assert ss._wr_band(99.01, c) == ">99"
+    assert ss._wr_band(99.0, c) == "95-99"     # 99.0 不 >99 → 落 95-99
+    assert ss._wr_band(95.0, c) == "80-95"     # 95.0 不 >95 → 落 80-95
+    assert ss._wr_band(80.0, c) == "≤80"       # 80.0 不 >80 → 落 ≤80
+    assert ss._wr_band(85.0, c) == "80-95"
+
+
+def test_output_fields_do_not_change_selection():
+    """加分档/标记字段后,SELECT 与四条件真值对同一输入逐点不变(锁'只加输出不改判据')。"""
+    kdf = _strong_frame()
+    for chp in ({"winner_rate": 99.92, "cost_95pct": 1.0},   # wr>99
+                {"winner_rate": 96.0, "cost_95pct": 1.0},    # 95-99
+                {"winner_rate": 50.0, "cost_95pct": float(kdf["high"].iloc[-1]) - 1e-3},  # 仅 high 命中
+                {"winner_rate": 50.0, "cost_95pct": 1e9},    # 都不命中
+                None):                                       # 无筹码
+        r = ss.screen_latest(kdf, chip=chp)
+        wr = None if chp is None else chp["winner_rate"]
+        expect_sel = bool(r["C1_六均线多头"] and r["C2_近期连涨"] and r["C3_高位区间"] and r["C4_筹码获利"])
+        assert r["SELECT"] == expect_sel
+        # 新字段存在且自洽
+        assert r["明细"]["winner_rate分档"] == ss._wr_band(wr, ss._CFG)
+        assert r["明细"]["次日高开回落风险"] == bool(wr is not None and wr > 99.0)
+
+
+def test_gap_fade_flag_only_above_99():
+    """次日高开回落标记:仅 winner_rate>99 为 True(wr=99.0 不算)。"""
+    kdf = _strong_frame()
+    assert ss.screen_latest(kdf, chip={"winner_rate": 99.5, "cost_95pct": 1.0})["明细"]["次日高开回落风险"] is True
+    assert ss.screen_latest(kdf, chip={"winner_rate": 99.0, "cost_95pct": 1.0})["明细"]["次日高开回落风险"] is False
+    assert ss.screen_latest(kdf, chip=None)["明细"]["次日高开回落风险"] is False
