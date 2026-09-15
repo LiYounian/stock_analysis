@@ -1510,6 +1510,26 @@ def _pct_from_review_md(code: str, md_date: str) -> float | None:
         return None
 
 
+def review_absolute_scorecard(code: str, md_date: str) -> dict | None:
+    """读 `复盘/<md_date>.md`，取某票的**次日实盘绝对收益三列**（整改设计 §4）：
+        {入场价, 入场→收盘 绝对收益%, 是否收盘为正}
+    交纯函数 selection_summary.parse_review_absolute_scorecard 解析（不触网、可单测）。
+
+    向后兼容：旧复盘（无这三列）/ 缺文件 / 解析不出 → None（缺则 None、不炸）。
+    展示层只读、只用 ≤md_date 已定稿数据（防未来）。⚠️ 研究模拟,非投资建议。"""
+    if not code or not md_date:
+        return None
+    try:
+        from tools import selection_summary
+        p = selection_summary.REVIEW_DIR / f"{md_date}.md"
+        if not p.is_file():
+            return None
+        return selection_summary.parse_review_absolute_scorecard(
+            p.read_text(encoding="utf-8"), code)
+    except Exception:                                   # noqa: BLE001
+        return None
+
+
 def _selection_pct_at(code: str, md_date: str) -> float | None:
     """某票某交易日(md_date)的涨跌%,**多级回退**取数(展示层只读、不算、只用 ≤md_date 数据):
       1) record.snapshot.pct_chg —— 现有,覆盖该日选出票/自选;

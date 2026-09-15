@@ -1,0 +1,11 @@
+2026-09-15 11:11:28,030 INFO 加载 5563 票 ...
+2026-09-15 11:11:34,064 INFO   ...1500/5563
+2026-09-15 11:11:39,786 INFO   ...3000/5563
+2026-09-15 11:11:46,128 INFO   ...4500/5563
+2026-09-15 11:11:49,061 INFO 有效票 5173,建市场基准 ...
+2026-09-15 11:12:02,619 INFO   扫 ...1500/5173 票, 累计信号 1330961
+2026-09-15 11:12:08,453 INFO   扫 ...3000/5173 票, 累计信号 2469492
+2026-09-15 11:12:15,143 INFO   扫 ...4500/5173 票, 累计信号 3776931
+2026-09-15 11:12:17,519 INFO 完成:5173 票, 4188023 记录
+2026-09-15 11:12:50,251 INFO 写出 /tmp/claude-501/-Users-yqg-Documents-projects-stock-analysis--claude-worktrees-wizardly-swirles-9d72e5/99d183c9-4bd7-4f76-9b94-25ab6572f732/scratchpad/factor_nextday_full_10bps.json
+/tmp/claude-501/-Users-yqg-Documents-projects-stock-analysis--claude-worktrees-wizardly-swirles-9d72e5/99d183c9-4bd7-4f76-9b94-25ab6572f732/scratchpad/factor_nextday_full_10bps.json

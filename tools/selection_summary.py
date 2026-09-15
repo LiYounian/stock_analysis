@@ -512,6 +512,108 @@ def parse_review_close_pct(md_text: str, code: str) -> float | None:
     return None
 
 
+# —— 复盘·次日实盘绝对收益口径新列（2026-09-15 整改设计 §4）——
+# 列名一经定稿即冻结：换线的 eod-review SKILL 与胜率牌逐字引用这些常量，勿改字面。
+COL_ENTRY_PRICE = "入场价"
+COL_ABS_RETURN = "入场→收盘 绝对收益%"
+COL_CLOSE_POSITIVE = "是否收盘为正"
+
+_NUM_RE = re.compile(r"([+\-−]?\d+(?:\.\d+)?)")
+
+
+def _cell_num(cell: str) -> float | None:
+    """从单元取首个数值（兼容 Unicode 负号）；'未触发'/无数字 → None。"""
+    s = _clean(cell)
+    if not s or "未触发" in s:
+        return None
+    m = _NUM_RE.search(s.replace("−", "-"))
+    if not m:
+        return None
+    try:
+        return float(m.group(1))
+    except ValueError:
+        return None
+
+
+def _cell_signed_pct(cell: str) -> float | None:
+    """从单元取带符号百分数（如 '+2.16%' / '−1.30%'）；缺则退化为首个纯数字；'未触发'→None。"""
+    s = _clean(cell)
+    if not s or "未触发" in s:
+        return None
+    m = _SIGNED_PCT_RE.search(s)
+    if m:
+        try:
+            return float(m.group(1).replace("−", "-"))
+        except ValueError:
+            return None
+    return _cell_num(s)
+
+
+def _cell_close_positive(cell: str) -> bool | None:
+    """'是否收盘为正' 三态解析：是→True / 否→False / 未触发(或空/无法判定)→None。"""
+    s = _clean(cell)
+    if not s or "未触发" in s:
+        return None
+    if s[0] == "是" or s in ("Y", "y", "yes", "✓", "√", "true", "True"):
+        return True
+    if s[0] == "否" or s in ("N", "n", "no", "✗", "×", "false", "False"):
+        return False
+    return None
+
+
+def parse_review_absolute_scorecard(md_text: str, code: str) -> dict | None:
+    """从 复盘/<D>.md「逐票收盘记分」表，取某票的**次日实盘绝对收益三列**（整改设计 §4）：
+        {入场价, 入场→收盘 绝对收益%, 是否收盘为正}
+
+    · 入场价：按 §3.1 口径记的 D+1 实际成交价；'未触发' → None；
+    · 入场→收盘 绝对收益%：= D+1收盘/入场价 − 1（**主指标**），带符号百分数；
+    · 是否收盘为正：是/否/未触发 三态 → True/False/None（**胜率计数**，未触发不计入分母）。
+
+    **向后兼容硬要求**：旧复盘 md（无这三列）→ 找不到含新列的记分表 → 返回 None（缺则 None、不炸）；
+    表在但个别新列缺 → 该键取 None。找不到该票行 → None。⚠️ 研究模拟，非投资建议。
+    """
+    if not md_text or not code:
+        return None
+    code = str(code)
+    # 选表：首列 ∈ {票,代码,名称} 且至少含一新列；heading 含"逐票收盘记分"优先，退而"逐票"。
+    best = None
+    for t in _parse_tables(md_text):
+        h = t["header"]
+        if not h or not any(k in h[0] for k in ("票", "代码", "名称")):
+            continue
+        if _col(h, COL_ENTRY_PRICE) < 0 and _col(h, "绝对收益") < 0 \
+                and _col(h, "收盘为正", "是否为正") < 0:
+            continue
+        score = 2 if "逐票收盘记分" in t["heading"] else (1 if "逐票" in t["heading"] else 0)
+        if best is None or score > best[0]:
+            best = (score, t)
+    if best is None:
+        return None
+    t = best[1]
+    h = t["header"]
+    ci_entry = _col(h, COL_ENTRY_PRICE)
+    ci_abs = _col(h, "绝对收益")
+    ci_pos = _col(h, "收盘为正", "是否为正")
+
+    target = None
+    for row in t["rows"]:
+        m = _CODE6.search(_clean(row[0])) if row else None
+        if m and m.group(1) == code:
+            target = row
+            break
+    if target is None:
+        return None
+
+    def _at(ci):
+        return target[ci] if 0 <= ci < len(target) else ""
+
+    return {
+        COL_ENTRY_PRICE: _cell_num(_at(ci_entry)) if ci_entry >= 0 else None,
+        COL_ABS_RETURN: _cell_signed_pct(_at(ci_abs)) if ci_abs >= 0 else None,
+        COL_CLOSE_POSITIVE: _cell_close_positive(_at(ci_pos)) if ci_pos >= 0 else None,
+    }
+
+
 def _fmt_alpha(alpha: float | None) -> str:
     """α 显示串:+X.XXpp / −X.XXpp(用 Unicode 负号,与项目复盘口径一致);None → 空串(模板渲染「—」)。"""
     if not isinstance(alpha, (int, float)) or isinstance(alpha, bool):
