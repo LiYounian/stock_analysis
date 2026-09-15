@@ -57,13 +57,27 @@ def _ic(mean_ic, naive_t, p_boot, n_days, ci):
             "boot_ci": ci, "n_days": n_days}
 
 
+def _stable(ok):
+    return {h: {"稳健一致": ok} for h in HZ}
+
+
+def test_robust_sign_tolerates_one_anomalous_year():
+    """8/9 年同号(仅1年翻)→ 稳健一致 True;6/9 → False(拒脆弱信号)。"""
+    sub8 = {"2018": -0.06, "2019": -0.03, "2020": +0.06, "2021": -0.02, "2022": -0.12,
+            "2023": -0.10, "2024": -0.09, "2025": -0.06, "2026": -0.05, "符号一致": False}
+    r8 = EV.robust_sign(sub8)
+    assert r8["稳健一致"] is True and r8["多数符号"] == -1
+    sub6 = {"2018": +0.02, "2019": -0.05, "2020": +0.04, "2021": -0.04, "2022": +0.03,
+            "2023": -0.06, "2024": -0.10, "2025": -0.12, "2026": -0.01, "符号一致": False}
+    assert EV.robust_sign(sub6)["稳健一致"] is False
+
+
 def test_verdict_high_naive_t_but_insignificant_boot_is_underpowered_not_signal():
     """短样本:naive t 虚高(-4.4)但重叠校正 p_boot=0.12 → 欠功效,绝不"有预测力"/"证伪"。"""
     ic = {5: _ic(-0.03, -2.5, 0.10, 234, [-0.09, 0.01]),
           10: _ic(-0.04, -3.0, 0.13, 234, [-0.11, 0.02]),
           20: _ic(-0.0617, -4.40, 0.124, 234, [-0.15, 0.03])}
-    subs = {h: {"符号一致": True} for h in HZ}
-    v = EV._verdict(ic, {}, subs, HZ)
+    v = EV._verdict(ic, _stable(True), HZ)
     assert v["判定"] == "欠功效待复查"
     assert v["判定"] != "有预测力"
 
@@ -74,7 +88,7 @@ def test_verdict_never_emits_zhengwei_label():
         {h: _ic(0.0, 0.0, 0.9, 100, [-0.05, 0.05]) for h in HZ},          # 弱噪声短样本
         {h: _ic(-0.06, -4.0, 0.12, 200, [-0.15, 0.02]) for h in HZ},      # naive高但boot不显著
     ]:
-        v = EV._verdict(ic, {}, {h: {"符号一致": True} for h in HZ}, HZ)
+        v = EV._verdict(ic, _stable(True), HZ)
         assert "证伪" not in v["判定"]
 
 
@@ -83,28 +97,29 @@ def test_verdict_adequate_and_null_is_buke_yong():
     ic = {5: _ic(0.001, 0.1, 0.9, 600, [-0.02, 0.02]),
           10: _ic(-0.002, -0.2, 0.8, 590, [-0.03, 0.02]),
           20: _ic(0.000, 0.0, 0.95, 580, [-0.03, 0.03])}
-    subs = {h: {"符号一致": False} for h in HZ}
-    v = EV._verdict(ic, {}, subs, HZ)
+    v = EV._verdict(ic, _stable(False), HZ)
     assert v["判定"] == "不可用·真null"
 
 
 def test_verdict_strong_signal_is_you_yuce_li():
-    """p_boot<0.05 且 |IC|≥bar 且子样本符号稳 → 有预测力。"""
+    """p_boot<0.05 且 |IC|≥bar 且稳健符号一致 → 有预测力。"""
     ic = {5: _ic(-0.05, -3.0, 0.01, 500, [-0.08, -0.02]),
           10: _ic(-0.04, -2.5, 0.03, 490, [-0.07, -0.01]),
           20: _ic(-0.03, -2.0, 0.20, 480, [-0.07, 0.01])}
-    subs = {h: {"符号一致": True} for h in HZ}
-    v = EV._verdict(ic, {}, subs, HZ)
+    v = EV._verdict(ic, _stable(True), HZ)
     assert v["判定"] == "有预测力"
     assert 5 in v["达标h"]
 
 
 # ————————————————————— 集成:evaluate_dim 端到端(合成) —————————————————————
 def _synthetic(signal: bool, seed: int = 0):
-    """5 行业 × 跨两年 ~260 交易日;signal=True 时 value 与前瞻收益强负相关。"""
+    """5 行业 × 跨 ~7 年 交易日;signal=True 时 value 与前瞻收益强负相关。
+
+    跨 7 年是为让稳健符号检验(二项)有足够子样本:n=7 全同号 → p≈0.016<0.05。
+    """
     rng = np.random.default_rng(seed)
     inds = [f"业{i}" for i in range(5)]
-    dates = pd.bdate_range("2024-01-01", periods=260).strftime("%Y-%m-%d").tolist()
+    dates = pd.bdate_range("2018-01-01", periods=1800).strftime("%Y-%m-%d").tolist()
     dim_rows, ret = [], {i: [] for i in inds}
     for d in dates:
         vals = rng.permutation(np.linspace(0.1, 0.9, 5))

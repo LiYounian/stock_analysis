@@ -131,6 +131,28 @@ def ic_significance(ic_frame: pd.DataFrame, h: int) -> dict:
     }
 
 
+# ————————————————————— 稳健符号一致(替代脆弱的全票一致) —————————————————————
+def robust_sign(subsample: dict) -> dict:
+    """由逐子样本(年)IC 判**稳健**符号一致:多数符号 + 二项符号检验(非要求全票一致)。
+
+    旧 IET/严格 unanimity 会因单个异常年(如 2020)否掉真信号——正是取证复盘批评的脆弱点。
+    稳健一致 = 二项符号检验 p<0.05 且 多数占比≥0.7。
+    """
+    from math import comb
+    ys = {k: v for k, v in subsample.items() if k != "符号一致" and v is not None}
+    signs = [1 if v > 1e-6 else (-1 if v < -1e-6 else 0) for v in ys.values()]
+    nz = [s for s in signs if s != 0]
+    n = len(nz)
+    if n == 0:
+        return {"稳健一致": False, "多数占比": None, "n_sub": 0, "sign_test_p": None}
+    maj = 1 if sum(nz) >= 0 else -1
+    k = sum(1 for s in nz if s == maj)
+    p = min(1.0, 2.0 * sum(comb(n, i) for i in range(k, n + 1)) / (2 ** n))
+    return {"稳健一致": bool(p < 0.05 and k / n >= 0.7),
+            "多数占比": round(k / n, 2), "n_sub": n, "多数符号": maj,
+            "sign_test_p": round(p, 4)}
+
+
 # ————————————————————— 功效 —————————————————————
 def power_note(n_days: int, h: int, observed_t) -> dict:
     eff_blocks = round(n_days / h, 1) if h else float(n_days)
@@ -152,6 +174,7 @@ def evaluate_dim(dim: str, dim_panel: pd.DataFrame, ret_by_industry: dict,
     # 连续 IC 的重叠校正显著性(块自助,作判定依据;naive t 仅报告)
     ic = {h: ic_significance(ic_frame, h) for h in horizons}
     subs = {h: R.subsample_sign_stability(ic_frame, h, by="year") for h in horizons}
+    sign = {h: robust_sign(subs[h]) for h in horizons}
 
     ab_df = sub[["date", "industry", "ab"]]
     ret_lf = ret_long(ret_by_industry)
@@ -159,12 +182,12 @@ def evaluate_dim(dim: str, dim_panel: pd.DataFrame, ret_by_industry: dict,
     powers = {h: power_note(ic[h].get("n_days", 0), h, ic[h].get("naive_t"))
               for h in horizons}
 
-    verdict = _verdict(ic, spreads, subs, horizons)
+    verdict = _verdict(ic, sign, horizons)
     return {"dim": dim, "ic": ic, "ab_spread": spreads,
-            "subsample": subs, "power": powers, "verdict": verdict}
+            "subsample": subs, "sign_robust": sign, "power": powers, "verdict": verdict}
 
 
-def _verdict(ic: dict, spreads: dict, subs: dict, horizons) -> dict:
+def _verdict(ic: dict, sign: dict, horizons) -> dict:
     """预注册判定(**用重叠校正的块自助 p_boot,不用 overlap-inflated 的 naive t**)。
     有预测力:某 h 连续IC块自助 p_boot<0.05 且 |mean_ic|≥IC_BAR 且 子样本符号稳定;
     不可用·真null:样本充足(有效块≥ADEQUATE_BLOCKS) 且各h点估≈0(|IC|<bar 且 IC块自助CI含0);
@@ -173,7 +196,7 @@ def _verdict(ic: dict, spreads: dict, subs: dict, horizons) -> dict:
     for h in horizons:
         s = ic[h]
         icv, p = s.get("mean_ic"), s.get("p_boot")
-        sign_stable = subs.get(h, {}).get("符号一致") is True
+        sign_stable = sign.get(h, {}).get("稳健一致") is True
         if (icv is not None and p is not None and abs(icv) >= IC_BAR
                 and p < 0.05 and sign_stable):
             passed_h.append(h)
