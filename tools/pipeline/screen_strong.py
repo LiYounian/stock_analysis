@@ -40,6 +40,28 @@ def _chip_source() -> str:
     return getattr(strategy, "STRONG_CHIP_SOURCE", "local") or "local"
 
 
+def _wr_band(wr: float | None, cfg: dict) -> str:
+    """winner_rate(百分数 0~100)分档标签(纯输出,不影响入选)。缺失 → 'NA'。
+
+    回测(docs/计划/2026-09-15_最强选股回测分析优化_报告.md)结论:winner_rate 段与前向 α 强相关,
+    但**方向依入场口径反转**——按持有(close→close)wr 越高 α 越好;按实盘次日开盘买则 wr>99 段逐年
+    高开回落(gap-fade)负 α。故不改二值入选门槛,只**分档输出** + 给最高档打标记,交下游按口径权衡。
+    默认档位 [99, 95, 80](可由 config「最强选股.winner_rate分档」覆盖)。
+    """
+    if wr is None:
+        return "NA"
+    bounds = cfg.get("winner_rate分档", [99, 95, 80])
+    hi, mid, lo = (float(bounds[0]), float(bounds[1]), float(bounds[2]))
+    w = float(wr)
+    if w > hi:
+        return f">{hi:g}"
+    if w > mid:
+        return f"{mid:g}-{hi:g}"
+    if w > lo:
+        return f"{lo:g}-{mid:g}"
+    return f"≤{lo:g}"
+
+
 def min_history() -> int:
     return int(_CFG["最少历史根数"])
 
@@ -95,6 +117,9 @@ def signal_at(kdf: pd.DataFrame, t: int, chip: dict | None = None,
             "close": round(float(close[t]), 4), "high": round(float(high[t]), 4),
             "H52": (round(float(h52), 4) if h52 is not None else None),
             "近期大涨次数": int(big),
+            # 纯输出(不影响入选;缺筹码 → NA/False):winner_rate 分档 + wr>99 次日易高开回落(gap-fade)标记
+            "winner_rate分档": _wr_band(wr, c),
+            "次日高开回落风险": bool(wr is not None and float(wr) > 99.0),
         },
     }
 
