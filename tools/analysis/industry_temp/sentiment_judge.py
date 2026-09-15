@@ -259,6 +259,27 @@ def read_sentiment_shadow(date: str, shadow_dir: str) -> dict:
             for r in payload.get("results", [])}
 
 
+def get_industry_sentiment_series(industry: str, dates: list[str], shadow_dir: str) -> dict:
+    """读 shadow 落盘 → {date: 净A度}(某行业的连续情绪值)。供 pattern 拐点检测消费。
+
+    ⚠️ shadow 是 **forward-only、非validated**(接调度后才积累);缺当日文件/该行业弃权→该 date 缺省。
+    净A度∈[-1,1](已跨行业去偏前的原始净A度;拐点用 delta,基线漂移可另减当日基线,见 payload 基线字段)。
+    """
+    out = {}
+    for d in dates:
+        p = Path(shadow_dir) / f"{d}.json"
+        if not p.exists():
+            continue
+        try:
+            payload = json.load(open(p, encoding="utf-8"))
+        except Exception:
+            continue
+        for r in payload.get("results", []):
+            if r.get("industry") == industry and r.get("净A度") is not None:
+                out[d] = r["净A度"]
+    return out
+
+
 def _cli() -> None:
     import argparse
     logging.basicConfig(level=logging.INFO)

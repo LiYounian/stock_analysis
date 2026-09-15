@@ -121,3 +121,14 @@ def test_shadow_roundtrip_records_nonvalidated(tmp_path):
     # 无 policy 文本(nodata)→ 该行业弃权,综合 None
     back = SJ.read_sentiment_shadow("2026-09-11", str(out))
     assert "银行" in back
+
+
+def test_sentiment_series_reads_netA(tmp_path):
+    """pattern 消费接口:get_industry_sentiment_series 从 shadow 取某行业净A度时序。"""
+    out = tmp_path / "shadow"
+    out.mkdir()
+    for d, na in [("2026-09-10", 1.0), ("2026-09-11", -0.5)]:
+        payload = {"date": d, "results": [{"industry": "银行", "净A度": na, "情绪_相对": "A"}]}
+        json.dump(payload, open(out / f"{d}.json", "w", encoding="utf-8"), ensure_ascii=False)
+    ser = SJ.get_industry_sentiment_series("银行", ["2026-09-10", "2026-09-11", "2026-09-12"], str(out))
+    assert ser == {"2026-09-10": 1.0, "2026-09-11": -0.5}    # 09-12 无文件→缺省
