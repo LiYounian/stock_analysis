@@ -120,8 +120,13 @@ def _trailing_dates(date: str, span_days: int = 420) -> list[str]:
 
 
 def get_industry_thermometer(date: str, *, 口径: str = "native",
-                             membership: Optional[dict] = None) -> dict:
-    """申万一级全行业在 date 的板块环境信号(因果 PIT)。契约见接口文档 §2。"""
+                             membership: Optional[dict] = None,
+                             sentiment_shadow_dir: Optional[str] = None) -> dict:
+    """申万一级全行业在 date 的板块环境信号(因果 PIT)。契约见接口文档 §2。
+
+    情绪(P-B):默认 None;若给 sentiment_shadow_dir 且当日有 shadow 落盘,则填其综合 A/B——
+    ⚠️ 情绪=**非validated 的 forward-shadow 观察信号**,勿据它 gate 决策(见接口契约)。
+    """
     D.bind_main_repo()
     if membership is None:
         from tools.collectors import code_industry
@@ -130,6 +135,10 @@ def get_industry_thermometer(date: str, *, 口径: str = "native",
                       if r and industry_map.to_sw(r)}
     dates = _trailing_dates(date)
     panel = build_thermometer_panel(dates, membership, 口径=口径)
+    senti = {}
+    if sentiment_shadow_dir:
+        from tools.analysis.industry_temp import sentiment_judge as SJ
+        senti = SJ.read_sentiment_shadow(date, sentiment_shadow_dir)
     out = {}
     for ind, g in panel.groupby("industry"):
         g = g[g["date"] <= date]
@@ -140,7 +149,7 @@ def get_industry_thermometer(date: str, *, 口径: str = "native",
             "拥挤分位": last["拥挤分位"], "拥挤": last["拥挤"],
             "动量_时序分位": last["动量_时序分位"], "动量_时序档": last["动量_时序档"],
             "动量_截面分位": last["动量_截面分位"], "动量_截面档": last["动量_截面档"],
-            "情绪": last["情绪"], "n_members": int(last["n_members"]),
+            "情绪": senti.get(ind, last["情绪"]), "n_members": int(last["n_members"]),
             "asof": last["date"],
         }
     return out
