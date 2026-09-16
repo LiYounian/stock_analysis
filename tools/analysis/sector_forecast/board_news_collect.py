@@ -30,10 +30,85 @@ from typing import Optional
 
 logger = logging.getLogger("sector_forecast.board_news_collect")
 
-RAW_VERSION = "v1-2026-09-16"
+RAW_VERSION = "v2-2026-09-17-clean"      # v2:P1 榜单噪音过滤 + P2 事件级去重(洗输入)
 LOOKBACK_DAYS = 12                       # 与 news_catalyst.LOOKBACK_DAYS 对齐(近1-2周)
 COLLECT_ROLES = ("龙头", "中军", "主力")   # 默认采集角色(催化/大资金承载者)
 LHB_WINDOW_DAYS = 30                      # 附带的 LHB 资金流回看窗
+
+# ════════════════════ P1 · 榜单/数据表噪音过滤 ════════════════════
+# 依据 DeepSeek-vs-Opus 对比(docs/计划/2026-09-17_...优化建议.md):全市场排行/数据表文章
+# 仅因个股代码出现在表里就被挂到该股 → 纯噪音、还带一串数字,淹没真催化。这里按**标题**
+# 剔除这类"市场级榜单/资金流向表/解禁一览/筹码换手榜"。**保守取向**:只打明确的榜单/数据
+# 表措辞,真催化标题(中标/集采/订单/业绩/技术落地/公告)不含这些词、不会被误杀。
+import re as _re
+
+_NOISE_TITLE_RE = _re.compile("|".join([
+    r"附股",                                   # (附股) 榜单标配
+    r"一览", r"图谱", r"数据丨",                # 汇总/图谱/数据栏目
+    r"资金流向?日报", r"资金净流[出入]", r"主力.{0,6}净流[出入]", r"净流[出入]超",
+    r"\d+\s*股.{0,4}净流",                      # "8股主力资金净流出"
+    r"筹码大换手", r"每笔成交", r"成交量增长",
+    r"股东户数", r"户数下降", r"户数增长",
+    r"解禁市值", r"解禁比例", r"限售股.{0,8}解禁", r"\d+\s*股.{0,4}解禁",
+    r"融资余额", r"杠杆资金", r"融资.{0,4}[增减]仓",
+    r"概念.{0,8}(下跌|上涨|拉升|走强|走弱)\s*[\d一二三四五六七八九十]",  # "X概念下跌1.05%"
+    r"站上.{0,3}均线", r"短线走稳",
+    r"\d+\s*只股", r"\d+\s*股(涨停|跌停|上榜|大涨|大跌)",
+    r"收盘涨停", r"涨停潮", r"涨停.{0,3}附股", r"涨停(板)?(一览|名单)",
+    r"市值居前", r"[涨跌]幅居前", r"增幅居前", r"[涨跌]幅榜",
+    r"回购图谱", r"回购一览", r"龙虎榜.{0,4}(一览|名单|数据)",
+    r"减持.{0,4}(一览|名单|榜)",
+]))
+
+
+def _is_noise_title(title: str) -> bool:
+    """P1:标题命中市场级榜单/数据表措辞 → 判噪音(市场级、非本股催化)。"""
+    return bool(title) and bool(_NOISE_TITLE_RE.search(title))
+
+
+# ════════════════════ P2 · 事件级去重(近重复转载只留一条)════════════════════
+# _news_key(title[:12]) 只抓前缀精确重复,抓不住多家媒体**近乎逐字转载**同一条(解禁/终止
+# 各被转发多次)。这里用**中文字符 bigram Jaccard**聚类:相似度≥阈值=近重复,留正文最长一条。
+# **保守取向**:阈值偏高,只合近逐字转载(占噪音大头·安全不误合);语义改写的同事件合并
+# 需 LLM 语义(超字符串能力·留后续 LLM 压缩支处理),本层不强合、宁漏不误。
+_DEDUP_SIM = 0.70                          # bigram Jaccard 阈值(预注册·偏高防误合不同事件)
+
+
+def _cn_bigrams(s: str) -> set:
+    s = _re.sub(r"[^一-鿿]", "", s or "")     # 只留中文字,去数字/标点/英文
+    return {s[i:i + 2] for i in range(len(s) - 1)} if len(s) >= 2 else ({s} if s else set())
+
+
+def _sim(a: str, b: str) -> float:
+    A, B = _cn_bigrams(a), _cn_bigrams(b)
+    if not A or not B:
+        return 0.0
+    inter = len(A & B)
+    sm = min(len(A), len(B))
+    # 短核心(≥3 bigram)几乎全含于另一条 → 近重复(来源前缀/截断转载,如"【基金报】终止收购")。
+    if sm >= 3 and inter / sm >= 0.85:
+        return 1.0
+    return inter / len(A | B)             # 否则 Jaccard(近逐字转载)
+
+
+def _dedup_events(items: list[dict]) -> tuple[list[dict], int]:
+    """P2:板块内同事件多标题去重(相似度聚类,留正文最长一条)。返回 (去重后, 合并掉的条数)。"""
+    kept: list[dict] = []
+    merged = 0
+    for it in items:
+        hit = None
+        for k in kept:
+            if _sim(it.get("title", ""), k.get("title", "")) >= _DEDUP_SIM:
+                hit = k
+                break
+        if hit is None:
+            kept.append(it)
+        else:
+            merged += 1
+            # 保留信息量更高(正文更长)的一条
+            if len(it.get("text", "") or "") > len(hit.get("text", "") or ""):
+                hit.update(it)
+    return kept, merged
 
 
 def _read_role_table(date: str, sw: str) -> Optional[dict]:
@@ -108,6 +183,7 @@ def collect_board_raw(date: str, sw: str, picks: list[dict], *,
     codes = [d["code"] for d in picks]
 
     items: list[dict] = []
+    n_noise = 0                          # P1:被过滤的榜单/数据表噪音条数(可审)
     # ① 个股新闻/公告(龙头/中军/主力·近 lookback_days)
     try:
         by_code = news_col.fetch_news(codes, days=lookback_days, workers=min(4, len(codes) or 1))
@@ -120,10 +196,14 @@ def collect_board_raw(date: str, sw: str, picks: list[dict], *,
             # 下限窗口始终生效;未来上限(t>date)仅在严格 as-of 口径剔除(allow_future=False)。
             if t and (t < cutoff or (not allow_future and t > date)):
                 continue
+            title = it.get("title", "")
+            if _is_noise_title(title):    # P1:市场级榜单/数据表噪音 → 剔除(非本股催化)
+                n_noise += 1
+                continue
             items.append({
                 "date": t or "?", "role": role_of.get(c, ""), "code": c,
                 "who": f"{role_of.get(c,'')}·{name_of.get(c) or c}",
-                "title": it.get("title", ""), "text": (it.get("content") or "")[:300],
+                "title": title, "text": (it.get("content") or "")[:300],
                 "source": it.get("source", ""), "url": it.get("url", ""), "kind": "个股新闻",
             })
     # ② 板块政策 + 国际对标(sentiment_policy;region=国外→国际形势)
@@ -152,6 +232,8 @@ def collect_board_raw(date: str, sw: str, picks: list[dict], *,
         if f:
             资金流.append({"code": c, "name": name_of.get(c, ""), "role": role_of.get(c, ""), **f})
 
+    # P2:事件级去重(同事件多标题只留信息量最高一条)——在噪音已过滤(P1)基础上再去重
+    items, n_merged = _dedup_events(items)
     items.sort(key=lambda x: x["date"])
     n_news = sum(1 for it in items if it["kind"] == "个股新闻")
     return {
@@ -164,8 +246,10 @@ def collect_board_raw(date: str, sw: str, picks: list[dict], *,
         "items": items, "资金流": 资金流,
         "统计": {"总条数": len(items), "个股新闻": n_news,
                 "政策/国际": len(items) - n_news, "LHB覆盖票数": len(资金流),
+                "P1过滤噪音": n_noise, "P2去重合并": n_merged,
                 "时间跨度": f"{items[0]['date']}~{items[-1]['date']}" if items else None},
-        "口径": "只抓不判(采集与研判解耦);龙头/中军/主力定向新闻+板块政策+国际对标+LHB资金流·逐条可溯",
+        "口径": "只抓不判(采集与研判解耦);龙头/中军/主力定向新闻+板块政策+国际对标+LHB资金流·"
+                "逐条可溯;已 P1 榜单噪音过滤 + P2 事件去重(洗输入)",
         "免责": "测试环境研究模拟,非投资建议。",
     }
 
