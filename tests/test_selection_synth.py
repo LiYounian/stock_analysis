@@ -214,6 +214,12 @@ def test_instruction_双依据():
         instr = ss.SELECTION_SYNTH_INSTRUCTION("电子", reg, board_tag=tag)
         assert "策略依据" in instr and "板块依据" in instr
         assert "策略面" in instr and "板块消息面" in instr
+        # ① 建议分档位文字定义(每档一句)
+        assert "建议分档位定义" in instr and "强推" in instr and "剔除" in instr
+        # ③ 策略分值口径解释(程序算出·非模型打分)
+        assert "策略分值口径" in instr and "council综合分" in instr and "获利盘" in instr
+        # ② 入场去锚定:不再一律"回踩",强调按票而定
+        assert "据个股形态给合适" in instr and "不追涨停" in instr
     # schema 也要求双依据
     assert "策略依据" in ss.SELECTION_SCHEMA["个股"] and "板块依据" in ss.SELECTION_SCHEMA["个股"]
 
