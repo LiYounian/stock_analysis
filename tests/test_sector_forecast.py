@@ -215,3 +215,38 @@ def test_macro_全中性():
     from tools.analysis.sector_forecast import news_store as NS
     m = NS.derive_macro({"国债": {"中国10Y环比": 0.0}, "汇率": {"环比": 0.1}}, {"宏观命中": {}})
     assert m["宏观净方向"] == "中性" and m["宏观情景"] == "中性"
+
+
+# ───────────────────────── P3:板块定向双跑 sector_hint 加分语义 ─────────────────────────
+
+def test_hint_规避池降权_重点池加权(monkeypatch, tmp_path):
+    """规避池 → 负 bonus;重点池补涨主选 → 正 bonus 且 > 弹性(角色乘子)。"""
+    from tools.analysis.sector_forecast import sector_hint as SH
+    focus = {"重点板块池": [{"板块": "电子", "focus_score": 0.8}],
+             "规避板块池": [{"板块": "银行"}]}
+    monkeypatch.setattr(SH, "_load_focus", lambda date: focus)
+    monkeypatch.setattr(SH, "_membership",
+                        lambda: {"E1": "电子", "E2": "电子", "B1": "银行"}, raising=False)
+    # 直接注入 membership 与 roster
+    import tools.analysis.sector_forecast.universe as U
+    monkeypatch.setattr(U, "_membership", lambda: {"E1": "电子", "E2": "电子", "B1": "银行"})
+    monkeypatch.setattr(SH, "_load_roster", lambda sw: {
+        "roles": {"补涨先锋": [{"code": "E1", "选级": "主选"}],
+                  "弹性股": [{"code": "E2", "选级": "主选"}]}} if sw == "电子" else None)
+    hints = SH.build_sector_hint("2026-09-15", ["E1", "E2", "B1"])
+    assert hints["B1"]["bonus"] < 0                 # 规避 → 降权
+    assert hints["E1"]["bonus"] > hints["E2"]["bonus"] > 0   # 补涨主选 > 弹性主选 > 0
+    assert hints["E1"]["角色"] == "补涨先锋"
+
+
+def test_dualrun_缺noon优雅报错():
+    from tools.analysis.sector_forecast import dual_run as DR
+    r = DR.build_dual_run("1999-01-01")
+    assert "error" in r
+
+
+def test_dualrun_forward防未来():
+    """forward 只取决策日之后已存在的 K线;历史日应取到真实 T+1/T+5。"""
+    from tools.analysis.sector_forecast import dual_run as DR
+    r = DR._forward_returns("601318", "2026-09-08", entry=50.0)
+    assert r.get("T+1") is not None and r.get("T+5") is not None
