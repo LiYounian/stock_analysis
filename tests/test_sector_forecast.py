@@ -215,3 +215,34 @@ def test_macro_全中性():
     from tools.analysis.sector_forecast import news_store as NS
     m = NS.derive_macro({"国债": {"中国10Y环比": 0.0}, "汇率": {"环比": 0.1}}, {"宏观命中": {}})
     assert m["宏观净方向"] == "中性" and m["宏观情景"] == "中性"
+
+
+# ───────────────────────── 消息驱动 一入 M1:板块龙头催化标签 ─────────────────────────
+
+def test_leader_catalyst_合并标签语义(monkeypatch):
+    """龙头净催化 + 政策净催化 合并 → 标签:≥+3 利好 / ≤−3 利空 / 中间 中性。"""
+    from tools.analysis.sector_forecast import news_catalyst as NC
+    from tools.analysis.sector_forecast import focus as F
+    monkeypatch.setattr(NC, "leader_codes",
+                        lambda date, boards=None: {"电子": [{"code": "E1", "name": "龙头一"}],
+                                                    "银行": [{"code": "B1", "name": "行一"}]})
+    # 龙头新闻打分(mock):电子龙头强利好、银行龙头利空
+    def fake_score(codes, *, date, client=None, per_code_top=5):
+        m = {"E1": {"净催化": 8.0, "n条": 2, "利好": 2, "利空": 0, "明细": []},
+             "B1": {"净催化": -5.0, "n条": 1, "利好": 0, "利空": 1, "明细": []}}
+        return {c: m[c] for c in codes}
+    monkeypatch.setattr(NC, "score_leader_news", fake_score)
+    monkeypatch.setattr(F, "news_catalyst_by_sector",
+                        lambda date: {"电子": {"净催化": 2.0}, "银行": {"净催化": 0.0}})
+    out = NC.board_leader_catalyst("2026-09-15")
+    assert out["电子"]["消息标签"] == "利好"      # 8+2=10 ≥ +3
+    assert out["银行"]["消息标签"] == "利空"      # -5+0=-5 ≤ -3
+    assert out["电子"]["合并净催化"] == 10.0
+
+
+def test_leader_codes_从角色表取龙头(monkeypatch, tmp_path):
+    """leader_codes 读 roster 的 roles.龙头(缺表则跳过,不崩)。"""
+    from tools.analysis.sector_forecast import news_catalyst as NC
+    # 不存在的板块 → 空(不崩)
+    out = NC.leader_codes("2026-09-15", boards=["不存在的板块XYZ"])
+    assert out == {}
