@@ -431,6 +431,11 @@ def test_web_selection_analysis_prior_day_picks_real_parse(monkeypatch):
 
     monkeypatch.setattr(store, "get_record", fake_get_record)
     monkeypatch.setattr(ewi, "load_daily_mean_pct", lambda *a, **k: {"2026-09-09": -0.4674})
+    # 基准只从(桩住的)daily_mean 取,不落 `选股/<date>.md` 文件兜底:否则随真实数据累积、
+    # 磁盘上出现 `选股/2026-09-10.md` 后,_selection_benchmark_at 会兜底解出 09-10 基准 → 次日
+    # 判成"已复盘"、本用例"次日基准缺→待复盘"的语义随日历滑动而失真(date/data-brittle)。
+    # 这里锁的是"次日广度未产出 → 待复盘",与磁盘上恰好有没有次日选股 md 无关。
+    monkeypatch.setattr(da, "_selection_benchmark_at", lambda md, dm: dm.get(md))
     v = da.selection_analysis_view("2026-09-09")
     rev = v["盘后"]["复盘"]
     codes = [r["code"] for r in rev["scorecard"]]
