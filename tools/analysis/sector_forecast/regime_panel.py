@@ -24,9 +24,14 @@ logger = logging.getLogger("sector_forecast.regime_panel")
 PANEL_VERSION = "v1-2026-09-16"
 
 
-def build_sector_regime(date: str, *, frame=None) -> list[dict]:
-    """合成 date 当日全板块环境面板(list,每板块一条)。frame 可传入复用(省一次全A加载)。"""
-    therm = TH.get_industry_thermometer(date)          # {sw: {拥挤/动量/...}}
+def build_sector_regime(date: str, *, frame=None, therm=None) -> list[dict]:
+    """合成 date 当日全板块环境面板(list,每板块一条)。
+
+    frame 可传入复用(省一次全A加载);therm 可传入预算的温度计信号 {sw: {...}}
+    (批量回测时一次构建整窗口面板后按日切片,免逐日重跑温度计 420 日面板)。
+    """
+    if therm is None:
+        therm = TH.get_industry_thermometer(date)      # {sw: {拥挤/动量/...}}
     if frame is None:
         frame = U.load_sector_frame(date)
     bd = U.sector_breadth(frame).set_index("sw")

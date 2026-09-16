@@ -78,14 +78,19 @@ def _role_of(code: str, roster: dict) -> tuple[Optional[str], Optional[str]]:
     return None, None
 
 
-def build_sector_hint(date: str, codes: list[str]) -> dict[str, dict]:
-    """{code: {板块, in_focus, focus_score, in_avoid, 角色, 选级, bonus, 依据}}(只覆盖有归属的)。"""
+def build_sector_hint(date: str, codes: list[str], *, focus: Optional[dict] = None,
+                      membership: Optional[dict] = None) -> dict[str, dict]:
+    """{code: {板块, in_focus, focus_score, in_avoid, 角色, 选级, bonus, 依据}}(只覆盖有归属的)。
+
+    focus/membership 可传入(回测批量复用,不落盘不重载);缺省从磁盘取 ≤date 最近 focus。
+    """
     from tools.analysis.sector_forecast.universe import _membership
-    focus = _load_focus(date)
+    if focus is None:
+        focus = _load_focus(date)
     if not focus:
         logger.warning("无 sector_focus.json(%s),板块定向为空", date)
         return {}
-    mem = _membership()
+    mem = membership if membership is not None else _membership()
     focus_sw = {r["板块"]: r for r in focus.get("重点板块池", [])}
     avoid_sw = {r["板块"] for r in focus.get("规避板块池", [])}
     roster_cache: dict[str, Optional[dict]] = {}

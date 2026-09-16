@@ -91,6 +91,11 @@ def build_dual_run(date: str, *, topn: int = TOPN) -> dict:
     b_codes = {r["code"] for r in B}
     B新增 = [r for r in B if r["code"] not in a_codes]
     B剔除 = [r for r in A if r["code"] not in b_codes]
+    # 归因来源(统筹要求):增票是**重点池加权**带上来;减票分**自己在规避池被降权** vs **被加权票挤掉**
+    for r in B新增:
+        r["来源"] = "重点池加权" if r["板块bonus"] > 0 else "规避腾位(他票降权让出)"
+    for r in B剔除:
+        r["来源"] = "规避池降权" if r["in_avoid"] else "被重点票挤出"
 
     # forward 收益(A/B 各自 + 差集)
     def _fwd(r):
@@ -127,10 +132,13 @@ def build_dual_run(date: str, *, topn: int = TOPN) -> dict:
 
 
 def _brief(r: dict) -> dict:
-    return {"code": r["code"], "name": r["name"], "量价分": r["量价综合分"],
-            "板块bonus": r["板块bonus"], "B综合分": r["B综合分"],
-            "板块": r["板块"], "角色": r["角色"], "选级": r["选级"],
-            "in_avoid": r["in_avoid"], "forward": r["forward"]}
+    d = {"code": r["code"], "name": r["name"], "量价分": r["量价综合分"],
+         "板块bonus": r["板块bonus"], "B综合分": r["B综合分"],
+         "板块": r["板块"], "角色": r["角色"], "选级": r["选级"],
+         "in_avoid": r["in_avoid"], "forward": r["forward"]}
+    if "来源" in r:
+        d["来源"] = r["来源"]
+    return d
 
 
 def write_dual_run(date: str, *, out_root: Optional[str] = None) -> Optional[Path]:
