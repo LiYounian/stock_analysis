@@ -19,6 +19,10 @@ from tools.collectors import news_recall as nr
 from tools.config import settings
 from tools.store import repo as store
 
+# fetch_news 按 days 的滚动 cutoff(today−days)过滤新闻,写死日历日会随时间滑出窗口而误红
+# (date-brittle)。相对今天取近日期,恒落在 days=30 窗口内,锁的是并集/去重/触发语义而非具体日历日。
+_RECENT = (pd.Timestamp.today() - pd.Timedelta(days=2)).strftime("%Y-%m-%d")
+
 
 # ————————————————————————————————————————————————
 # keywords_for
@@ -184,8 +188,13 @@ def test_relevance_filter_passes_disable_thinking(monkeypatch, tmp_path):
         return types.SimpleNamespace(choices=[types.SimpleNamespace(message=msg)])
 
     # 绕开 __init__(不建真 OpenAI 连接),直接装底层 _cli
+    # 关思考语义已随 client 重构挪到实例属性 _disable_thinking(__init__ 里按 provider 覆盖/
+    # 缺省读 settings.LLM_DISABLE_THINKING),不再在 create() 现读 settings。绕过 __init__ 就得
+    # 显式补齐该实例契约,否则走 AttributeError 降级、extra_body 永不下传(本用例真正要锁的正是
+    # "关思考=True 时 extra_body={'enable_thinking': False} 确被下传")。
     cli = lc.OpenAICompatClient.__new__(lc.OpenAICompatClient)
     cli.model = "test-model"
+    cli._disable_thinking = True
     cli._cli = types.SimpleNamespace(
         chat=types.SimpleNamespace(
             completions=types.SimpleNamespace(create=_fake_create)))
@@ -202,7 +211,7 @@ def test_fetch_news_recall_true_merges_and_dedups(monkeypatch, tmp_path):
     monkeypatch.setattr(store, "_RAW_DIR", tmp_path)
     em_df = pd.DataFrame({
         "新闻标题": ["东财个股新闻"], "新闻内容": ["c"],
-        "发布时间": ["2026-08-09 10:00:00"], "文章来源": ["em"], "新闻链接": ["u_em"],
+        "发布时间": [f"{_RECENT} 10:00:00"], "文章来源": ["em"], "新闻链接": ["u_em"],
     })
     fake = types.SimpleNamespace(stock_news_em=lambda symbol: em_df,
                                  stock_info_global_cls=lambda: pd.DataFrame())
@@ -214,9 +223,9 @@ def test_fetch_news_recall_true_merges_and_dedups(monkeypatch, tmp_path):
     def _fake_recall(code, name, cutoff, client=None):
         called["n"] += 1
         return [
-            {"title": "扩召回行业消息", "content": "r", "time": "2026-08-10 11:00:00",
+            {"title": "扩召回行业消息", "content": "r", "time": f"{_RECENT} 11:00:00",
              "source": "扩召回:算力", "url": "u_recall"},
-            {"title": "与东财重叠", "content": "c", "time": "2026-08-09 10:00:00",
+            {"title": "与东财重叠", "content": "c", "time": f"{_RECENT} 10:00:00",
              "source": "扩召回:算力", "url": "u_em"},        # 与东财 u_em 重叠 → 去重
         ]
     monkeypatch.setattr(nr, "recall_related", _fake_recall)
@@ -236,7 +245,7 @@ def test_fetch_news_recall_false_never_triggers(monkeypatch, tmp_path):
     monkeypatch.setattr(store, "_RAW_DIR", tmp_path)
     em_df = pd.DataFrame({
         "新闻标题": ["东财个股新闻"], "新闻内容": ["c"],
-        "发布时间": ["2026-08-09 10:00:00"], "文章来源": ["em"], "新闻链接": ["u_em"],
+        "发布时间": [f"{_RECENT} 10:00:00"], "文章来源": ["em"], "新闻链接": ["u_em"],
     })
     fake = types.SimpleNamespace(stock_news_em=lambda symbol: em_df,
                                  stock_info_global_cls=lambda: pd.DataFrame())
@@ -262,7 +271,7 @@ def test_fetch_news_recall_default_from_settings(monkeypatch, tmp_path):
     monkeypatch.setattr(settings, "NEWS_RECALL_ENABLED", False)
     em_df = pd.DataFrame({
         "新闻标题": ["东财个股新闻"], "新闻内容": ["c"],
-        "发布时间": ["2026-08-09 10:00:00"], "文章来源": ["em"], "新闻链接": ["u_em"],
+        "发布时间": [f"{_RECENT} 10:00:00"], "文章来源": ["em"], "新闻链接": ["u_em"],
     })
     fake = types.SimpleNamespace(stock_news_em=lambda symbol: em_df,
                                  stock_info_global_cls=lambda: pd.DataFrame())
