@@ -298,3 +298,142 @@ def test_universe_missing_file_exits_1(monkeypatch, tmp_path):
                      {"300308": {"name": "A", "price": None}})
 
     assert PS.run("1430", date="2026-09-07", skip_fundflow=True) == 1
+
+
+# ──────────────── 数据覆盖率闸门 / confirm_from 降级(2026-09-16 加) ────────────────
+#
+# 背景:原实现里 1450 无条件继承首判 selections 作 confirm_from。若首判因数据故障
+# (快照没覆盖到票池)选出 0 只,该空集会永久锁死复核 —— 哪怕 1450 数据补全也选不出票。
+# 2026-09-16 实测:首判覆盖率 4.8% → 全天 0 只。这里锁住修复语义。
+
+def _setup_coverage_case(monkeypatch, tmp_path, focus):
+    monkeypatch.setattr(PS.settings, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(G.settings, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(PS.cal, "is_trading_day", lambda d: True)
+    _install_snapshot_reader(monkeypatch, tmp_path)
+    _install_universe(monkeypatch, tmp_path, focus=focus, full=focus)
+
+
+def test_coverage_recorded_on_every_stage(monkeypatch, tmp_path):
+    """每段落盘都带 universe_coverage / quotes_n / universe_n(可观测性)。"""
+    focus = tuple(f"60000{i}" for i in range(1, 6))       # 5 只
+    _setup_coverage_case(monkeypatch, tmp_path, focus)
+    _write_gate(tmp_path, "2026-09-07", stage1=_gate_stage(allowed=("Q1",)))
+    # 5 只里给 4 只 → 覆盖率 80% ≥ 60% 门限
+    _write_snapshot(tmp_path, "2026-09-07", "1430",
+                     {c: {"name": f"票{c}", "price": None} for c in focus[:4]})
+
+    assert PS.run("1430", date="2026-09-07", skip_fundflow=True) == 0
+    s1 = json.loads(PS._screen_path("2026-09-07").read_text(encoding="utf-8"))["stage1_1430"]
+    assert s1["universe_n"] == 5
+    assert s1["quotes_n"] == 4
+    assert s1["universe_coverage"] == pytest.approx(0.8)
+    assert s1["data_insufficient"] is False
+
+
+def test_low_coverage_flags_data_insufficient(monkeypatch, tmp_path):
+    """覆盖率低于门限 → 标 data_insufficient(区分'没看全'与'真无信号')。"""
+    focus = tuple(f"60000{i}" for i in range(1, 6))       # 5 只
+    _setup_coverage_case(monkeypatch, tmp_path, focus)
+    _write_gate(tmp_path, "2026-09-07", stage1=_gate_stage(allowed=("Q1",)))
+    # 只给 1 只 → 覆盖率 20% < 60%
+    _write_snapshot(tmp_path, "2026-09-07", "1430",
+                     {focus[0]: {"name": "仅一只", "price": None}})
+
+    assert PS.run("1430", date="2026-09-07", skip_fundflow=True) == 0
+    s1 = json.loads(PS._screen_path("2026-09-07").read_text(encoding="utf-8"))["stage1_1430"]
+    assert s1["data_insufficient"] is True
+    assert s1["universe_coverage"] == pytest.approx(0.2)
+
+
+def test_1450_does_not_inherit_insufficient_stage1(monkeypatch, tmp_path):
+    """核心回归:首判数据不足时,1450 **不**继承其空集,退回全票池重筛。
+
+    这是 2026-09-16 全天 0 只的根因 —— 原实现会让 1450 候选恒为空集。
+    """
+    focus = tuple(f"60000{i}" for i in range(1, 6))
+    _setup_coverage_case(monkeypatch, tmp_path, focus)
+    _write_gate(tmp_path, "2026-09-07",
+                stage1=_gate_stage(allowed=("Q1",)), stage2=_gate_stage(allowed=("Q1",)))
+    # 首判:只 1 只 → data_insufficient,选出 0 只
+    _write_snapshot(tmp_path, "2026-09-07", "1430",
+                     {focus[0]: {"name": "仅一只", "price": None}})
+    assert PS.run("1430", date="2026-09-07", skip_fundflow=True) == 0
+    # 复核:数据补全到 5 只
+    _write_snapshot(tmp_path, "2026-09-07", "1450",
+                     {c: {"name": f"票{c}", "price": None} for c in focus})
+    assert PS.run("1450", date="2026-09-07", skip_fundflow=True) == 0
+
+    s2 = json.loads(PS._screen_path("2026-09-07").read_text(encoding="utf-8"))["stage2_1450"]
+    # 关键:候选范围是全票池(5 只),不是首判的空集
+    assert s2["quotes_n"] == 5
+    assert s2["data_insufficient"] is False
+    # 且必须诚实标注:这批票没经过首判确认
+    assert s2["confirm_degraded"] is True
+    assert "首判数据不足" in s2["confirm_degraded_reason"]
+    assert "单点命中" in s2["note"]
+
+
+def test_1450_does_inherit_sufficient_empty_stage1(monkeypatch, tmp_path):
+    """反向锁:首判数据**充分**但真选出 0 只 → 1450 仍须继承空集(尊重'无信号')。
+
+    否则会把"今天真没票"误判成"数据故障"而放开全池,破坏方案"两次都命中才买"。
+    """
+    focus = tuple(f"60000{i}" for i in range(1, 6))
+    _setup_coverage_case(monkeypatch, tmp_path, focus)
+    _write_gate(tmp_path, "2026-09-07",
+                stage1=_gate_stage(allowed=("Q1",)), stage2=_gate_stage(allowed=("Q1",)))
+    # 首判数据充分(5/5),但这些票不满足任何 Q1 信号 → 空是真实结论
+    snap = {c: {"name": f"票{c}", "price": None} for c in focus}
+    _write_snapshot(tmp_path, "2026-09-07", "1430", snap)
+    assert PS.run("1430", date="2026-09-07", skip_fundflow=True) == 0
+    s1 = json.loads(PS._screen_path("2026-09-07").read_text(encoding="utf-8"))["stage1_1430"]
+    assert s1["data_insufficient"] is False
+    assert s1["selections"]["Q1"] == []
+
+    _write_snapshot(tmp_path, "2026-09-07", "1450", snap)
+    assert PS.run("1450", date="2026-09-07", skip_fundflow=True) == 0
+    s2 = json.loads(PS._screen_path("2026-09-07").read_text(encoding="utf-8"))["stage2_1450"]
+    # 继承了空集 → 不标降级(这不是故障)
+    assert s2.get("confirm_degraded") is not True
+    assert s2["final_codes"] == []
+
+
+def test_degraded_flag_propagates_to_final(monkeypatch, tmp_path):
+    """单点命中标记必须透传到 final —— 否则下游分不清是否经过双点确认。"""
+    focus = tuple(f"60000{i}" for i in range(1, 6))
+    _setup_coverage_case(monkeypatch, tmp_path, focus)
+    _write_gate(tmp_path, "2026-09-07",
+                stage1=_gate_stage(allowed=("Q1",)),
+                stage2=_gate_stage(allowed=("Q1",)),
+                final=_gate_stage(allowed=("Q1",)))
+    _write_snapshot(tmp_path, "2026-09-07", "1430",
+                     {focus[0]: {"name": "仅一只", "price": None}})
+    assert PS.run("1430", date="2026-09-07", skip_fundflow=True) == 0
+    _write_snapshot(tmp_path, "2026-09-07", "1450",
+                     {c: {"name": f"票{c}", "price": None} for c in focus})
+    assert PS.run("1450", date="2026-09-07", skip_fundflow=True) == 0
+    assert PS.run("final", date="2026-09-07", skip_fundflow=True) == 0
+
+    final = json.loads(PS._screen_path("2026-09-07").read_text(encoding="utf-8"))["final"]
+    assert final["confirm_degraded"] is True
+    assert "单点命中" in final["note"]
+
+
+def test_1450_degraded_when_stage1_absent(monkeypatch, tmp_path):
+    """首判段整体缺失(如 14:30 任务没跑)→ 同样标降级,不静默当双点确认。"""
+    focus = tuple(f"60000{i}" for i in range(1, 6))
+    _setup_coverage_case(monkeypatch, tmp_path, focus)
+    _write_gate(tmp_path, "2026-09-07", stage2=_gate_stage(allowed=("Q1",)))
+    _write_snapshot(tmp_path, "2026-09-07", "1450",
+                     {c: {"name": f"票{c}", "price": None} for c in focus})
+
+    assert PS.run("1450", date="2026-09-07", skip_fundflow=True) == 0
+    s2 = json.loads(PS._screen_path("2026-09-07").read_text(encoding="utf-8"))["stage2_1450"]
+    assert s2["confirm_degraded"] is True
+    assert "首判段缺失" in s2["confirm_degraded_reason"]
+
+
+def test_coverage_threshold_constant_sane():
+    """门限须 ∈ (0,1];0 等于关闭闸门,>1 永远不达标。"""
+    assert 0 < PS.MIN_UNIVERSE_COVERAGE <= 1.0

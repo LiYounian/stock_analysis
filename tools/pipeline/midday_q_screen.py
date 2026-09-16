@@ -5,9 +5,16 @@
     stage="1450" → 读 gate.stage2_1450 + stage1 结果作 confirm_from → 落 screen.stage2_1450
     stage="final" → 读 gate.final + screen.stage2 → 若 gate.final 空仓 → 清空;否则取 stage2 为 final
 
+数据覆盖率闸门(2026-09-16 加,见 MIN_UNIVERSE_COVERAGE):
+    每段落盘都带 universe_coverage / data_insufficient。首判数据不足时,
+    1450 不继承其空集(否则永久锁死无法选出任何票),改为退回全票池重筛并
+    标 confirm_degraded —— 单点命中不冒充双点确认,标记透传到 final。
+
 依赖(上游必须先落):
     · data/analysis/midday_q/gate_<date>.json                              (M1 pipeline 落)
     · data/intraday/<date>/T<slot>.json                                    (intraday_snapshot 落)
+      ⚠️ 午盘 Q 需要**扫焦点池**,故调用 intraday_snapshot 时必须传 --codes <焦点池>;
+         不传的话它默认只跟踪"上一交易日选股 ∪ 自选池"(约 18 只),覆盖率会不达标。
     · Q3 触发时:M1 fundflow_intraday.collect(候选池)
 
 纪律:
@@ -56,6 +63,20 @@ _GATE_STAGE_KEY: dict[str, str] = {
     "1450": "stage2_1450",
     "final": "final",
 }
+
+# ── 数据覆盖率闸门(2026-09-16 加) ────────────────────────────────────────
+# 为什么要这个:原实现里"首判选出 0 只"有两种截然不同的成因,但落盘长得一模一样:
+#   (a) 真实无信号 —— 票池数据齐全,只是今天没有票满足阈值 → 空是**正确结论**
+#   (b) 数据故障   —— 快照只覆盖到票池的一小部分,根本没看全 → 空是**无效结论**
+# 而 1450 复核用 confirm_from 把候选锁死在首判结果里(方案要求"两次都命中才买"),
+# 于是 (b) 情形下首判的空集会**永久污染**复核:哪怕 1450 数据补全到 126/126,
+# 候选范围仍是空集,数学上不可能选出任何票。
+# 实例:2026-09-16 首判快照只有 18 只(intraday_snapshot 默认只跟踪已知标的,
+# 与午盘 Q"扫固定焦点池"的需求不匹配),∩焦点池后仅 6 只 → 覆盖率 4.8% → 全天 0 只。
+#
+# 故:落盘记录覆盖率,低于门限时标 data_insufficient,让下游能区分 (a) / (b)。
+MIN_UNIVERSE_COVERAGE = 0.6      # 首版门限(与 strategy.json"下午基准取样率下限"同值);
+                                  # 低于此视为"没看全票池",其"空"结论不可继承
 
 
 def _screen_path(date: str) -> Path:
@@ -247,6 +268,15 @@ def run(stage: Stage, *, date: str | None = None, force: bool = False,
         else:
             final = {**s2}
             final["note"] = "取 stage2 为 final"
+            # 单点命中的降级标记必须透传到 final —— 否则只过了 1450 单点的票
+            # 在 final 里长得跟"经两次确认"的票一模一样,下游无从分辨。
+            if s2.get("confirm_degraded"):
+                final["confirm_degraded"] = True
+                final["confirm_degraded_reason"] = s2.get("confirm_degraded_reason", "")
+                final["note"] = (
+                    "⚠️ 取 stage2 为 final,但该段为单点命中(未经 1430 首判确认):"
+                    f"{s2.get('confirm_degraded_reason', '')}"
+                )
         screen["final"] = final
         screen["flipped"] = bool(gate.get("flipped", False))
         _write_atomic(_screen_path(date), screen)
@@ -292,24 +322,59 @@ def run(stage: Stage, *, date: str | None = None, force: bool = False,
         logger.error("午盘 Q 票池文件缺失,无法收窄范围:%s", e)
         return 1
     quotes = {c: q for c, q in quotes_raw.items() if c in universe_codes}
-    logger.info("票池过滤:snapshot %d 只 ∩ midday_q_universe(%s) %d 只 → 候选 %d 只",
+    coverage = (len(quotes) / len(universe_codes)) if universe_codes else 0.0
+    data_insufficient = coverage < MIN_UNIVERSE_COVERAGE
+    logger.info("票池过滤:snapshot %d 只 ∩ midday_q_universe(%s) %d 只 → 候选 %d 只(覆盖率 %.1f%%)",
                 len(quotes_raw),
                 "full" if full_universe else "focus",
-                len(universe_codes), len(quotes))
+                len(universe_codes), len(quotes), coverage * 100)
+    if data_insufficient:
+        logger.warning(
+            "⚠️ 票池覆盖率 %.1f%% < 门限 %.0f%% —— 本段未看全票池,"
+            "其'无入选'结论不可作为复核依据(标 data_insufficient)。"
+            "常见成因:intraday_snapshot 未传 --codes(默认只跟踪已知标的,非扫焦点池)",
+            coverage * 100, MIN_UNIVERSE_COVERAGE * 100)
     if not quotes:
         screen[key] = {"selections": {}, "final_codes": [],
+                        "universe_coverage": round(coverage, 4),
+                        "quotes_n": 0, "universe_n": len(universe_codes),
+                        "data_insufficient": True,
                         "note": f"票池过滤后无候选(snapshot∩universe=空)"}
         _write_atomic(_screen_path(date), screen)
         return 0
 
-    # confirm_from:1450 阶段从 stage1_1430.final_codes 取
+    # confirm_from:1450 阶段从 stage1_1430 的入选里取(方案:两次都命中才买)
+    #
+    # ⚠️ 只在首判**数据充分**时才继承其结论。若首判 data_insufficient(没看全票池),
+    # 它的"空"是无效结论而非"今天无信号",继承它会让 1450 候选恒为空集
+    # (2026-09-16 实测:首判覆盖率 4.8% → 全天 0 只,即便 1450 已补到 126/126)。
+    # 此时退回全票池重筛,并标 confirm_degraded —— **不冒充双点确认**,
+    # 让下游/人知道这批票只过了单点(1450),没拿到方案要求的两次命中。
     confirm_from: dict[str, list[str]] | None = None
+    confirm_degraded = False
+    degraded_reason = ""
     if stage == "1450":
         s1 = screen.get("stage1_1430")
-        if s1 and s1.get("selections"):
+        if not s1:
+            confirm_degraded = True
+            degraded_reason = "首判段缺失(stage1_1430 未产出)"
+        elif s1.get("data_insufficient"):
+            confirm_degraded = True
+            degraded_reason = (
+                f"首判数据不足(覆盖率 {float(s1.get('universe_coverage') or 0) * 100:.1f}%"
+                f" < 门限 {MIN_UNIVERSE_COVERAGE * 100:.0f}%),其结论不可继承"
+            )
+        elif not s1.get("selections"):
+            # 首判数据充分但 selections 缺失/为空 dict(如 gate 当时不允许出手)
+            confirm_degraded = True
+            degraded_reason = f"首判无 selections 段({s1.get('note') or '原因未记录'})"
+        else:
+            # 首判数据充分且有 selections → 正常继承(空 list 也继承,那是真实"无信号")
             confirm_from = {
                 k: [h["code"] for h in v] for k, v in s1["selections"].items()
             }
+        if confirm_degraded:
+            logger.warning("1450 复核退回全票池重筛(不继承首判):%s", degraded_reason)
 
     # 是否拉分时资金流(Q3 触发 + 首判阶段)
     need_ff = ("Q3" in allowed) and (stage == "1430") and not skip_fundflow
@@ -321,7 +386,21 @@ def run(stage: Stage, *, date: str | None = None, force: bool = False,
         top_n_per_strategy=5, confirm_from=confirm_from, extras=extras,
     )
     # 复核阶段 Q3 用首判的 fundflow 数据(如果 stage1 里落了)——M2 阶段简单实现:1450 不重拉,若首判候选池有 fundflow,复核可复用;若没有,复核 Q3 无数据
-    screen[key] = result
+    screen[key] = {
+        **result,
+        "universe_coverage": round(coverage, 4),
+        "quotes_n": len(quotes),
+        "universe_n": len(universe_codes),
+        "data_insufficient": data_insufficient,
+    }
+    if confirm_degraded:
+        # 单点命中,未达方案"两次都命中"要求 → 显式留痕,不静默冒充双点确认
+        screen[key]["confirm_degraded"] = True
+        screen[key]["confirm_degraded_reason"] = degraded_reason
+        screen[key]["note"] = (
+            f"⚠️ 单点命中(仅 1450,未经首判确认):{degraded_reason}"
+            + (f";{result['note']}" if result.get("note") else "")
+        )
     screen["meta"] = {
         **(screen.get("meta") or {}),
         "script": "tools.pipeline.midday_q_screen",
