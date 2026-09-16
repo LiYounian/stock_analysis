@@ -88,40 +88,47 @@ def run(data_root: str, start: str, end: str, cost_bps: float, json_path: str | 
         n = len(c)
         n_stocks += 1
         for t in np.nonzero(sel)[0]:
-            if t < 1 or t + 2 >= n:      # 需 D-... 及 D+1,D+2
+            if t < 1 or t + 2 >= n:      # 需 D-... 及 D+1(入场),D+2(卖出)
                 continue
             dstr = dates[t]
             if dstr < start or dstr > end:
                 continue
             close_D = c[t]
-            o1, h1, l1, c1d = o[t + 1], h[t + 1], lo[t + 1], c[t + 1]
-            c2d = c[t + 2]
-            if not (o1 > 0) or not np.isfinite(c2d) or close_D <= 0:
+            o1, h1, l1 = o[t + 1], h[t + 1], lo[t + 1]
+            if not (o1 > 0) or close_D <= 0:
                 continue
             wr, _cost95 = S.chip_at(df, dstr)
             bkt = _bucket(wr)
             if bkt is None:
                 continue
             unbuy = bool(K.limit_up_unbuyable(code, np.array([close_D]), np.array([o1]))[0])
-            bench = (1.0 + mkt_cc.get(dates[t + 1], 0.0)) * (1.0 + mkt_cc.get(dates[t + 2], 0.0)) - 1.0
+            # 各 horizon 的全A等权 close→close 基准(t+1..t+h 复利)
+            bench_h = {}
+            acc = 1.0
+            for hh in (1, 2):
+                acc *= (1.0 + mkt_cc.get(dates[t + hh], 0.0))
+                bench_h[hh] = acc - 1.0
             for rule in ("limit_pc_0.01", "open"):
-                if rule == "open":
-                    P = o1
-                else:
-                    P = close_D * 0.99
-                fill, ret, filled = K.fill_and_return(
+                P = o1 if rule == "open" else close_D * 0.99
+                # 成交只看 D+1 OHLC(入场当日),卖价另取
+                fill, _r, filled = K.fill_and_return(
                     np.array([P]), np.array([o1]), np.array([h1]), np.array([l1]),
-                    np.array([c2d]), "marketable")   # 持有到 D+2 收盘:卖价=c2d
+                    np.array([c[t + 1]]), "marketable")
                 f0 = bool(filled[0])
-                if not f0:
-                    rows.append(dict(code=code, D=dstr, wr=wr, bucket=bkt, rule=rule,
-                                     filled=False, unbuyable=unbuy, net=np.nan, alpha_net=np.nan))
-                    continue
-                fillp = float(fill[0])
-                g = c2d / fillp - 1.0
-                net = (1.0 + g) * (1.0 - cost_bps / 1e4) - 1.0
-                rows.append(dict(code=code, D=dstr, wr=wr, bucket=bkt, rule=rule,
-                                 filled=True, unbuyable=unbuy, net=net, alpha_net=net - bench))
+                for hh in (1, 2):
+                    if not f0:
+                        rows.append(dict(code=code, D=dstr, wr=wr, bucket=bkt, rule=rule, h=hh,
+                                         filled=False, unbuyable=unbuy, net=np.nan, alpha_net=np.nan))
+                        continue
+                    fillp = float(fill[0])
+                    sell = c[t + hh]
+                    if not np.isfinite(sell):
+                        continue
+                    g = sell / fillp - 1.0
+                    net = (1.0 + g) * (1.0 - cost_bps / 1e4) - 1.0
+                    rows.append(dict(code=code, D=dstr, wr=wr, bucket=bkt, rule=rule, h=hh,
+                                     filled=True, unbuyable=unbuy, net=net,
+                                     alpha_net=net - bench_h[hh]))
     ev = pd.DataFrame(rows)
     print(f"—— 事件 {len(ev)} 条(C1∧C2∧C3 通过·{n_stocks} 票·含 limit/open 两档)——")
     res = {"config": dict(start=start, end=end, cost_bps=cost_bps, n_stocks=n_stocks,
@@ -131,40 +138,39 @@ def run(data_root: str, start: str, end: str, cost_bps: float, json_path: str | 
                     "判据": "wr>99 桶 (b)limit 绝对净收益显著 > (a)open,且 (b)>0 → gap-fade 应改为入场提示、不该降权"},
            "免责": "历史回测≠未来保证,非投资建议。"}
     table = {}
-    for bkt, _lo, _hi in WR_BUCKETS:
-        sub = ev[(ev["bucket"] == bkt) & (ev["filled"])]
-        cell = {}
-        for rule in ("limit_pc_0.01", "open"):
-            r = sub[sub["rule"] == rule]
-            net = r["net"].to_numpy(float)
-            cell[rule] = {
-                "n": int(len(r)),
-                "fill_rate": None,
-                "mean_net": round(float(net.mean()), 6) if len(net) else None,
-                "win_rate": round(float((net > 0).mean()), 4) if len(net) else None,
-                "mean_alpha_net": round(float(r["alpha_net"].mean()), 6) if len(r) else None,
-                "cluster_t_net": _cluster_t(net, r["D"].to_numpy())["cluster_t"],
-            }
-        # 成交率(含未触发):以该桶该 rule 全事件为分母
-        for rule in ("limit_pc_0.01", "open"):
-            allr = ev[(ev["bucket"] == bkt) & (ev["rule"] == rule)]
-            if len(allr):
-                cell[rule]["fill_rate"] = round(float(allr["filled"].mean()), 4)
-        # (b)−(a) 差(limit − open),按 D 聚类(只取两档都成交的同一 (code,D))
-        merged = sub.pivot_table(index=["code", "D"], columns="rule", values="net")
-        if {"limit_pc_0.01", "open"}.issubset(merged.columns):
-            paired = merged.dropna(subset=["limit_pc_0.01", "open"])
-            diff = (paired["limit_pc_0.01"] - paired["open"]).to_numpy()
-            Ds = [idx[1] for idx in paired.index]
-            cell["diff_limit_minus_open"] = _cluster_t(diff, np.array(Ds))
-        table[bkt] = cell
-        c = cell
-        print(f"  [{bkt}] limit: n={c['limit_pc_0.01']['n']} mean_net={c['limit_pc_0.01']['mean_net']} "
-              f"win={c['limit_pc_0.01']['win_rate']} fill={c['limit_pc_0.01']['fill_rate']} "
-              f"clt={c['limit_pc_0.01']['cluster_t_net']} | open: mean_net={c['open']['mean_net']} "
-              f"win={c['open']['win_rate']} clt={c['open']['cluster_t_net']} | "
-              f"limit−open diff={c.get('diff_limit_minus_open', {}).get('mean')} "
-              f"clt={c.get('diff_limit_minus_open', {}).get('cluster_t')}")
+    for hh in (1, 2):
+        htab = {}
+        print(f"—— 卖出=D+{hh} 收盘 ——")
+        for bkt, _lo, _hi in WR_BUCKETS:
+            sub = ev[(ev["bucket"] == bkt) & (ev["h"] == hh) & (ev["filled"])]
+            cell = {}
+            for rule in ("limit_pc_0.01", "open"):
+                r = sub[sub["rule"] == rule]
+                net = r["net"].to_numpy(float)
+                allr = ev[(ev["bucket"] == bkt) & (ev["h"] == hh) & (ev["rule"] == rule)]
+                cell[rule] = {
+                    "n": int(len(r)),
+                    "fill_rate": round(float(allr["filled"].mean()), 4) if len(allr) else None,
+                    "mean_net": round(float(net.mean()), 6) if len(net) else None,
+                    "win_rate": round(float((net > 0).mean()), 4) if len(net) else None,
+                    "mean_alpha_net": round(float(r["alpha_net"].mean()), 6) if len(r) else None,
+                    "cluster_t_net": _cluster_t(net, r["D"].to_numpy())["cluster_t"],
+                }
+            merged = sub.pivot_table(index=["code", "D"], columns="rule", values="net")
+            if {"limit_pc_0.01", "open"}.issubset(merged.columns):
+                paired = merged.dropna(subset=["limit_pc_0.01", "open"])
+                diff = (paired["limit_pc_0.01"] - paired["open"]).to_numpy()
+                Ds = [idx[1] for idx in paired.index]
+                cell["diff_limit_minus_open"] = _cluster_t(diff, np.array(Ds))
+            htab[bkt] = cell
+            c = cell
+            print(f"  [{bkt}] limit: n={c['limit_pc_0.01']['n']} mean_net={c['limit_pc_0.01']['mean_net']} "
+                  f"win={c['limit_pc_0.01']['win_rate']} fill={c['limit_pc_0.01']['fill_rate']} "
+                  f"clt={c['limit_pc_0.01']['cluster_t_net']} | open: mean_net={c['open']['mean_net']} "
+                  f"win={c['open']['win_rate']} clt={c['open']['cluster_t_net']} | "
+                  f"limit−open diff={c.get('diff_limit_minus_open', {}).get('mean')} "
+                  f"clt={c.get('diff_limit_minus_open', {}).get('cluster_t')}")
+        table[f"D+{hh}"] = htab
     res["by_bucket"] = table
     if json_path:
         Path(json_path).parent.mkdir(parents=True, exist_ok=True)
