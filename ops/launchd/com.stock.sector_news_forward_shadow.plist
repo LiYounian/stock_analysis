@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  消息驱动板块选股 M3 forward 记分器(草案 · 不自动 load;由用户本人 launchctl load,约法)。
+  时点:工作日 21:15(排在 veto_track 21:00 之后、盘后闭环末端)——既保证当日 17:30 sector_daily
+    已把「消息驱动」块写进 sector_focus(信号可读),又保证当日 EOD 全A K 线已刷新(可回填昨日信号
+    的 D+1 收益)。纯本地量价+读文件,不走 LLM。
+  纪律:non-gating · forward-only · 纯记录——绝不动 live 选股、绝不写 sector_focus.json;龙头/跟涨
+    (联动观察)分列;样本 <120 只报 N。cron 与本 plist 的 21:15 mon-fri 严格等价
+    (test_scheduler_launchd_equivalence 锁)。
+  装载:launchctl load ~/Library/LaunchAgents/com.stock.sector_news_forward_shadow.plist
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.stock.sector_news_forward_shadow</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>/Users/yqg/Documents/projects/stock_analysis/ops/launchd/sector_news_forward_shadow.sh</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>/Users/yqg/Documents/projects/stock_analysis</string>
+  <key>StartCalendarInterval</key>
+  <array>
+    <dict><key>Weekday</key><integer>1</integer><key>Hour</key><integer>21</integer><key>Minute</key><integer>15</integer></dict>
+    <dict><key>Weekday</key><integer>2</integer><key>Hour</key><integer>21</integer><key>Minute</key><integer>15</integer></dict>
+    <dict><key>Weekday</key><integer>3</integer><key>Hour</key><integer>21</integer><key>Minute</key><integer>15</integer></dict>
+    <dict><key>Weekday</key><integer>4</integer><key>Hour</key><integer>21</integer><key>Minute</key><integer>15</integer></dict>
+    <dict><key>Weekday</key><integer>5</integer><key>Hour</key><integer>21</integer><key>Minute</key><integer>15</integer></dict>
+  </array>
+  <key>RunAtLoad</key>
+  <false/>
+  <key>StandardOutPath</key>
+  <string>/Users/yqg/.local/state/stock/sector_news_forward_shadow.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/yqg/.local/state/stock/sector_news_forward_shadow.err.log</string>
+</dict>
+</plist>
