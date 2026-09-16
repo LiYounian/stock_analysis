@@ -10,7 +10,7 @@ extras 是"外部预算好的辅助数据"字典(避免每个 screener 里重复
     · listing_days:       {code: 上市天数 int}
     · t1_klines:          {code: pd.DataFrame(T-1 及以前日线,含 close)}
     · am_quote:           str slot → {code: quote}(如 "1030" → 上午快照 dict);Q1 AmPmRatio 用
-    · fundflow:           {code: pd.DataFrame} 分时资金流 5min;Q3 用
+    · fundflow:           {code: pd.DataFrame} 分时资金流 1min(每格增量口径);Q3 用
 上层 pipeline 预取一次,三 screener 共用。
 
 candidate universe 通过 quotes 层过基础卫生(not_st_not_new / liquidity_ok / 涨跌停排除)。

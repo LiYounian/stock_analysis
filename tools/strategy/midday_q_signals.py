@@ -254,7 +254,12 @@ def sector_rank_in_top(sector: str | None,
 # ────────────────────────────── 资金流(Q3) ──────────────────────────────
 
 def main_net_since(ffdf: pd.DataFrame | None, since_hhmm: str = "13:00") -> float | None:
-    """自 since_hhmm 起的所有 5min 主力净流入求和(元)。ffdf 无/空 → None。"""
+    """自 since_hhmm 起的所有分时主力净流入求和(元)。ffdf 无/空 → None。
+
+    口径前提:`ffdf` 各净流入列须是**每格增量**(非当日累计)——
+    `fundflow_intraday.fetch_one` 已在落盘前统一 diff 转换,见其 docstring。
+    若误传累计值,本函数求和会得出无意义的巨额数字。
+    """
     if ffdf is None or ffdf.empty or "主力净流入" not in ffdf.columns:
         return None
     hh, mm = since_hhmm.split(":")

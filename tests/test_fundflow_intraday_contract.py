@@ -30,6 +30,17 @@ def test_module_constants():
     assert "超大单净流入" in ff._COLS
 
 
+def test_uses_realtime_host_not_history():
+    """必须用 push2(实时 host):push2his 对 klt=1 返空 klines(2026-09-16 实测)。"""
+    assert "push2his" not in ff._FF_URL
+    assert "push2.eastmoney.com" in ff._FF_URL
+
+
+def test_only_1min_granularity_available():
+    """东财 2026-09-16 起下线 5min(rc=102)→ 仅 1min 合法。"""
+    assert ff._VALID_FREQ == (ff.FREQ_1MIN,)
+
+
 def test_secid_mapping():
     assert ff._secid("600519") == "1.600519"
     assert ff._secid("002415") == "0.002415"
@@ -49,6 +60,12 @@ def test_fetch_one_rejects_bad_freq():
         ff.fetch_one("600519", freq=15)
 
 
+def test_fetch_one_rejects_dead_5min_granularity():
+    """5min 已被东财下线 → 显式报错,不静默降级成 1min(否则调用方口径悄悄错)。"""
+    with pytest.raises(ValueError, match="freq"):
+        ff.fetch_one("600519", freq=ff.FREQ_5MIN)
+
+
 def test_fetch_one_rejects_bad_as_of():
     with pytest.raises(ValueError, match="as_of"):
         ff.fetch_one("600519", as_of="14:305")
@@ -58,7 +75,7 @@ def test_fetch_one_rejects_bad_as_of():
 
 def test_collect_rejects_too_many_codes():
     with pytest.raises(ValueError, match="MAX_BATCH_CODES"):
-        ff.collect(["000001"] * 51, freq=5)
+        ff.collect(["000001"] * 51)
 
 
 # ────────────────────────────── _parse 归一 ──────────────────────────────
@@ -98,6 +115,51 @@ def test_parse_bad_numeric_becomes_nan():
     assert pd.isna(df["主力净流入"].iloc[0])
 
 
+# ────────────────────────────── 累计 → 增量(东财口径转换) ──────────────────────────────
+
+def test_to_increments_converts_cumulative():
+    """东财返当日累计 → 转每格增量;首行保留原值。"""
+    df = pd.DataFrame({
+        "time": pd.to_datetime(["2026-09-05 09:31", "2026-09-05 09:32", "2026-09-05 09:33"]),
+        "主力净流入": [100.0, 250.0, 200.0],
+        "小单净流入": [10.0, 30.0, 60.0],
+        "中单净流入": [0.0, 0.0, 0.0],
+        "大单净流入": [0.0, 0.0, 0.0],
+        "超大单净流入": [0.0, 0.0, 0.0],
+    })
+    inc = ff._to_increments(df)
+    assert inc["主力净流入"].tolist() == [100.0, 150.0, -50.0]
+    assert inc["小单净流入"].tolist() == [10.0, 20.0, 30.0]
+    # 关键不变式:增量求和 == 原累计终值
+    assert inc["主力净流入"].sum() == df["主力净流入"].iloc[-1]
+
+
+def test_to_increments_empty_ok():
+    assert ff._to_increments(pd.DataFrame(columns=ff._COLS)).empty
+
+
+def test_fetch_one_returns_increments_not_cumulative():
+    """端到端:fetch_one 出来的是增量,求和 == 东财累计终值。"""
+    js = {"data": {"klines": [
+        "2026-09-05 09:31,100,0,0,0,0",
+        "2026-09-05 09:32,250,0,0,0,0",
+        "2026-09-05 09:33,200,0,0,0,0",
+    ]}}
+    with patch.object(ff, "_http_get", return_value=js):
+        df = ff.fetch_one("600519")
+    assert df["主力净流入"].tolist() == [100.0, 150.0, -50.0]
+    assert df["主力净流入"].sum() == 200.0        # == 累计终值
+
+
+def test_parse_tolerates_missing_7th_column():
+    """东财 2026-09-16 起只返 6 列(无主力净占比)→ NaN 兜底,不炸。"""
+    js = {"data": {"klines": ["2026-09-05 09:31,100,10,20,30,40"]}}
+    df = ff._parse(js)
+    assert list(df.columns) == ff._COLS
+    assert df["主力净流入"].iloc[0] == 100.0
+    assert pd.isna(df["主力净占比"].iloc[0])
+
+
 # ────────────────────────────── as_of 截断(未来函数红线) ──────────────────────────────
 
 def test_truncate_by_as_of_cuts_future():
@@ -132,7 +194,7 @@ def test_fetch_one_empty_raises_valueerror():
     """空 klines → ValueError,不返回空 DataFrame 伪装成功。"""
     with patch.object(ff, "_http_get", return_value={"data": {"klines": []}}):
         with pytest.raises(ValueError, match="为空"):
-            ff.fetch_one("600519", freq=5)
+            ff.fetch_one("600519")
 
 
 def test_fetch_one_respects_as_of():
@@ -144,7 +206,7 @@ def test_fetch_one_respects_as_of():
         "2026-09-05 14:50,4,0,0,0,0,0",
     ]}}
     with patch.object(ff, "_http_get", return_value=js):
-        df = ff.fetch_one("600519", freq=5, as_of="14:30")
+        df = ff.fetch_one("600519", as_of="14:30")
     assert len(df) == 2
     assert (df["time"].dt.strftime("%H:%M") <= "14:30").all()
 
@@ -156,5 +218,5 @@ def test_fetch_one_full_day_when_no_as_of():
         "2026-09-05 15:00,5,0,0,0,0,0",
     ]}}
     with patch.object(ff, "_http_get", return_value=js):
-        df = ff.fetch_one("600519", freq=5)
+        df = ff.fetch_one("600519")
     assert len(df) == 3
