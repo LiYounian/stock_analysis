@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>板块消息面研判 · 提示词模板展示</title>
+<style>
+  :root{--bg:#0f1216;--card:#1a1f27;--card2:#222835;--ink:#e6e9ef;--dim:#9aa4b2;--line:#2c333f;
+        --good:#3fb37f;--warn:#e0a13c;--bad:#e0655a;--accent:#5b9bd5;--ph:#c98bdb;--code:#12161c;}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.7 -apple-system,"PingFang SC","Microsoft YaHei",sans-serif;padding:24px}
+  .wrap{max-width:1000px;margin:0 auto}
+  h1{font-size:24px;margin:0 0 4px}
+  h2{font-size:19px;margin:32px 0 12px;padding-left:10px;border-left:4px solid var(--accent)}
+  .sub{color:var(--dim);margin:0 0 8px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:18px 20px;margin:14px 0}
+  .pill{display:inline-block;padding:2px 9px;border-radius:20px;font-size:12px;margin:2px 4px 2px 0}
+  .p-good{background:rgba(63,179,127,.16);color:var(--good)}
+  .p-warn{background:rgba(224,161,60,.16);color:var(--warn)}
+  .p-bad{background:rgba(224,101,90,.16);color:var(--bad)}
+  .p-acc{background:rgba(91,155,213,.16);color:var(--accent)}
+  .ph{color:var(--ph);font-weight:600;background:rgba(201,139,219,.12);padding:1px 5px;border-radius:4px}
+  pre{background:var(--code);border:1px solid var(--line);border-radius:8px;padding:14px;overflow:auto;
+      font:13px/1.6 "SF Mono",Menlo,Consolas,monospace;color:#cdd6e4;white-space:pre-wrap;word-break:break-word}
+  table{width:100%;border-collapse:collapse;margin:10px 0;font-size:13.5px}
+  th,td{border:1px solid var(--line);padding:8px 10px;text-align:left;vertical-align:top}
+  th{background:var(--card2);color:var(--dim);font-weight:600}
+  .mono{font-family:"SF Mono",Menlo,monospace;font-size:12.5px}
+  .flow{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:10px 0}
+  .node{background:var(--card2);border:1px solid var(--line);border-radius:8px;padding:8px 12px;font-size:13px}
+  .arr{color:var(--accent);font-weight:700}
+  .note{color:var(--dim);font-size:13px}
+  .kv{color:var(--dim)}
+  .hl{color:var(--good);font-weight:600}
+  .warnbox{background:rgba(224,161,60,.08);border:1px solid rgba(224,161,60,.3);border-radius:8px;padding:10px 14px;font-size:13px;color:#e8c98a}
+  code{background:var(--code);padding:1px 5px;border-radius:4px;font-size:12.5px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>板块消息面研判 · 提示词模板展示</h1>
+  <p class="sub">这是"消息驱动选股"流水线里 <b>S4 结构化研判</b> 环节实际调用大模型的提示词。模型：<span class="pill p-acc">DeepSeek-v4-pro · 思考关</span>（A/B 择优结果）。源码：<code>tools/analysis/sector_forecast/news_catalyst.py::board_verdict_instruction / BOARD_VERDICT_SCHEMA</code></p>
+  <div class="warnbox">⚠️ 测试环境研究模拟，非投资建议。本页所有输入/输出均为 2026-09-16「电子」板块的<b>真实一次调用</b>（原生 <code>client.extract</code>、非缓存）。</div>
+
+  <h2>0 · 它在流水线里的位置</h2>
+  <div class="card">
+    <div class="flow">
+      <span class="node">S3 定向采集<br><span class="note">板块龙头/中军新闻+政策+国际</span></span>
+      <span class="arr">→</span>
+      <span class="node hl">S4 本提示词<br><span class="note">LLM 逐板块研判</span></span>
+      <span class="arr">→</span>
+      <span class="node">板块整体评价<br><span class="note">利好/利空/中性/分歧 + 强弱</span></span>
+      <span class="arr">→</span>
+      <span class="node">S5 选股合成<br><span class="note">利好板块内选龙头/中军</span></span>
+    </div>
+    <p class="note">作用：把一堆零散新闻/公告，<b>按固定 rubric 分级</b>归纳成"这个板块当前消息面是好是坏、多强、依据是什么"，供选股决定"去哪个板块选"。<b>全文字档、绝不打分</b>（用户口径：数值不可信）。</p>
+  </div>
+
+  <h2>1 · 提示词模板（模板 + 占位符）</h2>
+  <div class="card">
+    <p class="note">下方 <span class="ph">紫色</span> 是运行时填入的占位符；黑框内是固定不变的指令与分级定义。</p>
+    <pre>你是「<span class="ph">{板块名}</span>」板块消息面研判员。下面是该板块<b>龙头+中军(板块主力)个股</b>、板块政策、
+及<b>国际形势</b>的<b>近 1-2 周</b>新闻/公告(每条带日期与来源角色)。
+请综合<b>新旧新闻 + 国际对标</b>(如半导体/算力看海外龙头动向、有色看大宗价格)判断该板块
+当前<b>消息面</b>(不是基本面数值)。
+
+<b>分级定义(务必按此归类,只输出文字档、绝不打分/给数值——数值不可信)</b>:
+  【可信度】可信=一手/官方/权威主流媒体,有明确出处；存疑=二手转载/解读/机构观点；不可信=小道消息/传闻
+  【影响程度】大=直接改变板块景气(政策落地/大额订单/技术突破/价格拐点)；中=边际(单公司事件/评级)；小=常规波动
+  【执行度】高=已落地/已签约/官方已发布；中=规划/意向/预期；低=传闻/概念炒作
+  【来源】一手=根源性(官方/当事方直接发布)；二手=转载/解读/引述
+
+要求:①每条关键事件<b>必给时间节点</b> + 标 可信度/影响程度/执行度/来源;
+②优先看<b>一手·根源性</b>消息(执行度更大),二手/传闻要在可靠性里点明需核实;
+③关注<b>持续利好</b>(近1-2周多条同向叠加);龙头与中军同向则更实;
+④<b>只用给定文本、禁止编造、禁止用日期之后的信息</b>。
+<span class="ph">{此前已归纳(去重增量·可选)}</span>
+
+────────────────────────────
+[输入] <span class="ph">{近1-2周新闻blob}</span>   ← 每条格式：[日期·来源角色] 标题 正文
+</pre>
+    <p class="note"><b>输出格式（schema，强制 JSON）</b>：</p>
+    <pre>{
+  "消息面": "利好 | 利空 | 中性 | 分歧",          // 对该板块整体
+  "强弱":   "强 | 中 | 弱",                       // 由影响+执行+可信综合(非数值)
+  "关键事件": [ {时间, 事件, 方向, 可信度, 影响程度, 执行度, 来源} ... ],
+  "持续性": "近1-2周是否多条同向(一句话)",
+  "时效":   "消息新鲜度+是否仍有效(一句话)",
+  "可靠性综述": "整体来源可靠性 + 需人工核实的点(一句话)",
+  "理由":   "综合研判(≤40字)"
+}</pre>
+  </div>
+
+  <h2>2 · 占位符解释 + 样例</h2>
+  <div class="card">
+  <table>
+    <tr><th>占位符</th><th>含义 / 它从哪来</th><th>样例（2026-09-16 电子）</th></tr>
+    <tr>
+      <td><span class="ph">{板块名}</span></td>
+      <td>申万一级板块名。来自 S1 板块 universe（29 个板块）里被判"重点/利好候选"的那些。</td>
+      <td class="mono">电子</td>
+    </tr>
+    <tr>
+      <td><span class="ph">{近1-2周新闻blob}</span></td>
+      <td>S3 定向采集的原始消息拼成的文本：对该板块<b>龙头+中军</b>个股定向抓的新闻/公告 + 板块政策 + 国际对标，每条带 <span class="mono">[日期·来源角色]</span>。最多 40 条、截断 6000 字。</td>
+      <td class="mono">[2026-09-07·政策] 中国移动普通光缆集采顶格落槌，总金额70.998亿元，涨价1.15倍…</td>
+    </tr>
+    <tr>
+      <td><span class="ph">{此前已归纳}</span></td>
+      <td><b>去重增量</b>机制：昨天已分析过的新闻不重复送模型，只把"此前归纳的一句话摘要"带进来，让模型在其上<b>增量更新</b>（省 token + 保留近 2 周记忆）。首日为空。</td>
+      <td class="mono">2026-09-15 消息面=利好·中：算力政策预期…｜持续性：零星</td>
+    </tr>
+  </table>
+  <p class="note">另外三个"分级维度"（可信度/影响程度/执行度/来源）不是运行时填的占位符，是<b>写死在提示词里的评判标准</b>——先给模型定义、再让它对每条新闻按定义归类。见上方模板第二段。</p>
+  </div>
+
+  <h2>3 · 实际输入（真实一次调用）</h2>
+  <div class="card">
+    <p class="note">板块=电子，S3 采集到的 7 条近 1-2 周消息：</p>
+    <pre>[2026-09-04·龙头] 国产算力顶层文件9月起实施，超节点进入规模采购期
+[2026-09-04·中军] 生益科技H1净利暴增130%，AI服务器和数据中心交换机是PCB产业增长主线
+[2026-09-04·政策] 广合科技拟累计投资超120亿元扩产PCB
+[2026-09-05·龙头] 源杰科技业绩持续亮眼，CPO/NPO等领域新品进展顺利
+[2026-09-07·政策] 中国移动普通光缆集采顶格落槌，总金额70.998亿元，涨价1.15倍，18家中标
+[2026-09-07·行业] PCB行业进入结构性上行阶段，量价齐升由AI算力需求主导，英伟达平台迭代提升高端板价值量，海外客户三季度备货力度加大
+[2026-09-07·龙头] 沪电股份涨停，龙虎榜显示机构及北向资金大幅净买入17.43亿元；生益科技成交额达100亿元</pre>
+  </div>
+
+  <h2>4 · 实际输出（DeepSeek 真实研判）</h2>
+  <div class="card">
+    <p style="font-size:16px">板块整体：<span class="pill p-good">消息面 = 利好</span><span class="pill p-good">强弱 = 强</span></p>
+    <table>
+      <tr><th>字段</th><th>模型输出</th></tr>
+      <tr><td>持续性</td><td>持续利好·近一周多条同向叠加，政策落地、龙头业绩兑现、大额集采涨价及资本开支扩张形成共振</td></tr>
+      <tr><td>时效</td><td>本周新消息密集发布，均为最新动态且持续有效</td></tr>
+      <tr><td>可靠性综述</td><td>一手为主，政策、公司公告及运营商集采均为权威来源；<b>行业上行判断为二手解读需结合后续订单验证</b></td></tr>
+      <tr><td>理由</td><td>政策实施+龙头业绩暴增+光缆集采量价齐升+百亿扩产，算力产业链景气度获多维度确认</td></tr>
+    </table>
+    <p class="note" style="margin-top:14px">关键事件（每条按 rubric 分级）——注意<span class="hl">第 6 条被正确判为「存疑·二手」</span>（行业趋势解读没有一手出处），其余一手政策/公告判「可信·一手」：</p>
+    <table>
+      <tr><th>时间</th><th>事件</th><th>方向</th><th>可信度</th><th>影响</th><th>执行</th><th>来源</th></tr>
+      <tr><td>09-04</td><td>国产算力顶层文件9月起实施</td><td><span class="p-good">利好</span></td><td>可信</td><td>大</td><td>高</td><td>一手</td></tr>
+      <tr><td>09-04</td><td>生益科技H1净利暴增130%</td><td><span class="p-good">利好</span></td><td>可信</td><td>中</td><td>高</td><td>一手</td></tr>
+      <tr><td>09-04</td><td>广合科技拟投超120亿扩产PCB</td><td><span class="p-good">利好</span></td><td>可信</td><td>大</td><td>中</td><td>一手</td></tr>
+      <tr><td>09-05</td><td>源杰科技CPO/NPO新品进展</td><td><span class="p-good">利好</span></td><td>可信</td><td>中</td><td>高</td><td>一手</td></tr>
+      <tr><td>09-07</td><td>中移动光缆集采70.998亿·涨价1.15倍</td><td><span class="p-good">利好</span></td><td>可信</td><td>大</td><td>高</td><td>一手</td></tr>
+      <tr style="background:rgba(224,161,60,.08)"><td>09-07</td><td>PCB结构性上行·英伟达平台迭代…</td><td><span class="p-good">利好</span></td><td><span class="p-warn">存疑</span></td><td>大</td><td>中</td><td><span class="p-warn">二手</span></td></tr>
+      <tr><td>09-07</td><td>沪电涨停·机构北向净买17.43亿</td><td><span class="p-good">利好</span></td><td>可信</td><td>中</td><td>高</td><td>一手</td></tr>
+    </table>
+  </div>
+
+  <h2>5 · 这份研判怎么进选股</h2>
+  <div class="card">
+    <p class="note">板块判「利好·强」→ 电子进<b>重点选股池</b> → S5 在电子板块内选<b>龙头/中军</b>（沪电/生益/三环/长飞…）→ 再走量价形态 + 策略0合议(含财报/龙虎榜) + 回踩限价，综合出票。<br>反之若某板块判「利空/分歧」（如今日汽车=利空、计算机=分歧）→ <b>不从其中选、或规避</b>。这就是"消息驱动 + 规避"的锚。</p>
+    <p class="note"><b>为什么选 DeepSeek</b>：A/B 里遇到"分歧盘"（利好利空对冲），DeepSeek 正确判「分歧」，qwen3.8-max 会过度乐观标「利好」=假利好风险。故 S4 锁 DeepSeek-v4-pro·思考关。</p>
+  </div>
+
+  <p class="sub" style="margin-top:26px">生成：2026-09-16 · 真实调用留痕 · ⚠️ 测试环境研究模拟，非投资建议。</p>
+</div>
+</body>
+</html>
