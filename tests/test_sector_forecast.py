@@ -219,25 +219,23 @@ def test_macro_全中性():
 
 # ───────────────────────── 消息驱动 一入 M1:板块龙头催化标签 ─────────────────────────
 
-def test_leader_catalyst_合并标签语义(monkeypatch):
-    """龙头净催化 + 政策净催化 合并 → 标签:≥+3 利好 / ≤−3 利空 / 中间 中性。"""
+def test_leader_catalyst_描述性无数值(monkeypatch):
+    """v2:板块标签直接取 LLM 描述性『消息面』,不做数值加权;结构为文字标签。"""
     from tools.analysis.sector_forecast import news_catalyst as NC
-    from tools.analysis.sector_forecast import focus as F
     monkeypatch.setattr(NC, "leader_codes",
-                        lambda date, boards=None: {"电子": [{"code": "E1", "name": "龙头一"}],
-                                                    "银行": [{"code": "B1", "name": "行一"}]})
-    # 龙头新闻打分(mock):电子龙头强利好、银行龙头利空
-    def fake_score(codes, *, date, client=None, per_code_top=5):
-        m = {"E1": {"净催化": 8.0, "n条": 2, "利好": 2, "利空": 0, "明细": []},
-             "B1": {"净催化": -5.0, "n条": 1, "利好": 0, "利空": 1, "明细": []}}
-        return {c: m[c] for c in codes}
-    monkeypatch.setattr(NC, "score_leader_news", fake_score)
-    monkeypatch.setattr(F, "news_catalyst_by_sector",
-                        lambda date: {"电子": {"净催化": 2.0}, "银行": {"净催化": 0.0}})
+                        lambda date, boards=None: {"电子": [{"code": "E1", "name": "龙头一"}]})
+    monkeypatch.setattr(NC, "board_news_verdict",
+                        lambda date, sw, leads, client=None: {
+                            "消息面": "利好", "强弱": "强",
+                            "关键事件": ["2026-09-10 算力订单落地(利好)"],
+                            "持续性": "持续利好·两周内多条", "时效与可靠性": "本周主流媒体,较可靠",
+                            "理由": "算力持续催化", "n条": 6, "时间跨度": "2026-09-03~2026-09-15"})
     out = NC.board_leader_catalyst("2026-09-15")
-    assert out["电子"]["消息标签"] == "利好"      # 8+2=10 ≥ +3
-    assert out["银行"]["消息标签"] == "利空"      # -5+0=-5 ≤ -3
-    assert out["电子"]["合并净催化"] == 10.0
+    assert out["电子"]["消息标签"] == "利好" and out["电子"]["强弱"] == "强"
+    assert "算力订单" in out["电子"]["关键事件"][0]      # 关键事件带时间节点
+    assert "持续利好" in out["电子"]["持续性"]
+    # 断言无数值分字段(用户:数值不可信)
+    assert "合并净催化" not in out["电子"] and "净催化" not in out["电子"]
 
 
 def test_leader_codes_从角色表取龙头(monkeypatch, tmp_path):
@@ -253,16 +251,19 @@ def test_news_driven_block_契约字段(monkeypatch):
     from tools.analysis.sector_forecast import news_focus_block as NB
     from tools.analysis.sector_forecast import news_catalyst as NC
     monkeypatch.setattr(NC, "board_leader_catalyst", lambda date, boards=None, client=None: {
-        "电子": {"消息标签": "利好", "合并净催化": 10.0, "龙头净催化": 8.0, "政策净催化": 2.0,
-                "龙头明细": {"E1": {"name": "龙头一", "净催化": 8.0, "明细": [{"x": 1}]}}},
-        "银行": {"消息标签": "中性", "合并净催化": 0.0, "龙头净催化": 0.0, "政策净催化": 0.0,
-                "龙头明细": {}}})
+        "电子": {"消息标签": "利好", "强弱": "强", "关键事件": ["2026-09-10 算力订单(利好)"],
+                "持续性": "持续利好", "时效与可靠性": "较可靠", "理由": "算力催化",
+                "n条": 6, "时间跨度": "2026-09-03~2026-09-15",
+                "龙头": [{"code": "E1", "name": "龙头一"}]},
+        "银行": {"消息标签": "中性", "龙头": []}})
     monkeypatch.setattr(NB, "_leader_moved", lambda code, date: True)
     monkeypatch.setattr(NB, "_followers", lambda sw, date, top=3: [{"code": "F1", "name": "跟涨一", "联动依据": "x"}])
     blk = NB.build_news_driven_block("2026-09-16")
     boards = [b["board"] for b in blk["利好板块"]]
     assert boards == ["电子"]                      # 只收利好板块
     e = blk["利好板块"][0]
-    assert e["tag"] == "利好" and e["strength"] == 10.0
+    assert e["tag"] == "利好" and e["强弱"] == "强"      # 文字档,非数值
+    assert "strength" not in e                          # 无数值分(用户:数值不可信)
     assert e["龙头候选"][0]["code"] == "E1" and e["龙头候选"][0]["已动"] is True
     assert e["跟涨候选"][0]["code"] == "F1"
+    assert "算力订单" in e["关键事件"][0]

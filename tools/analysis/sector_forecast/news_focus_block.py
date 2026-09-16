@@ -64,33 +64,36 @@ def _followers(sw: str, date: str, *, top: int = 3) -> list[dict]:
     return out
 
 
+_STRENGTH_ORDER = {"强": 0, "中": 1, "弱": 2, None: 3}
+
+
 def build_news_driven_block(date: str, *, boards: Optional[list[str]] = None, client=None) -> dict:
-    """产「消息驱动」块(统筹契约)。仅收 tag=利好 的板块。"""
+    """产「消息驱动」块(统筹契约·v2 描述性:文字不数值)。仅收 消息面=利好 的板块。"""
     from tools.analysis.sector_forecast import news_catalyst as NC
     cat = NC.board_leader_catalyst(date, boards=boards, client=client)
     利好板块 = []
     for sw, c in cat.items():
-        if c["消息标签"] != "利好":
+        if c.get("消息标签") != "利好":
             continue
-        # 龙头候选:带催化 + 已动(无催化依据不进)
-        leads = []
-        for code, d in c.get("龙头明细", {}).items():
-            if not d.get("明细") and d.get("净催化", 0) == 0:
-                continue                                   # 无消息依据不进
-            leads.append({"code": code, "name": d.get("name", ""),
-                          "催化": d.get("净催化"), "已动": _leader_moved(code, date)})
-        if not leads:
-            continue
+        leads = [{"code": d["code"], "name": d.get("name", ""), "已动": _leader_moved(d["code"], date)}
+                 for d in c.get("龙头", [])]
         利好板块.append({
-            "board": sw, "tag": "利好", "strength": c["合并净催化"],
-            "依据": f"龙头净催化{c['龙头净催化']}+政策净催化{c['政策净催化']}",
+            "board": sw, "tag": "利好",
+            "强弱": c.get("强弱"),                        # 文字档(非数值)
+            "关键事件": c.get("关键事件", []),            # 每条带时间+可信度/影响/执行度/来源(文字)
+            "持续性": c.get("持续性"),
+            "时效": c.get("时效"), "可靠性综述": c.get("可靠性综述"),
+            "依据": c.get("理由"),
+            "新闻时间跨度": c.get("时间跨度"), "新闻条数": c.get("n条"), "新增条数": c.get("新增"),
             "龙头候选": leads, "跟涨候选": _followers(sw, date),
         })
-    利好板块.sort(key=lambda x: -x["strength"])
+    # 强弱排序(强在前),不用数值
+    利好板块.sort(key=lambda x: _STRENGTH_ORDER.get(x.get("强弱"), 3))
     return {"as_of": date, "version": BLOCK_VERSION, "利好板块": 利好板块,
-            "口径": "消息催化(α源)驱动;龙头进候选池走逐票研判+回踩限价,跟涨进联动观察档单列验",
+            "口径": "消息催化(α源·描述性文字判定不数值)驱动;龙头进候选池走逐票研判+回踩限价,"
+                    "跟涨进联动观察档单列验;结合近1-2周新旧新闻、识别持续利好",
             "诚实边界": ["国际龙头专用源待接", "概念级成分缺(申万一级)",
-                        "non-gating·实盘forward累积·未达标不gated"]}
+                        "时效/可靠性为LLM描述性评价、需人工核", "non-gating·实盘forward累积·未达标不gated"]}
 
 
 def enrich_sector_focus(date: str, *, boards: Optional[list[str]] = None, client=None,
