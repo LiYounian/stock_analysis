@@ -86,6 +86,56 @@ tasks:
     notify_on: [failure, misfire]
     tags: [local, eod, capitulation]
 
+  # 午盘全A重筛(工作日 11:35,抢 13:00 前):全A量价重筛→尾盘候选。plist=com.stock.noon_fullA_screen.plist。
+  - id: noon_fullA_screen
+    description: "午盘全A重筛(11:35);全A量价重筛→尾盘回踩限价候选;正式午盘选股(踏空根治)"
+    cmd: ["python", "-m", "tools.pipeline.noon_fullA_screen"]
+    cron: "35 11 * * mon-fri"
+    timeout_sec: 900
+    retries: 1
+    notify_on: [failure, misfire]
+    tags: [local, intraday, noon]
+
+  # P-B 情绪判官 forward-shadow(工作日 20:00,闭环后):LLM 判申万一级行业情绪→shadow。non-gating 纯记录。
+  - id: sentiment_shadow
+    description: "P-B 情绪判官 forward-shadow(20:00);LLM 判行业情绪 A/B+净A度;non-gating 攒样本"
+    cmd: ["python", "-m", "tools.analysis.industry_temp.sentiment_judge"]
+    cron: "0 20 * * mon-fri"
+    timeout_sec: 1800
+    retries: 1
+    notify_on: [failure, misfire]
+    tags: [local, forward-shadow, regime]
+
+  # ④ 消息驱动板块拐点 forward-shadow(工作日 20:30,情绪 shadow 之后):板块拐点+成员候选→advisory。non-gating。
+  - id: sector_inflection_shadow
+    description: "④ 板块拐点 forward-shadow(20:30);价量+情绪拐点+成员候选;non-gating 攒样本"
+    cmd: ["python", "-m", "tools.research.sector_inflection"]
+    cron: "30 20 * * mon-fri"
+    timeout_sec: 900
+    retries: 1
+    notify_on: [failure, misfire]
+    tags: [local, forward-shadow, regime]
+
+  # C 宏观/板块级消息规避 forward-shadow(工作日 20:45):加息/汇率/关税→板块规避标记。non-gating。
+  - id: sector_macro_avoid_shadow
+    description: "C 宏观板块规避 forward-shadow(20:45);加息/汇率/关税→板块规避;non-gating 攒样本"
+    cmd: ["python", "-m", "tools.research.sector_macro_avoid"]
+    cron: "45 20 * * mon-fri"
+    timeout_sec: 900
+    retries: 1
+    notify_on: [failure, misfire]
+    tags: [local, forward-shadow, regime]
+
+  # B 基本面 veto 误杀追踪 forward-shadow(工作日 21:00):价量强但被 veto 票→跟次日绝对收益。non-gating。
+  - id: veto_track_shadow
+    description: "B veto 误杀追踪 forward-shadow(21:00);价量强被veto票→次日绝对收益;non-gating 攒样本"
+    cmd: ["python", "-m", "tools.research.veto_track"]
+    cron: "0 21 * * mon-fri"
+    timeout_sec: 900
+    retries: 1
+    notify_on: [failure, misfire]
+    tags: [local, forward-shadow, avoidance]
+
   - id: pullrefresh
     description: 盘后全量刷新/全A选股(15:40,约 1 小时)
     cmd: ["python", "-m", "tools.run", "screenall"]
