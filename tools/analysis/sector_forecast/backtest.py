@@ -125,6 +125,81 @@ def run_backtest(dates: Optional[list[str]] = None, *, topn: int = POOL_TOPN) ->
             "汇总": _aggregate(per_day)}
 
 
+def run_coverage_backtest(dates: Optional[list[str]] = None, *, topn: int = POOL_TOPN,
+                          top_sectors: int = 3, per_role: int = 2) -> dict:
+    """修正版 B':**覆盖式**——量价 top ∪ 占优板块 roster 里量价漏掉的补涨先锋/中军(主选)。
+
+    检验双跑暴露的假设:踏空对象(热板块里低位待接力的补涨/中军)量价榜捞不到,主动补进是否兑现 α。
+    对比 A(量价 top) vs 补入票(补涨/中军)的 forward。
+    """
+    from tools.analysis.sector_forecast import regime_panel as RP
+    from tools.analysis.sector_forecast import focus as F
+    from tools.analysis.sector_forecast import roster as RO
+    from tools.analysis.sector_forecast import universe as U
+    from tools.analysis.sector_forecast import dual_run as DR
+
+    dates = dates or _usable_dates(min_fwd=1)
+    membership = U._membership()
+    mem_by_sw = RO._members_by_sector()
+    thermo_by_date = _batch_thermo(dates, membership)
+    per_day = []
+    for date in dates:
+        frame = U.load_sector_frame(date)
+        if frame.empty:
+            continue
+        panel = RP.build_sector_regime(date, frame=frame, therm=thermo_by_date.get(date))
+        focus = F.build_focus(date, panel=panel)
+        cands = _eod_candidates(frame)
+        if not cands:
+            continue
+        for c in cands:
+            c["fwd"] = DR._forward_returns(c["code"], date, c["entry"])
+        A = sorted(cands, key=lambda x: -x["proxy"])[:topn]
+        a_codes = {c["code"] for c in A}
+        close_map = frame.set_index("code")["close"].to_dict()
+
+        # 占优板块 top_sectors → roster 补涨/中军主选,补入量价漏掉的
+        补入 = []
+        for fr in focus["重点板块池"][:top_sectors]:
+            sw = fr["板块"]
+            members = mem_by_sw.get(sw, [])
+            if not members:
+                continue
+            roster = RO.build_roster(sw, date, members)
+            for role in ("补涨先锋", "中军"):
+                for it in roster["roles"].get(role, [])[:per_role]:
+                    code = it["code"]
+                    if code in a_codes or code in {x["code"] for x in 补入}:
+                        continue
+                    entry = close_map.get(code)
+                    if not entry:
+                        continue
+                    补入.append({"code": code, "name": it.get("name"), "板块": sw, "角色": role,
+                                 "选级": it.get("选级"), "entry": float(entry),
+                                 "fwd": DR._forward_returns(code, date, float(entry))})
+        per_day.append({"date": date, "A": A, "补入": 补入})
+        logger.info("覆盖回测 %s: A%d 补入%d(补涨/中军)", date, len(A), len(补入))
+
+    # 聚合:A vs 补入(按角色分)
+    def _mean(key, fwd_key, role=None):
+        vals = []
+        for d in per_day:
+            for c in d[key]:
+                if role and c.get("角色") != role:
+                    continue
+                v = c["fwd"].get(fwd_key)
+                if v is not None:
+                    vals.append(v)
+        return {"均值": round(sum(vals) / len(vals), 3) if vals else None, "n": len(vals),
+                "胜率": round(sum(1 for v in vals if v > 0) / len(vals), 3) if vals else None}
+    汇总 = {"决策日数": len(per_day)}
+    for fk in (f"T+{h}" for h in FWD):
+        汇总[fk] = {"A量价top": _mean("A", fk), "补入全部": _mean("补入", fk),
+                   "补入_补涨先锋": _mean("补入", fk, "补涨先锋"),
+                   "补入_中军": _mean("补入", fk, "中军")}
+    return {"dates": [d["date"] for d in per_day], "per_day": per_day, "汇总": 汇总}
+
+
 def _aggregate(per_day: list[dict]) -> dict:
     def _mean(picks_key, fwd_key):
         vals = []
