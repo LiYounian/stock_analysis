@@ -14,6 +14,8 @@ import logging
 from pathlib import Path
 from typing import Optional
 
+from tools.llm import rubric_map as rm
+
 logger = logging.getLogger("sector_forecast.daily_report")
 
 REPORT_VERSION = "v1-2026-09-16"
@@ -42,7 +44,7 @@ def _news_headlines(date: str, top: int = 5) -> list[dict]:
         msgs = json.loads(p.read_text(encoding="utf-8"))
     except Exception:
         return []
-    msgs = sorted(msgs, key=lambda m: -(m.get("影响强度") or 0))
+    msgs = sorted(msgs, key=lambda m: -rm.strength_to_num(m.get("影响强度"), default=0.0))
     out = []
     for m in msgs[:top]:
         out.append({"title": m.get("title", "")[:50], "方向": m.get("影响方向"),

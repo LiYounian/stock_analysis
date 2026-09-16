@@ -1,7 +1,8 @@
 """消息面因子(读 analysis/<日>/sentiment_policy.json)——大盘预测的"消息面"维。
 
 聚合**日度净利好度** = Σ(影响强度 × 方向符号),外加利好/利空条数比、条数、受影响行业广度。
-方向符号:利好 +1 / 利空 −1 / 中性 0。强度 1–5。
+方向符号:利好 +1 / 利空 −1 / 中性 0。强度取 LLM 文字档(强/中/弱),经 rubric_map 回填数值
+(强=5/中=3/弱=1;兼容 legacy 1~5),口径 /20 归一不变。
 
 历史仅约 1 个月(从接入日累积),故作**近端实时因子**,长回测里覆盖不到的日期该维缺省 0
 (降级为中性),在报告里说明局限。防未来函数:某日的消息面只用该日(信号日 t)落的条目。
@@ -17,6 +18,8 @@ import re
 import numpy as np
 import pandas as pd
 
+from tools.llm import rubric_map as rm
+
 logger = logging.getLogger("market_forecast.sentiment")
 
 _DIR_SIGN = {"利好": 1.0, "利空": -1.0, "中性": 0.0}
@@ -30,11 +33,8 @@ def _agg_one(items: list) -> dict:
     industries: set = set()
     for it in items or []:
         d = it.get("影响方向") or it.get("方向")
-        s = it.get("影响强度", it.get("强度", 0)) or 0
-        try:
-            s = float(s)
-        except (TypeError, ValueError):
-            s = 0.0
+        # 影响强度文字档(强/中/弱)→ 数值;兼容 legacy 1~5;缺失默认 0(与旧口径一致)
+        s = rm.strength_to_num(it.get("影响强度", it.get("强度")), default=0.0)
         sign = _DIR_SIGN.get(d, 0.0)
         net += sign * s
         if sign > 0:

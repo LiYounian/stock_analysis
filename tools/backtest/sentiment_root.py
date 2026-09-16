@@ -32,6 +32,7 @@ from tools.collectors import market
 from tools.store import repo as store
 from tools.backtest.backtest_rank import ic_metrics, decile_metrics
 from tools.backtest.backtest_sentiment import calibration
+from tools.llm import rubric_map as rm
 
 logger = logging.getLogger("backtest.sentiment_root")
 
@@ -58,10 +59,7 @@ def _root_sentiment(rec: dict):
             d = _DIR.get(e.get("影响方向"))
             if d is None:
                 continue
-            try:
-                stg = float(e.get("影响强度") or 0)
-            except (TypeError, ValueError):
-                stg = 0.0
+            stg = rm.strength_to_num(e.get("影响强度"), default=0.0)  # 文字档→数值(兼容legacy)
             ev_scores.append(d * min(stg, 4.0) / 4.0)
     if ev_scores:
         parts.append(float(np.mean(ev_scores)))

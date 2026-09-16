@@ -135,6 +135,7 @@ def score_leader_news(codes: list[str], *, date: str, client=None,
     from tools.analysis import event
     from tools.llm import prompts
     from tools.llm import client as lc
+    from tools.llm import rubric_map as rm
 
     client = client or lc.get_client()
     try:
@@ -157,7 +158,7 @@ def score_leader_news(codes: list[str], *, date: str, client=None,
             if "影响方向" not in r:
                 continue
             sign = _DIR_SIGN.get(r.get("影响方向"), 0)
-            strength = float(r.get("影响强度") or 0)
+            strength = rm.strength_to_num(r.get("影响强度"), default=0.0)  # 文字档→数值(兼容legacy)
             net += sign * strength
             if sign > 0:
                 good += 1
