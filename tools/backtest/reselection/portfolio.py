@@ -225,6 +225,8 @@ def summarize(res: SimResult, periods_per_year: int = 244) -> dict:
 def cluster_t_diff(tr_a: pd.DataFrame, tr_b: pd.DataFrame) -> dict:
     """两臂逐笔 net 收益按 exec_date 聚类的均值差 t(H0: 差=0)。近似:各臂按日聚合贡献。"""
     def _agg(tr):
+        if tr is None or len(tr) == 0 or "net" not in getattr(tr, "columns", []):
+            return np.array([]), np.array([])
         v = tr["net"].to_numpy(float)
         c = tr["exec_date"].to_numpy()
         m = np.isfinite(v)

@@ -87,6 +87,13 @@ def test_treatment_exits_when_breaks_line():
     assert trt.trades["hold_days"].iloc[0] == 1   # 破线,未续持
 
 
+def test_cluster_t_diff_empty_safe():
+    """空 trades(如某视图无可交易日)不应崩溃,返回 None。"""
+    empty = pd.DataFrame()
+    out = P.cluster_t_diff(empty, empty)
+    assert out["cluster_t"] is None and out["diff"] is None
+
+
 def test_ranks_topn_desc():
     """排名视图按 score 降序取 TopN。"""
     feats = {
