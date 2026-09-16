@@ -159,14 +159,17 @@ def _load_klines(codes: list[str], date: str) -> dict:
 
 
 def _fetch_fundflow_for(codes: list[str], as_of: str) -> dict:
-    """对候选池拉分时资金流(5min),失败者不入结果。"""
+    """对候选池拉分时资金流(1min),失败者不入结果。
+
+    粒度 1min:东财 2026-09-16 起下线 5min(rc=102),详见 fundflow_intraday docstring。
+    """
     from tools.collectors import fundflow_intraday as FI
     # 硬拦候选池上限
     codes = codes[:FI.MAX_BATCH_CODES]
     if not codes:
         return {}
     try:
-        got, errors = FI.collect(codes, freq=FI.FREQ_5MIN, as_of=as_of)
+        got, errors = FI.collect(codes, freq=FI.FREQ_1MIN, as_of=as_of)
         if errors:
             logger.warning("fundflow_intraday 失败 %d 只(不阻断整批)", len(errors))
         return got
