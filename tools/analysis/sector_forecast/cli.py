@@ -37,7 +37,8 @@ def _setup_logging() -> None:
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="板块预测系统 P1:板块环境面板 + 四角色主表")
     ap.add_argument("--date", default=None, help="口径日 YYYY-MM-DD(默认今天)")
-    ap.add_argument("--regime-only", action="store_true", help="只出板块面板,跳过角色表")
+    ap.add_argument("--regime-only", action="store_true", help="只出板块面板,跳过角色表/两步/日报")
+    ap.add_argument("--no-report", action="store_true", help="出面板+角色+focus,但不渲染每日文档")
     ap.add_argument("--sectors", default=None,
                     help="逗号分隔的目标板块(申万一级);缺省 = 种子清单")
     args = ap.parse_args(argv)
@@ -62,14 +63,40 @@ def main(argv: list[str] | None = None) -> int:
         log.error("全A截面为空(该日无K线?),不落盘、非0退出")
         return 1
 
-    out = RP.write_sector_regime(date, frame=frame)
+    # 面板只构一次(温度计较重),面板/角色/focus/日报全复用
+    panel = RP.build_sector_regime(date, frame=frame)
+    out = RP.write_sector_regime(date, panel=panel)
     log.info("板块面板 → %s", out)
+    if args.regime_only:
+        return 0
 
-    if not args.regime_only:
-        from tools.analysis.sector_forecast import roster as RO
-        sectors = [s.strip() for s in args.sectors.split(",")] if args.sectors else None
-        paths = RO.build_all_rosters(date, frame=frame, sectors=sectors)
-        log.info("角色主表 → %d 个板块落盘 data/sector_roster/", len(paths))
+    from tools.analysis.sector_forecast import roster as RO
+    sectors = [s.strip() for s in args.sectors.split(",")] if args.sectors else None
+    paths = RO.build_all_rosters(date, frame=frame, sectors=sectors)
+    log.info("角色主表 → %d 个板块落盘 data/sector_roster/", len(paths))
+
+    # 独立新闻库(宏观指标+新闻+资金 → 宏观净方向/情景),独立落库 data/sector_news/
+    from tools.analysis.sector_forecast import news_store as NS
+    npath = NS.write_news_store(date)
+    macro = None
+    try:
+        import json as _json
+        macro = _json.loads(npath.read_text(encoding="utf-8")).get("宏观研判")
+    except Exception:
+        pass
+    log.info("独立新闻库 → %s(宏观 %s/%s)", npath,
+             (macro or {}).get("宏观净方向"), (macro or {}).get("宏观情景"))
+
+    from tools.analysis.sector_forecast import focus as F
+    fpath = F.write_focus(date, panel=panel, macro=macro)
+    log.info("重点板块池 → %s", fpath)
+
+    if not args.no_report:
+        from tools.analysis.sector_forecast import daily_report as DR
+        mp, jp = DR.write_report(date, panel=panel, macro=macro)
+        log.info("每日板块文档 → %s", mp)
+        mkp = DR.write_market_daily(date, macro=macro)
+        log.info("每日市场综合研判 → %s", mkp)
     return 0
 
 
