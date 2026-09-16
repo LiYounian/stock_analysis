@@ -24,12 +24,12 @@ class _FakeClient:
 
     def extract(self, text, schema, *, instruction, temperature=0.0):
         self.calls += 1
-        if "受影响行业" in schema:                     # 政策打分 schema
-            return {"影响方向": "利好", "影响强度": 4, "受影响行业": ["半导体"]}
-        if "净情绪" in schema:                          # UGC 情感 schema
-            return {"净情绪": 0.6, "多空": "偏多", "依据": "多数看多"}
-        return {"事件类型": "业绩", "影响方向": "利好",  # 新闻抽取 schema
-                "影响强度": 4, "与本股关系": "直接", "摘要": "x"}
+        if "受影响行业" in schema:                     # 政策打分 schema(文字档:强/中/弱)
+            return {"影响方向": "利好", "影响强度": "强", "受影响行业": ["半导体"]}
+        if "多空" in schema:                            # UGC 情感 schema(文字档:多空,无净情绪数值)
+            return {"多空": "偏多", "依据": "多数看多"}
+        return {"事件类型": "业绩", "影响方向": "利好",  # 新闻抽取 schema(文字档)
+                "影响强度": "强", "与本股关系": "直接", "摘要": "x"}
 
 
 @pytest.fixture
@@ -72,7 +72,7 @@ def test_score_policy_structure_and_persist(isolate, monkeypatch):
 
     assert len(scored) == 1
     r = scored[0]
-    assert r["影响方向"] == "利好" and r["影响强度"] == 4
+    assert r["影响方向"] == "利好" and r["影响强度"] == "强"
     assert r["受影响行业"] == ["半导体"] and r["层"] == "政策"
     assert r["title"] == "国家出台半导体扶持政策"     # 原字段保留
 
@@ -105,7 +105,8 @@ def test_ugc_sentiment_structure(isolate, monkeypatch):
         {"text": "这票要起飞"}, {"text": "基本面很好"},
     ]})
     r = ev.ugc_sentiment("002156", client=_FakeClient())
-    assert r["净情绪"] == 0.6 and r["多空"] == "偏多"
+    # 净情绪由文字档「多空=偏多」经 rubric_map.stance_to_net 回填(偏多→+0.5),LLM 不再给数值
+    assert r["净情绪"] == 0.5 and r["多空"] == "偏多"
     assert r["样本数"] == 2 and "依据" in r
 
 
@@ -116,15 +117,23 @@ def test_ugc_sentiment_no_cache_degrades(isolate, monkeypatch):
     assert r["样本数"] == 0 and r["degraded"] == "no_ugc_cache"
 
 
-def test_ugc_sentiment_clamps(isolate, monkeypatch):
+def test_ugc_sentiment_stance_maps_to_net(isolate, monkeypatch):
+    """文字档「多空」→ 净情绪:强多=+1(档端);legacy 越界净情绪数值仍 clamp。"""
     _fake_ugc(monkeypatch, {"002156": [{"text": "x"}]})
 
-    class _Over(_FakeClient):
+    class _Strong(_FakeClient):
         def extract(self, text, schema, *, instruction, temperature=0.0):
             self.calls += 1
-            return {"净情绪": 5.0, "多空": "偏多", "依据": "y"}    # 越界 → clamp 到 1
+            return {"多空": "强多", "依据": "y"}                  # 强多 → +1.0
 
-    assert ev.ugc_sentiment("002156", client=_Over())["净情绪"] == 1.0
+    assert ev.ugc_sentiment("002156", client=_Strong())["净情绪"] == 1.0
+
+    class _Legacy(_FakeClient):
+        def extract(self, text, schema, *, instruction, temperature=0.0):
+            self.calls += 1
+            return {"净情绪": 5.0, "依据": "y"}                  # legacy 无多空、越界 → clamp 到 1
+
+    assert ev.ugc_sentiment("002156", client=_Legacy())["净情绪"] == 1.0
 
 
 # ---------- analyze_stock 三层整合 ----------
