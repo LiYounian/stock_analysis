@@ -68,3 +68,7 @@ logs/
 # trailing 广度缓存(增量重建) + 逐日 β 择时信号。生产数据在主仓、按需重建,不入库。
 data/breadth_series/
 data/signals/
+
+# 程序化流水线 S1/S2 周度派生过程文件(量价重算·可复现·自带 roster_changes/history 变更留痕):不入库,避免每周 diff 弄脏。
+data/analysis/sector_universe.json
+data/sector_roster_table/
