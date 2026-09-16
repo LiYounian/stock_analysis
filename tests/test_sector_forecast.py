@@ -246,3 +246,23 @@ def test_leader_codes_从角色表取龙头(monkeypatch, tmp_path):
     # 不存在的板块 → 空(不崩)
     out = NC.leader_codes("2026-09-15", boards=["不存在的板块XYZ"])
     assert out == {}
+
+
+def test_news_driven_block_契约字段(monkeypatch):
+    """「消息驱动」块字段对齐统筹契约:利好板块[{board,tag,strength,龙头候选[code,催化,已动],跟涨候选}]。"""
+    from tools.analysis.sector_forecast import news_focus_block as NB
+    from tools.analysis.sector_forecast import news_catalyst as NC
+    monkeypatch.setattr(NC, "board_leader_catalyst", lambda date, boards=None, client=None: {
+        "电子": {"消息标签": "利好", "合并净催化": 10.0, "龙头净催化": 8.0, "政策净催化": 2.0,
+                "龙头明细": {"E1": {"name": "龙头一", "净催化": 8.0, "明细": [{"x": 1}]}}},
+        "银行": {"消息标签": "中性", "合并净催化": 0.0, "龙头净催化": 0.0, "政策净催化": 0.0,
+                "龙头明细": {}}})
+    monkeypatch.setattr(NB, "_leader_moved", lambda code, date: True)
+    monkeypatch.setattr(NB, "_followers", lambda sw, date, top=3: [{"code": "F1", "name": "跟涨一", "联动依据": "x"}])
+    blk = NB.build_news_driven_block("2026-09-16")
+    boards = [b["board"] for b in blk["利好板块"]]
+    assert boards == ["电子"]                      # 只收利好板块
+    e = blk["利好板块"][0]
+    assert e["tag"] == "利好" and e["strength"] == 10.0
+    assert e["龙头候选"][0]["code"] == "E1" and e["龙头候选"][0]["已动"] is True
+    assert e["跟涨候选"][0]["code"] == "F1"
