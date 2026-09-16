@@ -266,12 +266,16 @@ def _merge_events(prior: list, new: list, date: str, lookback_days: int = LOOKBA
     return out
 
 
-def board_news_verdict(date: str, sw: str, leads: list[dict], *, client=None) -> dict:
-    """板块级**描述性**研判(rubric 文字归类·无数值)。**去重增量**:旧新闻不重复分析,在此前归纳上增量更新。"""
+def board_news_verdict(date: str, sw: str, leads: list[dict], *, client=None,
+                       items: Optional[list[dict]] = None) -> dict:
+    """板块级**描述性**研判(rubric 文字归类·无数值)。**去重增量**:旧新闻不重复分析,在此前归纳上增量更新。
+
+    items:S3 采集层已落的原始消息(采集与研判解耦·S4 传入)。None → 回退实时采集(向后兼容)。
+    """
     from tools.analysis import event
     from tools.llm import client as lc
     client = client or lc.get_client()
-    items = _collect_board_news(date, sw, leads)
+    items = items if items is not None else _collect_board_news(date, sw, leads)
     prior = _load_analyzed(sw)
     seen = set(prior.get("seen_keys") or [])
     # 只分析**新**新闻(去重:已分析过的不重复送 LLM)
