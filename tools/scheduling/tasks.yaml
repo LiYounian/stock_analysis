@@ -96,6 +96,21 @@ tasks:
     notify_on: [failure, misfire]
     tags: [local, eod, heavy]
 
+  # 板块预测系统每日研判产出(收盘后 17:30,排在 pullrefresh 之后:需 master kline / sentiment_policy 就绪)。
+  # 产出 sector_regime/roster/sector_focus/sector_daily.md/market_daily.md/sector_news 落主仓 data,
+  # 作**人工/研判辅助**(2026-09-16 定案:不机械接入生产选股;双跑仅证伪粗暴自动接法)。
+  # plist=com.stock.sector_daily.plist(草案);**enabled:false + 待用户 launchctl 装载**(建-not-切,SSOT 留痕)。
+  # cron 与 plist 的 17:30 mon-fri 严格等价(test_scheduler_launchd_equivalence 锁)。前置:P2 已合 main。
+  - id: sector_daily
+    description: "板块每日研判(收盘后 17:30):面板/角色/两步/综合研判文档,人工辅助不接选股;草案待装载,默认关"
+    cmd: ["python", "-m", "tools.analysis.sector_forecast"]
+    cron: "30 17 * * mon-fri"
+    timeout_sec: 900
+    retries: 1
+    enabled: false
+    notify_on: [failure, misfire]
+    tags: [local, eod, sector]
+
   - id: intraday_review
     description: 盘尾复盘(17:00)
     cmd: ["python", "-m", "tools.run", "intraday_review"]
