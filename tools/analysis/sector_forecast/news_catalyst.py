@@ -69,19 +69,26 @@ def board_verdict_instruction(sw: str, prior_summary: str = "") -> str:
         for dim, levels in RUBRIC.items())
     prior = f"\n\n【此前已归纳(近期,勿重复分析,只在其上增量更新)】\n{prior_summary}" if prior_summary else ""
     return (
-        f"你是「{sw}」板块消息面研判员。下面是该板块及其龙头股**近 1-2 周**新闻/公告(每条带日期)。"
-        "请综合**新旧新闻**判断该板块当前**消息面**(不是基本面数值)。"
+        f"你是「{sw}」板块消息面研判员。下面是该板块**龙头+中军(板块主力)个股**、板块政策、"
+        "及**国际形势**的**近 1-2 周**新闻/公告(每条带日期与来源角色)。"
+        "请综合**新旧新闻 + 国际对标**(如半导体/算力看海外龙头动向、有色看大宗价格)判断该板块当前"
+        "**消息面**(不是基本面数值)。"
         "\n\n**分级定义(务必按此归类,只输出文字档、绝不打分/给数值——数值不可信)**:\n"
         + rubric_txt +
         "\n\n要求:①每条关键事件**必给时间节点** + 按上面定义标 可信度/影响程度/执行度/来源;"
         "②优先看**一手·根源性**消息(执行度更大),二手转载/传闻要在可靠性里点明需核实;"
-        "③关注**持续利好**(近1-2周多条同向叠加=更大/持续利好);"
+        "③关注**持续利好**(近1-2周多条同向叠加=更大/持续利好);龙头与中军同向则更实;"
         "④**只用给定文本、禁止编造、禁止用日期之后的信息**。" + prior
     )
 
 
-def leader_codes(date: str, boards: Optional[list[str]] = None) -> dict[str, list[dict]]:
-    """{板块: [{code, name}(龙头主选/备选)]}。boards 缺省 = 种子板块;读 P1 角色表。"""
+# 定向抓新闻的角色(用户 2026-09-16:龙头之外也抓中军=板块大资金主力,其公告/新闻亦是催化源)
+NEWS_ROLES = ("龙头", "中军")
+
+
+def role_codes(date: str, boards: Optional[list[str]] = None, *,
+               roles: tuple[str, ...] = NEWS_ROLES) -> dict[str, list[dict]]:
+    """{板块: [{code, name, role}]}(龙头+中军,带角色标签)。读 P1 角色表。"""
     from tools.analysis.sector_forecast.roles import SEED_SW
     from tools.config import settings
     from tools.backtest.iet_probe.data import _MAIN
@@ -100,11 +107,22 @@ def leader_codes(date: str, boards: Optional[list[str]] = None) -> dict[str, lis
                     pass
         if not roster:
             continue
-        leads = [{"code": it["code"], "name": it.get("name", "")}
-                 for it in roster.get("roles", {}).get("龙头", [])]
-        if leads:
-            out[sw] = leads
+        picks, seen = [], set()
+        for role in roles:
+            for it in roster.get("roles", {}).get(role, []):
+                if it["code"] in seen:
+                    continue
+                seen.add(it["code"])
+                picks.append({"code": it["code"], "name": it.get("name", ""), "role": role})
+        if picks:
+            out[sw] = picks
     return out
+
+
+def leader_codes(date: str, boards: Optional[list[str]] = None) -> dict[str, list[dict]]:
+    """{板块: [{code, name}(仅龙头)]}(向后兼容)。"""
+    return {sw: [{"code": d["code"], "name": d["name"]} for d in picks if d["role"] == "龙头"]
+            for sw, picks in role_codes(date, boards, roles=("龙头",)).items()}
 
 
 def score_leader_news(codes: list[str], *, date: str, client=None,
@@ -173,17 +191,19 @@ def _collect_board_news(date: str, sw: str, leads: list[dict], *,
             t = str(it.get("time", ""))[:10]
             if t and (t < cutoff or t > date):
                 continue
-            items.append({"date": t or "?", "who": d["name"] or d["code"],
+            who = f"{d.get('role','')}·{d['name'] or d['code']}"    # 标注龙头/中军
+            items.append({"date": t or "?", "who": who,
                           "title": it.get("title", ""), "text": (it.get("content") or "")[:300]})
-    # 板块政策命中(sentiment_policy 当日;历史多日可扩,先当日)
+    # 板块政策命中 + 国际消息(sentiment_policy;region=国外 标为国际,用户:结合国际形势)
     p = resolve_analysis_file(date, "sentiment_policy.json")
     if p:
         try:
+            from tools.analysis import industry_map
             for m in _json.loads(p.read_text(encoding="utf-8")):
                 inds = m.get("industries") or m.get("受影响行业") or []
-                from tools.analysis import industry_map
                 if any(industry_map.to_sw(x) == sw for x in inds):
-                    items.append({"date": m.get("date", date), "who": "板块政策",
+                    who = "国际形势" if m.get("region") == "国外" else "板块政策"
+                    items.append({"date": m.get("date", date), "who": who,
                                   "title": m.get("title", ""), "text": (m.get("summary") or "")[:300]})
         except Exception:
             pass
@@ -209,17 +229,41 @@ def _load_analyzed(sw: str) -> dict:
     p = _analyzed_path(sw)
     if p.exists():
         try:
-            return _json.loads(p.read_text(encoding="utf-8"))
+            d = _json.loads(p.read_text(encoding="utf-8"))
+            d.setdefault("events", [])          # B:滚动关键事件累积(近2周)
+            return d
         except Exception:
             pass
-    return {"seen_keys": [], "summary": "", "updated": None}
+    return {"seen_keys": [], "summary": "", "updated": None, "events": []}
 
 
-def _save_analyzed(sw: str, seen_keys: list[str], summary: str, date: str) -> None:
+def _save_analyzed(sw: str, seen_keys: list[str], summary: str, date: str,
+                   events: Optional[list] = None) -> None:
     import json as _json
     p = _analyzed_path(sw)
-    p.write_text(_json.dumps({"seen_keys": seen_keys[-500:], "summary": summary, "updated": date},
+    p.write_text(_json.dumps({"seen_keys": seen_keys[-500:], "summary": summary,
+                              "updated": date, "events": (events or [])[-60:]},
                              ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _merge_events(prior: list, new: list, date: str, lookback_days: int = LOOKBACK_DAYS) -> list:
+    """B:累积近 lookback_days 天关键事件(去重+按日剪枝),供每天看完整两周全貌(用户口径)。"""
+    import pandas as pd
+    cutoff = (pd.Timestamp(date) - pd.Timedelta(days=lookback_days)).strftime("%Y-%m-%d")
+    seen, out = set(), []
+    for e in (prior or []) + (new or []):
+        if not isinstance(e, dict):
+            continue
+        t = str(e.get("时间", ""))[:10]
+        if t and t < cutoff:                    # 剪掉两周前的
+            continue
+        k = (t, (e.get("事件") or "")[:30])
+        if k in seen:
+            continue
+        seen.add(k)
+        out.append(e)
+    out.sort(key=lambda e: str(e.get("时间", "")))
+    return out
 
 
 def board_news_verdict(date: str, sw: str, leads: list[dict], *, client=None) -> dict:
@@ -237,8 +281,10 @@ def board_news_verdict(date: str, sw: str, leads: list[dict], *, client=None) ->
         return {"消息面": "中性", "强弱": "弱", "关键事件": [], "持续性": "近1-2周无相关新闻",
                 "时效": "无", "可靠性综述": "无数据", "理由": "无消息", "n条": 0, "新增": 0}
     if not new_items and prior.get("summary"):
-        # 无新增新闻 → 沿用此前归纳(不重复烧 LLM),标注
-        return {**_summary_to_verdict(prior["summary"]), "n条": len(items), "新增": 0,
+        # 无新增新闻 → 沿用此前归纳(不重复烧 LLM);仍呈现累积的近2周关键事件(B)
+        v = _summary_to_verdict(prior["summary"])
+        v["关键事件"] = _merge_events(prior.get("events", []), [], date)   # 剪枝到近2周
+        return {**v, "n条": len(items), "新增": 0,
                 "时间跨度": f"{items[0]['date']}~{items[-1]['date']}", "备注": "无新增新闻,沿用此前归纳"}
     blob = "\n".join(f"[{it['date']}·{it['who']}] {it['title']} {it['text']}" for it in new_items[:40])
     try:
@@ -251,10 +297,13 @@ def board_news_verdict(date: str, sw: str, leads: list[dict], *, client=None) ->
     r["n条"] = len(items)
     r["新增"] = len(new_items)
     r["时间跨度"] = f"{new_items[0]['date']}~{new_items[-1]['date']}" if new_items else "?"
-    # 更新去重集 + 滚动归纳(供次日增量,不丢历史)
+    # B:把本次新事件并入滚动累积 → 每天呈现完整近2周关键事件(用户口径:去重只是不重复分析,展示保留全量)
+    merged = _merge_events(prior.get("events", []), r.get("关键事件", []), date)
+    r["关键事件"] = merged
+    # 更新去重集 + 滚动归纳 + 累积事件(供次日增量,不丢历史)
     new_keys = list(seen | {_news_key(it) for it in new_items if _news_key(it)})
     summary = f"{date} 消息面={r.get('消息面')}·{r.get('强弱','')}:{r.get('理由','')}｜持续性:{r.get('持续性','')}"
-    _save_analyzed(sw, new_keys, summary, date)
+    _save_analyzed(sw, new_keys, summary, date, events=merged)
     return r
 
 
@@ -272,7 +321,7 @@ def board_leader_catalyst(date: str, *, boards: Optional[list[str]] = None,
     返回 {板块: {消息标签(=消息面), 强弱, 关键事件[带时间], 持续性, 时效与可靠性, 理由, n条, 时间跨度, 龙头}}。
     标签直接取 LLM 的描述性"消息面"(利好/利空/中性/分歧),**不做数值加权**。
     """
-    leaders = leader_codes(date, boards)
+    leaders = role_codes(date, boards)          # 龙头 + 中军(用户:中军新闻也是催化源)
     out: dict[str, dict] = {}
     for sw, leads in leaders.items():
         v = board_news_verdict(date, sw, leads, client=client)   # client 惰性(board_news_verdict 内取)
@@ -281,6 +330,7 @@ def board_leader_catalyst(date: str, *, boards: Optional[list[str]] = None,
             "关键事件": v.get("关键事件", []), "持续性": v.get("持续性"),
             "时效": v.get("时效"), "可靠性综述": v.get("可靠性综述"), "理由": v.get("理由"),
             "n条": v.get("n条", 0), "新增": v.get("新增", 0), "时间跨度": v.get("时间跨度"),
-            "龙头": [{"code": d["code"], "name": d["name"]} for d in leads],
+            "龙头": [{"code": d["code"], "name": d["name"]} for d in leads if d.get("role") == "龙头"],
+            "中军": [{"code": d["code"], "name": d["name"]} for d in leads if d.get("role") == "中军"],
         }
     return out
