@@ -7,8 +7,14 @@ from tools.analysis import serialize, technical as ta, valuation
 from tools.config import strategy
 
 
-def test_strategy_json_sync():
-    """dump_json 落盘内容 = THRESHOLDS/FORMULAS(py↔json 一致)。"""
+def test_strategy_json_sync(monkeypatch, tmp_path):
+    """dump_json 落盘内容 = THRESHOLDS/FORMULAS(py↔json 一致)。
+
+    落到 tmp 而非真实 config/strategy.json:dump_json 写的是 git 跟踪文件,直接跑会把
+    工作区那份改写成"当前 py 阈值"的导出(committed json 若滞后于 py 即静默脏工作区、
+    甚至误提交)。本用例只锁 py↔json 往返一致,不该有落盘副作用;切 STRATEGY_JSON 到 tmp。
+    (committed json 与 py 是否同步是另一回事,不由本 self-consistent 用例把守。)"""
+    monkeypatch.setattr(strategy, "STRATEGY_JSON", tmp_path / "strategy.json")
     path = strategy.dump_json()
     data = json.load(open(path, encoding="utf-8"))
     assert data["thresholds"] == strategy.THRESHOLDS
