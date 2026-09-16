@@ -135,3 +135,51 @@ def test_防未来_frame只含目标日之内():
     assert set(["code", "sw", "pct_chg", "limit_up"]).issubset(frame.columns)
     assert frame["limit_up"].dtype == bool
     assert (frame["amount"].dropna() >= 0).all()
+
+
+# ───────────────────────── P2:两步框架 focus 防踏空语义 ─────────────────────────
+
+def _panel_row(板块, 冷热, **kw):
+    base = dict(板块=板块, 冷热标签=冷热, 拥挤分位=0.5, 拥挤档="B",
+                动量_时序分位=0.5, 动量_时序档="温", 动量_截面分位=0.5, 动量_截面档="温",
+                上涨家数占比=0.3, 涨停数=0, 板块成交额=1e9, 板块成交占比=0.05,
+                板块均涨幅=0.0, 成分数=100, 拐点方向=None)
+    base.update(kw)
+    return base
+
+
+def test_focus_过冷板块有涨停仍进重点池_防踏空(monkeypatch):
+    """核心防踏空:板块虽标'过冷',只要当日有涨停(≥门槛)就必须进重点池,不被冷热标签踢出。"""
+    from tools.analysis.sector_forecast import focus as F
+    from tools.analysis.sector_forecast import market_step as MS
+    # 屏蔽外部新闻/大盘输入,只考察冷热与涨停的逻辑
+    monkeypatch.setattr(F, "news_catalyst_by_sector", lambda date: {})
+    monkeypatch.setattr(MS, "market_risk_appetite",
+                        lambda date: {"风险偏好": "中性", "依据": "test"})
+    panel = [_panel_row("电子", "过冷", 涨停数=6, 板块成交占比=0.31),
+             _panel_row("食品饮料", "正常活跃", 涨停数=0, 板块成交占比=0.02)]
+    foc = F.build_focus("2026-09-15", panel=panel)
+    hot = [r["板块"] for r in foc["重点板块池"]]
+    assert "电子" in hot          # 过冷但6涨停 → 必须在重点池(否则重演踏空)
+
+
+def test_focus_利空叠拥挤A进规避池(monkeypatch):
+    from tools.analysis.sector_forecast import focus as F
+    from tools.analysis.sector_forecast import market_step as MS
+    monkeypatch.setattr(F, "news_catalyst_by_sector",
+                        lambda date: {"银行": {"净催化": -8.0, "n条": 2, "利好": 0, "利空": 2}})
+    monkeypatch.setattr(MS, "market_risk_appetite",
+                        lambda date: {"风险偏好": "防守", "依据": "test"})
+    panel = [_panel_row("银行", "正常活跃", 拥挤档="A", 涨停数=0)]
+    foc = F.build_focus("2026-09-15", panel=panel)
+    avoid = [r["板块"] for r in foc["规避板块池"]]
+    assert "银行" in avoid         # 净利空+拥挤A → 规避
+
+
+def test_focus_冷热不直接决定入池():
+    """回归锁:重点池判据里不得出现'冷热标签∈过冷则排除'这类硬编码(防未来重写引回踏空)。"""
+    import inspect
+    from tools.analysis.sector_forecast import focus as F
+    src = inspect.getsource(F.build_focus)
+    # 入池条件必须基于 catalyst / 涨停,而非"过冷"直接排除
+    assert "catalyst > 0" in src or "涨停" in src

@@ -65,12 +65,14 @@ def build_sector_regime(date: str, *, frame=None) -> list[dict]:
     return out
 
 
-def write_sector_regime(date: str, *, out_root: Optional[str] = None, frame=None) -> Path:
-    """落库 data/analysis/<date>/sector_regime.json(原子写)。返回路径。"""
+def write_sector_regime(date: str, *, out_root: Optional[str] = None, frame=None,
+                        panel: Optional[list[dict]] = None) -> Path:
+    """落库 data/analysis/<date>/sector_regime.json(原子写)。panel 可传入复用,避免重复构建。"""
     from tools.config import settings
     root = Path(out_root) if out_root else settings.PROJECT_ROOT / "data" / "analysis" / date
     root.mkdir(parents=True, exist_ok=True)
-    panel = build_sector_regime(date, frame=frame)
+    if panel is None:
+        panel = build_sector_regime(date, frame=frame)
     from tools.analysis.sector_forecast import suggest as SG
     建议 = SG.suggest_sectors(panel)
     payload = {
