@@ -79,6 +79,65 @@ def _is_noise_title(title: str) -> bool:
     return bool(title) and bool(_NOISE_TITLE_RE.search(title))
 
 
+# ════════════════════ P4 · 跨股误挂修正 ════════════════════
+# 现象(P1 残余):个股新闻页/按名过滤偶尔返回**主体是另一只股**的文章(如"威尔高"页返回
+# "摩尔线程20cm跌停")。保守判据:本股名(≥2字)在**标题与正文都不出现** = 这条压根没讲本股
+# → 剔。只在本股名**完全缺席**时剔(出现在任一处即留·防误杀真讲本股但用简称/代码的)。
+def _name_core(name: str) -> str:
+    """取简称核心(去 *ST/ST/XD/XR/N/中国 等前缀),用于宽松匹配防"中国长城 vs 长城"误杀。"""
+    n = (name or "").strip().replace(" ", "")
+    for pre in ("*ST", "ST", "XD", "XR", "N", "中国"):
+        if n.startswith(pre) and len(n) - len(pre) >= 2:
+            n = n[len(pre):]
+            break
+    return n
+
+
+from functools import lru_cache as _lru_cache
+
+
+@_lru_cache(maxsize=1)
+def _name_set() -> frozenset:
+    """全A 正式简称集合(≥3字·防高频短词撞名)。无网络/无映射 → 空集(P4 降级为不判·不误杀)。"""
+    try:
+        from tools.analysis.sector_forecast.roster import _name_map
+        return frozenset(n for n in _name_map().values() if isinstance(n, str) and len(n.replace(" ", "")) >= 3)
+    except Exception:
+        return frozenset()
+
+
+def _other_subject_in_title(title: str, own: str, own_core: str) -> bool:
+    """标题**开头段**是否点了**另一只具名股**(≥3字·全A名集)。有=正面证据本条讲别人。"""
+    ns = _name_set()
+    if not ns:
+        return False
+    head = (title or "").replace(" ", "")[:16]         # 只看标题主体区(开头),防顺带提及
+    for i in range(len(head)):
+        for L in (4, 3):
+            cand = head[i:i + L]
+            if len(cand) == L and cand in ns and cand != own and cand not in own and own not in cand \
+                    and cand != own_core:
+                return True
+    return False
+
+
+def _is_misattached(name: str, title: str, text: str) -> bool:
+    """P4:**正面证据式**跨股误挂——本股名(全名或核心)在标题+正文均缺席 **且** 标题开头点了
+    另一只具名股 → 判误挂剔除。
+
+    只在有另一主体正面证据时才剔(不再"名缺席即剔"——个股新闻常是行业/事件标题不含股名、
+    实为本股新闻,误剔=踏空)。宽松匹配防"中国长城 vs 长城"误杀;名缺失/无名集 → 不判。
+    """
+    full = (name or "").strip().replace(" ", "")
+    if len(full) < 2:
+        return False
+    blob = ((title or "") + (text or "")).replace(" ", "")
+    core = _name_core(name)
+    if full in blob or (len(core) >= 2 and core in blob):
+        return False                                    # 本股名出现在任一处 → 留
+    return _other_subject_in_title(title, full, core)   # 本股缺席 且 标题点了别人 → 剔
+
+
 # ════════════════════ P2 · 事件级去重(近重复转载只留一条)════════════════════
 # _news_key(title[:12]) 只抓前缀精确重复,抓不住多家媒体**近乎逐字转载**同一条(解禁/终止
 # 各被转发多次)。这里用**中文字符 bigram Jaccard**聚类:相似度≥阈值=近重复,留正文最长一条。
@@ -197,6 +256,7 @@ def collect_board_raw(date: str, sw: str, picks: list[dict], *,
 
     items: list[dict] = []
     n_noise = 0                          # P1:被过滤的榜单/数据表噪音条数(可审)
+    n_misattach = 0                      # P4:被剔的跨股误挂条数(可审)
     # ① 个股新闻/公告(龙头/中军/主力·近 lookback_days)
     try:
         by_code = news_col.fetch_news(codes, days=lookback_days, workers=min(4, len(codes) or 1))
@@ -213,7 +273,11 @@ def collect_board_raw(date: str, sw: str, picks: list[dict], *,
             if _is_noise_title(title):    # P1:市场级榜单/数据表噪音 → 剔除(非本股催化)
                 n_noise += 1
                 continue
-            body, full_len, truncated = _clip_text(it.get("content") or "")
+            content = it.get("content") or ""
+            if _is_misattached(name_of.get(c, ""), title, content):   # P4:本股名全缺席=跨股误挂 → 剔
+                n_misattach += 1
+                continue
+            body, full_len, truncated = _clip_text(content)
             items.append({
                 "date": t or "?", "role": role_of.get(c, ""), "code": c,
                 "who": f"{role_of.get(c,'')}·{name_of.get(c) or c}",
@@ -262,7 +326,7 @@ def collect_board_raw(date: str, sw: str, picks: list[dict], *,
         "items": items, "资金流": 资金流,
         "统计": {"总条数": len(items), "个股新闻": n_news,
                 "政策/国际": len(items) - n_news, "LHB覆盖票数": len(资金流),
-                "P1过滤噪音": n_noise, "P2去重合并": n_merged,
+                "P1过滤噪音": n_noise, "P2去重合并": n_merged, "P4跨股误挂": n_misattach,
                 "时间跨度": f"{items[0]['date']}~{items[-1]['date']}" if items else None},
         "口径": "只抓不判(采集与研判解耦);龙头/中军/主力定向新闻+板块政策+国际对标+LHB资金流·"
                 "逐条可溯;已 P1 榜单噪音过滤 + P2 事件去重(洗输入)",

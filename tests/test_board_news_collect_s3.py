@@ -220,6 +220,47 @@ def test_p1_p2_wired_into_collect(_patch_sources):
     assert not any("筹码大换手" in t for t in titles)   # 噪音不在
 
 
+@pytest.fixture
+def _name_set(monkeypatch):
+    """mock 全A名集(P4 正面证据用),断网。"""
+    BC._name_set.cache_clear()
+    monkeypatch.setattr(BC, "_name_set", lambda: frozenset({"摩尔线程", "中国长城", "长城信息"}))
+
+
+def test_p4_misattach_positive_evidence(_name_set):
+    """P4 正面证据式:本股名全缺席**且标题点了另一具名股**才剔;仅缺席不剔(防误杀行业标题=踏空)。"""
+    # 剔:威尔高缺席 且 标题开头点了另一股"摩尔线程"
+    assert BC._is_misattached("威尔高", "20cm跌停！算力龙头摩尔线程创上市新低", "摩尔线程解禁") is True
+    # 留(关键防误杀):威尔高缺席、但标题是行业/事件框架、没点别的具名股 → 实为本股新闻,不剔
+    assert BC._is_misattached("生益科技", "PCB行业进入结构性上行阶段：AI算力驱动量价齐升", "行业景气") is False
+    # 留:标题含本股名
+    assert BC._is_misattached("威尔高", "威尔高中标5亿元PCB订单", "") is False
+    # 留:正文含本股名
+    assert BC._is_misattached("威尔高", "PCB板块拉升异动", "其中威尔高涨停") is False
+    # 留:roster 名"中国长城"、文只写核心"长城"(核心命中·防误杀)
+    assert BC._is_misattached("中国长城", "长城信息安全新品", "长城公告") is False
+    # 不判:名缺失
+    assert BC._is_misattached("", "摩尔线程涨停", "") is False
+
+
+def test_p4_wired_into_collect(_patch_sources, _name_set):
+    """P4 接进 collect:标题点别股+本股缺席的误挂条被剔;行业标题(无别股)保留;统计记 P4跨股误挂。"""
+    _patch_sources(
+        table={"电子": {"roles": {"龙头": [{"code": "A", "name": "威尔高"}]}}},
+        news={"A": [
+            {"title": "威尔高中标5亿PCB订单", "content": "威尔高公告", "time": "2026-09-15"},        # 留(含名)
+            {"title": "PCB行业上行AI算力驱动量价齐升", "content": "景气", "time": "2026-09-15"},      # 留(行业·无别股)
+            {"title": "摩尔线程20cm跌停解禁", "content": "摩尔线程", "time": "2026-09-15"},           # 剔(点别股+本股缺席)
+        ]},
+    )
+    raw = BC.collect_board_raw("2026-09-16", "电子", [{"code": "A", "name": "威尔高", "role": "龙头"}])
+    assert raw["统计"]["P4跨股误挂"] == 1                    # 只剔 1(摩尔线程条)
+    titles = [it["title"] for it in raw["items"]]
+    assert any("威尔高中标" in t for t in titles)
+    assert any("PCB行业上行" in t for t in titles)          # 行业标题不误杀(踏空防护)
+    assert not any("摩尔线程" in t for t in titles)
+
+
 def test_news_depth_clip(_patch_sources):
     """§4.7② 新闻加深:短文全放;超 NEWS_TEXT_MAX 截断并标 text_truncated + 记原长(供S4压缩)。"""
     short = "短正文" * 10                                  # 30 字 < 500

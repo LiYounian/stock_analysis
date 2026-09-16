@@ -125,6 +125,32 @@ def test_board_desc_condenses_with_rubric():
     assert "持续性：近两周多条同向" in desc
 
 
+def test_compress_long_items(monkeypatch):
+    """S4 前置长文压缩:超长(text_truncated)条被 LLM 压成要点;短文/政策条不动;失败保留原文。"""
+    import tools.analysis.event as ev
+    monkeypatch.setattr(ev, "_cached_extract", lambda client, text, instr, schema: {"要点": "压缩后的要点"})
+    items = [
+        {"kind": "个股新闻", "text": "长" * 300, "text_truncated": True},   # 触发压缩
+        {"kind": "个股新闻", "text": "短讯", "text_truncated": False},        # 太短不压
+        {"kind": "板块政策", "text": "政" * 300},                            # 政策条不压
+    ]
+    n = S4.compress_long_items(items, object())
+    assert n == 1
+    assert items[0]["text"] == "压缩后的要点" and items[0].get("compressed") is True
+    assert items[1]["text"] == "短讯" and "compressed" not in items[1]
+    assert items[2]["text"] == "政" * 300                                   # 政策条原样
+
+
+def test_compress_off_no_llm(_patch):
+    """compress=False:不触发任何压缩(测试/需要时可关)。"""
+    raws = {"电子": _raw("电子", [{"kind": "个股新闻", "text": "长" * 300, "text_truncated": True}],
+                        [{"code": "A", "name": "甲", "role": "龙头"}])}
+    seen = _patch(raws=raws)
+    S4.board_catalyst_from_raw("2026-09-16", compress=False)
+    # verdict 收到的 items 未被压缩(原长文还在)
+    assert seen["电子"][0]["text"] == "长" * 300
+
+
 def test_verdict_includes_desc(_patch):
     """_one_verdict 输出带 additive「描述」字段(供塔尖读)。"""
     raws = {"电子": _raw("电子", [], [{"code": "A", "name": "甲", "role": "龙头"}])}

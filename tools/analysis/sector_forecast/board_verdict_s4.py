@@ -28,6 +28,43 @@ logger = logging.getLogger("sector_forecast.board_verdict_s4")
 # 网关并发上限(env 可覆盖):板块并行调用 DeepSeek 的有界工作线程数。保守默认 4,防打爆网关。
 DEFAULT_WORKERS = int(os.getenv("SECTOR_S4_WORKERS", "4"))
 
+# ════════════════════ S4 前置 · 长文 LLM 压缩(新闻加深配套)════════════════════
+# S3 只截断不压(保持无 LLM);长文的关键信息可能被 500 字截断稀释。此处 S4 前置对**长文**
+# 逐条 LLM 压成要点(时间/来源/关键数字/对本股影响·≤~160字),可缓存。压缩腾出 verdict 的
+# 6000 字预算塞更多**不同事件**(凝练防过载)。压缩失败保留原截断文本、不崩。
+COMPRESS_TRIGGER = 220                     # 正文超此长度才压(短文不折腾 LLM)
+COMPRESS_MAX = 160                         # 压缩要点上限
+_COMPRESS_SCHEMA = {"要点": f"≤{COMPRESS_MAX}字要点:保留时间/涉及主体/关键数字金额比例/对该公司影响方向;不编造不评论不复述标题"}
+
+
+def _compress_instruction() -> str:
+    return (f"把下面新闻正文压缩成不超过 {COMPRESS_MAX} 字的要点。必须保留:时间、涉及主体、"
+            "关键数字/金额/比例、对该公司的影响方向。不要编造、不要加评论、不要复述标题。")
+
+
+def compress_long_items(items: list[dict], client, *, trigger: int = COMPRESS_TRIGGER) -> int:
+    """S4 前置:对长文(text_truncated 或超 trigger)逐条 LLM 压成要点(可缓存)。返回压缩条数。"""
+    from tools.analysis import event
+    n = 0
+    for it in items:
+        if it.get("kind") != "个股新闻":
+            continue
+        text = it.get("text", "") or ""
+        if not it.get("text_truncated") and len(text) < trigger:
+            continue
+        if len(text) < trigger:
+            continue
+        try:
+            r = event._cached_extract(client, text[:2000], _compress_instruction(), _COMPRESS_SCHEMA)
+        except Exception:
+            continue                       # 压缩失败:保留原截断文本
+        pt = (r or {}).get("要点")
+        if pt:
+            it["text"] = pt[:COMPRESS_MAX + 20]
+            it["compressed"] = True
+            n += 1
+    return n
+
 
 def board_desc(entry: dict, sw: str) -> str:
     """金字塔④·板块消息面研判 → 塔尖可读的一段**凝练描述**(additive)。
@@ -68,11 +105,20 @@ def board_desc(entry: dict, sw: str) -> str:
     return "｜".join(parts)
 
 
-def _one_verdict(date: str, sw: str, raw: dict, client) -> dict:
-    """单板块:用 S3 raw 的 items 跑 board_news_verdict(沿用 rubric 文字分级),组装输出。"""
+def _one_verdict(date: str, sw: str, raw: dict, client, *, compress: bool = True) -> dict:
+    """单板块:用 S3 raw 的 items 跑 board_news_verdict(沿用 rubric 文字分级),组装输出。
+
+    compress=True:先对长文 LLM 压缩(S4 前置·可缓存),再喂 verdict(腾预算塞更多事件)。
+    """
     from tools.analysis.sector_forecast import news_catalyst as NC
     leads = raw.get("角色", [])
-    v = NC.board_news_verdict(date, sw, leads, client=client, items=raw.get("items", []))
+    items = raw.get("items", [])
+    if compress:
+        try:
+            compress_long_items(items, client)
+        except Exception as e:
+            logger.warning("S4 长文压缩跳过 %s: %s", sw, str(e)[:80])
+    v = NC.board_news_verdict(date, sw, leads, client=client, items=items)
     def _role(r):
         return [{"code": d["code"], "name": d.get("name", "")} for d in leads if d.get("role") == r]
     entry = {
@@ -100,9 +146,12 @@ def _boards_with_raw(date: str, *, out_root: Optional[str] = None) -> list[str]:
 
 
 def board_catalyst_from_raw(date: str, *, boards: Optional[list[str]] = None, client=None,
-                            workers: int = DEFAULT_WORKERS,
+                            workers: int = DEFAULT_WORKERS, compress: bool = True,
                             out_root: Optional[str] = None) -> dict[str, dict]:
-    """读 S3 raw → 全板块并行 DeepSeek 研判 → {板块: 研判dict}。并发有界(网关分批)。"""
+    """读 S3 raw → 全板块并行 DeepSeek 研判 → {板块: 研判dict}。并发有界(网关分批)。
+
+    compress=True:verdict 前对长文 LLM 压缩(S4 前置·可缓存·腾预算);测试可关。
+    """
     from tools.analysis.sector_forecast import board_news_collect as BC
     from tools.llm import client as lc
     boards = boards or _boards_with_raw(date, out_root=out_root)
@@ -117,7 +166,8 @@ def board_catalyst_from_raw(date: str, *, boards: Optional[list[str]] = None, cl
     client = client or lc.get_client()          # 共享 client(DeepSeek-v4-pro 默认·thinking关)
     results: dict[str, dict] = {}
     with ThreadPoolExecutor(max_workers=max(1, workers)) as ex:
-        futs = {ex.submit(_one_verdict, date, sw, raw, client): sw for sw, raw in tasks}
+        futs = {ex.submit(_one_verdict, date, sw, raw, client, compress=compress): sw
+                for sw, raw in tasks}
         for fut in as_completed(futs):
             sw = futs[fut]
             try:
