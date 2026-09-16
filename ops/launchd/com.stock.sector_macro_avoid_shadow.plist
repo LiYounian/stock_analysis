@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.stock.sector_macro_avoid_shadow</string>
+  <!-- C 宏观/板块级消息规避 forward-shadow(纯记录·non-gating);工作日 20:45
+       (排在情绪 shadow 20:00·④板块拐点 20:30 之后)。不走 LLM(读 sentiment_policy + thermometer + 全A/板块 K线)。
+       依赖:当日 sentiment_policy 须已闭环产出。装载由用户本人 launchctl load。 -->
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>/Users/yqg/Documents/projects/stock_analysis/ops/launchd/sector_macro_avoid_shadow.sh</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>/Users/yqg/Documents/projects/stock_analysis</string>
+  <key>StartCalendarInterval</key>
+  <array>
+    <dict><key>Weekday</key><integer>1</integer><key>Hour</key><integer>20</integer><key>Minute</key><integer>45</integer></dict>
+    <dict><key>Weekday</key><integer>2</integer><key>Hour</key><integer>20</integer><key>Minute</key><integer>45</integer></dict>
+    <dict><key>Weekday</key><integer>3</integer><key>Hour</key><integer>20</integer><key>Minute</key><integer>45</integer></dict>
+    <dict><key>Weekday</key><integer>4</integer><key>Hour</key><integer>20</integer><key>Minute</key><integer>45</integer></dict>
+    <dict><key>Weekday</key><integer>5</integer><key>Hour</key><integer>20</integer><key>Minute</key><integer>45</integer></dict>
+  </array>
+  <key>RunAtLoad</key>
+  <false/>
+  <key>StandardOutPath</key>
+  <string>/Users/yqg/.local/state/stock/sector_macro_avoid_shadow.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/yqg/.local/state/stock/sector_macro_avoid_shadow.err.log</string>
+</dict>
+</plist>
