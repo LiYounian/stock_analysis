@@ -78,6 +78,28 @@ def test_collect_filters_news_window(_patch_sources):
     assert it["role"] == "龙头" and it["code"] == "A" and it["source"] == "东财" and it["url"] == "u1"
 
 
+def test_allow_future_toggle(_patch_sources):
+    """allow_future 开关(防未来硬红线):默认严格剔除 t>date;=True(live)保留未来新闻,下限仍生效。"""
+    _patch_sources(
+        table={"电子": {"roles": {"龙头": [{"code": "A", "name": "甲"}]}}},
+        news={"A": [
+            {"title": "当日", "content": "x", "time": "2026-09-15", "source": "东财", "url": "u1"},
+            {"title": "未来", "content": "z", "time": "2026-09-20", "source": "东财", "url": "u3"},
+            {"title": "太旧", "content": "y", "time": "2026-06-01", "source": "新浪", "url": "u2"},
+        ]},
+    )
+    picks = [{"code": "A", "name": "甲", "role": "龙头"}]
+    # 默认严格:未来新闻被剔
+    strict = BC.collect_board_raw("2026-09-16", "电子", picks)
+    tt = [i["title"] for i in strict["items"]]
+    assert "未来" not in tt and strict["allow_future"] is False
+    # allow_future=True(live):未来新闻保留,但下限窗口(太旧)仍剔
+    live = BC.collect_board_raw("2026-09-16", "电子", picks, allow_future=True)
+    tl = [i["title"] for i in live["items"]]
+    assert "未来" in tl and "当日" in tl and "太旧" not in tl
+    assert live["allow_future"] is True and "非防未来" in live["新闻口径"]
+
+
 def test_policy_and_international(_patch_sources):
     _patch_sources(
         table={"电子": {"roles": {"龙头": [{"code": "A", "name": "甲"}]}}},

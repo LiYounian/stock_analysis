@@ -1,29 +1,33 @@
-"""S5 · 选股合成程序化 —— 把「利好板块 × 消息催化 × 策略合议 × 财报 × 形态 × 盘面」
-合成为《今日选股》,用 **DeepSeek 程序化产出**(取代此前统筹交互式的合成)。
+"""S5 · 选股合成程序化(**双路并集**版)——策略线 ∪ 板块消息线,用 DeepSeek 程序化产出《今日选股》。
 
 设计见 docs/计划/2026-09-16_消息板块选股_程序化流水线_设计.md(S5 段)+
-docs/计划/2026-09-16_选股侧消费板块利好标签_接口设计.md(进池口径/防偷看)。
+docs/计划/2026-09-17_选股双路并集整改_设计.md(双路并集/来源标注/双依据提示词)。
 ⚠️ 测试环境研究模拟,非投资建议。KPI = 绝对收益
 (Model A:D 选 → D+1 回踩限价入场 → D+1 收盘绝对为正 → D+2 卖出)。
 
-流程(每步明确输入/输出,程序驱动、非 Claude 交互):
-  1. 读输入  = sector_focus「消息驱动」块(利好板块+龙头/跟涨候选,板块消息面评价)
-              + 角色关系表(role_codes)拿**中军**(板块大资金主力,消息块未含)。
-  2. 策略面  = tools.pipeline.screen_council(--codes 候选)拿综合分/方向/财报红旗/龙虎榜否决。
-  3. 形态面  = screen_forward_common.load_klines + 本模块 pattern_metrics
-              (当日/5/10/20 日涨跌、均线多头、距 20/60 高、量比、获利盘代理、涨停不可买)。
-  4. 盘面    = sector_focus 顶层 regime(风险偏好/宏观净方向/宏观情景)。
-  5. 合成    = **DeepSeek 分析师**(SELECTION_SYNTH_INSTRUCTION,rubric 文字优先)逐板块
-              判每票 档(推荐/观察/剔除)+建议分(0-10)+理由+入场(回踩限价)/止损+风险
-              + 板块级规避提示。
-  6. 落产物  = data/analysis/<date>/今日选股_<date>.md(同手工版结构)+ .json(结构化)。
+━━ 病根整改:此前 S5 只做"消息面判利好板块→只在利好板块内选票",策略选出的强票若板块
+   未被判利好就整条旁路,选股被板块绑架、过度极端。本版拉回平衡为**双路并集**:
 
-防未来/防偷看(硬):as-of(只用 ≤date 数据);入场=回踩限价(不追高开);判据固定、
-**绝不对既往赢家调参**;只用给定数据、禁编造、禁用未来信息。
+  (a) 策略线(主体·全A·不被板块闸门):跑生产策略选股拿候选——至少
+      tools.pipeline.screen_council(策略0·多专家合议·全A·含财报/龙虎)top-N;有余力再并
+      screen_momentum/screen_strong/screen_trend_template 的 top 票。这些是"原策略直接选出
+      的强票",**不管板块是否利好都保留**。
+  (b) 板块消息线(催化/规避维):读 sector_focus「消息驱动」利好板块——用策略(council/形态)
+      在利好板块内挑可买强票(催化加成);规避板块池内的票打**规避/降级**。板块消息**不再当
+      唯一闸门**,而是"催化加权 + 规避"维。
+  (c) 综合并集:最终候选 = 策略线票 ∪ 板块消息线票。**每票标来源** 来源∈{策略直选,板块催化,两者兼有}。
 
-复用不重造:screen_council(--codes)、screen_forward_common.load_klines、
-news_catalyst.role_codes(中军)、chip.summarize(获利盘)、board_verdict 的 client.extract 范式、
-dataroot.ensure_data_root(worktree 数据根)。
+提示词(SELECTION_SYNTH_INSTRUCTION)**同时给"策略借鉴"和"板块借鉴"并说原因**:每票喂
+①策略面(命中哪些策略/council综合分+方向/财报红旗/龙虎)②板块面(所属板块消息利好/利空/催化/强弱)
+③形态;要求 LLM 输出 档/建议分/理由,**理由里分别点明"策略依据"与"板块依据"**。
+
+防未来/防偷看(硬):量价/财报 as-of(只用 ≤date 数据);入场=回踩限价(不追高开);判据固定、
+**绝不对既往赢家调参**;只用给定数据、禁编造、禁用未来信息。(新闻时效由 S3 allow_future 口径管,
+live 选股走"最大可得新闻",不影响本模块量价/财报 as-of。)
+
+复用不重造:screen_council(全A universe / --codes)、screen_momentum/strong/trend_template、
+screen_forward_common.load_klines、news_catalyst.role_codes(中军)、chip.summarize(获利盘)、
+board_verdict 的 client.extract 范式、dataroot.ensure_data_root(worktree 数据根)。
 """
 from __future__ import annotations
 
@@ -37,12 +41,21 @@ import pandas as pd
 
 logger = logging.getLogger("analysis.selection_synth")
 
-SYNTH_VERSION = "s5-2026-09-16"
+SYNTH_VERSION = "s5-dualpath-2026-09-17"
 
 # 采集角色:龙头/跟涨取自消息驱动块(消息催化候选);中军取自角色关系表(板块大资金主力)。
 ROLE_LEADER = "龙头"
 ROLE_CORE = "中军"
 ROLE_FOLLOW = "跟涨"
+ROLE_STRATEGY = "策略"          # 策略线选出、不隶属某利好板块的强票(全A council/动量等)
+
+# 来源标注(双路并集):策略线直选 / 板块消息线催化 / 两路都命中。
+SRC_STRATEGY = "策略直选"
+SRC_BOARD = "板块催化"
+SRC_BOTH = "两者兼有"
+
+STRATEGY_TOP_N = 12            # 策略线(全A council)取 top-N 进并集
+EXTRA_TOP_K = 8               # 附加策略(动量/强势/趋势模板)各取 top-K 合入"策略命中"
 
 # 涨停线(与 nextday_kernel/Doc3 §7.2 同口径):当日收盘≈涨停 → 次日无法回踩限价买入。
 LIMIT_MAIN = 0.10        # 主板 60/00/001/002/003
@@ -52,7 +65,7 @@ LIMIT_TOL = 0.005        # 当日涨幅 ≥ limit-0.005 判涨停不可买
 MIN_BARS = 60            # 形态/均线所需最少 K 线
 
 
-# ════════════════════ 输入读取(sector_focus 消息驱动 + regime) ════════════════════
+# ════════════════════ 输入读取(sector_focus 消息驱动 + regime + 规避板块池) ════════════════════
 def _sector_focus_path(date: str, data_root: Optional[Path] = None) -> Path:
     from tools.analysis.market_forecast import dataroot
     root = data_root or dataroot.ensure_data_root()
@@ -60,7 +73,7 @@ def _sector_focus_path(date: str, data_root: Optional[Path] = None) -> Path:
 
 
 def load_sector_focus(date: str, *, data_root: Optional[Path] = None) -> dict:
-    """读当日 sector_focus.json(消息驱动块 + 顶层 regime)。缺失抛 FileNotFoundError。"""
+    """读当日 sector_focus.json(消息驱动块 + 顶层 regime + 规避板块池)。缺失抛 FileNotFoundError。"""
     p = _sector_focus_path(date, data_root)
     if not p.exists():
         raise FileNotFoundError(f"sector_focus 缺失:{p}")
@@ -91,6 +104,16 @@ def load_message_boards(focus: dict, *, as_of: Optional[str] = None) -> list[dic
         logger.warning("消息驱动 as_of=%s 晚于决策时刻 %s,防偷看忽略", blk_as_of, as_of)
         return []
     return list(md.get("利好板块") or [])
+
+
+def load_avoid_boards(focus: dict) -> dict[str, str]:
+    """取规避板块池 → {板块名: 规避理由}。板块消息线据此对隶属票打"规避/降级"(非闸门·仅降级维)。"""
+    out: dict[str, str] = {}
+    for r in (focus.get("规避板块池") or []):
+        sw = r.get("板块") or r.get("board")
+        if sw:
+            out[sw] = r.get("规避理由") or r.get("理由") or "板块消息面转弱/拥挤过热"
+    return out
 
 
 def board_core_codes(date: str, board: str) -> list[dict]:
@@ -124,6 +147,34 @@ def gather_candidates(date: str, board_block: dict) -> list[dict]:
         _add(d.get("code"), d.get("name", ""), ROLE_FOLLOW,
              {"联动依据": d.get("联动依据")})
     return out
+
+
+# ---- 名称 / 行业→申万一级 ----
+_NAMES: Optional[dict] = None
+
+
+def _name_of(code: str) -> str:
+    """从 config/code_name.json 取股票名(缺 → 空串,不阻断)。"""
+    global _NAMES
+    if _NAMES is None:
+        try:
+            from tools.config import settings
+            _NAMES = json.loads((settings.PROJECT_ROOT / "config" / "code_name.json")
+                                .read_text(encoding="utf-8"))
+        except Exception:                                 # noqa: BLE001
+            _NAMES = {}
+    return _NAMES.get(code) or ""
+
+
+def sw_of(code: str, industry: Optional[str]) -> Optional[str]:
+    """个股 → 申万一级板块名(优先 council 给的行业名映射;失败 → None)。供规避板块池匹配。"""
+    if not industry:
+        return None
+    try:
+        from tools.analysis import industry_map
+        return industry_map.to_sw(industry) or industry
+    except Exception:                                     # noqa: BLE001
+        return industry
 
 
 # ════════════════════ 形态面(load_klines + pattern_metrics) ════════════════════
@@ -192,17 +243,11 @@ def pattern_metrics(df: pd.DataFrame, code: str, *, date: str) -> dict:
     }
 
 
-# ════════════════════ 策略面(screen_council --codes) ════════════════════
-def run_council(codes: list[str], as_of: str) -> dict[str, dict]:
-    """对候选 codes 跑策略0多专家合议 → {code: {综合分,综合方向,财报红旗数,龙虎榜否决,财报风险}}。
-
-    persist=False(不覆盖闭环已落 view)。历史不足/无信号的票不入 top → map 无该 code(下游标数据不足)。
-    """
-    from tools.pipeline.screen_council import run_council_screen
-    view = run_council_screen(list(dict.fromkeys(codes)), as_of=as_of,
-                              fetch=False, top_n=len(codes) + 5, persist=False)
+# ════════════════════ 策略面(screen_council --codes / 全A universe + 附加策略) ════════════════════
+def _council_rows_to_map(rows: list[dict]) -> dict[str, dict]:
+    """把 council view 的 top 行统一成 {code: {综合分,综合方向,财报红旗数,龙虎榜否决,财报风险,行业}}。"""
     out: dict[str, dict] = {}
-    for row in view.get("top") or []:
+    for row in rows or []:
         fr = row.get("财报风险") or {}
         lhb = ((fr.get("各轴") or {}).get("龙虎榜") or {})
         out[row["code"]] = {
@@ -211,60 +256,177 @@ def run_council(codes: list[str], as_of: str) -> dict[str, dict]:
             "财报红旗数": int(fr.get("高危数") or 0),
             "龙虎榜否决": bool(lhb.get("应用")),
             "财报风险": fr or None,
+            "行业": row.get("行业"),
         }
     return out
 
 
-# ════════════════════ DeepSeek 分析师合成(提示词 + schema) ════════════════════
+def run_council(codes: list[str], as_of: str) -> dict[str, dict]:
+    """对候选 codes 跑策略0多专家合议 → {code: {综合分,综合方向,财报红旗数,龙虎榜否决,财报风险,行业}}。
+
+    persist=False(不覆盖闭环已落 view)。历史不足/无信号的票不入 top → map 无该 code(下游标数据不足)。
+    """
+    from tools.pipeline.screen_council import run_council_screen
+    view = run_council_screen(list(dict.fromkeys(codes)), as_of=as_of,
+                              fetch=False, top_n=len(codes) + 5, persist=False)
+    return _council_rows_to_map(view.get("top") or [])
+
+
+def run_council_universe(as_of: str, *, top_n: int = STRATEGY_TOP_N,
+                         universe_limit: Optional[int] = None,
+                         fetch: bool = False) -> dict[str, dict]:
+    """**策略线主体**:全A(离线缓存票池)跑策略0合议 → 取 top_n → {code: council 字段}(含 行业)。
+
+    不被板块闸门约束——这些是"原策略直接选出的强票"。fetch=False 用本地缓存 K 线(不触网·as_of 控)。
+    """
+    from tools.pipeline.screen_council import run_council_screen, _offline_universe_codes
+    codes = _offline_universe_codes(limit=universe_limit)
+    if not codes:
+        logger.warning("策略线:离线全A票池为空(先补缓存 K 线),策略线跳过")
+        return {}
+    view = run_council_screen(codes, as_of=as_of, fetch=fetch, top_n=top_n, persist=False)
+    m = _council_rows_to_map(view.get("top") or [])
+    logger.info("策略线 council(全A%d) → top%d:%s", len(codes), len(m), "、".join(m.keys()))
+    return m
+
+
+# 附加策略:各取 top-K,只记"策略命中"名(供并集加权 + 提示词策略借鉴),council 仍是主排序面。
+_EXTRA_STRATEGIES = (
+    ("动量", "tools.pipeline.screen_momentum", "run_momentum_screen"),
+    ("强势S05", "tools.pipeline.screen_strong", "run_strong_screen"),
+    ("趋势模板", "tools.pipeline.screen_trend_template", "run_trend_template_screen"),
+)
+
+
+def run_extra_strategies(as_of: str, *, top_k: int = EXTRA_TOP_K,
+                         universe_limit: Optional[int] = None) -> dict[str, list[str]]:
+    """best-effort 跑附加策略(动量/强势/趋势模板)各取 top-K → {code: [命中策略名]}。
+
+    单策略失败/接口不符 → 记 warning 跳过,不阻断双路并集(council 是硬底线)。
+    """
+    from tools.pipeline.screen_council import _offline_universe_codes
+    import importlib
+    codes = _offline_universe_codes(limit=universe_limit)
+    hits: dict[str, list[str]] = {}
+    if not codes:
+        return hits
+    for name, mod_path, fn_name in _EXTRA_STRATEGIES:
+        try:
+            mod = importlib.import_module(mod_path)
+            fn = getattr(mod, fn_name, None)
+            if fn is None:
+                continue
+            view = fn(codes, as_of=as_of, fetch=False)
+            top = (view or {}).get("top") or []
+            for row in top[:top_k]:
+                code = row.get("code") or row.get("symbol")
+                if code:
+                    hits.setdefault(code, []).append(name)
+        except Exception as e:                            # noqa: BLE001
+            logger.warning("附加策略 %s 跳过:%s", name, str(e)[:120])
+    return hits
+
+
+# ════════════════════ DeepSeek 分析师合成(双依据提示词 + schema) ════════════════════
 # 每票输出档:文字优先(仿 board_verdict rubric),建议分 0-10 供排序。
 SELECTION_SCHEMA = {
-    "个股": ("list,每票一个 dict:{code, name, 档:推荐|观察|剔除, 建议分:0-10 数值, "
-            "理由:一句话≤40字, 入场:回踩限价文字(如『~ma5 125.9 回踩限价』), "
-            "止损:文字(如『ma20 121.5』), 风险:一句话}"),
-    "规避提示": "一句话:本板块级需规避/降级的情形(消息面转弱/资金流出/高位拥挤等),无则写『无』",
+    "个股": ("list,每票一个 dict:{code, name, 档:推荐|观察|剔除(据【建议分档位定义】给), "
+            "建议分:0-10 数值(与档位定义一致), "
+            "理由:一句话≤50字·**必须分别点明『策略依据』与『板块依据』**"
+            "(如『策略:council看多+动量命中;板块:电子利好·强催化』), "
+            "入场:据个股形态给合适入场文字(回踩支撑限价/突破确认/缩量企稳等按票而定·不追高), "
+            "止损:文字(如跌破关键均线/前低), 风险:一句话}"),
+    "规避提示": "一句话:本组需规避/降级的情形(板块消息转弱/资金流出/高位拥挤等),无则写『无』",
 }
 
 
-def SELECTION_SYNTH_INSTRUCTION(sw: str, regime: dict) -> str:
-    """选股分析师合成提示词(rubric 文字优先·硬纪律写死)。sw=利好板块名,regime=盘面 dict。"""
+def SELECTION_SYNTH_INSTRUCTION(group_name: str, regime: dict, *,
+                                board_tag: Optional[str] = None) -> str:
+    """选股分析师**双依据**合成提示词(rubric 文字优先·硬纪律写死)。
+
+    group_name=组名(利好板块名 / 规避板块名 / "策略直选");
+    board_tag∈{"利好","规避",None}:决定板块借鉴的语气(催化加成 / 规避降级 / 无板块仅策略)。
+    """
     reg = (f"风险偏好={regime.get('风险偏好')}·宏观净方向={regime.get('宏观净方向')}"
            f"·宏观情景={regime.get('宏观情景')}·广度档={regime.get('广度档')}")
+    if board_tag == "利好":
+        board_line = (f"本组个股属**消息利好板块「{group_name}」**——板块借鉴=催化加成(利好+强催化→"
+                      "同等策略面下可抬分),但**不是唯一依据**。")
+    elif board_tag == "规避":
+        board_line = (f"本组个股属**规避板块「{group_name}」(板块消息转弱/拥挤过热)**——板块借鉴=规避/降级"
+                      "(除非策略面极强且形态健康,否则压到观察及以下,理由须点明板块利空)。")
+    else:
+        board_line = ("本组为**策略直选票(不隶属任何消息利好板块)**——**板块借鉴中性**:板块无消息催化"
+                      "不代表看空,一律**以策略面为主**判选/不选,理由的『板块依据』写明"
+                      "『无板块消息催化·纯策略直选』或所属板块的中性/利空状态。")
     return (
-        f"你是**选股分析师**。给你「{sw}」板块(消息面利好)内候选票的**三维数据**"
-        f"(消息催化 × 策略council × 形态)+ 当前盘面 regime,请按**整体选股策略**逐票判"
+        f"你是**选股分析师**。给你「{group_name}」组候选票的**多维数据**"
+        "(策略面 × 板块消息面 × 形态)+ 当前盘面 regime,请按**整体选股策略**逐票判"
         "选/不选,并给建议分(0-10)。\n\n"
         f"【盘面 regime】{reg}\n\n"
-        "【每票给你的数据】code/name/角色(龙头/中军/跟涨) + 消息催化(板块消息面评价+个股是否已动) + "
-        "策略council(综合分/综合方向/财报红旗数/龙虎榜否决) + 形态(距20高/距60高/获利盘/位置pos60/量比/"
-        "均线多头/当日涨跌/涨停不可买/ATR%)。\n\n"
+        f"【本组板块属性】{board_line}\n\n"
+        "【每票给你的数据】code/name/角色(龙头/中军/跟涨/策略) + 来源(策略直选/板块催化/两者兼有) + "
+        "策略面(命中哪些策略/council综合分+综合方向/财报红旗数/龙虎榜否决) + "
+        "板块面(所属板块/板块消息面利好或利空/强弱/持续性/个股是否已动/规避原因) + "
+        "形态(距20高/距60高/获利盘/位置pos60/量比/均线多头/当日涨跌/涨停不可买/ATR%)。\n\n"
+        "【策略分值口径(这些是**程序/策略算出的客观指标·不是你打的分**,请按此口径解读,勿臆测)】\n"
+        "· council综合分 ∈[-1,1]:>0.3 看多 / [-0.3,0.3] 中性 / <-0.3 看空,数值越高越看多(多专家合议)。\n"
+        "· 财报红旗数:高危财报瑕疵计数,≥1 即有高危瑕疵(硬纪律直接剔除)。龙虎榜否决=资金微结构净卖否决。\n"
+        "· 获利盘 ∈[0,1]:成本≤现价的筹码占比,越高浮盈盘越重、上方抛压越大(≥0.95 极高位)。\n"
+        "· 位置pos60 ∈[0,1]:现价在近60日高低区间的分位,越接近1 越贴近区间高点(≥0.95 且贴高=极高位)。\n"
+        "· 距20高/距60高:现价相对近20/60日最高价的百分比,负值=低于高点(越负越远离高点/越深调整)。\n"
+        "· 量比:当日量 / 近5日均量,>1 放量、<1 缩量。均线多头=ma5>ma10>ma20 且站上 ma5。ATR%=波动幅度。\n\n"
+        "【建议分档位定义(0-10·你据此给『档』,别裸给分——先按定义定档再给对应分)】\n"
+        "· 8-10=强推:硬催化(利好板块+强催化)× 策略看多 × 财报净 × 形态健康,罕见,宁缺毋滥。\n"
+        "· 6.5-8=推荐:策略面偏多 或 强催化,且财报净、形态健康(回踩到位/突破确认),可主选建仓。\n"
+        "· 5-6.5=中性观察:方向或形态存在瑕疵(如均线未多头/位置略高/量能一般),看而不急、等更好点位。\n"
+        "· 3-5=偏弱观察:策略偏空 或 形态明显弱(深度空头/远离均线/缩量),仅联动/备选,不建仓。\n"
+        "· 0-2=剔除:硬纪律命中(财报红旗/龙虎否决/涨停不可买/极高位)或策略与形态双弱。\n\n"
         "【硬纪律(务必遵守)】\n"
-        "① **催化优先 × 不追高**:在强利好板块内选**催化驱动的强势票**,一律**回踩限价入场**"
-        "(如 ~ma5 回踩),**不追涨停/不追高开**;入场价写回踩支撑(ma5/ma20)文字。\n"
-        "② **龙头/中军为主线,跟涨(补涨先锋)只作『联动观察』不进主选**:跟涨角色最高只给『观察』档。\n"
-        "③ **反选剔除(命中任一即『剔除』档、建议分≤2)**:财报高危红旗(财报红旗数≥1)/龙虎榜否决/"
+        "① **双依据必写**:每票理由**分别写明『策略依据』(命中哪些策略/council 方向)与『板块依据』"
+        "(所属板块消息利好/利空/催化/中性,及为何加成或降级或中性)**。两条都要出现。\n"
+        "② **策略线不被板块旁路**:策略直选的强票即使无板块催化,只要策略面强+形态健康,照常可给推荐;"
+        "**不因『板块没被判利好』就一刀切剔除或降级**。\n"
+        "③ **催化优先 × 不追高 × 入场按票而定**:选催化/策略驱动的强势票;入场**据个股形态给合适方式**"
+        "(回踩支撑限价 / 突破确认 / 缩量企稳等,不要一律写『回踩』),但**一律不追涨停/不追高开**。\n"
+        "④ **龙头/中军/策略为主线,跟涨(补涨先锋)只作『联动观察』不进主选**:跟涨角色最高只给『观察』档。\n"
+        "⑤ **反选剔除(命中任一即『剔除』档、建议分≤2)**:财报高危红旗(财报红旗数≥1)/龙虎榜否决/"
         "涨停不可买/极高位高抛压(获利盘≥0.95 或 位置pos60≥0.95 且距高接近0)。\n"
-        "④ **普跌/中性 regime 不因超买系统性回避动量**:有硬催化的强势票照常可入选,不因中性盘面一刀切避。\n"
-        "⑤ **只用给定数据,禁止编造,禁止使用给定日期之后的未来信息**;建议分越高越看好,"
-        "推荐档一般≥6.5、观察档 3~6.5、剔除档≤2。\n\n"
-        "【建议分构成(供你心算,不必输出公式)】消息强弱(强/中/弱) + 策略方向(看多/中性/看空) + "
-        "财报(干净/红旗) + 形态(回踩健康/涨停不可买/极高位)。综合成 0-10。\n"
+        "⑥ **规避板块内票**:除非策略面极强+形态健康,否则压到观察及以下,理由点明板块利空/拥挤。\n"
+        "⑦ **只用给定数据,禁止编造,禁止使用给定日期之后的未来信息**。\n\n"
         "输出严格 JSON,个股顺序同输入。"
     )
 
 
-def _stock_llm_payload(cand: dict, council: dict, form: dict, board_ctx: dict) -> dict:
-    """喂给 LLM 的单票精简数据(只给判据、不给结论)。"""
+def _source_label(srcs: set) -> str:
+    """来源集合 → 标注文字。"""
+    if SRC_STRATEGY in srcs and SRC_BOARD in srcs:
+        return SRC_BOTH
+    if SRC_STRATEGY in srcs:
+        return SRC_STRATEGY
+    return SRC_BOARD
+
+
+def _stock_llm_payload(cand: dict, council: dict, form: dict) -> dict:
+    """喂给 LLM 的单票精简数据(只给判据、不给结论)——**策略面 + 板块面 双维**。"""
+    board = cand.get("board")
+    board_ctx = cand.get("board_ctx") or {}
+    strat_hits = list(dict.fromkeys(cand.get("策略命中") or []))
     return {
         "code": cand["code"], "name": cand.get("name", ""), "角色": cand.get("role"),
-        "消息催化": {
-            "板块消息面": board_ctx.get("tag"), "板块强弱": board_ctx.get("强弱"),
-            "板块持续性": board_ctx.get("持续性"), "个股已动": cand.get("已动"),
-            "联动依据": cand.get("联动依据"),
-        },
-        "策略council": {
-            "综合分": council.get("综合分"), "综合方向": council.get("综合方向"),
+        "来源": _source_label(cand.get("来源") or set()),
+        "策略面": {
+            "命中策略": strat_hits or (["council合议"] if council else []),
+            "council综合分": council.get("综合分"), "council综合方向": council.get("综合方向"),
             "财报红旗数": council.get("财报红旗数"), "龙虎榜否决": council.get("龙虎榜否决"),
-        } if council else {"数据不足": True},
+        } if council else {"命中策略": strat_hits, "数据不足": True},
+        "板块面": {
+            "所属板块": board or "无(策略直选)",
+            "板块消息面": board_ctx.get("tag") or ("规避" if cand.get("规避") else "无消息催化"),
+            "板块强弱": board_ctx.get("强弱"), "板块持续性": board_ctx.get("持续性"),
+            "个股已动": cand.get("已动"), "联动依据": cand.get("联动依据"),
+            "规避原因": cand.get("规避"),
+        },
         "形态": form if not form.get("数据不足") else {"数据不足": True},
     }
 
@@ -305,7 +467,7 @@ def apply_hard_discipline(stock: dict, role: str, council: Optional[dict],
     """LLM 合成后的硬纪律回扣(defense-in-depth):
 
     · 反选命中 → 强制 档=剔除、建议分≤2(不管 LLM 给了什么)。
-    · 跟涨角色 → 最高只到『观察』(龙头/中军为主线,跟涨只联动观察)。
+    · 跟涨角色 → 最高只到『观察』(龙头/中军/策略为主线,跟涨只联动观察)。
     语义锁在 tests,防未来 prompt/代码重写无意删规则。
     """
     reason = hard_veto_reason(role, council, form)
@@ -323,94 +485,218 @@ def apply_hard_discipline(stock: dict, role: str, council: Optional[dict],
     return stock
 
 
-def synthesize_board(sw: str, board_ctx: dict, candidates: list[dict],
+def apply_avoid_downgrade(stock: dict, avoid_reason: Optional[str]) -> dict:
+    """板块消息线规避维:隶属规避板块池的票**降级**(推荐→观察),留痕板块利空原因。
+
+    非硬闸(不强制剔除)——极强策略票仍可留观察;与 hard_veto(强制剔除)正交。
+    """
+    if not avoid_reason:
+        return stock
+    if stock.get("档") == "推荐":
+        stock["档"] = "观察"
+    base = stock.get("理由") or ""
+    tag = f"[板块规避:{avoid_reason}]"
+    if "板块规避" not in base:
+        stock["理由"] = f"{tag} {base}".strip()
+    stock["板块规避命中"] = avoid_reason
+    return stock
+
+
+def synthesize_group(group_name: str, board_ctx: Optional[dict], candidates: list[dict],
                      council_map: dict, form_map: dict, regime: dict, *,
-                     client=None) -> dict:
-    """单板块合成:组三维 payload → DeepSeek client.extract(原生绕缓存)→ 每票档/分/理由 + 规避提示。
+                     board_tag: Optional[str] = None, client=None) -> dict:
+    """单组合成(利好板块 / 规避板块 / 策略直选):组多维 payload → DeepSeek client.extract →
+    每票档/分/理由(双依据)+ 硬纪律回扣 + 规避降级 + 来源标注。
 
     LLM 失败 → 降级(每票档=观察·建议分=None·标 LLM失败),不崩;上游据此诚实标注。
     """
     from tools.llm import client as lc
     client = client or lc.get_client()
     payloads = [
-        _stock_llm_payload(c, council_map.get(c["code"], {}), form_map.get(c["code"], {}),
-                           board_ctx)
+        _stock_llm_payload(c, council_map.get(c["code"], {}), form_map.get(c["code"], {}))
         for c in candidates
     ]
-    text = json.dumps({"板块": sw, "候选": payloads}, ensure_ascii=False)
+    text = json.dumps({"组": group_name, "候选": payloads}, ensure_ascii=False)
     try:
         r = client.extract(text, SELECTION_SCHEMA,
-                           instruction=SELECTION_SYNTH_INSTRUCTION(sw, regime))
+                           instruction=SELECTION_SYNTH_INSTRUCTION(group_name, regime,
+                                                                   board_tag=board_tag))
     except Exception as e:                                # noqa: BLE001
-        logger.warning("板块 %s 合成 LLM 失败:%s", sw, e)
+        logger.warning("组 %s 合成 LLM 失败:%s", group_name, e)
         r = {"个股": [{"code": c["code"], "name": c.get("name", ""), "档": "观察",
                       "建议分": None, "理由": "LLM合成失败降级", "入场": None,
                       "止损": None, "风险": "研判缺失,需人工"} for c in candidates],
              "规避提示": f"LLM失败:{str(e)[:40]}"}
-    # 回挂原始三维数据(留痕、人工可核)
+    # 回挂原始多维数据(留痕、人工可核)+ 硬纪律 + 规避降级 + 来源标注
     by_code = {s.get("code"): s for s in (r.get("个股") or [])}
     merged = []
     for c in candidates:
         s = by_code.get(c["code"], {"code": c["code"], "name": c.get("name", ""),
                                      "档": "观察", "建议分": None, "理由": "LLM未返回"})
         s["角色"] = c.get("role")
+        s["来源"] = _source_label(c.get("来源") or set())
+        s["策略命中"] = list(dict.fromkeys(c.get("策略命中") or []))
+        s["board"] = c.get("board")
         s["council"] = council_map.get(c["code"])
         s["形态"] = form_map.get(c["code"])
         apply_hard_discipline(s, c.get("role"), s["council"], s["形态"])
+        apply_avoid_downgrade(s, c.get("规避"))
         merged.append(s)
     merged.sort(key=lambda s: (s.get("建议分") if isinstance(s.get("建议分"), (int, float))
                                else -1), reverse=True)
-    return {"board": sw, "板块消息面": board_ctx, "个股": merged,
-            "规避提示": r.get("规避提示")}
+    return {"board": group_name, "板块消息面": board_ctx, "board_tag": board_tag,
+            "个股": merged, "规避提示": r.get("规避提示")}
 
 
-# ════════════════════ 编排 + 产物落盘 ════════════════════
+# ════════════════════ 双路并集编排 + 产物落盘 ════════════════════
+def _merge_candidate(registry: dict[str, dict], code: str, *, name: str = "",
+                     role: Optional[str] = None, board: Optional[str] = None,
+                     board_ctx: Optional[dict] = None, src: str,
+                     strat_hits: Optional[list[str]] = None,
+                     已动=None, 联动依据=None, 规避: Optional[str] = None) -> None:
+    """把一票并入并集 registry(按 code 去重合并;板块上下文/角色优先保留非空;来源集合累加)。"""
+    cur = registry.get(code)
+    if cur is None:
+        cur = {"code": code, "name": name or _name_of(code), "role": role,
+               "board": board, "board_ctx": board_ctx, "来源": set(),
+               "策略命中": [], "已动": 已动, "联动依据": 联动依据, "规避": 规避}
+        registry[code] = cur
+    cur["来源"].add(src)
+    if strat_hits:
+        cur["策略命中"] = list(dict.fromkeys((cur.get("策略命中") or []) + strat_hits))
+    if name and not cur.get("name"):
+        cur["name"] = name
+    # 板块上下文优先保留(板块催化线信息比策略线角色更具体)
+    if board and not cur.get("board"):
+        cur["board"] = board
+    if board_ctx and not cur.get("board_ctx"):
+        cur["board_ctx"] = board_ctx
+    if role and (cur.get("role") in (None, ROLE_STRATEGY)):
+        cur["role"] = role
+    for k, v in (("已动", 已动), ("联动依据", 联动依据), ("规避", 规避)):
+        if v is not None and cur.get(k) is None:
+            cur[k] = v
+
+
 def synthesize(date: str, *, data_root: Optional[Path] = None, client=None,
-               boards: Optional[list[str]] = None) -> dict:
-    """S5 主编排:读输入 → 逐板块(council+形态+DeepSeek 合成)→ 结构化结果 dict。"""
+               boards: Optional[list[str]] = None, strategy_top_n: int = STRATEGY_TOP_N,
+               universe_limit: Optional[int] = None, extra_screens: bool = False) -> dict:
+    """S5 主编排(**双路并集**):策略线(全A council top-N + 附加策略)∪ 板块消息线(利好催化 + 规避降级)
+    → 按组(利好板块 / 策略直选 / 规避)DeepSeek 双依据合成 → 结构化结果 dict。
+    """
     from tools.analysis.market_forecast import dataroot
     root = data_root or dataroot.ensure_data_root()
     focus = load_sector_focus(date, data_root=root)
     regime = load_regime(focus)
     good_boards = load_message_boards(focus, as_of=date)
+    avoid_map = load_avoid_boards(focus)
     if boards:
         good_boards = [b for b in good_boards
                        if (b.get("board") or b.get("板块")) in boards]
 
-    board_results = []
+    registry: dict[str, dict] = {}
+
+    # ── (a) 策略线(主体·全A·不被板块闸门)──────────────────────────────
+    strat_council = run_council_universe(date, top_n=strategy_top_n,
+                                         universe_limit=universe_limit)
+    extra_hits = run_extra_strategies(date, universe_limit=universe_limit) if extra_screens else {}
+    for code in strat_council:
+        _merge_candidate(registry, code, name=_name_of(code), role=ROLE_STRATEGY,
+                         src=SRC_STRATEGY, strat_hits=["council合议"])
+    for code, names in extra_hits.items():
+        # 附加策略命中:并入(可能是新票,也可能给已有票加"策略命中")
+        _merge_candidate(registry, code, name=_name_of(code), role=ROLE_STRATEGY,
+                         src=SRC_STRATEGY, strat_hits=names)
+
+    # ── (b) 板块消息线(利好板块催化候选)────────────────────────────────
+    board_ctx_by_name: dict[str, dict] = {}
     for blk in good_boards:
         sw = blk.get("board") or blk.get("板块") or ""
-        cands = gather_candidates(date, blk)
-        if not cands:
-            continue
-        codes = [c["code"] for c in cands]
-        council_map = run_council(codes, as_of=date)
-        # 形态:load_klines(复用)+ as-of pattern_metrics
-        from tools.backtest.screen_forward_common import load_klines
-        klines = load_klines(codes, min_bars=MIN_BARS)
-        form_map = {code: pattern_metrics(df, code, date=date)
-                    for code, df in klines.items()}
-        for code in codes:                                # 无 K 线的票也留占位
-            form_map.setdefault(code, {"数据不足": True})
         board_ctx = {
             "tag": blk.get("tag"), "强弱": blk.get("强弱"),
             "关键事件": blk.get("关键事件"), "持续性": blk.get("持续性"),
             "时效": blk.get("时效"), "可靠性综述": blk.get("可靠性综述"),
             "依据": blk.get("依据"),
         }
+        board_ctx_by_name[sw] = board_ctx
+        for c in gather_candidates(date, blk):
+            _merge_candidate(registry, c["code"], name=c.get("name", ""), role=c.get("role"),
+                             board=sw, board_ctx=board_ctx, src=SRC_BOARD,
+                             已动=c.get("已动"), 联动依据=c.get("联动依据"))
+
+    if not registry:
+        logger.warning("双路并集:策略线+板块线均无候选(date=%s)", date)
+
+    all_codes = list(registry.keys())
+
+    # ── 策略面(council):策略线已有;板块催化票/附加票缺 council 的补跑一次 ──
+    council_map = dict(strat_council)
+    missing = [c for c in all_codes if c not in council_map]
+    if missing:
+        council_map.update(run_council(missing, as_of=date))
+
+    # ── 形态面(load_klines + as-of pattern_metrics)────────────────────
+    from tools.backtest.screen_forward_common import load_klines
+    klines = load_klines(all_codes, min_bars=MIN_BARS) if all_codes else {}
+    form_map = {code: pattern_metrics(df, code, date=date) for code, df in klines.items()}
+    for code in all_codes:
+        form_map.setdefault(code, {"数据不足": True})
+
+    # ── (b续) 规避板块池:标注隶属规避板块的票(按 board 或 council 行业→申万一级)────
+    for code, cand in registry.items():
+        sw = cand.get("board") or sw_of(code, (council_map.get(code) or {}).get("行业"))
+        if sw and sw in avoid_map:
+            cand["规避"] = avoid_map[sw]
+            if not cand.get("board"):
+                cand["board"] = sw
+                cand["board_ctx"] = {"tag": "利空/规避", "强弱": "弱",
+                                     "持续性": avoid_map[sw]}
+
+    # ── (c) 综合并集:按组(利好板块 / 规避板块 / 策略直选)DeepSeek 双依据合成 ──
+    #   分组键:隶属利好板块 → 该板块组;隶属规避板块 → "规避·<板块>"组;否则 → "策略直选"组。
+    groups: dict[str, dict] = {}   # key -> {name, tag, ctx, cands}
+    for code, cand in registry.items():
+        board = cand.get("board")
+        if board and board in board_ctx_by_name:
+            key, name, tag, ctx = board, board, "利好", board_ctx_by_name[board]
+        elif cand.get("规避"):
+            key = f"规避·{board or '未知'}"
+            name, tag, ctx = (board or "规避板块"), "规避", cand.get("board_ctx")
+        else:
+            key, name, tag, ctx = "策略直选", "策略直选", None, None
+        g = groups.setdefault(key, {"name": name, "tag": tag, "ctx": ctx, "cands": []})
+        g["cands"].append(cand)
+
+    board_results = []
+    # 组顺序:利好板块 → 策略直选 → 规避,稳定可读
+    def _order(k: str) -> tuple:
+        g = groups[k]
+        return ({"利好": 0, None: 1, "规避": 2}.get(g["tag"], 1), g["name"])
+    for key in sorted(groups.keys(), key=_order):
+        g = groups[key]
         board_results.append(
-            synthesize_board(sw, board_ctx, cands, council_map, form_map, regime,
-                             client=client))
+            synthesize_group(g["name"], g["ctx"], g["cands"], council_map, form_map,
+                             regime, board_tag=g["tag"], client=client))
 
     return {
         "date": date, "version": SYNTH_VERSION,
         "as_of": (focus.get("消息驱动") or {}).get("as_of") or date,
         "regime": regime,
         "板块": board_results,
-        "口径": ("S5 程序化合成:消息驱动块(龙头/跟涨)+角色表(中军)→ screen_council 策略面 + "
-                "形态(as-of)→ DeepSeek 分析师(SELECTION_SYNTH_INSTRUCTION,rubric 文字优先)"
-                "逐票 档/建议分/回踩限价入场 + 板块规避。"),
-        "防未来": "as-of(只用≤date K线+披露≤date财报+龙虎榜list_date<date);回踩限价入场不追高开;判据固定不对既往赢家调参。",
+        "双路统计": {
+            "策略线票数": sum(1 for c in registry.values() if SRC_STRATEGY in c["来源"]),
+            "板块催化票数": sum(1 for c in registry.values() if SRC_BOARD in c["来源"]),
+            "两者兼有": sum(1 for c in registry.values()
+                          if SRC_STRATEGY in c["来源"] and SRC_BOARD in c["来源"]),
+            "并集总数": len(registry),
+            "规避降级票数": sum(1 for c in registry.values() if c.get("规避")),
+        },
+        "口径": ("S5 双路并集:(a)策略线=全A screen_council top-N(+附加策略,不被板块闸门)"
+                "∪ (b)板块消息线=利好板块催化候选(龙头/中军/跟涨)+规避板块池降级 → 每票标来源"
+                "(策略直选/板块催化/两者兼有)→ DeepSeek 双依据分析师(策略借鉴+板块借鉴)"
+                "逐票 档/建议分/回踩限价入场;硬纪律程序兜底。"),
+        "防未来": ("量价/财报 as-of(只用≤date K线+披露≤date财报+龙虎榜list_date<date);"
+                  "回踩限价入场不追高开;判据固定不对既往赢家调参。新闻走 S3 live 口径(最大可得·非防未来)。"),
         "免责": "⚠️ 测试环境研究模拟,非投资建议。",
     }
 
@@ -444,12 +730,13 @@ def _fmt_form(form: Optional[dict]) -> str:
 def render_md(result: dict) -> str:
     date = result["date"]
     reg = result.get("regime") or {}
+    ds = result.get("双路统计") or {}
     L: list[str] = []
-    L.append(f"# 今日选股 · {date}（消息面 × 策略面 × 财报 三维合成 · 程序化 S5）\n")
+    L.append(f"# 今日选股 · {date}（双路并集：策略线 ∪ 板块消息线 · 程序化 S5）\n")
     L.append("> ⚠️ 测试环境研究模拟，非投资建议。KPI = 绝对收益"
              "（Model A：D 选 → D+1 回踩限价入场 → D+1 收盘绝对为正 → D+2 卖出线）。")
     L.append(f"> 产出方式：程序化 `tools.analysis.selection_synth`（版本 {result.get('version')}）"
-             "，DeepSeek 分析师合成，非 Claude 交互。")
+             "，DeepSeek 双依据分析师合成，非 Claude 交互。")
     L.append(f"> as_of={result.get('as_of')}；{result.get('防未来')}\n")
 
     L.append("## 一、整体盘面（regime）\n")
@@ -457,20 +744,23 @@ def render_md(result: dict) -> str:
              f"净广度 {reg.get('净广度')}、涨停 {reg.get('涨停')}/跌停 {reg.get('跌停')}、"
              f"hs300 {reg.get('hs300方向')}）。")
     L.append(f"- **宏观**：净方向 {reg.get('宏观净方向')}、情景 {reg.get('宏观情景')}。")
+    L.append(f"- **双路并集统计**：策略线 {ds.get('策略线票数')} 票 ∪ 板块催化 {ds.get('板块催化票数')} 票"
+             f"（两者兼有 {ds.get('两者兼有')}）→ 并集 {ds.get('并集总数')} 票；"
+             f"规避降级 {ds.get('规避降级票数')} 票。")
     L.append(f"- **口径**：{result.get('口径')}\n")
 
     L.append("## 二、板块消息面评价\n")
-    L.append("| 板块 | 评价 | 强弱 | 持续性 | 规避提示 |")
-    L.append("|---|---|---|---|---|")
+    L.append("| 组 | 属性 | 评价 | 强弱 | 持续性 | 规避提示 |")
+    L.append("|---|---|---|---|---|---|")
     for b in result.get("板块") or []:
         ctx = b.get("板块消息面") or {}
-        L.append(f"| **{b['board']}** | {ctx.get('tag')} | {ctx.get('强弱')} | "
-                 f"{(ctx.get('持续性') or '')[:40]} | {b.get('规避提示') or '-'} |")
+        L.append(f"| **{b['board']}** | {b.get('board_tag') or '策略直选'} | {ctx.get('tag') or '-'} | "
+                 f"{ctx.get('强弱') or '-'} | {(ctx.get('持续性') or '')[:40]} | {b.get('规避提示') or '-'} |")
     L.append("")
 
-    L.append("## 三、选股（三维合成：消息面 × 策略council × 财报 × 形态）\n")
-    L.append("| 板块 | 角色 | 代码 | 名称 | 消息 | 策略分/方向 | 财报/龙虎 | 形态 | 建议分 | 档 |")
-    L.append("|---|---|---|---|---|---|---|---|---|---|")
+    L.append("## 三、选股（双路并集：策略面 × 板块消息面 × 形态）\n")
+    L.append("| 组 | 来源 | 角色 | 代码 | 名称 | 命中策略 | 消息 | 策略分/方向 | 财报/龙虎 | 形态 | 建议分 | 档 |")
+    L.append("|---|---|---|---|---|---|---|---|---|---|---|---|")
     picks = []
     for b in result.get("板块") or []:
         ctx = b.get("板块消息面") or {}
@@ -483,59 +773,73 @@ def render_md(result: dict) -> str:
             score_s = f"**{score}**" if isinstance(score, (int, float)) else "-"
             档 = s.get("档") or "-"
             档_s = f"**{档}**" if 档 in ("推荐", "剔除") else 档
-            L.append(f"| {b['board']} | {s.get('角色')} | {s['code']} | {s.get('name')} | "
-                     f"{ctx.get('强弱')} | {cc.get('综合分') if cc else '-'} "
-                     f"{cc.get('综合方向') if cc else ''} | {fr} | {_fmt_form(s.get('形态'))} | "
-                     f"{score_s} | {档_s} |")
+            hits = "/".join(s.get("策略命中") or []) or "-"
+            L.append(f"| {b['board']} | {s.get('来源') or '-'} | {s.get('角色')} | {s['code']} | "
+                     f"{s.get('name')} | {hits} | {ctx.get('强弱') or '-'} | "
+                     f"{cc.get('综合分') if cc else '-'} {cc.get('综合方向') if cc else ''} | {fr} | "
+                     f"{_fmt_form(s.get('形态'))} | {score_s} | {档_s} |")
             if 档 == "推荐":
                 picks.append((b["board"], s))
     L.append("")
 
-    L.append("## 四、主选深度（推荐 · 回踩限价入场）\n")
+    L.append("## 四、主选深度（推荐 · 回踩限价入场 · 双依据）\n")
     if picks:
-        L.append("| 板块 代码 名称 | 理由(催化) | 入场(回踩限价·不追高) | 止损 | 风险 |")
-        L.append("|---|---|---|---|---|")
+        L.append("| 组 代码 名称 | 来源 | 理由(策略依据+板块依据) | 入场(回踩限价·不追高) | 止损 | 风险 |")
+        L.append("|---|---|---|---|---|---|")
         for board, s in sorted(picks, key=lambda x: -(x[1].get("建议分") or 0)):
-            L.append(f"| {board} {s['code']} {s.get('name')} | {s.get('理由') or '-'} | "
-                     f"{s.get('入场') or '-'} | {s.get('止损') or '-'} | {s.get('风险') or '-'} |")
+            L.append(f"| {board} {s['code']} {s.get('name')} | {s.get('来源') or '-'} | "
+                     f"{s.get('理由') or '-'} | {s.get('入场') or '-'} | {s.get('止损') or '-'} | "
+                     f"{s.get('风险') or '-'} |")
     else:
-        L.append("_今日无『推荐』档（宁缺毋滥/降仓/只留有硬催化的）。_")
+        L.append("_今日无『推荐』档（宁缺毋滥/降仓/只留有硬催化或强策略的）。_")
     L.append("")
 
-    L.append("## 五、反选剔除（数据背书）\n")
+    L.append("## 五、反选剔除 / 规避降级（数据背书）\n")
     any_cut = False
     for b in result.get("板块") or []:
         for s in b.get("个股") or []:
-            if s.get("档") == "剔除":
+            if s.get("档") == "剔除" or s.get("板块规避命中"):
                 any_cut = True
-                L.append(f"- **{b['board']} {s['code']} {s.get('name')}**："
-                         f"{s.get('理由') or ''}（风险：{s.get('风险') or '-'}）")
+                tags = []
+                if s.get("硬纪律命中"):
+                    tags.append(f"反选:{s['硬纪律命中']}")
+                if s.get("板块规避命中"):
+                    tags.append(f"板块规避:{s['板块规避命中']}")
+                L.append(f"- **{b['board']} {s['code']} {s.get('name')}**（{s.get('档')}）："
+                         f"{s.get('理由') or ''}"
+                         + (f"（{'/'.join(tags)}）" if tags else ""))
     if not any_cut:
-        L.append("_无剔除。_")
+        L.append("_无剔除/规避降级。_")
     L.append("")
 
-    L.append("## 六、规避策略（板块级）\n")
+    L.append("## 六、规避策略（组级）\n")
     for b in result.get("板块") or []:
         tip = b.get("规避提示")
         if tip and tip != "无":
             L.append(f"- **{b['board']}**：{tip}")
-    L.append("- **无利好日兜底**：若无高确信利好板块，宁缺毋滥/降仓/只留有硬催化的，不硬凑。\n")
+    L.append("- **无利好日兜底**：若无高确信利好板块，策略线仍照常直选强票；宁缺毋滥/降仓，不硬凑。\n")
 
-    L.append("## 七、龙头 / 中军 / 跟涨 —— 口径说明\n")
-    L.append("- **龙头/跟涨** 取自 sector_focus「消息驱动」块（消息催化候选，跟涨=补涨先锋只作联动观察）；"
-             "**中军** 取自角色关系表（板块大资金主力，`role_codes`）。")
-    L.append("- **龙头/中军为主线，跟涨只联动观察**（不抢名额、优先级低于有自身催化的票）。")
-    L.append(f"\n---\n*{result.get('免责')} 数据来源：sector_focus 消息驱动块 + 角色关系表 + "
-             "screen_council 策略0合议 + as-of 形态。*")
+    L.append("## 七、来源 / 角色 —— 口径说明\n")
+    L.append("- **来源**：`策略直选`=全A screen_council(+附加策略)选出、不隶属消息利好板块的强票（不被板块闸门旁路）；"
+             "`板块催化`=消息利好板块内的催化候选（龙头/中军/跟涨）；`两者兼有`=两路都命中（信号叠加）。")
+    L.append("- **角色**：龙头/中军取自消息驱动块+角色关系表；跟涨=补涨先锋只作联动观察；"
+             "策略=策略线直选（无板块角色）。")
+    L.append("- **龙头/中军/策略为主线，跟涨只联动观察**；规避板块内票降级（除非策略面极强+形态健康）。")
+    L.append(f"\n---\n*{result.get('免责')} 数据来源：sector_focus 消息驱动块+规避板块池 + 角色关系表 + "
+             "screen_council 全A策略0合议(+附加策略) + as-of 形态。*")
     return "\n".join(L)
 
 
 def run(date: str, *, data_root: Optional[Path] = None, client=None,
-        boards: Optional[list[str]] = None, write: bool = True) -> dict:
-    """S5 端到端:合成 → 落 今日选股_<date>.md + .json(data/analysis/<date>/)。返回结果 dict。"""
+        boards: Optional[list[str]] = None, write: bool = True,
+        strategy_top_n: int = STRATEGY_TOP_N, universe_limit: Optional[int] = None,
+        extra_screens: bool = False) -> dict:
+    """S5 端到端:双路并集合成 → 落 今日选股_<date>.md + .json(data/analysis/<date>/)。返回结果 dict。"""
     from tools.analysis.market_forecast import dataroot
     root = data_root or dataroot.ensure_data_root()
-    result = synthesize(date, data_root=root, client=client, boards=boards)
+    result = synthesize(date, data_root=root, client=client, boards=boards,
+                        strategy_top_n=strategy_top_n, universe_limit=universe_limit,
+                        extra_screens=extra_screens)
     if write:
         out_dir = dataroot.analysis_dir(root) / date
         out_dir.mkdir(parents=True, exist_ok=True)
@@ -545,5 +849,5 @@ def run(date: str, *, data_root: Optional[Path] = None, client=None,
         json_path.write_text(json.dumps(result, ensure_ascii=False, indent=2),
                              encoding="utf-8")
         result["_产物"] = {"md": str(md_path), "json": str(json_path)}
-        logger.info("S5 选股合成落盘:%s + %s", md_path, json_path)
+        logger.info("S5 双路并集选股落盘:%s + %s", md_path, json_path)
     return result

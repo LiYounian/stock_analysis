@@ -51,6 +51,11 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description="S3 定向采集每日 runner(无 LLM)")
     ap.add_argument("--date", default=None)
     ap.add_argument("--boards", default=None, help="逗号分隔申万一级;缺省=S1清单/种子")
+    ap.add_argument("--lookback-days", type=int, default=None,
+                    help="新闻下限窗口天数;缺省=模块默认(live 可放宽取更多新闻)")
+    ap.add_argument("--strict", action="store_true",
+                    help="严格 as-of:剔除 t>date 未来新闻(回测/forward 复盘用);"
+                         "默认 live 口径=最大可得新闻(allow_future=True)")
     args = ap.parse_args(argv)
     _setup_logging()
     log = logging.getLogger("sector_forecast.board_news_collect_run")
@@ -65,7 +70,13 @@ def main(argv=None) -> int:
 
     from tools.analysis.sector_forecast import board_news_collect as BC
     boards = [b.strip() for b in args.boards.split(",")] if args.boards else _boards(date)
-    paths = BC.collect_all(date, boards)
+    allow_future = not args.strict          # live 每日 runner 默认放开(最大可得新闻);--strict 回退防未来
+    kw = {"allow_future": allow_future}
+    if args.lookback_days is not None:
+        kw["lookback_days"] = args.lookback_days
+    log.info("S3 新闻口径:%s(allow_future=%s)",
+             "最大可得·live" if allow_future else "严格 as-of·防未来", allow_future)
+    paths = BC.collect_all(date, boards, **kw)
     if not paths:
         log.error("S3 未采集到任何板块(先跑 S2 角色关系表 / 每日 roster),非0退出")
         return 1

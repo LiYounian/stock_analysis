@@ -10,7 +10,14 @@
 周期:每日(下午/EOD)。**无 LLM**(纯采集)。
 
 角色口径:默认采 **龙头/中军/主力**(催化/大资金承载者);补涨先锋=量价跟随、无独立催化,
-默认不采(可经 roles 参数开启)。防未来:新闻只保留 ≤date;LHB 用 lhb_asof(上榜日<date·T+1)。
+默认不采(可经 roles 参数开启)。LHB 用 lhb_asof(上榜日<date·T+1)。
+
+新闻时效口径(allow_future 开关·防未来硬红线):
+  · **allow_future=False(默认·严格 as-of)**:新闻只保留 ≤date(剔除 t>date 的未来新闻)。
+    **forward-shadow / 回测 / as-of 复盘的调用方必须走默认严格**——否则那些验证数值全废。
+  · **allow_future=True(『最大可得新闻·live 口径·非防未来』)**:跳过 t>date 剔除,用当前能抓到的
+    最多新闻(下限窗口仍生效)。**仅供当日最优选股(live 生产)**——S3 每日 runner 传 True。
+量价/财报仍严格 as-of≤date(不受本开关影响)。
 ⚠️ 测试环境研究模拟,非投资建议。
 """
 from __future__ import annotations
@@ -85,8 +92,13 @@ def _lhb_flow(code: str, date: str, *, window_days: int = LHB_WINDOW_DAYS) -> Op
 
 
 def collect_board_raw(date: str, sw: str, picks: list[dict], *,
-                      lookback_days: int = LOOKBACK_DAYS) -> dict:
-    """采单板块原始消息(个股新闻 + 板块政策/国际 + LHB资金流)。逐条可溯,无 LLM。"""
+                      lookback_days: int = LOOKBACK_DAYS,
+                      allow_future: bool = False) -> dict:
+    """采单板块原始消息(个股新闻 + 板块政策/国际 + LHB资金流)。逐条可溯,无 LLM。
+
+    allow_future=False(默认·严格):新闻剔除 t>date(防未来·回测/forward 必走此支)。
+    allow_future=True(live 口径):跳过 t>date 剔除,取当前最多新闻(仅当日最优选股用)。
+    """
     from tools.collectors import news as news_col
     from tools.analysis.sector_forecast.market_step import resolve_analysis_file
     import pandas as pd
@@ -105,7 +117,8 @@ def collect_board_raw(date: str, sw: str, picks: list[dict], *,
     for c in codes:
         for it in (by_code.get(c) or []):
             t = str(it.get("time", ""))[:10]
-            if t and (t < cutoff or t > date):
+            # 下限窗口始终生效;未来上限(t>date)仅在严格 as-of 口径剔除(allow_future=False)。
+            if t and (t < cutoff or (not allow_future and t > date)):
                 continue
             items.append({
                 "date": t or "?", "role": role_of.get(c, ""), "code": c,
@@ -145,6 +158,8 @@ def collect_board_raw(date: str, sw: str, picks: list[dict], *,
         "板块": sw, "as_of": date, "version": RAW_VERSION,
         "collected_at": datetime.now().isoformat(timespec="seconds"),
         "lookback_days": lookback_days,
+        "allow_future": allow_future,
+        "新闻口径": ("最大可得新闻·live(非防未来)" if allow_future else "严格 as-of≤date(防未来)"),
         "角色": picks,
         "items": items, "资金流": 资金流,
         "统计": {"总条数": len(items), "个股新闻": n_news,
@@ -188,15 +203,20 @@ def load_board_raw(date: str, sw: str, *, out_root: Optional[str] = None) -> Opt
 
 
 def collect_all(date: str, boards: list[str], *, roles: tuple[str, ...] = COLLECT_ROLES,
-                lookback_days: int = LOOKBACK_DAYS, out_root: Optional[str] = None) -> list[Path]:
-    """对全板块(读 S2 表)逐板块采集 + 落 raw 过程文件。返回落盘路径 list。"""
+                lookback_days: int = LOOKBACK_DAYS, out_root: Optional[str] = None,
+                allow_future: bool = False) -> list[Path]:
+    """对全板块(读 S2 表)逐板块采集 + 落 raw 过程文件。返回落盘路径 list。
+
+    allow_future 透传 collect_board_raw:默认严格(回测/forward);live 每日 runner 传 True。
+    """
     picks_by_board = role_picks(date, boards, roles=roles)
     if not picks_by_board:
         logger.warning("S3 无板块角色表(先跑 S2 sector_roster_table),不采集")
         return []
     paths = []
     for sw, picks in picks_by_board.items():
-        payload = collect_board_raw(date, sw, picks, lookback_days=lookback_days)
+        payload = collect_board_raw(date, sw, picks, lookback_days=lookback_days,
+                                    allow_future=allow_future)
         p = write_board_raw(date, sw, payload, out_root=out_root)
         paths.append(p)
         st = payload["统计"]
