@@ -63,14 +63,16 @@ tasks:
     notify_on: [failure, misfire]
     tags: [local, intraday, watch]
 
-  # 消息驱动板块研判每日增量(工作日 14:00·下午不冲突时段,用户口径):定向抓龙头+板块近1-2周新闻,
-  # LLM 按 rubric 文字分级研判(不打分)+去重增量 → data/sector_news/catalyst_<date>.json + 扩 sector_focus 消息驱动块。
-  # 供选股"利好板块→筛形态好的+反选剔除利空→深度分析"支撑路径(非直接触发)。真调 LLM(wrapper 解析网关凭证)。
-  # plist=com.stock.sector_news_catalyst.plist(草案);**enabled:false + 待用户 launchctl 装载**。
-  # cron 与 plist 的 14:00 mon-fri 严格等价(test_scheduler_launchd_equivalence 锁)。前置:消息驱动代码已合 main。
+  # 消息驱动板块研判每日(工作日 14:00·下午不冲突时段):【2026-09-16 升级·程序化流水线 S3→S4 链】
+  # live sh(sector_news_catalyst.sh)重指向:先跑 S3 board_news_collect_run(读S2表→定向采集 龙头/中军/主力
+  #   新闻+政策+国际+LHB → raw 过程文件·只抓不判无 LLM)→ 再跑 S4 board_verdict_run(读raw→DeepSeek-v4-pro
+  #   思考关 按 rubric 文字分级研判+去重增量 → catalyst_<date>.json 全板块 + 扩 sector_focus 消息驱动块)。
+  #   retire 内部耦合的 news_catalyst_run(采集与研判解耦为两阶段·全板块覆盖)。供选股利好板块→深度分析支撑路径。
+  # plist=com.stock.sector_news_catalyst.plist;**用户已 launchctl load(live);plist 路径不变→下个14:00自动跑升级链、无需reload**。
+  # cron 与 plist 的 14:00 mon-fri 严格等价(test_scheduler_launchd_equivalence 锁)。cmd 记 S4 终点模块(S3 由 sh 前置)。
   - id: sector_news_catalyst
-    description: "消息驱动板块研判每日增量(14:00);定向龙头/板块近2周新闻+rubric文字分级+去重;草案待装载,默认关"
-    cmd: ["python", "-m", "tools.analysis.sector_forecast.news_catalyst_run"]
+    description: "消息驱动板块研判(14:00·S3采集→S4研判链);全板块DeepSeek rubric文字分级+去重;live升级内核,同slot"
+    cmd: ["python", "-m", "tools.analysis.sector_forecast.board_verdict_run"]
     cron: "0 14 * * mon-fri"
     timeout_sec: 1800
     retries: 1
