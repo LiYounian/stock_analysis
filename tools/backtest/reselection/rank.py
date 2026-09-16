@@ -13,10 +13,12 @@ logger = logging.getLogger("backtest.reselection.rank")
 
 
 def build_daily_ranks(feats: dict[str, dict], score_key: str = "mom",
-                      cap: int = 60, min_cross: int = 30) -> dict[str, list[str]]:
+                      cap: int = 60, min_cross: int = 30,
+                      min_liq: float = 0.0) -> dict[str, list[str]]:
     """→ {决策日 D: [按 score 降序的 code, 最多 cap 只]}。
 
     cap 只需 ≥ 最大 TopN(默认 60 足够 N≤20 的续选判定)。剔除横截面票数 < min_cross 的日。
+    min_liq>0:按当日近20日均成交额(元,as-of)剔除不可交易的低流动性票(防微盘幻觉)。
     """
     rows_date: list = []
     rows_code: list = []
@@ -27,6 +29,11 @@ def build_daily_ranks(feats: dict[str, dict], score_key: str = "mom",
             continue
         dates = f["dates"]
         ok = np.isfinite(s)
+        if min_liq > 0:
+            liq = f.get("liq")
+            if liq is None:
+                continue
+            ok = ok & (np.nan_to_num(liq, nan=-1.0) >= min_liq)
         idx = np.nonzero(ok)[0]
         if len(idx) == 0:
             continue

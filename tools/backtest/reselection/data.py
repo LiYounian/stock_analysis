@@ -90,6 +90,12 @@ def build_feats(data_root: str, codes: list[str], min_date: str,
         f = K.precompute(df)
         if with_momentum:
             f["mom"] = momentum_score_series(f["c"])
+        # 近20日均成交额(元),as-of 无未来:liq[t] 用 amount[t-19..t]
+        if "amount" in df.columns:
+            f["liq"] = pd.Series(df["amount"].to_numpy(float)).rolling(
+                20, min_periods=10).mean().to_numpy()
+        else:
+            f["liq"] = np.full(len(f["c"]), np.nan)
         feats[code] = f
     logger.info("加载特征 %d 只(跳过 %d)", len(feats), skipped)
     return feats

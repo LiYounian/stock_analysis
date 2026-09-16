@@ -35,7 +35,7 @@ def _year_windows(start: str, end: str) -> list[tuple[str, str, str]]:
 
 def run(data_root: str, score: str, start: str, end: str, topn: int, N: int,
         entry_rules: list[str], json_path: str | None, oos_split: str,
-        universe_sample: int = 0, min_amount: float = 0.0):
+        universe_sample: int = 0, min_amount: float = 0.0, min_liq: float = 0.0):
     print("\n===== H1 续选 vs 无状态重挑(持续型排名视图·绝对收益 Model A)=====")
     print(f"(score={score} 区间={start}~{end} TopN={topn} 槽N={N} 成交=marketable 成本=10bps)")
     print("(⚠️ 测试环境研究模拟,非投资建议;防未来:排名/入场/基准只用 ≤D 数据)\n")
@@ -51,10 +51,10 @@ def run(data_root: str, score: str, start: str, end: str, topn: int, N: int,
         _add_council_scores(feats)
     market = D.build_market(feats)
     ranks = R.build_daily_ranks(feats, score_key=("mom" if score == "momentum" else "council"),
-                                cap=max(60, topn * 3))
+                                cap=max(60, topn * 3), min_liq=min_liq)
     print(f"排名视图决策日 {len(ranks)} 个;开始模拟 {len(entry_rules)} 档入场口径 × 2 臂\n")
 
-    res = {"config": dict(score=score, start=start, end=end, topn=topn, N=N,
+    res = {"config": dict(score=score, start=start, end=end, topn=topn, N=N, min_liq=min_liq,
                           entry_rules=entry_rules, oos_split=oos_split,
                           n_universe=len(codes), n_feats=len(feats), n_decision_days=len(ranks)),
            "预注册": _PREREG, "免责": "历史回测≠未来保证,非投资建议。"}
@@ -187,9 +187,11 @@ if __name__ == "__main__":
     ap.add_argument("--entry-rules", default="limit_pc_0.01,limit_pc_0.0,open")
     ap.add_argument("--oos-split", default="2023-01-01")
     ap.add_argument("--min-amount", type=float, default=0.0)
+    ap.add_argument("--min-liq", type=float, default=0.0,
+                    help="排名视图每日近20日均成交额(元)下限,防微盘幻觉;如 2e8")
     ap.add_argument("--universe-sample", type=int, default=0)
     ap.add_argument("--json", default="")
     a = ap.parse_args()
     run(a.data_root, a.score, a.start, a.end, a.topn, a.N,
         [r for r in a.entry_rules.split(",") if r], a.json or None, a.oos_split,
-        universe_sample=a.universe_sample, min_amount=a.min_amount)
+        universe_sample=a.universe_sample, min_amount=a.min_amount, min_liq=a.min_liq)

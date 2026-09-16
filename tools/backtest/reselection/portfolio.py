@@ -44,8 +44,14 @@ def _ensure_didx(feats: dict[str, dict]) -> None:
 def simulate(feats: dict[str, dict], ranks: dict[str, list[str]], market: dict,
              *, arm: str, N: int = 10, topn: int = 10, entry_rule: str = "limit_pc_0.01",
              model: str = "marketable", cost_bps: float = 10.0,
+             cont_mode: str = "topn_line",
              start: str | None = None, end: str | None = None) -> SimResult:
-    """按全A执行日历逐日模拟。arm ∈ {baseline, treatment}。"""
+    """按全A执行日历逐日模拟。arm ∈ {baseline, treatment}。
+
+    cont_mode(treatment 续持判据):
+      · topn_line(默认·预注册):仍在 TopN 且收盘≥入场价(未破卖出线)→ 续持;
+      · topn_only(稳健性对照):仅要求仍在 TopN(去掉盈亏平衡止损),测「卖出线」是否是主因。
+    """
     _ensure_didx(feats)
     mkt_ir = market["mkt_ir"]
     cal = sorted(mkt_ir)                                # 全A执行日历
@@ -99,7 +105,10 @@ def simulate(feats: dict[str, dict], ranks: dict[str, list[str]], market: dict,
                 elif arm == "treatment":
                     still_top = code in top_set
                     above_line = c_g >= p["entry"]     # 未破卖出线(收盘≥入场价)
-                    exit_now = not (still_top and above_line)
+                    if cont_mode == "topn_only":
+                        exit_now = not still_top
+                    else:
+                        exit_now = not (still_top and above_line)
                 else:
                     raise ValueError(arm)
             if exit_now:
