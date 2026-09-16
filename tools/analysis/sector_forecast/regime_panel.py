@@ -71,6 +71,8 @@ def write_sector_regime(date: str, *, out_root: Optional[str] = None, frame=None
     root = Path(out_root) if out_root else settings.PROJECT_ROOT / "data" / "analysis" / date
     root.mkdir(parents=True, exist_ok=True)
     panel = build_sector_regime(date, frame=frame)
+    from tools.analysis.sector_forecast import suggest as SG
+    建议 = SG.suggest_sectors(panel)
     payload = {
         "date": date, "version": PANEL_VERSION,
         "口径": "申万一级 · 因果PIT · 规则合成标签",
@@ -78,6 +80,7 @@ def write_sector_regime(date: str, *, out_root: Optional[str] = None, frame=None
                     "新闻催化维度留P2", "涨停由pct+板块限价派生(breadth.is_limit_hit)"],
         "标签阈值版本": L.LABELS_VERSION,
         "n_板块": len(panel),
+        "目标板块建议": 建议,
         "板块": panel,
         "免责": "测试环境研究模拟,非投资建议。",
     }
