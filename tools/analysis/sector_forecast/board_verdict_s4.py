@@ -29,6 +29,45 @@ logger = logging.getLogger("sector_forecast.board_verdict_s4")
 DEFAULT_WORKERS = int(os.getenv("SECTOR_S4_WORKERS", "4"))
 
 
+def board_desc(entry: dict, sw: str) -> str:
+    """金字塔④·板块消息面研判 → 塔尖可读的一段**凝练描述**(additive)。
+
+    口径一致由 rubric_map **档标签**(利好/利空/中性·强/中/弱)保证——标签的标准定义由塔尖
+    侧 **glossary 全票共享一次**(rubric_map.render_*),此处**只用标签、不内联定义**(防过载·
+    §4.1 凝练防过载:板块描述全票共享一次,不逐票重复长定义)。
+    塔尖选股读这段描述(不是 raw 全量)。格式初版·待统筹塔尖接口定稿后对齐(结构稳定,只调排布)。
+    """
+    面 = entry.get("消息标签") or "中性"
+    强弱 = entry.get("强弱") or ""
+    parts = [f"消息面：{面}·{强弱}".rstrip("·")]
+    if entry.get("理由"):
+        parts.append(f"研判：{entry['理由']}")
+    if entry.get("持续性"):
+        parts.append(f"持续性：{entry['持续性']}")
+    # 关键催化:优先影响大的,取前 2(凝练防过载)
+    evs = entry.get("关键事件") or []
+    big = [e for e in evs if e.get("影响程度") == "大"]
+    top = (big or evs)[:2]
+    if top:
+        cat = "；".join(
+            f"{e.get('时间','')}·{(e.get('事件') or '')[:36]}"
+            f"({e.get('方向','')}/影响{e.get('影响程度','')}/{e.get('来源','')})"
+            for e in top)
+        parts.append(f"关键催化：{cat}")
+    # 资金流(主力净买/卖·凝练)
+    flows = entry.get("资金流") or []
+    net_in = [f for f in flows if f.get("方向") == "净买入"]
+    if net_in:
+        top_f = max(net_in, key=lambda f: f.get("累计净买亿", 0))
+        parts.append(f"资金流：主力净买领先 {top_f.get('name') or top_f.get('code')}"
+                     f"(+{top_f.get('累计净买亿')}亿)")
+    if entry.get("时效"):
+        parts.append(f"时效：{entry['时效']}")
+    if entry.get("可靠性综述"):
+        parts.append(f"可靠性：{entry['可靠性综述']}")
+    return "｜".join(parts)
+
+
 def _one_verdict(date: str, sw: str, raw: dict, client) -> dict:
     """单板块:用 S3 raw 的 items 跑 board_news_verdict(沿用 rubric 文字分级),组装输出。"""
     from tools.analysis.sector_forecast import news_catalyst as NC
@@ -36,7 +75,7 @@ def _one_verdict(date: str, sw: str, raw: dict, client) -> dict:
     v = NC.board_news_verdict(date, sw, leads, client=client, items=raw.get("items", []))
     def _role(r):
         return [{"code": d["code"], "name": d.get("name", "")} for d in leads if d.get("role") == r]
-    return {
+    entry = {
         "消息标签": v.get("消息面", "中性"), "强弱": v.get("强弱"),
         "关键事件": v.get("关键事件", []), "持续性": v.get("持续性"),
         "时效": v.get("时效"), "可靠性综述": v.get("可靠性综述"), "理由": v.get("理由"),
@@ -44,6 +83,8 @@ def _one_verdict(date: str, sw: str, raw: dict, client) -> dict:
         "龙头": _role("龙头"), "中军": _role("中军"), "主力": _role("主力"),
         "资金流": raw.get("资金流", []),
     }
+    entry["描述"] = board_desc(entry, sw)      # 金字塔④凝练描述(additive·供塔尖选股读)
+    return entry
 
 
 def _boards_with_raw(date: str, *, out_root: Optional[str] = None) -> list[str]:

@@ -30,10 +30,23 @@ from typing import Optional
 
 logger = logging.getLogger("sector_forecast.board_news_collect")
 
-RAW_VERSION = "v2-2026-09-17-clean"      # v2:P1 榜单噪音过滤 + P2 事件级去重(洗输入)
+RAW_VERSION = "v3-2026-09-17-deep"       # v3:新闻正文加深(300→500)+ 截断标记(供 S4 可选LLM压缩)
 LOOKBACK_DAYS = 12                       # 与 news_catalyst.LOOKBACK_DAYS 对齐(近1-2周)
 COLLECT_ROLES = ("龙头", "中军", "主力")   # 默认采集角色(催化/大资金承载者)
 LHB_WINDOW_DAYS = 30                      # 附带的 LHB 资金流回看窗
+NEWS_TEXT_MAX = 500                       # 正文保留上限(§4.7②加深:300→500;S3 只截断不压缩·保持无LLM)
+
+
+def _clip_text(s: str) -> tuple[str, int, bool]:
+    """正文加深:短文全放、长文截到 NEWS_TEXT_MAX 并标 truncated。返回 (文本, 原长, 是否截断)。
+
+    S3 保持"只抓不判·无 LLM"——超长只截断+标记,真正的 LLM 逐条压缩放 S4 前置(解耦)。
+    """
+    s = s or ""
+    n = len(s)
+    if n <= NEWS_TEXT_MAX:
+        return s, n, False
+    return s[:NEWS_TEXT_MAX], n, True
 
 # ════════════════════ P1 · 榜单/数据表噪音过滤 ════════════════════
 # 依据 DeepSeek-vs-Opus 对比(docs/计划/2026-09-17_...优化建议.md):全市场排行/数据表文章
@@ -200,10 +213,11 @@ def collect_board_raw(date: str, sw: str, picks: list[dict], *,
             if _is_noise_title(title):    # P1:市场级榜单/数据表噪音 → 剔除(非本股催化)
                 n_noise += 1
                 continue
+            body, full_len, truncated = _clip_text(it.get("content") or "")
             items.append({
                 "date": t or "?", "role": role_of.get(c, ""), "code": c,
                 "who": f"{role_of.get(c,'')}·{name_of.get(c) or c}",
-                "title": title, "text": (it.get("content") or "")[:300],
+                "title": title, "text": body, "text_full_len": full_len, "text_truncated": truncated,
                 "source": it.get("source", ""), "url": it.get("url", ""), "kind": "个股新闻",
             })
     # ② 板块政策 + 国际对标(sentiment_policy;region=国外→国际形势)
@@ -215,11 +229,13 @@ def collect_board_raw(date: str, sw: str, picks: list[dict], *,
                 inds = m.get("industries") or m.get("受影响行业") or []
                 if any(industry_map.to_sw(x) == sw for x in inds):
                     intl = m.get("region") == "国外"
+                    p_body, p_len, p_trunc = _clip_text(m.get("summary") or "")
                     items.append({
                         "date": str(m.get("date", date))[:10],
                         "role": "国际形势" if intl else "板块政策", "code": "",
                         "who": "国际形势" if intl else "板块政策",
-                        "title": m.get("title", ""), "text": (m.get("summary") or "")[:300],
+                        "title": m.get("title", ""), "text": p_body,
+                        "text_full_len": p_len, "text_truncated": p_trunc,
                         "source": m.get("source", "sentiment_policy"), "url": m.get("url", ""),
                         "kind": "国际对标" if intl else "板块政策",
                     })
