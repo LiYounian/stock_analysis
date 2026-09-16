@@ -30,28 +30,23 @@ def _degraded_ai() -> dict:
     绝不再把失败静默塌缩成与真中性不可区分的 0/空。历史数据无该字段时,B 回退启发式
     (评论+原因都空 ⇒ 视为 scored:false),故此处是前向显式标记的唯一真源。
     """
-    return {"方向": "中性", "强度": 0, "与本股关系": "", "评论": "", "原因": "",
+    return {"方向": "中性", "强度": "", "与本股关系": "", "评论": "", "原因": "",
             "scored": False}
-
-
-def _to_int(v, default: int = 0) -> int:
-    try:
-        return int(float(v))
-    except (TypeError, ValueError):
-        return default
 
 
 def _to_ai(ev: dict | None) -> dict:
     """把单条 event 抽取结果映射成统一 ai 块。缺字段/标 error → 降级中性。
 
     评论=复用抽取「摘要」(空则「暂无」);原因=复用抽取「原因」(老缓存无该字段降级空串)。
+    强度:直接展示 LLM 输出的**文字档**(强/中/弱;老缓存里的 1~5 数值原样带过,展示无碍)。
     """
     if not ev or "error" in ev or "影响方向" not in ev:
         return _degraded_ai()
     comment = (ev.get("摘要") or "").strip() or "暂无"
+    st = ev.get("影响强度")
     return {
         "方向": ev.get("影响方向") or "中性",
-        "强度": _to_int(ev.get("影响强度"), 0),
+        "强度": st if st is not None else "",
         "与本股关系": ev.get("与本股关系") or "",
         "评论": comment,
         "原因": (ev.get("原因") or "").strip(),

@@ -3,7 +3,7 @@
 锁定语义:
   - enrich_news 按索引对齐合并:每条含 ai.方向/强度/与本股关系/评论/原因,长度与原始新闻对齐;
   - 评论复用抽取「摘要」(空则「暂无」),原因复用抽取「原因」;
-  - LLM 未配置 / 抽取抛错 / 缺字段 → ai 降级中性(方向=中性、强度=0),不崩;
+  - LLM 未配置 / 抽取抛错 / 缺字段 → ai 降级中性(方向=中性、强度=""),不崩;
   - data_access.news_list 优先读 news_ai;无则回退原始新闻并补空 ai;
   - news_flow 拍平全池并带 code/name/sector,按时间倒序。
 路径隔离:tmp_path + monkeypatch store 路径根;set_active_date 固定日期,绝不污染真实 data/。
@@ -77,7 +77,7 @@ def test_enrich_news_degrades_on_llm_error(monkeypatch):
     out = news_ai.enrich_news("000021")
     assert len(out) == 2
     for o in out:
-        assert o["ai"] == {"方向": "中性", "强度": 0, "与本股关系": "",
+        assert o["ai"] == {"方向": "中性", "强度": "", "与本股关系": "",
                            "评论": "", "原因": "", "scored": False}
         # 失败态显式标 scored:false —— 与「真中性(scored:true)」字段可区分,不可再合并
         assert o["ai"]["scored"] is False
@@ -97,7 +97,7 @@ def test_enrich_news_degrades_bad_item(monkeypatch):
     out = news_ai.enrich_news("000021")
     assert out[0]["ai"]["方向"] == "利好" and out[0]["ai"]["原因"] == ""   # 无原因字段 → 空串
     assert out[0]["ai"]["scored"] is True                          # 成功条
-    assert out[1]["ai"]["方向"] == "中性" and out[1]["ai"]["强度"] == 0
+    assert out[1]["ai"]["方向"] == "中性" and out[1]["ai"]["强度"] == ""
     assert out[1]["ai"]["scored"] is False                         # error 条 → 失败态
 
 
@@ -138,7 +138,7 @@ def test_enrich_news_extract_capped_at_budget(monkeypatch):
     assert len(out) == n_items                     # 原文全量落盘,输出长度对齐
     assert out[0]["ai"]["方向"] == "利好"           # 前 cap 条拿到真实抽取
     assert out[0]["ai"]["scored"] is True
-    assert out[cap]["ai"] == {"方向": "中性", "强度": 0, "与本股关系": "",
+    assert out[cap]["ai"] == {"方向": "中性", "强度": "", "与本股关系": "",
                               "评论": "", "原因": "", "scored": False}  # 超限条降级(失败态)
 
 
@@ -176,7 +176,7 @@ def test_news_list_fallback_raw_empty_ai(store):
     got = da.news_list("000600", _D)
     assert len(got) == 1
     assert got[0]["title"] == "B"
-    assert got[0]["ai"] == {"方向": "中性", "强度": 0, "与本股关系": "",
+    assert got[0]["ai"] == {"方向": "中性", "强度": "", "与本股关系": "",
                             "评论": "", "原因": ""}
 
 

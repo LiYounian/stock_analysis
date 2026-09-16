@@ -20,6 +20,7 @@ from tools.collectors import ugc as ug
 from tools.config import settings, stock_pool
 from tools.llm import client as lc
 from tools.llm import prompts
+from tools.llm import rubric_map
 
 logger = logging.getLogger("analysis.event")
 
@@ -337,10 +338,7 @@ def aggregate_sentiment(events: list[dict]) -> dict:
         if rel == 0:
             continue                        # 成功打分但与本股无关:剔除,不算失败
         sign = _DIR_SIGN.get(e.get("影响方向"), 0)
-        try:
-            strength = float(e.get("影响强度") or 1)
-        except (TypeError, ValueError):
-            strength = 1.0
+        strength = rubric_map.strength_to_num(e.get("影响强度"), default=1.0)  # 文字档→数值(兼容legacy)
         total += sign * strength * rel / 5.0
         n += 1
         if sign > 0:
@@ -448,10 +446,7 @@ def _policy_layer_net(items: list[dict]) -> tuple[float, int]:
         if "影响方向" not in it or "error" in it:
             continue
         sign = _DIR_SIGN.get(it.get("影响方向"), 0)
-        try:
-            strength = float(it.get("影响强度") or 1)
-        except (TypeError, ValueError):
-            strength = 1.0
+        strength = rubric_map.strength_to_num(it.get("影响强度"), default=1.0)  # 文字档→数值(兼容legacy)
         total += sign * strength / 5.0
         n += 1
     return (round(total / n, 3), n) if n else (0.0, 0)
@@ -498,11 +493,11 @@ def ugc_sentiment(code: str, client=None, n: int = UGC_SAMPLE_N,
         logger.warning("%s UGC 情感 LLM 失败,降级:%s", code, str(e)[:80])
         return {"净情绪": 0.0, "多空": "中性", "样本数": len(posts),
                 "degraded": str(e)[:80], "status": "unknown"}
-    try:
-        net = max(-1.0, min(1.0, float(r.get("净情绪") or 0.0)))
-    except (TypeError, ValueError):
-        net = 0.0
-    return {"净情绪": round(net, 3), "多空": r.get("多空", "中性"),
+    # 净情绪由**文字档「多空」**经 rubric_map 回填(用户:不让 LLM 给 -1~1 数值);
+    # legacy 缓存无「多空」但有「净情绪」小数时回退取之(stance_to_net 对数值透传),向后兼容不崩。
+    stance = r.get("多空")
+    net = rubric_map.stance_to_net(stance if stance is not None else r.get("净情绪"))
+    return {"净情绪": round(net, 3), "多空": stance or "中性",
             "样本数": len(posts), "依据": r.get("依据", ""), "status": "ok"}
 
 

@@ -20,6 +20,8 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Optional
 
+from tools.llm import rubric_map as rm
+
 logger = logging.getLogger("sector_forecast.focus")
 
 FOCUS_VERSION = "v1-2026-09-16"
@@ -49,7 +51,7 @@ def news_catalyst_by_sector(date: str) -> dict[str, dict]:
     agg: dict[str, dict] = defaultdict(lambda: {"净催化": 0.0, "n条": 0, "利好": 0, "利空": 0})
     for m in msgs:
         sign = _DIR_SIGN.get(m.get("影响方向"), 0)
-        strength = float(m.get("影响强度") or 0)
+        strength = rm.strength_to_num(m.get("影响强度"), default=0.0)  # 文字档→数值(兼容legacy)
         inds = m.get("industries") or m.get("受影响行业") or []
         seen = set()
         for raw in inds:
