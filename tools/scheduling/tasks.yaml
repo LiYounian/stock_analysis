@@ -138,12 +138,15 @@ tasks:
 
   # 板块预测系统每日 runner(工作日 19:45,闭环后·shadow批前):产 sector_focus/market_daily/roster。
   # forward-shadow·non-gating·不接生产选股(接入 gated 待 B' 覆盖验证)。plist=com.stock.sector_forecast.plist。
+  # 已被 sector_daily(17:30) 取代:两者调用同一 CLI=重复;17:30 排在 18:36 晚间选股前(同日可喂研判),
+  # 19:45 在选股后只能次日用。2026-09-16 收敛:停用本条、启用 sector_daily。plist 待用户 launchctl unload。
   - id: sector_forecast
-    description: "板块预测系统 runner(19:45);板块冷热+四角色+大盘→板块两步+综合总报告;non-gating"
+    description: "[已停用·被 sector_daily(17:30)取代] 板块预测系统 runner(19:45);同一 CLI 重复,收敛留 17:30"
     cmd: ["python", "-m", "tools.analysis.sector_forecast"]
     cron: "45 19 * * mon-fri"
     timeout_sec: 900
     retries: 1
+    enabled: false
     notify_on: [failure, misfire]
     tags: [local, eod, regime]
 
@@ -156,6 +159,21 @@ tasks:
     retry_backoff_sec: 60
     notify_on: [failure, misfire]
     tags: [local, eod, heavy]
+
+  # 板块预测系统每日研判产出(收盘后 17:30,排在 pullrefresh 之后:需 master kline / sentiment_policy 就绪)。
+  # 产出 sector_regime/roster/sector_focus/sector_daily.md/market_daily.md/sector_news 落主仓 data,
+  # 作**人工/研判辅助**(2026-09-16 定案:不机械接入生产选股;双跑仅证伪粗暴自动接法)。
+  # plist=com.stock.sector_daily.plist;**唯一在编的板块日更 job**(2026-09-16 收敛:取代 19:45 sector_forecast)。
+  # 17:30 排在 pullrefresh(15:40) 之后、18:36 晚间选股之前 → 板块研判同日可喂选股(消息驱动方向下选股要读板块利好标签)。
+  # cron 与 plist 的 17:30 mon-fri 严格等价(test_scheduler_launchd_equivalence 锁)。待用户 launchctl load 生效。
+  - id: sector_daily
+    description: "板块每日研判(收盘后 17:30·选股前):面板/角色/两步/综合研判+新闻标签;唯一在编板块日更,取代19:45"
+    cmd: ["python", "-m", "tools.analysis.sector_forecast"]
+    cron: "30 17 * * mon-fri"
+    timeout_sec: 900
+    retries: 1
+    notify_on: [failure, misfire]
+    tags: [local, eod, sector]
 
   - id: intraday_review
     description: 盘尾复盘(17:00)

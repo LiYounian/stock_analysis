@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  板块预测系统 · 每日研判产出(草案 · 不自动 load;由用户本人 launchctl load,约法)。
+  定位:人工/研判辅助,不机械接入生产选股(双跑证伪粗暴自动接,2026-09-16 定案)。
+  时点:工作日 17:30 —— 排在 pullrefresh(15:40 收盘刷数据 + sentiment_policy)之后,
+        确保 master kline / sentiment_policy 已就绪;跑 ~90s。用户可按实际 pullrefresh 完成时间调。
+  前置:P1+P2 代码需已在主仓 main(P1 已合 d6c9990;P2 合入后本任务方完整可跑)。
+  装载:launchctl load ~/Library/LaunchAgents/com.stock.sector_daily.plist(先把本文件与 sector_daily.sh 就位)。
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.stock.sector_daily</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>/Users/yqg/Documents/projects/stock_analysis/ops/launchd/sector_daily.sh</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>/Users/yqg/Documents/projects/stock_analysis</string>
+  <key>StartCalendarInterval</key>
+  <array>
+    <dict><key>Weekday</key><integer>1</integer><key>Hour</key><integer>17</integer><key>Minute</key><integer>30</integer></dict>
+    <dict><key>Weekday</key><integer>2</integer><key>Hour</key><integer>17</integer><key>Minute</key><integer>30</integer></dict>
+    <dict><key>Weekday</key><integer>3</integer><key>Hour</key><integer>17</integer><key>Minute</key><integer>30</integer></dict>
+    <dict><key>Weekday</key><integer>4</integer><key>Hour</key><integer>17</integer><key>Minute</key><integer>30</integer></dict>
+    <dict><key>Weekday</key><integer>5</integer><key>Hour</key><integer>17</integer><key>Minute</key><integer>30</integer></dict>
+  </array>
+  <key>RunAtLoad</key>
+  <false/>
+  <key>StandardOutPath</key>
+  <string>/Users/yqg/.local/state/stock/sector_daily.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/yqg/.local/state/stock/sector_daily.err.log</string>
+</dict>
+</plist>
