@@ -100,3 +100,35 @@ def test_no_raw_returns_empty(_patch):
     _patch(raws={})
     cat = S4.board_catalyst_from_raw("2026-09-16")
     assert cat == {}
+
+
+def test_board_desc_condenses_with_rubric():
+    """金字塔④ 描述凝练:board_desc 把研判凝成塔尖可读一段·用 rubric_map 标准强弱口径·带催化/资金流。"""
+    from tools.llm import rubric_map as rm
+    entry = {
+        "消息标签": "利好", "强弱": "强", "理由": "光缆集采涨价+AI算力景气共振",
+        "持续性": "近两周多条同向", "时效": "本周新",
+        "可靠性综述": "一手为主",
+        "关键事件": [
+            {"时间": "2026-09-07", "事件": "中国移动光缆集采70.998亿涨价1.15倍", "方向": "利好",
+             "影响程度": "大", "来源": "一手"},
+            {"时间": "2026-09-07", "事件": "某研报观点", "方向": "利好", "影响程度": "小", "来源": "二手"},
+        ],
+        "资金流": [{"code": "601869", "name": "长飞光纤", "方向": "净买入", "累计净买亿": 1.41}],
+    }
+    desc = S4.board_desc(entry, "电子")
+    assert "消息面：利好·强" in desc                        # 用 rubric_map 档标签(标准定义塔尖glossary共享一次)
+    assert rm.strength_desc("强") not in desc              # 防过载:不内联长定义(§4.1 凝练)
+    assert "光缆集采70.998亿" in desc                      # 影响大的催化优先入
+    assert "某研报观点" not in desc                        # 影响小的被凝练掉(防过载)
+    assert "长飞光纤" in desc and "1.41" in desc           # 主力净买领先入描述
+    assert "持续性：近两周多条同向" in desc
+
+
+def test_verdict_includes_desc(_patch):
+    """_one_verdict 输出带 additive「描述」字段(供塔尖读)。"""
+    raws = {"电子": _raw("电子", [], [{"code": "A", "name": "甲", "role": "龙头"}])}
+    _patch(raws=raws, verdict={"电子": {"消息面": "利好", "强弱": "强", "关键事件": [],
+                                       "持续性": "", "时效": "", "可靠性综述": "", "理由": "r"}})
+    cat = S4.board_catalyst_from_raw("2026-09-16")
+    assert "描述" in cat["电子"] and "消息面：利好·强" in cat["电子"]["描述"]

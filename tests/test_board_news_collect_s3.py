@@ -220,6 +220,25 @@ def test_p1_p2_wired_into_collect(_patch_sources):
     assert not any("筹码大换手" in t for t in titles)   # 噪音不在
 
 
+def test_news_depth_clip(_patch_sources):
+    """§4.7② 新闻加深:短文全放;超 NEWS_TEXT_MAX 截断并标 text_truncated + 记原长(供S4压缩)。"""
+    short = "短正文" * 10                                  # 30 字 < 500
+    long = "长正文内容" * 200                              # 1000 字 > 500
+    _patch_sources(
+        table={"电子": {"roles": {"龙头": [{"code": "A", "name": "甲"}]}}},
+        news={"A": [
+            {"title": "短讯", "content": short, "time": "2026-09-15"},
+            {"title": "长文深度报道", "content": long, "time": "2026-09-15"},
+        ]},
+    )
+    raw = BC.collect_board_raw("2026-09-16", "电子", [{"code": "A", "name": "甲", "role": "龙头"}])
+    by_t = {it["title"]: it for it in raw["items"]}
+    assert by_t["短讯"]["text_truncated"] is False and by_t["短讯"]["text"] == short
+    assert by_t["长文深度报道"]["text_truncated"] is True
+    assert len(by_t["长文深度报道"]["text"]) == BC.NEWS_TEXT_MAX      # 截到上限(300→500 加深)
+    assert by_t["长文深度报道"]["text_full_len"] == len(long)         # 原长留痕供 S4 LLM 压缩
+
+
 def test_write_load_roundtrip(tmp_path, _patch_sources):
     _patch_sources(table={"电子": {"roles": {"龙头": [{"code": "A", "name": "甲"}]}}},
                    news={"A": [{"title": "t", "content": "c", "time": "2026-09-15"}]})
