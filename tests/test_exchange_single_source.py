@@ -263,6 +263,12 @@ _ALLOWED: dict[str, str] = {
     "tools/backtest/backtest_midday_q.py":
         "判 30/68 取涨跌停幅度上限(创业/科创 20% vs 主板 10%),是涨跌停口径不是交易所,"
         "与 backtest_newhigh._is_20cm 同构",
+    "tools/research/factor_nextday.py":
+        "board_limit 判 30/68 取次日涨跌停幅(创业/科创 20% vs 主板 10%),是涨跌停口径不是"
+        "交易所,与 backtest_midday_q/backtest_newhigh._is_20cm 同构;ST 5% 不可由 code 判、按主板近似",
+    "tools/research/selection_alpha/nextday_kernel.py":
+        "board_limit 判 300/688 取涨停幅度(创业/科创 20% vs 主板 10%),是涨跌停口径不是交易所,"
+        "北交所已在 universe 排除;同 factor_nextday.board_limit 口径",
     "tools/strategy/reversal_turnover.py":
         "_code_head_excluded 策略排除口径(剥离创业/科创/北交/B股);含 '9' 故 920 与 900 都被排除",
     "tools/strategy/small_cap.py":
