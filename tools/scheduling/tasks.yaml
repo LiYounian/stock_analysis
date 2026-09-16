@@ -63,6 +63,21 @@ tasks:
     notify_on: [failure, misfire]
     tags: [local, intraday, watch]
 
+  # 消息驱动板块研判每日增量(工作日 14:00·下午不冲突时段,用户口径):定向抓龙头+板块近1-2周新闻,
+  # LLM 按 rubric 文字分级研判(不打分)+去重增量 → data/sector_news/catalyst_<date>.json + 扩 sector_focus 消息驱动块。
+  # 供选股"利好板块→筛形态好的+反选剔除利空→深度分析"支撑路径(非直接触发)。真调 LLM(wrapper 解析网关凭证)。
+  # plist=com.stock.sector_news_catalyst.plist(草案);**enabled:false + 待用户 launchctl 装载**。
+  # cron 与 plist 的 14:00 mon-fri 严格等价(test_scheduler_launchd_equivalence 锁)。前置:消息驱动代码已合 main。
+  - id: sector_news_catalyst
+    description: "消息驱动板块研判每日增量(14:00);定向龙头/板块近2周新闻+rubric文字分级+去重;草案待装载,默认关"
+    cmd: ["python", "-m", "tools.analysis.sector_forecast.news_catalyst_run"]
+    cron: "0 14 * * mon-fri"
+    timeout_sec: 1800
+    retries: 1
+    enabled: false
+    notify_on: [failure, misfire]
+    tags: [local, afternoon, sector, news]
+
   - id: breadth
     description: 市场宽度(收盘后 15:05)
     cmd: ["python", "-m", "tools.pipeline.market_breadth", "--slot", "1505"]
