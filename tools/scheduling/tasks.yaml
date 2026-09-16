@@ -151,6 +151,21 @@ tasks:
     notify_on: [failure, misfire]
     tags: [local, forward-shadow, avoidance]
 
+  # 消息驱动板块选股 M3 forward 记分器(工作日 21:15,veto_track 21:00 之后·闭环末端):
+  # 读当日 sector_focus 消息驱动块(缺则回退真 catalyst 官方转换)→ 回踩限价入场→记 D+1/D+2 绝对收益。
+  # 龙头(个股催化)与跟涨(补涨联动观察)严格分开、分层;non-gating·纯记录·**绝不接 live 选股/不写 sector_focus**。
+  # plist=com.stock.sector_news_forward_shadow.plist(草案);**enabled:false + 待用户 launchctl 装载**。
+  # cron 与 plist 的 21:15 mon-fri 严格等价(test_scheduler_launchd_equivalence 锁)。
+  - id: sector_news_forward_shadow
+    description: "消息驱动板块选股 forward 记分器(21:15);龙头/跟涨分列·回踩限价→D+1/D+2 绝对收益;non-gating 攒样本"
+    cmd: ["python", "-m", "tools.research.sector_news_forward"]
+    cron: "15 21 * * mon-fri"
+    timeout_sec: 900
+    retries: 1
+    enabled: false
+    notify_on: [failure, misfire]
+    tags: [local, forward-shadow, sector, news]
+
   # 板块预测系统每日 runner(工作日 19:45,闭环后·shadow批前):产 sector_focus/market_daily/roster。
   # forward-shadow·non-gating·不接生产选股(接入 gated 待 B' 覆盖验证)。plist=com.stock.sector_forecast.plist。
   # 已被 sector_daily(17:30) 取代:两者调用同一 CLI=重复;17:30 排在 18:36 晚间选股前(同日可喂研判),
