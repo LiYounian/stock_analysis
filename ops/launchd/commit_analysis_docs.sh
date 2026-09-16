@@ -3,6 +3,8 @@
 # 设计:docs/计划/2026-09-07_分析文档自动提交_设计.md
 # 硬约束:①只提交白名单 md(绝不 git add -A) ②独立 worktree 提交、不碰主仓 HEAD
 #         ③脱敏扫描 ④无改动跳过 ⑤无 AI 署名 ⑥git 失败只记日志不外溢。
+# ⑦收尾把主仓 local main 安全 ff 到 origin/main(只清伪冲突、绝不丢真改动;best-effort 不外溢)
+#   ——根治「主仓工作树留同名未跟踪副本 → 长期落后 origin、每次 load 新 job 都要手动清」。
 # ⚠️ 非投资建议,测试环境研究模拟。
 set -uo pipefail   # 不用 -e:git 失败要自己兜、不外溢
 
@@ -64,5 +66,26 @@ else
   # push 失败:worktree 本地 commit 下轮 reset 会丢,但文档仍在主仓,下轮重新 add 提交(自愈)。
   log "!! push 失败,下轮自愈重试: $CHANGED"
   exit 6
+fi
+
+# 7) 收尾:安全 ff 主仓 local main 到 origin/main(只清伪冲突,绝不丢真改动)。
+#    我们刚把 docs 从 worktree push 到 origin/main、绕过了主仓 local main;主仓工作树里
+#    留着这些同名 md 的未跟踪/已改副本 → 会挡下次 `merge --ff-only`。这里用 safe_ff 逐文件核
+#    「与 origin 一致或本地更旧无独有行」才清,任一真改动即整体拒绝(不清不 ff、留人工)。
+#    从本 worktree(已 reset 到 origin/main、代码最新)跑,--repo 指向主仓;best-effort 非阻断。
+PY="${STOCK_PYTHON:-$HOME/.conda/envs/stock_analysis/bin/python}"
+if [ -f "$WT/tools/ops/safe_ff.py" ]; then
+  if "$PY" -m tools.ops.safe_ff --repo "$MAIN_REPO" --apply >>"$LOG" 2>&1; then
+    log "✅ 主仓 local main 安全 ff 完成(或已同步/无真改动可推进)"
+  else
+    rc=$?
+    if [ "$rc" = "2" ]; then
+      log "!! 主仓有真改动撞车,已按铁律拒绝 ff(留人工核查,不外溢)"
+    else
+      log "!! 主仓安全 ff 内部异常 rc=$rc(不外溢,下轮重试)"
+    fi
+  fi
+else
+  log "-- safe_ff.py 缺失(半部署态),跳过主仓 ff --"
 fi
 log "==== 完成 ===="
