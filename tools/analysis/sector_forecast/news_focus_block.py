@@ -101,6 +101,20 @@ def build_news_driven_block(date: str, *, boards: Optional[list[str]] = None, cl
                         "时效/可靠性为LLM描述性评价、需人工核", "non-gating·实盘forward累积·未达标不gated"]}
 
 
+def _load_catalyst(date: str) -> Optional[dict]:
+    """读 14:00 已落盘的 catalyst_<date>.json 的 板块研判(供 17:30 enrich 复用,不重烧 LLM)。"""
+    from tools.config import settings
+    from tools.backtest.iet_probe.data import _MAIN
+    for base in (settings.PROJECT_ROOT, _MAIN):
+        p = Path(base) / "data" / "sector_news" / f"catalyst_{date}.json"
+        if p.exists():
+            try:
+                return json.loads(p.read_text(encoding="utf-8")).get("板块研判")
+            except Exception:
+                return None
+    return None
+
+
 def enrich_sector_focus(date: str, *, boards: Optional[list[str]] = None, client=None,
                         cat: Optional[dict] = None, out_root: Optional[str] = None) -> Optional[Path]:
     """把「消息驱动」块合进已落盘的 sector_focus.json(选股侧单一源)。cat 可传入复用(不二次烧 LLM)。"""
@@ -111,6 +125,8 @@ def enrich_sector_focus(date: str, *, boards: Optional[list[str]] = None, client
         logger.warning("无 sector_focus.json(%s),先跑板块面板/两步", date)
         return None
     focus = json.loads(p.read_text(encoding="utf-8"))
+    if cat is None:                                       # 复用已落盘 catalyst_<date>.json(14:00 产出),不重算/不重烧 LLM
+        cat = _load_catalyst(date)
     focus["消息驱动"] = build_news_driven_block(date, boards=boards, client=client, cat=cat)
     # 写回(优先本仓 analysis;production 主仓即本仓)
     root = Path(out_root) if out_root else settings.PROJECT_ROOT / "data" / "analysis" / date
