@@ -67,10 +67,15 @@ def _followers(sw: str, date: str, *, top: int = 3) -> list[dict]:
 _STRENGTH_ORDER = {"强": 0, "中": 1, "弱": 2, None: 3}
 
 
-def build_news_driven_block(date: str, *, boards: Optional[list[str]] = None, client=None) -> dict:
-    """产「消息驱动」块(统筹契约·v2 描述性:文字不数值)。仅收 消息面=利好 的板块。"""
+def build_news_driven_block(date: str, *, boards: Optional[list[str]] = None, client=None,
+                            cat: Optional[dict] = None) -> dict:
+    """产「消息驱动」块(统筹契约·v2 描述性:文字不数值)。仅收 消息面=利好 的板块。
+
+    cat 可传入已算的 board_leader_catalyst 结果(runner 复用,避免二次烧 LLM)。
+    """
     from tools.analysis.sector_forecast import news_catalyst as NC
-    cat = NC.board_leader_catalyst(date, boards=boards, client=client)
+    if cat is None:
+        cat = NC.board_leader_catalyst(date, boards=boards, client=client)
     利好板块 = []
     for sw, c in cat.items():
         if c.get("消息标签") != "利好":
@@ -97,8 +102,8 @@ def build_news_driven_block(date: str, *, boards: Optional[list[str]] = None, cl
 
 
 def enrich_sector_focus(date: str, *, boards: Optional[list[str]] = None, client=None,
-                        out_root: Optional[str] = None) -> Optional[Path]:
-    """把「消息驱动」块合进已落盘的 sector_focus.json(选股侧单一源)。"""
+                        cat: Optional[dict] = None, out_root: Optional[str] = None) -> Optional[Path]:
+    """把「消息驱动」块合进已落盘的 sector_focus.json(选股侧单一源)。cat 可传入复用(不二次烧 LLM)。"""
     from tools.analysis.sector_forecast.market_step import resolve_analysis_file
     from tools.config import settings
     p = resolve_analysis_file(date, "sector_focus.json")
@@ -106,7 +111,7 @@ def enrich_sector_focus(date: str, *, boards: Optional[list[str]] = None, client
         logger.warning("无 sector_focus.json(%s),先跑板块面板/两步", date)
         return None
     focus = json.loads(p.read_text(encoding="utf-8"))
-    focus["消息驱动"] = build_news_driven_block(date, boards=boards, client=client)
+    focus["消息驱动"] = build_news_driven_block(date, boards=boards, client=client, cat=cat)
     # 写回(优先本仓 analysis;production 主仓即本仓)
     root = Path(out_root) if out_root else settings.PROJECT_ROOT / "data" / "analysis" / date
     root.mkdir(parents=True, exist_ok=True)
