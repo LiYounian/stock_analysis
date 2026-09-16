@@ -136,6 +136,17 @@ tasks:
     notify_on: [failure, misfire]
     tags: [local, forward-shadow, avoidance]
 
+  # 板块预测系统每日 runner(工作日 19:45,闭环后·shadow批前):产 sector_focus/market_daily/roster。
+  # forward-shadow·non-gating·不接生产选股(接入 gated 待 B' 覆盖验证)。plist=com.stock.sector_forecast.plist。
+  - id: sector_forecast
+    description: "板块预测系统 runner(19:45);板块冷热+四角色+大盘→板块两步+综合总报告;non-gating"
+    cmd: ["python", "-m", "tools.analysis.sector_forecast"]
+    cron: "45 19 * * mon-fri"
+    timeout_sec: 900
+    retries: 1
+    notify_on: [failure, misfire]
+    tags: [local, eod, regime]
+
   - id: pullrefresh
     description: 盘后全量刷新/全A选股(15:40,约 1 小时)
     cmd: ["python", "-m", "tools.run", "screenall"]
