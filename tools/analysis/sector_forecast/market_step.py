@@ -43,11 +43,22 @@ def _load_market_forecast(date: str) -> Optional[dict]:
         return None
 
 
-def market_risk_appetite(date: str) -> dict:
-    """归纳大盘风险偏好档。缺 market_forecast → 中性 + 标数据缺。"""
+def market_risk_appetite(date: str, *, macro: Optional[dict] = None) -> dict:
+    """归纳大盘风险偏好档 = **广度 + 宏观净方向**(macro 来自 news_store 宏观研判)。
+
+    宏观净方向对档位的修正(用户 P2 强化:第一步不只用广度):
+      · 宏观偏空 → 档位下调一级(进攻→中性、中性→防守)。
+      · 宏观偏多 且 广度不深弱 → 中性可上调进攻。
+    缺 market_forecast → 中性 + 标数据缺(仍叠加宏观修正)。
+    """
+    macro = macro or {}
+    宏观净 = macro.get("宏观净方向", "中性")
     mf = _load_market_forecast(date)
     if not mf:
-        return {"风险偏好": "中性", "依据": "缺 market_forecast.json,降级中性",
+        base = "中性"
+        档 = _apply_macro(base, 宏观净)
+        return {"风险偏好": 档, "依据": f"缺 market_forecast.json,广度降级中性;宏观净方向={宏观净}",
+                "宏观净方向": 宏观净, "宏观情景": macro.get("宏观情景"),
                 "数据缺": True, "version": STEP_VERSION}
 
     tgt = (mf.get("targets") or {}).get("hs300") or {}
@@ -70,17 +81,29 @@ def market_risk_appetite(date: str) -> dict:
     涨停弱 = lu is not None and ld is not None and ld > lu * 1.5
 
     if 偏多 and (net_adv is None or net_adv > 0):
-        档 = "进攻"
+        base = "进攻"
     elif 偏空 or 深度弱 or 涨停弱:
-        档 = "防守"
+        base = "防守"
     else:
-        档 = "中性"
+        base = "中性"
+    档 = _apply_macro(base, 宏观净, net_adv=net_adv)
 
     return {
-        "风险偏好": 档,
+        "风险偏好": 档, "广度档": base, "宏观净方向": 宏观净, "宏观情景": macro.get("宏观情景"),
         "hs300方向": hs300_dir, "proxy方向": proxy_dir,
         "净广度": net_adv, "涨停": lu, "跌停": ld, "风格背离": bool(分歧),
-        "依据": f"proxy/hs300方向={proxy_dir or hs300_dir}、净广度={net_adv}、涨停{lu}/跌停{ld}"
-                + ("、权重搭台中小盘偏弱" if 分歧 else ""),
+        "依据": f"广度档={base}(proxy/hs300={proxy_dir or hs300_dir}、净广度={net_adv}、涨停{lu}/跌停{ld}"
+                + ("、权重搭台中小盘偏弱" if 分歧 else "") + f");宏观净方向={宏观净}→最终{档}",
         "数据缺": False, "version": STEP_VERSION,
     }
+
+
+def _apply_macro(base: str, 宏观净: str, *, net_adv=None) -> str:
+    """宏观净方向修正广度档。偏空下调一级;偏多且广度不深弱可上调。"""
+    order = ["防守", "中性", "进攻"]
+    i = order.index(base)
+    if 宏观净 == "偏空":
+        i = max(0, i - 1)
+    elif 宏观净 == "偏多" and (net_adv is None or net_adv > -0.3):
+        i = min(2, i + 1)
+    return order[i]

@@ -51,14 +51,14 @@ def _news_headlines(date: str, top: int = 5) -> list[dict]:
     return out
 
 
-def build_report(date: str, *, panel=None, focus=None) -> dict:
-    """组装结构化日报(dict)。panel/focus 可传入复用。"""
+def build_report(date: str, *, panel=None, focus=None, macro=None) -> dict:
+    """组装结构化日报(dict)。panel/focus/macro 可传入复用。"""
     from tools.analysis.sector_forecast import regime_panel as RP
     from tools.analysis.sector_forecast import focus as F
     if panel is None:
         panel = RP.build_sector_regime(date)
     if focus is None:
-        focus = F.build_focus(date, panel=panel)
+        focus = F.build_focus(date, panel=panel, macro=macro)
 
     headlines = _news_headlines(date)
     重点 = focus["重点板块池"]
@@ -92,6 +92,8 @@ def build_report(date: str, *, panel=None, focus=None) -> dict:
         "date": date, "version": REPORT_VERSION,
         "全局摘要": {
             "市场风险偏好": focus["风险偏好"]["风险偏好"],
+            "宏观净方向": focus.get("宏观净方向", "中性"),
+            "宏观情景": focus.get("宏观情景", "中性"),
             "大盘依据": focus["风险偏好"].get("依据"),
             "新闻主线": headlines,
         },
@@ -157,11 +159,89 @@ def render_markdown(report: dict) -> str:
     return "\n".join(L)
 
 
-def write_report(date: str, *, panel=None, focus=None, out_root: Optional[str] = None) -> tuple[Path, Path]:
+def _load_news_store(date: str) -> Optional[dict]:
+    from tools.config import settings
+    from tools.backtest.iet_probe.data import _MAIN
+    for base in (settings.PROJECT_ROOT, _MAIN):
+        p = Path(base) / "data" / "sector_news" / f"{date}.json"
+        if p.exists():
+            try:
+                return json.loads(p.read_text(encoding="utf-8"))
+            except Exception:
+                return None
+    return None
+
+
+def _load_focus(date: str) -> Optional[dict]:
+    from tools.analysis.sector_forecast.market_step import resolve_analysis_file
+    p = resolve_analysis_file(date, "sector_focus.json")
+    if p:
+        try:
+            return json.loads(p.read_text(encoding="utf-8"))
+        except Exception:
+            return None
+    return None
+
+
+def render_market_daily(date: str, macro: Optional[dict] = None, *, focus: Optional[dict] = None) -> str:
+    """每日市场综合研判(人类可读总报告)——宏观指标+净方向/情景 + 大盘档 + 重点/规避板块。
+
+    focus 优先用传入/已落盘的 sector_focus.json(避免重建面板);缺则现算。
+    """
+    from tools.analysis.sector_forecast import market_step as MS
+    ns = _load_news_store(date) or {}
+    ind = ns.get("宏观指标", {})
+    mac = macro or ns.get("宏观研判", {})
+    appetite = MS.market_risk_appetite(date, macro=mac)
+    foc = focus or _load_focus(date)
+    if foc is None:
+        from tools.analysis.sector_forecast import focus as F
+        foc = F.build_focus(date, macro=mac)
+
+    L = [f"# 每日市场综合研判 · {date}", "",
+         "> ⚠️ 测试环境研究模拟,非投资建议。forward-shadow 留痕。", "",
+         "## 一、宏观研判",
+         f"- **宏观净方向**:{mac.get('宏观净方向','?')}　**情景**:{mac.get('宏观情景','?')}",
+         f"- 依据:{mac.get('依据','')}"]
+    if ind.get("国债"):
+        b = ind["国债"]
+        L.append(f"- 利率:中国10Y {b.get('中国10Y')}%（环比 {b.get('中国10Y环比')}，{b.get('对A股')}）"
+                 f"、中美利差 {b.get('中美利差')}")
+    if ind.get("汇率"):
+        fx = ind["汇率"]
+        L.append(f"- 汇率:美元中间价 {fx.get('美元中间价')}（环比 {fx.get('环比')}，{fx.get('对A股')}）")
+    if ind.get("LPR"):
+        L.append(f"- LPR:1Y {ind['LPR'].get('1Y')}% / 5Y {ind['LPR'].get('5Y')}%")
+    L += ["", "## 二、大盘风险偏好",
+          f"- **{appetite['风险偏好']}**（{appetite.get('依据','')}）", ""]
+    L += ["## 三、重点选股板块池（按 focus_score）"]
+    for r in foc["重点板块池"][:8]:
+        L.append(f"- **{r['板块']}** focus={r['focus_score']}｜催化净{r['新闻净催化']}"
+                 f"（利好{r['利好条']}/利空{r['利空条']}）｜涨停{r['涨停数']}｜{r['冷热']}"
+                 + ("（面板冷但当日活跃）" if r["冷热"] == "过冷" else ""))
+    if foc["规避板块池"]:
+        L += ["", "## 四、规避板块池"]
+        for r in foc["规避板块池"]:
+            L.append(f"- {r['板块']}：{r.get('规避理由','')}")
+    L += ["", "## 诚实边界"] + [f"- {b}" for b in ns.get("诚实边界", [])]
+    return "\n".join(L)
+
+
+def write_market_daily(date: str, *, macro=None, out_root: Optional[str] = None) -> Path:
     from tools.config import settings
     root = Path(out_root) if out_root else settings.PROJECT_ROOT / "data" / "analysis" / date
     root.mkdir(parents=True, exist_ok=True)
-    report = build_report(date, panel=panel, focus=focus)
+    p = root / "market_daily.md"
+    p.write_text(render_market_daily(date, macro), encoding="utf-8")
+    logger.info("落盘 %s(每日市场综合研判)", p)
+    return p
+
+
+def write_report(date: str, *, panel=None, focus=None, macro=None, out_root: Optional[str] = None) -> tuple[Path, Path]:
+    from tools.config import settings
+    root = Path(out_root) if out_root else settings.PROJECT_ROOT / "data" / "analysis" / date
+    root.mkdir(parents=True, exist_ok=True)
+    report = build_report(date, panel=panel, focus=focus, macro=macro)
     jp = root / "sector_daily.json"
     jp.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
     mp = root / "sector_daily.md"

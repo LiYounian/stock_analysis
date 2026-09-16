@@ -25,8 +25,9 @@ logger = logging.getLogger("sector_forecast.focus")
 FOCUS_VERSION = "v1-2026-09-16"
 _DIR_SIGN = {"利好": 1, "利空": -1, "中性": 0}
 
-# 合成权重(预注册·写死)
-W_CATALYST, W_MONEY, W_STRENGTH, W_MOM, W_RISK = 0.30, 0.25, 0.20, 0.15, 0.10
+# 合成权重(预注册·写死)。**催化提到最高 0.40**(用户洞察:选股激进/规避的真锚是
+# 消息面催化,不是纯量价动量;有真催化的强势票该进候选,无催化的纯动量才防 gap-fade)。
+W_CATALYST, W_MONEY, W_STRENGTH, W_MOM, W_RISK = 0.40, 0.20, 0.20, 0.12, 0.08
 # 重点池门槛:催化>0 或 涨停≥此数(有资金/有催化才算"值得重点选股")
 FOCUS_MIN_LIMIT = 2
 
@@ -76,14 +77,19 @@ def _rank_map(pairs: list[tuple[str, float]]) -> dict[str, float]:
     return {k: float(r[k]) for k in s.index}
 
 
-def build_focus(date: str, *, panel: Optional[list[dict]] = None) -> dict:
-    """两步合成 → 重点/规避板块池。panel 可传入复用(省一次全A加载)。"""
+def build_focus(date: str, *, panel: Optional[list[dict]] = None,
+                macro: Optional[dict] = None) -> dict:
+    """两步合成 → 重点/规避板块池。panel/macro 可传入复用(省全A加载/akshare调用)。
+
+    macro = news_store.build_news_store(date)['宏观研判'](含 宏观净方向/宏观情景),
+    供第一步大盘档融合 + 顶层 宏观情景 字段(选股预案查表用)。
+    """
     from tools.analysis.sector_forecast import regime_panel as RP
     from tools.analysis.sector_forecast import market_step as MS
 
     if panel is None:
         panel = RP.build_sector_regime(date)
-    appetite = MS.market_risk_appetite(date)
+    appetite = MS.market_risk_appetite(date, macro=macro)
     news = news_catalyst_by_sector(date)
 
     # 各维 rank
@@ -133,8 +139,11 @@ def build_focus(date: str, *, panel: Optional[list[dict]] = None) -> dict:
     return {
         "date": date, "version": FOCUS_VERSION,
         "风险偏好": appetite,
+        "宏观情景": (macro or {}).get("宏观情景", "中性"),      # 选股预案查表用离散标签
+        "宏观净方向": (macro or {}).get("宏观净方向", "中性"),
         "重点板块池": 重点, "规避板块池": 规避,
-        "口径": "新闻催化+资金(成交占比)+当日涨停广度+截面动量;冷热仅作风险上下文(不据它挑板块)",
+        "口径": "新闻催化(0.40最高权重)+资金(成交占比)+当日涨停广度+截面动量;冷热仅作风险上下文"
+                "(不据它挑板块);催化优先——有真催化的强势票不因超买规避,无催化纯动量才防gap-fade",
         "下游": "双喂 午盘全A重筛入参位 + 晚间选股(读同一份);角色表指针→定向取先锋/中军/补涨",
         "诚实边界": ["forward-shadow·non-gating·不进生产选股(P3 gated才接)",
                     "概念级成分缺(申万一级)", "资金维度仅板块成交额(个股fundflow陈旧未纳入)"],
@@ -142,11 +151,11 @@ def build_focus(date: str, *, panel: Optional[list[dict]] = None) -> dict:
     }
 
 
-def write_focus(date: str, *, panel=None, out_root: Optional[str] = None) -> Path:
+def write_focus(date: str, *, panel=None, macro=None, out_root: Optional[str] = None) -> Path:
     from tools.config import settings
     root = Path(out_root) if out_root else settings.PROJECT_ROOT / "data" / "analysis" / date
     root.mkdir(parents=True, exist_ok=True)
-    payload = build_focus(date, panel=panel)
+    payload = build_focus(date, panel=panel, macro=macro)
     out = root / "sector_focus.json"
     tmp = out.with_suffix(".json.tmp")
     tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")

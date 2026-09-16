@@ -155,7 +155,7 @@ def test_focus_过冷板块有涨停仍进重点池_防踏空(monkeypatch):
     # 屏蔽外部新闻/大盘输入,只考察冷热与涨停的逻辑
     monkeypatch.setattr(F, "news_catalyst_by_sector", lambda date: {})
     monkeypatch.setattr(MS, "market_risk_appetite",
-                        lambda date: {"风险偏好": "中性", "依据": "test"})
+                        lambda date, **kw: {"风险偏好": "中性", "依据": "test"})
     panel = [_panel_row("电子", "过冷", 涨停数=6, 板块成交占比=0.31),
              _panel_row("食品饮料", "正常活跃", 涨停数=0, 板块成交占比=0.02)]
     foc = F.build_focus("2026-09-15", panel=panel)
@@ -169,7 +169,7 @@ def test_focus_利空叠拥挤A进规避池(monkeypatch):
     monkeypatch.setattr(F, "news_catalyst_by_sector",
                         lambda date: {"银行": {"净催化": -8.0, "n条": 2, "利好": 0, "利空": 2}})
     monkeypatch.setattr(MS, "market_risk_appetite",
-                        lambda date: {"风险偏好": "防守", "依据": "test"})
+                        lambda date, **kw: {"风险偏好": "防守", "依据": "test"})
     panel = [_panel_row("银行", "正常活跃", 拥挤档="A", 涨停数=0)]
     foc = F.build_focus("2026-09-15", panel=panel)
     avoid = [r["板块"] for r in foc["规避板块池"]]
@@ -183,3 +183,35 @@ def test_focus_冷热不直接决定入池():
     src = inspect.getsource(F.build_focus)
     # 入池条件必须基于 catalyst / 涨停,而非"过冷"直接排除
     assert "catalyst > 0" in src or "涨停" in src
+
+
+# ───────────────────────── P2.3:宏观研判(锁 catalyst 刷屏不污染宏观) ─────────────────────────
+
+def test_macro_关税利好刷屏不判偏空():
+    """回归锁:大量'算力+出口管制(国产替代利好)'新闻不得把宏观净方向刷成偏空/关税冲击
+    (板块催化≠市场级宏观利空;此前 bug)。"""
+    from tools.analysis.sector_forecast import news_store as NS
+    indicators = {"国债": {"中国10Y环比": -0.002}, "汇率": {"环比": -0.28}}
+    news = {"宏观命中": {"关税冲击": [{"方向": "利好", "强度": 3}] * 15}}  # 15条国产替代利好
+    m = NS.derive_macro(indicators, news)
+    assert m["宏观净方向"] != "偏空"
+    assert m["宏观情景"] != "关税冲击"
+
+
+def test_macro_真关税净利空判冲击():
+    from tools.analysis.sector_forecast import news_store as NS
+    news = {"宏观命中": {"关税冲击": [{"方向": "利空", "强度": 4}] * 2}}  # 净-8
+    m = NS.derive_macro({}, news)
+    assert m["宏观情景"] == "关税冲击"
+
+
+def test_macro_利率大幅下行判降息宽松():
+    from tools.analysis.sector_forecast import news_store as NS
+    m = NS.derive_macro({"国债": {"中国10Y环比": -0.08}}, {"宏观命中": {}})
+    assert m["宏观情景"] == "降息宽松"
+
+
+def test_macro_全中性():
+    from tools.analysis.sector_forecast import news_store as NS
+    m = NS.derive_macro({"国债": {"中国10Y环比": 0.0}, "汇率": {"环比": 0.1}}, {"宏观命中": {}})
+    assert m["宏观净方向"] == "中性" and m["宏观情景"] == "中性"

@@ -75,14 +75,28 @@ def main(argv: list[str] | None = None) -> int:
     paths = RO.build_all_rosters(date, frame=frame, sectors=sectors)
     log.info("角色主表 → %d 个板块落盘 data/sector_roster/", len(paths))
 
+    # 独立新闻库(宏观指标+新闻+资金 → 宏观净方向/情景),独立落库 data/sector_news/
+    from tools.analysis.sector_forecast import news_store as NS
+    npath = NS.write_news_store(date)
+    macro = None
+    try:
+        import json as _json
+        macro = _json.loads(npath.read_text(encoding="utf-8")).get("宏观研判")
+    except Exception:
+        pass
+    log.info("独立新闻库 → %s(宏观 %s/%s)", npath,
+             (macro or {}).get("宏观净方向"), (macro or {}).get("宏观情景"))
+
     from tools.analysis.sector_forecast import focus as F
-    fpath = F.write_focus(date, panel=panel)
+    fpath = F.write_focus(date, panel=panel, macro=macro)
     log.info("重点板块池 → %s", fpath)
 
     if not args.no_report:
         from tools.analysis.sector_forecast import daily_report as DR
-        mp, jp = DR.write_report(date, panel=panel)
+        mp, jp = DR.write_report(date, panel=panel, macro=macro)
         log.info("每日板块文档 → %s", mp)
+        mkp = DR.write_market_daily(date, macro=macro)
+        log.info("每日市场综合研判 → %s", mkp)
     return 0
 
 
