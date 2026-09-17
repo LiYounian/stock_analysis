@@ -29,6 +29,7 @@ class Pick:
     council: dict[str, Any] = field(default_factory=dict)   # 综合方向/财报红旗数/龙虎榜否决/财报风险/行业
     形态: dict[str, Any] = field(default_factory=dict)       # 现价/ma5/当日涨跌/位置pos60/距60高/涨停不可买/均线多头...
     板块消息面: dict[str, Any] = field(default_factory=dict)  # board 级 tag/强弱/关键事件[]（催化证据）
+    board_regime: dict[str, Any] = field(default_factory=dict)  # sector_regime join by board：冷热标签/拥挤档/动量_截面档
     # —— 自由文本（P_entry 自报敏感性 & 记录）——
     入场_text: Optional[str] = None
     止损_text: Optional[str] = None
@@ -56,6 +57,7 @@ class ModelALabels:
     alpha_d1: Optional[float] = None      # r_d1 − 全A等权同期（D→D+1）
     alpha_exit: Optional[float] = None    # r_exit − 全A等权同期（按 exit_horizon）
     untriggered: bool = False        # = (filled is False)
+    runaway_up: bool = False         # 未触发且 D+1 收盘 > 限价（票高开冲走没回踩）→ 踏空候选
     status: str = "pending"          # settled | partial | pending | not_entered
     p_entry_self: Optional[float] = None  # 自报回踩价（MA5/MA20，从 入场_text 解析）；次列敏感性
     note: Optional[str] = None

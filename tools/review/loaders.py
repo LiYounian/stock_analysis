@@ -77,6 +77,34 @@ def _pick_from_record(date: str, board: str | None, 板块消息面: dict,
     )
 
 
+def load_board_regime(date: str, data_root: str | None = None) -> dict[str, dict]:
+    """sector_regime.json → {board: {冷热标签, 拥挤档, 动量_截面档}}（按 board join 用）。缺→{}。"""
+    doc = _load_json(analysis_dir(date, data_root) / "sector_regime.json")
+    out: dict[str, dict] = {}
+    if not doc:
+        return out
+    for b in doc.get("板块", []) or []:
+        name = b.get("板块")
+        if name:
+            out[name] = {"冷热标签": b.get("冷热标签"), "拥挤档": b.get("拥挤档"),
+                         "动量_截面档": b.get("动量_截面档")}
+    return out
+
+
+def load_market_context(date: str, data_root: str | None = None) -> dict:
+    """大盘 regime 上下文（判踏错大盘基调）：优先 今日选股.regime，回退 market_forecast.json。缺→{}。"""
+    doc = _load_json(analysis_dir(date, data_root) / f"今日选股_{date}.json")
+    if doc and doc.get("regime"):
+        r = doc["regime"]
+        return {"宏观净方向": r.get("宏观净方向"), "风险偏好": r.get("风险偏好"),
+                "hs300方向": r.get("hs300方向")}
+    mf = _load_json(analysis_dir(date, data_root) / "market_forecast.json")
+    if mf:
+        return {"宏观净方向": mf.get("宏观净方向") or mf.get("净方向"),
+                "风险偏好": mf.get("风险偏好")}
+    return {}
+
+
 def load_today_picks(date: str, data_root: str | None = None) -> list[Pick]:
     """今日选股_<date>.json → list[Pick]（version_tag=今日选股）。缺文件→[]（有声）。"""
     path = analysis_dir(date, data_root) / f"今日选股_{date}.json"
@@ -84,6 +112,7 @@ def load_today_picks(date: str, data_root: str | None = None) -> list[Pick]:
     if not doc:
         logger.warning("缺 %s（有声降级，返回空 picks）", path)
         return []
+    regimes = load_board_regime(date, data_root)
     picks: list[Pick] = []
     for bl in doc.get("板块", []) or []:
         board = bl.get("board")
@@ -91,6 +120,7 @@ def load_today_picks(date: str, data_root: str | None = None) -> list[Pick]:
         for rec in bl.get("个股", []) or []:
             p = _pick_from_record(date, board, msg, rec, "今日选股")
             if p:
+                p.board_regime = dict(regimes.get(p.board or board, {}))
                 picks.append(p)
     return picks
 

@@ -85,6 +85,14 @@ def compute_labels(pick: Pick, cache: dict, ew: dict) -> ModelALabels:
     lab.untriggered = (entry["filled"] is False)
     lab.close_positive = is_close_positive(lab.r_d1)     # None=未触发/未到期（剔出胜率分母）
 
+    # —— 踏空候选：未触发且 D+1 收盘 > 限价（票高开冲走、回踩没等到）——
+    if lab.filled is False and isinstance(lab.limit, (int, float)):
+        rows, d2i = snf._kline(pick.code, cache)
+        if rows is not None:
+            i = d2i.get(pick.date)
+            if i is not None and i + 1 < len(rows):
+                lab.runaway_up = rows[i + 1][3] > lab.limit   # D+1 close > 限价
+
     # —— 盘中破 MA5（形态.ma5 为信号日 D PIT 值）——
     ma5 = pick.形态.get("ma5")
     d1_low = _d1_low(pick.code, pick.date, cache)
