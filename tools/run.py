@@ -78,6 +78,64 @@ def _safe(label: str, fn):
         return None
 
 
+# H1-F1 · 收盘闭环有声降级告警。09-14~17 收盘 run_screen_all 的 enrich_candidates 及其后 7 步**全部裸调**,
+#   单步一崩(EMFILE 等)整条闭环中止,per-stock 记录退化为午盘版且**无任何显式信号**(午盘同 bug 被 _safe
+#   静默吞掉、收盘直接崩)。这里给收盘链每步套 _safe_gap:降级即 logger.error(高可见)+ 落
+#   data/analysis/<D>/_gap_alarm.json(哪步/原因/时间),**绝不静默**,后续独立步骤照跑。
+#   文件名用小写 _gap_alarm.json,与 output_guard 的 SEPA 缺口 marker _GAP_ALARM.json 语义区分
+#   (且 macOS 大小写不敏感文件系统上避免相互覆盖);同一轮多步降级累积进 steps 数组、不互相覆盖。
+_GAP_ALARM_NAME = "_gap_alarm.json"
+
+
+def _record_gap_alarm(as_of: str, label: str, error: BaseException) -> None:
+    """把收盘闭环某步的降级写成高可见告警(logger.error + 落盘累积)。best-effort,自身绝不抛。"""
+    import json as _json
+    import traceback as _tb
+    from datetime import datetime as _dt
+    logger.error("🔴 收盘闭环降级:步骤「%s」失败被降级跳过(闭环继续,但当日产出残缺!)—— %s: %s",
+                 label, type(error).__name__, error)
+    try:
+        day_dir = store._ANALYSIS_DIR / as_of
+        day_dir.mkdir(parents=True, exist_ok=True)
+        marker = day_dir / _GAP_ALARM_NAME
+        payload = {"alarm": "收盘闭环步骤降级(有声降级 H1-F1):当日产出可能残缺,勿当完整收盘数据用",
+                   "date": as_of, "steps": []}
+        if marker.exists():
+            try:
+                prev = _json.loads(marker.read_text(encoding="utf-8"))
+                if isinstance(prev, dict) and isinstance(prev.get("steps"), list):
+                    payload = prev
+            except Exception:  # noqa: BLE001 —— 旧文件损坏/异构则以新 payload 覆盖,不阻断
+                pass
+        payload["steps"].append({
+            "step": label,
+            "error_type": type(error).__name__,
+            "error": str(error)[:500],
+            "errno": getattr(error, "errno", None),
+            "at": _dt.now().isoformat(timespec="seconds"),
+            "traceback": "".join(_tb.format_exception_only(type(error), error)).strip()[:500],
+        })
+        payload["updated_at"] = _dt.now().isoformat(timespec="seconds")
+        marker.write_text(_json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        logger.error("🔴 降级告警已落盘:%s(累计 %d 步降级)", marker, len(payload["steps"]))
+    except Exception as e:  # noqa: BLE001 —— 告警落盘失败也不能中止闭环,但仍留一条日志
+        logger.error("降级告警落盘失败(闭环继续): %s", e)
+
+
+def _safe_gap(label: str, fn, as_of: str):
+    """收盘闭环专用 _safe:异常 → 有声降级(logger.error + 写 _gap_alarm.json)+ 返回 None + 继续。
+
+    与 _safe 的区别:_safe 是"数据源采集降级"的静默 WARNING(可接受的日常缺数据);_safe_gap 是
+    收盘闭环骨架步(serialize/事件/因子/合议/panel/选股 等)降级 —— 这类失败会让当日产出退化为
+    残缺/午盘口径,必须**高可见 + 落盘留痕**,绝不静默吞掉(H1-F1 根因即此前裸调一崩整链中止无信号)。
+    """
+    try:
+        return fn()
+    except Exception as e:
+        _record_gap_alarm(as_of, label, e)
+        return None
+
+
 # H1-F2 · fd 软上限兜底目标值。launchd 拉起的进程 RLIMIT_NOFILE 软限只有 256(交互 shell 是 1048576),
 # 09-14~17 收盘闭环即因嵌套 LLM 并发 + 每次新建不关闭的 httpx 客户端撞满 fd → EMFILE(Errno 24)连崩 4 天。
 # 入口 shell(ops/launchd/pull_refresh.sh / intraday_screen.sh)已 `ulimit -Sn`,这里是 python 侧第二道兜底:
@@ -1306,19 +1364,23 @@ def run_screen_all(codes_all: list[str], as_of: str, no_llm: bool = False,
     #    只对 cand_set(⊆ llm_subset)——新闻/LLM 情绪坚决不扩到边缘候选(最贵,控成本)。
     if no_llm:
         logger.info("数据-only 模式:候选富集跳过 LLM 情绪 + 财报文本层(情绪三层专家将弃权)")
-    enrich_report = enrich_candidates(cand_set, as_of, no_llm=no_llm)
+    # —— H1-F1 有声降级:enrich_candidates 及其后 7 步(collect_ticks/serialize/events/factor/council/panel/screen)
+    #    此前**全部裸调**,单步一崩(09-14~17 EMFILE)整条闭环中止且无信号 → per-stock 退化为午盘版。
+    #    改用 _safe_gap:任一步降级 → logger.error(高可见)+ 落 data/analysis/<D>/_gap_alarm.json,
+    #    后续独立步骤照跑(骨架步之间无硬依赖:各自读已落盘产物、缺则下游自然少一路)。
+    enrich_report = _safe_gap("候选定向富集", lambda: enrich_candidates(cand_set, as_of, no_llm=no_llm), as_of) or {}
     # 逐笔盘口归档(collect_ticks):须在 serialize 前——serialize 的 tick 块按 as_of date-pin 读当日摘要,
     # 先采后组装才进 record/个股页卡片。对 analysis_set(含边缘候选,票池级、有界)——逐笔是 6 类数值面之一。
-    collect_ticks(analysis_set)
-    run_serialize(analysis_set, as_of)
-    run_events(analysis_set, as_of)
-    run_factor(analysis_set, as_of)
-    run_council(analysis_set, as_of)                 # 边缘票获数值面公允合议分(情绪/新闻专家因无数据自然弃权)
+    _safe_gap("逐笔盘口归档", lambda: collect_ticks(analysis_set), as_of)
+    _safe_gap("record 序列化", lambda: run_serialize(analysis_set, as_of), as_of)
+    _safe_gap("事件深采", lambda: run_events(analysis_set, as_of), as_of)
+    _safe_gap("多因子预计算", lambda: run_factor(analysis_set, as_of), as_of)
+    _safe_gap("合议重算", lambda: run_council(analysis_set, as_of), as_of)   # 边缘票获数值面公允合议分(情绪/新闻专家因无数据自然弃权)
     # 流式增量推:record 含完整 council 后按批推(分片 key=code;抗断点——某批/网络失败不影响其余,末尾兜底补漏)
     for _b in _chunks(analysis_set, settings.STREAM_RECORD_BATCH):
         _push_incremental(as_of, set(_b))
-    run_panel(analysis_set)
-    run_screen(analysis_set)
+    _safe_gap("panel 组装", lambda: run_panel(analysis_set), as_of)
+    _safe_gap("选股视图", lambda: run_screen(analysis_set), as_of)
     # —— 候选池消息面三段式·回灌打分(项目根本特色:把消息面前移进每日选股并真正回灌进用得上它的策略)——
     #    策略/合议出候选后,对候选池(各策略 top-K∪自选,≤策略数×10,有界)采新闻+news_ai+三层情绪+
     #    事件+资金流,再把消息面评价**可解释线性映射成分数、回灌到候选集重算合议 → 候选集内重排**得完整分,
