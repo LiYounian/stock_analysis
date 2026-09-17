@@ -320,6 +320,20 @@ def test_schema_no_llm_price_end2end(monkeypatch, tmp_path):
     assert isinstance(stocks["605058"].get("挂单价"), (int, float))
 
 
+# ──────────────── ⑫ render 通俗操作卡 + 两层闸门脚注 ────────────────
+def test_render_operatecard(monkeypatch, tmp_path):
+    date, _ = _fake_synthesize(monkeypatch, tmp_path)
+    result = ss.synthesize(date, data_root=tmp_path, client=_FakeClient())
+    md = ss.render_md(result)
+    # 通俗金额:买点带"元"、挂限价、不追高红线
+    assert "买点：" in md and "元" in md and "挂限价买" in md
+    assert "红线：高于" in md and "别买" in md
+    assert "止损：跌破" in md
+    # 两层闸门脚注:价位层(不滞后) + 时机层(日内线·暂未接入)
+    assert "价位层" in md and "时机层" in md
+    assert "日内线" in md and "不滞后" in md and "暂未接入" in md
+
+
 if __name__ == "__main__":
     import sys
     sys.exit(pytest.main([__file__, "-v"]))

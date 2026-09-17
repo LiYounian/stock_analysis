@@ -789,6 +789,67 @@ def _fmt_form(form: Optional[dict]) -> str:
     return "/".join(parts)
 
 
+# 两层闸门脚注(方案 §3.3):价位层程序静态挂单闸门(本轮落地) + 时机层实时盘中(归日内线·暂未接入)。
+_闸门脚注 = (
+    "**入场闸门分两层**:(1)**价位层**=均线/前低算出的静态挂单闸门,**开盘前已定、当日可用不滞后**"
+    "(今日照挂限价买+不追高即可);(2)**时机层**=当日盘中「此刻扣不扣扳机」,需实时分时信号"
+    "(现价站上均线+量比>1+不追涨停/封单确认),**归日内线,本轮暂未接入——先按价位层挂单+不追高操作**。"
+)
+
+
+def _signal_str(form: Optional[dict]) -> str:
+    """把形态指标拼成一句通俗『信号』(昨涨跌·量比·距高·获利·多头)。数据不足 → 提示。"""
+    if not form or form.get("数据不足"):
+        return "形态数据不足·人工确认"
+    parts: list[str] = []
+    if form.get("当日涨跌") is not None:
+        parts.append(f"昨{_fmt_pct(form['当日涨跌'])}")
+    if form.get("量比") is not None:
+        parts.append(f"量比{form['量比']}")
+    if form.get("距20高") is not None:
+        parts.append(f"距20高{_fmt_pct(form['距20高'])}")
+    wr = form.get("获利盘")
+    if wr is not None:
+        parts.append(f"获利{wr * 100:.0f}%")
+    elif form.get("位置pos60") is not None:
+        parts.append(f"pos60={form['位置pos60']:.2f}")
+    if form.get("均线多头"):
+        parts.append("均线多头")
+    if form.get("涨停不可买"):
+        parts.append("涨停不可买")
+    return "·".join(parts) or "-"
+
+
+def _operate_card(board: str, s: dict) -> list[str]:
+    """单票**通俗操作卡**(方案 §3.2):买点(元·区间·入场方式)/止损(元)/红线(不追高·元)/信号/理由。
+
+    价位全部来自程序回填字段(挂单价/止损价/不追高上限);None → 『数据不足·人工确认』,不编。
+    """
+    form = s.get("形态") or {}
+    name = s.get("name") or ""
+    档 = s.get("档") or "-"
+    score = s.get("建议分")
+    score_s = f"{score}" if isinstance(score, (int, float)) else "-"
+    方式 = s.get("入场方式") or "-"
+    entry, stop, cap = s.get("挂单价"), s.get("止损价"), s.get("不追高上限")
+    lines = [f"- **{name} {s['code']}** ｜ {档} {score_s} ｜ 来源：{s.get('来源') or '-'} ｜ 组：{board}"]
+    if isinstance(entry, (int, float)):
+        lines.append(f"  - 买点：{entry:.2f}–{entry * 1.005:.2f} 元 挂限价买（{方式}，不追高）")
+    else:
+        lines.append(f"  - 买点：数据不足·人工确认（{方式}）")
+    if isinstance(stop, (int, float)):
+        lines.append(f"  - 止损：跌破 {stop:.2f} 元 走")
+    else:
+        lines.append("  - 止损：数据不足·人工确认")
+    if isinstance(cap, (int, float)):
+        lines.append(f"  - 红线：高于 {cap:.2f} 元 = 追高别买")
+    else:
+        lines.append("  - 红线：数据不足·人工确认")
+    lines.append(f"  - 信号：{_signal_str(form)}")
+    lines.append(f"  - 理由：{s.get('理由') or '-'}")
+    return lines
+
+
 def render_md(result: dict) -> str:
     date = result["date"]
     reg = result.get("regime") or {}
@@ -844,14 +905,16 @@ def render_md(result: dict) -> str:
                 picks.append((b["board"], s))
     L.append("")
 
-    L.append("## 四、主选深度（推荐 · 回踩限价入场 · 双依据）\n")
+    L.append("## 四、主选操作卡（推荐 · 程序回填价位 · 不追高）\n")
+    L.append(f"> {_闸门脚注}")
+    L.append("> 价位（买点/止损/红线）均为**程序按均线/前低回填的数值**（大模型只选『入场方式』类型、不产数字）。\n")
     if picks:
-        L.append("| 组 代码 名称 | 来源 | 理由(策略依据+板块依据) | 入场(回踩限价·不追高) | 止损 | 风险 |")
-        L.append("|---|---|---|---|---|---|")
         for board, s in sorted(picks, key=lambda x: -(x[1].get("建议分") or 0)):
-            L.append(f"| {board} {s['code']} {s.get('name')} | {s.get('来源') or '-'} | "
-                     f"{s.get('理由') or '-'} | {s.get('入场') or '-'} | {s.get('止损') or '-'} | "
-                     f"{s.get('风险') or '-'} |")
+            L.extend(_operate_card(board, s))
+            风险 = s.get("风险")
+            if 风险 and 风险 != "-":
+                L.append(f"  - 风险：{风险}")
+            L.append("")
     else:
         L.append("_今日无『推荐』档（宁缺毋滥/降仓/只留有硬催化或强策略的）。_")
     L.append("")
@@ -887,6 +950,9 @@ def render_md(result: dict) -> str:
     L.append("- **角色**：龙头/中军取自消息驱动块+角色关系表；跟涨=补涨先锋只作联动观察；"
              "策略=策略线直选（无板块角色）。")
     L.append("- **龙头/中军/策略为主线，跟涨只联动观察**；规避板块内票降级（除非策略面极强+形态健康）。")
+    L.append(f"- **入场闸门**：{_闸门脚注}")
+    L.append("- **价位来源**：买点/止损/红线=程序据均线(ma5/ma20)/前低回填（大模型只据形态选『入场方式』类型、"
+             "不产任何价位数字；文字里若含数字一律以程序回填为准）。")
     L.append(f"\n---\n*{result.get('免责')} 数据来源：sector_focus 消息驱动块+规避板块池 + 角色关系表 + "
              "screen_council 全A策略0合议(+附加策略) + as-of 形态。*")
     return "\n".join(L)
