@@ -34,6 +34,11 @@ import socket
 import sys
 import time
 
+try:                      # POSIX 专有;非 POSIX 平台无此模块 → fd 抬限兜底自然跳过
+    import resource
+except ImportError:       # pragma: no cover
+    resource = None
+
 import pandas as pd
 
 from tools import parallel
@@ -71,6 +76,39 @@ def _safe(label: str, fn):
     except Exception as e:
         logger.warning("%s 采集失败,降级跳过(不中止流水线): %s", label, e)
         return None
+
+
+# H1-F2 · fd 软上限兜底目标值。launchd 拉起的进程 RLIMIT_NOFILE 软限只有 256(交互 shell 是 1048576),
+# 09-14~17 收盘闭环即因嵌套 LLM 并发 + 每次新建不关闭的 httpx 客户端撞满 fd → EMFILE(Errno 24)连崩 4 天。
+# 入口 shell(ops/launchd/pull_refresh.sh / intraday_screen.sh)已 `ulimit -Sn`,这里是 python 侧第二道兜底:
+# 手跑 / 其它 wrapper 漏加 ulimit 时同样生效。只抬本进程软限、不超 hard、失败不阻断。
+FD_SOFT_LIMIT_TARGET = int(os.getenv("STOCK_FD_SOFT_LIMIT", "65536"))
+
+
+def _raise_fd_limit(target: int = FD_SOFT_LIMIT_TARGET) -> int:
+    """把本进程 RLIMIT_NOFILE 软限抬到 min(target, hard);返回生效后的软限(失败返回当前值,绝不抛)。
+
+    hard=RLIM_INFINITY 时按 target 抬;软限已 ≥ 目标则不动。打印生效值(INFO)——launchd 日志里可直接
+    看到"软限是不是还卡在 256"(规格 §1.2 待核1 的靶试点)。
+    """
+    if resource is None:
+        return -1
+    try:
+        soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+        want = target if hard == resource.RLIM_INFINITY else min(target, hard)
+        if soft < want:
+            resource.setrlimit(resource.RLIMIT_NOFILE, (want, hard))
+        soft2, hard2 = resource.getrlimit(resource.RLIMIT_NOFILE)
+        logger.info("fd 软上限(RLIMIT_NOFILE):%d → %d(hard=%s,目标 %d)%s", soft, soft2,
+                    "unlimited" if hard2 == resource.RLIM_INFINITY else hard2, target,
+                    "" if soft2 >= target else " ⚠️ 未达目标,LLM 高并发下仍有 EMFILE 风险")
+        return soft2
+    except Exception as e:  # noqa: BLE001 —— 兜底本身绝不阻断闭环
+        logger.warning("抬 fd 软上限失败(继续,不阻断):%s", e)
+        try:
+            return resource.getrlimit(resource.RLIMIT_NOFILE)[0]
+        except Exception:  # noqa: BLE001
+            return -1
 
 
 def _pool(argv: list[str] | None = None) -> list[str]:
@@ -1547,6 +1585,7 @@ def main(argv: list[str]) -> int:
     if len(argv) < 2 or argv[1] not in _CMDS:
         print(f"用法: python -m tools.run [{'|'.join(_CMDS)}] [--all]")
         return 1
+    _raise_fd_limit()   # H1-F2:launchd 下软限 256 → 抬到 65536(打印生效值);所有子命令统一受益
     return _CMDS[argv[1]](argv) or 0   # 命令返回退出码(int)则透传;返回 None 视作 0
 
 

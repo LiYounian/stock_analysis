@@ -38,6 +38,12 @@ git -C "$WORKTREE" reset --hard origin/main
 _NEW_HEAD="$(git -C "$WORKTREE" rev-parse --short HEAD 2>/dev/null || echo unknown)"
 REPO="$WORKTREE"
 cd "$REPO"
+# —— H1-F2 · fd 软上限兜底(2026-09-18):launchd 拉起的进程 RLIMIT_NOFILE 软限只有 256
+#   (`launchctl limit maxfiles` → 256 unlimited;交互 shell 是 1048576,故手跑从不复现)。
+#   09-14~17 收盘闭环连崩 4 天即撞此上限(EMFILE, Errno 24):嵌套 LLM 并发 × 每次新建不关闭的 httpx
+#   客户端把 fd 吃满。hard=unlimited,进程自己抬软限是允许的;抬不到 65536 退 10240,再不行留原值
+#   (tools/run.py 入口还有 setrlimit 兜底)。只改本进程,不动 plist / 系统 launchctl limit。
+ulimit -Sn 65536 2>/dev/null || ulimit -Sn 10240 2>/dev/null || true
 PY="${STOCK_PYTHON:-$HOME/.conda/envs/stock_analysis/bin/python}"
 D="$(date +%Y-%m-%d)"
 LOG="${STOCK_PULL_LOG:-$HOME/.local/state/stock/pull_refresh.log}"
@@ -63,6 +69,7 @@ fi
 
 {
   echo "==================== $(date) pull_refresh $D ===================="
+  echo "-- fd 软上限 nofile soft=$(ulimit -Sn) hard=$(ulimit -Hn)(H1-F2 兜底后;<65536 说明抬限未生效)--"
   # ⓪ 代码已在脚本头部由专用 worktree 卫生更到最新 origin/main(fetch + reset --hard),这里只记账:
   #    forward_scorecard 的多周滚存样本靠 data/analysis/<日期>/ 逐日累积——本 worktree 常驻不删,
   #    reset --hard 只重置 tracked 文件、不动未跟踪日期目录,故滚存在本 worktree 内照常累积(部署已 seed 历史)。

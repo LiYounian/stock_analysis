@@ -30,6 +30,12 @@ git -C "$WORKTREE" fetch --quiet origin || echo "$(date) 警告:git fetch origin
 git -C "$WORKTREE" reset --hard origin/main >/dev/null 2>&1 || echo "$(date) 警告:reset --hard origin/main 失败,用 worktree 当前代码" >&2
 REPO="$WORKTREE"
 cd "$REPO"
+# —— H1-F2 · fd 软上限兜底(2026-09-18):launchd 拉起的进程 RLIMIT_NOFILE 软限只有 256
+#   (`launchctl limit maxfiles` → 256 unlimited;交互 shell 是 1048576,故手跑从不复现)。
+#   09-14~17 收盘闭环连崩 4 天即撞此上限(EMFILE, Errno 24):嵌套 LLM 并发 × 每次新建不关闭的 httpx
+#   客户端把 fd 吃满。hard=unlimited,进程自己抬软限是允许的;抬不到 65536 退 10240,再不行留原值
+#   (tools/run.py 入口还有 setrlimit 兜底)。只改本进程,不动 plist / 系统 launchctl limit。
+ulimit -Sn 65536 2>/dev/null || ulimit -Sn 10240 2>/dev/null || true
 PY="${STOCK_PYTHON:-$HOME/.conda/envs/stock_analysis/bin/python}"
 LOG="${STOCK_INTRADAY_SCREEN_LOG:-$HOME/.local/state/stock/intraday_screen.log}"
 mkdir -p "$(dirname "$LOG")"
@@ -55,6 +61,7 @@ fi
 
 {
   echo "==================== $(date) intraday_screen ===================="
+  echo "-- fd 软上限 nofile soft=$(ulimit -Sn) hard=$(ulimit -Hn)(H1-F2 兜底后;<65536 说明抬限未生效)--"
   "$PY" -m tools.run intraday_screen "$@"
   RC=$?
   echo "-- 退出码 $RC --"
