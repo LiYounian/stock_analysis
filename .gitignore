@@ -75,3 +75,6 @@ data/signals/
 # 程序化流水线 S1/S2 周度派生过程文件(量价重算·可复现·自带 roster_changes/history 变更留痕):不入库,避免每周 diff 弄脏。
 data/analysis/sector_universe.json
 data/sector_roster_table/
+
+# 盯盘监控运行时产物(watchlist + alert流水),不入库
+data/watch/
