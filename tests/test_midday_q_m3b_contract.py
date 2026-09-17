@@ -100,6 +100,68 @@ def test_retry_budget_is_positive():
     assert F.MAX_ATTEMPTS > 1
 
 
+# ── 坑④:单次约 2000 行上限 → 必须分段拉取 ──
+#
+# 实证:一次性请求 168 交易日时,658/3210 只票的交易日数精确聚集在 42/84/125
+# (=168 的 1/4、1/2、3/4),起始日全对 → "从正确起点取到一部分就断"。
+# 换算:请求的是整天 48 根,42 日 × 48 ≈ 2016 行 ≈ 压测见过的 n=2000 截断值。
+
+def test_month_chunks_covers_range_without_gap():
+    """分段必须无缝覆盖 [start, end]:段首尾相接、不漏日、不越界。"""
+    segs = F._month_chunks("2026-01-02", "2026-09-10", months=2)
+    assert segs[0][0] == "2026-01-02"
+    assert segs[-1][1] == "2026-09-10"
+    for (_, prev_end), (nxt_start, _) in zip(segs, segs[1:]):
+        gap = pd.Timestamp(nxt_start) - pd.Timestamp(prev_end)
+        assert gap == pd.Timedelta(days=1), f"段间有缝/重叠:{prev_end}→{nxt_start}"
+
+
+def test_month_chunks_segment_stays_under_row_cap():
+    """每段的交易日数须远低于 2000/48≈42 日上限,否则分段就没意义。"""
+    segs = F._month_chunks("2026-01-02", "2026-09-10", months=2)
+    for s, e in segs:
+        cal_days = (pd.Timestamp(e) - pd.Timestamp(s)).days + 1
+        # 2 个月自然日 ≈62 → 交易日 ≈40 → ×48 根 ≈1920 行 < 2000
+        assert cal_days <= 62, f"段过长可能触发截断:{s}~{e} 共{cal_days}天"
+
+
+def test_month_chunks_single_short_range():
+    segs = F._month_chunks("2026-03-01", "2026-03-20", months=2)
+    assert segs == [("2026-03-01", "2026-03-20")]
+
+
+def test_ok_on_disk_tolerates_end_on_nontrading_day():
+    """end 落在非交易日时,不能把正常票误判成不完整(容差 10 天)。"""
+    import pathlib
+    import tempfile
+    with tempfile.TemporaryDirectory() as td:
+        path = pathlib.Path(td) / "a.parquet"
+        rows = []
+        for d in ("2026-01-02", "2026-06-01", "2026-09-04"):   # 末日早 end 6 天
+            for t in F.KEEP_TIMES:
+                rows.append({"date": d, "time": t, "open": 1.0, "high": 1.0,
+                              "low": 1.0, "close": 1.0, "volume": 1.0,
+                              "amount": 1.0})
+        pd.DataFrame(rows).to_parquet(path, index=False)
+        assert F._ok_on_disk(path, "2026-01-02", "2026-09-10")
+
+
+def test_ok_on_disk_still_rejects_segment_truncation():
+    """但 42/84/125 日那种整段尾部缺失(差几十天)必须仍被拦住。"""
+    import tempfile, pathlib
+    with tempfile.TemporaryDirectory() as td:
+        path = pathlib.Path(td) / "b.parquet"
+        rows = []
+        for d in ("2026-01-02", "2026-02-10", "2026-03-11"):   # 末日 = 坑④的 42 日档
+            for t in F.KEEP_TIMES:
+                rows.append({"date": d, "time": t, "open": 1.0, "high": 1.0,
+                              "low": 1.0, "close": 1.0, "volume": 1.0,
+                              "amount": 1.0})
+        pd.DataFrame(rows).to_parquet(path, index=False)
+        assert not F._ok_on_disk(path, "2026-01-02", "2026-09-10")
+
+
+
 # ────────────────────────────── 防未来(核心红线) ──────────────────────────────
 
 def _bars(rows):

@@ -10,7 +10,7 @@
 → M3.b 分时回测**不必等 60 个交易日未来采样**,Q1/Q2 立刻可做真回测。
    (Q3 仍需等:东财 fflow/kline 只返当天资金流,`lmt` 给多大都拿不到历史。)
 
-## 三个必须处理的 baostock 坑(v1 踩过,实测数据)
+## 四个必须处理的 baostock 坑(实测数据)
 
 **① 长会话会被掐断** —— v1 用"单次 login 跑完 126 只"的写法,跑到第 51 只
 (约 18 分钟)后**连续 73 只全报无数据**;那些票单独用新会话测完全正常
@@ -22,7 +22,16 @@
 实测最优并发:P=3 → 12/12 成功、2.0s/只;P=5 → 11/12、2.5s/只(反而更慢)。
 
 **③ 幂等必须校验内容而非仅存在性** —— 文件存在 ≠ 内容完整(见坑②)。
-→ `_ok_on_disk()` 同时校验区间覆盖与每日 bar 数。
+→ `_ok_on_disk()` 同时校验区间覆盖(带 10 天容差)与每日 bar 数。
+
+**④ 单次返回约 2000 行硬上限 → 长区间被静默截断**
+一次性请求 2026-01-02→09-10(168 交易日)时,**658/3210 只票**的交易日数精确
+聚集在 **42 / 84 / 125**(= 168 的 1/4、1/2、3/4),起始日全部正确(2026-01-05)
+→ 典型"从正确起点取到一部分就断",且 `error_code` 仍返 0。
+换算:我们请求的是**整天 48 根**(baostock 不支持按时刻过滤,落盘前才裁成
+7 个 KEEP_TIMES),42 日 × 48 ≈ **2016 行** ≈ 压测时见过的 n=2000 截断值。
+剔除率跨板块均匀(创16%/沪主17%/深主25%/科创28%)→ 不是某类票的问题。
+→ 本版**按 1.5 个月分段拉取**(≈31 交易日≈1500 行,留 25% 余量)再 concat 去重。
 
 ## 落盘格式
 
@@ -127,6 +136,10 @@ def _ok_on_disk(path: Path, start: str, end: str) -> bool:
     只判"存在"不够 —— 并发截断会留下**看似正常的半份文件**(坑②)。
     故同时校验:①区间已覆盖 ②每个交易日的 bar 数不少于 KEEP_TIMES 的一半
     (留松量:个别日确实可能缺某时刻,如停牌半天)。
+
+    ⚠️ ①的"区间已覆盖"用 `max(date) >= end - 容差`:end 常落在非交易日/
+    该票停牌日,严格相等会把正常票误判成不完整。容差 10 个自然日足够跨周末+小长假,
+    同时仍能拦住 42/84/125 日那种**整段尾部缺失**(坑④,差几十天)。
     """
     if not path.exists():
         return False
@@ -136,55 +149,109 @@ def _ok_on_disk(path: Path, start: str, end: str) -> bool:
         return False
     if df.empty:
         return False
-    if not (str(df["date"].min()) <= start and str(df["date"].max()) >= end):
+    if str(df["date"].min()) > start:
+        return False
+    end_floor = (pd.Timestamp(end) - pd.Timedelta(days=10)).strftime("%Y-%m-%d")
+    if str(df["date"].max()) < end_floor:
         return False
     per_day = df.groupby("date").size()
     return bool((per_day >= len(KEEP_TIMES) // 2).all())
 
 
-def fetch_one(code: str, start: str, end: str) -> tuple[str, int, int, str]:
-    """拉单票并落盘。返回 (code, 行数, 尝试次数, 状态)。
 
-    **每次尝试都新建 login/logout 会话** —— 长会话会被服务端掐断(坑①)。
+def _month_chunks(start: str, end: str, months: float = 1.5) -> list[tuple[str, str]]:
+    """把 [start, end] 切成每段约 `months` 个月的子区间。
+
+    ## 为什么必须分段(2026-09-17 实测的坑④)
+
+    baostock 单次返回有**约 2000 行硬上限**,超出就静默截断(`error_code` 仍返 0)。
+    我们请求的是**整天 48 根** 5min bar(baostock 不支持按时刻过滤,落盘前才裁成
+    7 个 KEEP_TIMES),所以 2000 行 ÷ 48 ≈ **42 个交易日**就到顶。
+
+    实证:2026-01-02→09-10(168 交易日)一次性拉,658/3210 只票的交易日数精确
+    聚集在 **42 / 84 / 125**(= 168 的 1/4、1/2、3/4),起始日全部正确
+    (2026-01-05)→ 典型"从正确起点取到一部分就断"。
+
+    ## 段长选 1.5 个月(不是 2 个月)
+
+    A 股约 每月 21 个交易日 → 2 个月 ≈ 42 交易日 × 48 根 ≈ **2020 行,正好踩线**。
+    1.5 个月 ≈ 31 交易日 ≈ **1500 行**,留 25% 安全余量。
+    (别为了少几次请求把段长调大 —— 踩线的代价是静默截断,比多跑几次严重得多。)
+    """
+    out: list[tuple[str, str]] = []
+    cur = pd.Timestamp(start)
+    last = pd.Timestamp(end)
+    step = pd.Timedelta(days=int(round(months * 30.44)))
+    while cur <= last:
+        seg_end = min(cur + step - pd.Timedelta(days=1), last)
+        out.append((cur.strftime("%Y-%m-%d"), seg_end.strftime("%Y-%m-%d")))
+        cur = seg_end + pd.Timedelta(days=1)
+    return out
+
+
+def _query_segment(bs, code: str, start: str, end: str) -> tuple[list[dict], str]:
+    """拉单段。返回 (rows, error_code)。调用方负责会话与重试。"""
+    rs = bs.query_history_k_data_plus(
+        _bs_code(code),
+        "date,time,open,high,low,close,volume,amount",
+        start_date=start, end_date=end, frequency="5", adjustflag="3")
+    return _parse_rows(rs), rs.error_code
+
+
+def fetch_one(code: str, start: str, end: str) -> tuple[str, int, int, str]:
+    """拉单票(分段)并落盘。返回 (code, 行数, 尝试次数, 状态)。
+
+    三层防护对应三个已实证的 baostock 坑:
+      坑① 长会话被掐断      → **每段都新建 login/logout**
+      坑② 并发静默截断      → error_code 非 0 一律重试,不落盘
+      坑④ 单次约2000行上限  → **按 1.5 个月分段**,段内远离上限;分段后 concat 去重
     """
     import baostock as bs
 
     out = OUT_DIR / f"{code}.parquet"
-    rows: list[dict] = []
-    for attempt in range(1, MAX_ATTEMPTS + 1):
-        try:
-            lg = bs.login()
-            if lg.error_code != "0":
-                time.sleep(_RETRY_BASE_SEC * attempt)
-                continue
-            rs = bs.query_history_k_data_plus(
-                _bs_code(code),
-                "date,time,open,high,low,close,volume,amount",
-                start_date=start, end_date=end, frequency="5", adjustflag="3")
-            err = rs.error_code
-            rows = _parse_rows(rs)
+    segments = _month_chunks(start, end)
+    all_rows: list[dict] = []
+    total_attempts = 0
+
+    for seg_start, seg_end in segments:
+        seg_rows: list[dict] | None = None
+        for attempt in range(1, MAX_ATTEMPTS + 1):
+            total_attempts += 1
             try:
-                bs.logout()
-            except Exception:
-                pass                        # logout 失败不影响已取到的数据
-
-            # 坑②:error_code 非 0 时数据可能被静默截断 → 一律重试,不落盘
-            if err != "0":
+                lg = bs.login()
+                if lg.error_code != "0":
+                    time.sleep(_RETRY_BASE_SEC * attempt)
+                    continue
+                rows, err = _query_segment(bs, code, seg_start, seg_end)
+                try:
+                    bs.logout()
+                except Exception:
+                    pass                    # logout 失败不影响已取到的数据
+                if err != "0":
+                    time.sleep(_RETRY_BASE_SEC * attempt)
+                    continue
+                seg_rows = rows             # 空 list 也算有效(该段可能真无交易日)
+                break
+            except Exception as e:
+                logger.debug("%s [%s~%s] 第%d次异常: %s",
+                             code, seg_start, seg_end, attempt, e)
                 time.sleep(_RETRY_BASE_SEC * attempt)
-                continue
-            if not rows:
-                # 真无数据(新股未上市/长期停牌)与瞬时失败无法区分 → 重试到上限
-                time.sleep(_RETRY_BASE_SEC * attempt)
-                continue
+        if seg_rows is None:
+            # 某段彻底失败 → 整票判失败(宁可重取,不落"缺一段"的半份数据)
+            return (code, 0, total_attempts, "fail")
+        all_rows.extend(seg_rows)
 
-            df = pd.DataFrame(rows).sort_values(["date", "time"]).reset_index(drop=True)
-            OUT_DIR.mkdir(parents=True, exist_ok=True)
-            df.to_parquet(out, index=False)
-            return (code, len(df), attempt, "ok")
-        except Exception as e:                # 网络/协议异常:退避重试
-            logger.debug("%s 第%d次异常: %s", code, attempt, e)
-            time.sleep(_RETRY_BASE_SEC * attempt)
-    return (code, 0, MAX_ATTEMPTS, "fail")
+    if not all_rows:
+        # 全段皆空:新股未上市/长期停牌/退市 —— 与瞬时失败已由上面的重试区分开
+        return (code, 0, total_attempts, "empty")
+
+    df = (pd.DataFrame(all_rows)
+            .drop_duplicates(subset=["date", "time"])      # 段边界可能重叠
+            .sort_values(["date", "time"])
+            .reset_index(drop=True))
+    OUT_DIR.mkdir(parents=True, exist_ok=True)
+    df.to_parquet(out, index=False)
+    return (code, len(df), total_attempts, "ok")
 
 
 _JOB: dict = {}
@@ -214,15 +281,22 @@ def run(start: str, end: str, *, universe: str = "focus",
         logger.info("全部已完整,无需采集")
         return 0
 
-    ok = fail = retried = 0
+    ok = fail = empty = retried = 0
     failed_codes: list[str] = []
+    empty_codes: list[str] = []
     t0 = time.time()
     with Pool(procs, initializer=_init, initargs=(start, end)) as pool:
         for i, (code, n, attempts, status) in enumerate(
                 pool.imap_unordered(_work, todo), 1):
             if status == "ok":
                 ok += 1
-                retried += (attempts > 1)
+                # 分段后每票至少 len(segments) 次尝试 → 用"超出段数"判是否真重试过
+                retried += (attempts > len(_month_chunks(start, end)))
+            elif status == "empty":
+                # 真无数据(新股未上市/退市/长期停牌)—— 与取数失败分开计,
+                # 混在一起会让失败率虚高、掩盖真问题
+                empty += 1
+                empty_codes.append(code)
             else:
                 fail += 1
                 failed_codes.append(code)
@@ -230,22 +304,25 @@ def run(start: str, end: str, *, universe: str = "focus",
                 el = time.time() - t0
                 rate = el / i
                 eta = rate * (len(todo) - i)
-                logger.info("[%d/%d] 成功%d 失败%d (重试救回%d) | %.1fs/只 | "
+                logger.info("[%d/%d] 成功%d 失败%d 无数据%d (重试救回%d) | %.1fs/只 | "
                             "已用%.0f分 剩约%.0f分",
-                            i, len(todo), ok, fail, retried, rate, el / 60, eta / 60)
+                            i, len(todo), ok, fail, empty, retried,
+                            rate, el / 60, eta / 60)
 
     el = time.time() - t0
-    logger.info("完成:成功 %d / 失败 %d / 跳过 %d,共 %d 只,用时 %.0f 分钟",
-                ok, fail, done_already, len(codes), el / 60)
-    if failed_codes:
-        # 失败清单落盘,便于单独重跑(而不是在几千行日志里捞)
+    logger.info("完成:成功 %d / 失败 %d / 无数据 %d / 跳过 %d,共 %d 只,用时 %.0f 分钟",
+                ok, fail, empty, done_already, len(codes), el / 60)
+    if failed_codes or empty_codes:
+        # 清单落盘,便于单独重跑(而不是在几千行日志里捞)
         fp = OUT_DIR.parent / "m3b_fetch_failed.json"
         fp.write_text(json.dumps({"universe": universe, "start": start, "end": end,
-                                   "failed": sorted(failed_codes)},
+                                   "failed": sorted(failed_codes),
+                                   "empty_no_data": sorted(empty_codes)},
                                   ensure_ascii=False, indent=2), encoding="utf-8")
-        logger.warning("失败 %d 只,清单见 %s(重跑同一命令会自动续)",
-                       len(failed_codes), fp)
+        logger.warning("失败 %d 只 / 无数据 %d 只,清单见 %s(重跑同一命令会自动续)",
+                       len(failed_codes), len(empty_codes), fp)
     return 0 if ok > 0 or done_already > 0 else 1
+
 
 
 def main() -> int:
