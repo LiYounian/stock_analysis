@@ -254,6 +254,49 @@ def test_non_gating_不改上游(monkeypatch, tmp_path):
     assert focus == snapshot        # 合成不得原地修改读入的 sector_focus(消息驱动块)
 
 
+# ──────────────── ⑩ 入场/止损 程序回填(堵『大模型写数字』) ────────────────
+def test_fill_entry_exit_各入场方式精确值():
+    """每种入场方式回填的挂单价/止损价/不追高上限=程序按 ma5/ma20/前低/现价 算的精确值。"""
+    form = {"ma5": 110.0, "ma20": 105.0, "前低": 100.0, "现价": 112.0}
+
+    s = ss.fill_entry_exit({"入场方式": "回踩MA5"}, form)
+    assert (s["挂单价"], s["止损价"], s["不追高上限"]) == (110.0, 105.0, 112.0)
+
+    s = ss.fill_entry_exit({"入场方式": "回踩MA20"}, form)
+    assert (s["挂单价"], s["止损价"], s["不追高上限"]) == (105.0, 100.0, 112.0)
+
+    s = ss.fill_entry_exit({"入场方式": "回踩前低"}, form)
+    assert (s["挂单价"], s["止损价"], s["不追高上限"]) == (100.0, 98.0, 112.0)  # 前低×0.98
+
+    for m in ("突破确认", "缩量企稳"):
+        s = ss.fill_entry_exit({"入场方式": m}, form)
+        assert (s["挂单价"], s["止损价"], s["不追高上限"]) == (112.0, 105.0, 114.24)  # 现价×1.02
+
+
+def test_fill_entry_exit_缺省或非法方式兜底回踩MA5():
+    form = {"ma5": 50.0, "ma20": 48.0, "前低": 45.0, "现价": 52.0}
+    for bad in (None, "", "乱填", "回踩布林"):
+        s = ss.fill_entry_exit({"入场方式": bad}, form)
+        assert s["入场方式"] == "回踩MA5"          # 兜底并回写留痕
+        assert s["挂单价"] == 50.0 and s["止损价"] == 48.0
+
+
+def test_fill_entry_exit_LLM文字数字被忽略以回填为准():
+    """核心语义:LLM 即便在文字里写了价位数字,最终价位=程序回填(大模型不产数字)。"""
+    form = {"ma5": 110.0, "ma20": 105.0, "前低": 100.0, "现价": 112.0}
+    # LLM 硬塞了自由文字价位(旧 schema 遗留 / 越权)
+    stock = {"入场方式": "回踩MA5", "入场": "挂 999 元", "止损": "跌破 888 元"}
+    ss.fill_entry_exit(stock, form)
+    assert stock["挂单价"] == 110.0 and stock["止损价"] == 105.0   # 忽略 999/888,以 ma5/ma20 为准
+
+
+def test_fill_entry_exit_数据不足不编():
+    for bad_form in ({"数据不足": True}, None, {}):
+        s = ss.fill_entry_exit({"入场方式": "回踩MA5"}, bad_form)
+        assert s["挂单价"] is None and s["止损价"] is None and s["不追高上限"] is None
+        assert "数据不足" in (s.get("价位说明") or "")
+
+
 if __name__ == "__main__":
     import sys
     sys.exit(pytest.main([__file__, "-v"]))

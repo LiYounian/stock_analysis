@@ -211,6 +211,7 @@ def pattern_metrics(df: pd.DataFrame, code: str, *, date: str) -> dict:
 
     hi20, hi60 = float(np.max(h[-20:])), float(np.max(h[-60:]))
     lo60 = float(np.min(lo[-60:]))
+    lo20 = float(np.min(lo[-20:]))            # 近20日最低价 → 回踩前低入场/止损锚点
     vol = df["volume"].to_numpy(float)
     vr = float(vol[-1] / np.mean(vol[-6:-1])) if len(vol) >= 6 and np.mean(vol[-6:-1]) else None
     # ATR14%
@@ -230,6 +231,7 @@ def pattern_metrics(df: pd.DataFrame, code: str, *, date: str) -> dict:
     return {
         "现价": round(close, 3),
         "ma5": round(ma5, 3), "ma20": round(ma20, 3), "ma60": round(ma60, 3),
+        "前低": round(lo20, 3),
         "当日涨跌": round(close / float(c[-2]) - 1.0, 4) if len(c) >= 2 else None,
         "ret5": _ret(5), "ret10": _ret(10), "ret20": _ret(20),
         "均线多头": bool(ma5 > ma10 > ma20 and close >= ma5),
@@ -325,6 +327,61 @@ def run_extra_strategies(as_of: str, *, top_k: int = EXTRA_TOP_K,
         except Exception as e:                            # noqa: BLE001
             logger.warning("附加策略 %s 跳过:%s", name, str(e)[:120])
     return hits
+
+
+# ════════════════════ 入场/止损 程序回填(堵『大模型写数字』漏洞) ════════════════════
+# LLM 只据形态从下列枚举选一个『入场方式』(不产任何价位数字);挂单价/止损价/不追高上限一律程序回填。
+ENTRY_METHODS = ("回踩MA5", "回踩MA20", "回踩前低", "突破确认", "缩量企稳")
+_入场方式_默认 = "回踩MA5"           # LLM 缺/乱填 → 兜底回踩MA5(最保守·站上5日线才买)
+
+
+def _r3(v) -> Optional[float]:
+    return round(float(v), 3) if isinstance(v, (int, float)) else None
+
+
+def fill_entry_exit(stock: dict, form: Optional[dict]) -> dict:
+    """**程序回填**入场/止损价位(核心·堵『大模型抄写数字』转写风险)。
+
+    据 `stock['入场方式']`(枚举) + 程序已算好的 `form`(ma5/ma20/前低/现价),算出三个数值写回 stock:
+      · 挂单价(entry) / 止损价(stop) / 不追高上限(cap)
+    映射(初版·方案 §3.1;判据固定,不对既往赢家调参):
+      · 回踩MA5   → 挂单=ma5;   止损=ma20;      不追高=现价
+      · 回踩MA20  → 挂单=ma20;  止损=前低;      不追高=现价
+      · 回踩前低  → 挂单=前低;  止损=前低×0.98; 不追高=现价
+      · 突破确认/缩量企稳 → 挂单=现价; 止损=ma20; 不追高=现价×1.02
+
+    **LLM 若在文字里仍写了数字 → 程序一律忽略,以本回填为准**(defense-in-depth,仿 hard_veto)。
+    form 数据不足 → 三价位=None + 标『数据不足·人工确认』,绝不编。
+    """
+    form = form or {}
+    method = stock.get("入场方式")
+    if method not in ENTRY_METHODS:
+        method = _入场方式_默认               # 缺/非法枚举 → 兜底,并回写留痕
+        stock["入场方式"] = method
+    if form.get("数据不足") or not form:
+        stock["挂单价"] = stock["止损价"] = stock["不追高上限"] = None
+        stock["价位说明"] = "数据不足·人工确认"
+        return stock
+    ma5, ma20 = form.get("ma5"), form.get("ma20")
+    前低, 现价 = form.get("前低"), form.get("现价")
+    entry = stop = cap = None
+    if method == "回踩MA5":
+        entry, stop, cap = ma5, ma20, 现价
+    elif method == "回踩MA20":
+        entry, stop, cap = ma20, 前低, 现价
+    elif method == "回踩前低":
+        entry = 前低
+        stop = 前低 * 0.98 if isinstance(前低, (int, float)) else None
+        cap = 现价
+    else:  # 突破确认 / 缩量企稳:回踩确认位=现价挂单,给 2% 追高容忍上限
+        entry = 现价
+        stop = ma20
+        cap = 现价 * 1.02 if isinstance(现价, (int, float)) else None
+    stock["挂单价"] = _r3(entry)
+    stock["止损价"] = _r3(stop)
+    stock["不追高上限"] = _r3(cap)
+    stock.pop("价位说明", None)
+    return stock
 
 
 # ════════════════════ DeepSeek 分析师合成(双依据提示词 + schema) ════════════════════
