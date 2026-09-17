@@ -231,7 +231,10 @@ def pattern_metrics(df: pd.DataFrame, code: str, *, date: str) -> dict:
     return {
         "现价": round(close, 3),
         "ma5": round(ma5, 3), "ma20": round(ma20, 3), "ma60": round(ma60, 3),
+        "ma10": round(ma10, 3),
         "前低": round(lo20, 3),
+        "当日high": round(float(h[-1]), 3),      # 强势旁路突破锚:D 日最高价(D+1 突破即确认)
+        "当日low": round(float(lo[-1]), 3),       # 旁路止损锚:跌破启动日低点即走
         "当日涨跌": round(close / float(c[-2]) - 1.0, 4) if len(c) >= 2 else None,
         "ret5": _ret(5), "ret10": _ret(10), "ret20": _ret(20),
         "均线多头": bool(ma5 > ma10 > ma20 and close >= ma5),
@@ -331,8 +334,18 @@ def run_extra_strategies(as_of: str, *, top_k: int = EXTRA_TOP_K,
 
 # ════════════════════ 入场/止损 程序回填(堵『大模型写数字』漏洞) ════════════════════
 # LLM 只据形态从下列枚举选一个『入场方式』(不产任何价位数字);挂单价/止损价/不追高上限一律程序回填。
-ENTRY_METHODS = ("回踩MA5", "回踩MA20", "回踩前低", "突破确认", "缩量企稳")
+ENTRY_METHODS = ("回踩MA5", "回踩MA20", "回踩前低", "突破确认", "缩量企稳", "突破新高确认")
 _入场方式_默认 = "回踩MA5"           # LLM 缺/乱填 → 兜底回踩MA5(最保守·站上5日线才买)
+_旁路入场方式 = "突破新高确认"        # 强势不回踩旁路专属:挂 D 日 high、受控追(见 fill_entry_exit / §3.2)
+_旁路_CAP_MULT = 1.03                # §3.2 追高硬顶倍数(D日high×此值);回测 §4.5 网格 {1.02,1.03} OOS 选
+
+# ── 强势不回踩旁路 · 够格判据阈值(§2·全部写死·预注册·绝不对既往赢家调参)──
+_旁路_量比_下 = 1.0                   # G4 温和放量下界(量比≥1 放量确认)
+_旁路_量比_上 = 2.5                   # G4 上界(排除爆量·爆量常见于一日游/见顶)
+_旁路_pos60_下 = 0.50                # G5 低位起步下界(确是启动·非刚触底)
+_旁路_pos60_上 = 0.85                # G5 上界(离顶尚有空间·严于通用0.95 veto)
+_旁路_距60高_上 = -0.08              # G6 现价距60日高≥8%空间(与G5双保险)
+_旁路_专属pos60闸 = 0.90             # §3.2 旁路专属硬闸:pos60≥此值直接踢出旁路(严于通用0.95)
 
 
 def _r3(v) -> Optional[float]:
@@ -349,6 +362,9 @@ def fill_entry_exit(stock: dict, form: Optional[dict]) -> dict:
       · 回踩MA20  → 挂单=ma20;  止损=前低;      不追高=现价
       · 回踩前低  → 挂单=前低;  止损=前低×0.98; 不追高=现价
       · 突破确认/缩量企稳 → 挂单=现价; 止损=ma20; 不追高=现价×1.02
+      · 突破新高确认(强势旁路)→ 挂单=clip(当日high, 下界现价, 上界cap); 止损=max(ma5, 当日low);
+        cap=min(当日high×_旁路_CAP_MULT, 现价×(1+涨停线-0.02))。**这是唯一允许挂单>现价的方式**
+        (受控追高:不越 cap;回踩三方式的 entry=min(entry,现价) 铁律原样保留、不受影响)。
 
     **LLM 若在文字里仍写了数字 → 程序一律忽略,以本回填为准**(defense-in-depth,仿 hard_veto)。
     form 数据不足 → 三价位=None + 标『数据不足·人工确认』,绝不编。
@@ -373,6 +389,19 @@ def fill_entry_exit(stock: dict, form: Optional[dict]) -> dict:
         entry = 前低
         stop = 前低 * 0.98 if isinstance(前低, (int, float)) else None
         cap = 现价
+    elif method == _旁路入场方式:            # 突破新高确认(强势旁路·§3.2 受控追高)
+        当日high, 当日low = form.get("当日high"), form.get("当日low")
+        if not isinstance(当日high, (int, float)) or not isinstance(现价, (int, float)):
+            stock["挂单价"] = stock["止损价"] = stock["不追高上限"] = None
+            stock["价位说明"] = "旁路数据不足(缺当日high/现价)·人工确认"
+            return stock
+        lim = limit_pct(stock.get("code") or "")
+        近涨停线 = 现价 * (1.0 + lim - 0.02)   # 追高不越"次日近涨停"线(与涨停不可买留 2% 缓冲)
+        cap = min(当日high * _旁路_CAP_MULT, 近涨停线)
+        entry = min(max(当日high, 现价), cap)   # clip(当日high, 下界现价, 上界cap):允许 entry>现价但≤cap
+        # 止损:跌破 ma5 或跌破启动日低点即走(取二者较高=更紧);单调性夹逼保证 stop<entry
+        cands = [v for v in (ma5, 当日low) if isinstance(v, (int, float))]
+        stop = max(cands) if cands else None
     else:  # 突破确认 / 缩量企稳:回踩确认位=现价挂单,给 2% 追高容忍上限
         entry = 现价
         stop = ma20
@@ -394,6 +423,93 @@ def fill_entry_exit(stock: dict, form: Optional[dict]) -> dict:
     stock["不追高上限"] = _r3(cap)
     stock.pop("价位说明", None)
     return stock
+
+
+# ════════════════════ 强势不回踩旁路 · 够格判据 + 专属硬闸(§2/§3.2) ════════════════════
+ROLE_BYPASS_OK = (ROLE_LEADER, ROLE_CORE, ROLE_STRATEGY)   # G3 可走旁路角色(跟涨排除)
+
+
+def bypass_hard_gate(form: Optional[dict]) -> Optional[str]:
+    """§3.2 旁路专属硬闸(比通用 hard_veto 更严):命中即**踢出旁路**(可回落普通回踩通道)。
+
+    当前只含"位置更严"闸:pos60 ≥ 0.90(通用 veto 是 0.95,旁路留更大安全垫防站岗)。
+    返回命中原因(留痕);未命中 → None。追高硬顶 cap 在 fill_entry_exit 落实,不在此。
+    """
+    form = form or {}
+    pos = form.get("位置pos60")
+    if isinstance(pos, (int, float)) and pos >= _旁路_专属pos60闸:
+        return f"旁路位置闸:pos60={pos:.2f}≥{_旁路_专属pos60闸}(严于通用veto·防站岗)"
+    return None
+
+
+def bypass_eligible(cand: dict, form: Optional[dict], board_ctx: Optional[dict] = None,
+                    *, require_mainline: bool = True) -> Optional[str]:
+    """§2 够格判据:一票是否够格走"强势不回踩旁路"。够格 → 返回命中说明字符串;不够格 → None。
+
+    **纯函数·判据全部写死·可复现·预注册不对既往赢家调参**。逐条 AND(任一不满足即 None):
+      G1 均线多头  G2 主线利好板块且强弱=强(require_mainline=False 时跳过·退化口径)
+      G3 角色∈{龙头/中军/策略}  G4 量比∈[1.0,2.5]  G5 pos60∈[0.50,0.85]
+      G6 距60高≤-8%  G7 当日红盘且未近涨停  G8 非涨停不可买
+    注:本函数只判"够格",不含 §3.1 通用 hard_veto / §3.2 专属闸(那两道在下游另行叠加,正交)。
+    """
+    form = form or {}
+    if form.get("数据不足"):
+        return None
+    # G1 趋势:均线多头排列
+    if not form.get("均线多头"):
+        return None
+    # G3 角色:龙头/中军/策略(跟涨不走旁路)
+    role = cand.get("role")
+    if role not in ROLE_BYPASS_OK:
+        return None
+    # G2 主线/风口:属消息利好板块且强弱=强(退化口径 require_mainline=False 时跳过)
+    if require_mainline:
+        ctx = board_ctx or cand.get("board_ctx") or {}
+        strong = str(ctx.get("强弱") or "")
+        if not cand.get("board") or "强" not in strong:
+            return None
+    # G4 温和放量
+    vr = form.get("量比")
+    if not isinstance(vr, (int, float)) or not (_旁路_量比_下 <= vr <= _旁路_量比_上):
+        return None
+    # G5 低位起步 pos60∈[0.50,0.85]
+    pos = form.get("位置pos60")
+    if not isinstance(pos, (int, float)) or not (_旁路_pos60_下 <= pos <= _旁路_pos60_上):
+        return None
+    # G6 离顶有空间:距60高≤-8%
+    d60 = form.get("距60高")
+    if not isinstance(d60, (int, float)) or d60 > _旁路_距60高_上:
+        return None
+    # G7 当日红盘且未近涨停(温和上涨·不追暴涨/连板当天)
+    chg = form.get("当日涨跌")
+    lim = limit_pct(cand.get("code") or "")
+    if not isinstance(chg, (int, float)) or not (0.0 < chg < lim - 0.02):
+        return None
+    # G8 非涨停不可买
+    if form.get("涨停不可买"):
+        return None
+    return (f"旁路够格:多头+{'主线强' if require_mainline else '主线代理'}+{role}"
+            f"+量比{vr:.2f}+pos60={pos:.2f}+距60高{d60 * 100:.1f}%+当日{chg * 100:+.1f}%")
+
+
+def maybe_route_bypass(stock: dict, cand: dict, form: Optional[dict],
+                       *, require_mainline: bool = True) -> Optional[str]:
+    """(opt-in)把够格的强势票**路由到旁路入场方式**:够格 + 未命中通用 hard_veto + 未命中 §3.2 专属闸
+    → 覆盖 `stock['入场方式']=突破新高确认` 并留痕 `stock['旁路命中']`。返回命中说明或 None(不改)。
+
+    **默认不启用**(synthesize enable_bypass=False):旁路 live 采用须先经 §5 回测跑赢基线。本函数供
+    回测/启用后调用。硬闸命中(极高位/涨停/财报/龙虎 或 pos60≥0.90)→ 不路由,该票走原回踩通道。
+    """
+    reason = bypass_eligible(cand, form, cand.get("board_ctx"), require_mainline=require_mainline)
+    if not reason:
+        return None
+    if hard_veto_reason(cand.get("role"), stock.get("council"), form):
+        return None                                   # 通用硬闸命中 → 不走旁路(交回踩/剔除)
+    if bypass_hard_gate(form):
+        return None                                   # §3.2 专属位置闸命中 → 不走旁路
+    stock["入场方式"] = _旁路入场方式
+    stock["旁路命中"] = reason
+    return reason
 
 
 # ════════════════════ DeepSeek 分析师合成(双依据提示词 + schema) ════════════════════
@@ -576,7 +692,8 @@ def apply_avoid_downgrade(stock: dict, avoid_reason: Optional[str]) -> dict:
 
 def synthesize_group(group_name: str, board_ctx: Optional[dict], candidates: list[dict],
                      council_map: dict, form_map: dict, regime: dict, *,
-                     board_tag: Optional[str] = None, client=None) -> dict:
+                     board_tag: Optional[str] = None, client=None,
+                     enable_bypass: bool = False) -> dict:
     """单组合成(利好板块 / 规避板块 / 策略直选):组多维 payload → DeepSeek client.extract →
     每票档/分/理由(双依据)+ 硬纪律回扣 + 规避降级 + 来源标注。
 
@@ -613,6 +730,9 @@ def synthesize_group(group_name: str, board_ctx: Optional[dict], candidates: lis
         s["形态"] = form_map.get(c["code"])
         apply_hard_discipline(s, c.get("role"), s["council"], s["形态"])
         apply_avoid_downgrade(s, c.get("规避"))
+        # (opt-in)强势不回踩旁路:够格 + 未命中硬闸 → 覆盖入场方式为"突破新高确认"(默认关闭·待回测放行)
+        if enable_bypass:
+            maybe_route_bypass(s, c, s["形态"])
         # 入场/止损价位一律程序回填(LLM 只给『入场方式』枚举;文字里若含数字被忽略,以回填为准)
         fill_entry_exit(s, s["形态"])
         merged.append(s)
@@ -654,7 +774,8 @@ def _merge_candidate(registry: dict[str, dict], code: str, *, name: str = "",
 
 def synthesize(date: str, *, data_root: Optional[Path] = None, client=None,
                boards: Optional[list[str]] = None, strategy_top_n: int = STRATEGY_TOP_N,
-               universe_limit: Optional[int] = None, extra_screens: bool = False) -> dict:
+               universe_limit: Optional[int] = None, extra_screens: bool = False,
+               enable_bypass: bool = False) -> dict:
     """S5 主编排(**双路并集**):策略线(全A council top-N + 附加策略)∪ 板块消息线(利好催化 + 规避降级)
     → 按组(利好板块 / 策略直选 / 规避)DeepSeek 双依据合成 → 结构化结果 dict。
     """
@@ -750,7 +871,8 @@ def synthesize(date: str, *, data_root: Optional[Path] = None, client=None,
         g = groups[key]
         board_results.append(
             synthesize_group(g["name"], g["ctx"], g["cands"], council_map, form_map,
-                             regime, board_tag=g["tag"], client=client))
+                             regime, board_tag=g["tag"], client=client,
+                             enable_bypass=enable_bypass))
 
     return {
         "date": date, "version": SYNTH_VERSION,
@@ -973,13 +1095,13 @@ def render_md(result: dict) -> str:
 def run(date: str, *, data_root: Optional[Path] = None, client=None,
         boards: Optional[list[str]] = None, write: bool = True,
         strategy_top_n: int = STRATEGY_TOP_N, universe_limit: Optional[int] = None,
-        extra_screens: bool = False) -> dict:
+        extra_screens: bool = False, enable_bypass: bool = False) -> dict:
     """S5 端到端:双路并集合成 → 落 今日选股_<date>.md + .json(data/analysis/<date>/)。返回结果 dict。"""
     from tools.analysis.market_forecast import dataroot
     root = data_root or dataroot.ensure_data_root()
     result = synthesize(date, data_root=root, client=client, boards=boards,
                         strategy_top_n=strategy_top_n, universe_limit=universe_limit,
-                        extra_screens=extra_screens)
+                        extra_screens=extra_screens, enable_bypass=enable_bypass)
     if write:
         out_dir = dataroot.analysis_dir(root) / date
         out_dir.mkdir(parents=True, exist_ok=True)
