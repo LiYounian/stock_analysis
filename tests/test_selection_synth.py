@@ -297,6 +297,19 @@ def test_fill_entry_exit_数据不足不编():
         assert "数据不足" in (s.get("价位说明") or "")
 
 
+def test_fill_entry_exit_均线空头单调性夹逼():
+    """现价跌破均线(均线空头)时,操作卡仍须满足铁律 止损<买点≤红线,不出反常卡。"""
+    # 现价 25.69 < ma5 25.92 < ma20 26.26(下跌趋势):回踩MA5 旧逻辑会给 买点25.92>红线25.69、止损26.26>买点
+    form = {"ma5": 25.92, "ma20": 26.26, "前低": 24.5, "现价": 25.69}
+    for m in ss.ENTRY_METHODS:
+        s = ss.fill_entry_exit({"入场方式": m}, dict(form))
+        e, st, cap = s["挂单价"], s["止损价"], s["不追高上限"]
+        assert st < e <= cap, f"{m}: 违反 止损<买点≤红线 (止损{st} 买点{e} 红线{cap})"
+        # 回踩类不挂到现价之上(不追)
+        if m in ("回踩MA5", "回踩MA20", "回踩前低"):
+            assert e <= form["现价"], f"{m}: 回踩限价 {e} 挂到了现价 {form['现价']} 之上"
+
+
 # ──────────────── ⑪ schema:LLM 不产数字(只给入场方式枚举) ────────────────
 def test_schema_no_llm_price():
     sch = ss.SELECTION_SCHEMA["个股"]
@@ -313,9 +326,11 @@ def test_schema_no_llm_price_end2end(monkeypatch, tmp_path):
     stocks = {s["code"]: s for b in result["板块"] for s in b["个股"]}
     s = stocks["002463"]                       # 健康票·推荐·form 齐全
     form = s["形态"]
-    # 挂单价/止损价来自程序回填(默认回踩MA5 → ma5/ma20),不是 LLM 文字里的字符串
-    assert s["挂单价"] == form["ma5"] and s["止损价"] == form["ma20"]
-    assert isinstance(s["挂单价"], (int, float))
+    # 挂单价来自程序回填(默认回踩MA5 → min(ma5,现价)·回踩限价不挂到现价之上),不是 LLM 文字里的字符串
+    assert s["挂单价"] == min(form["ma5"], form["现价"])
+    assert isinstance(s["挂单价"], (int, float)) and isinstance(s["止损价"], (int, float))
+    # 单调性铁律成立(止损<买点≤红线),不受趋势/LLM 文字影响
+    assert s["止损价"] < s["挂单价"] <= s["不追高上限"]
     # 605058 form 齐全但被剔除,价位仍程序回填,不受 LLM 文字影响
     assert isinstance(stocks["605058"].get("挂单价"), (int, float))
 

@@ -377,6 +377,18 @@ def fill_entry_exit(stock: dict, form: Optional[dict]) -> dict:
         entry = 现价
         stop = ma20
         cap = 现价 * 1.02 if isinstance(现价, (int, float)) else None
+    # 单调性夹逼:防均线空头/现价跌破均线时出现"止损≥买点"或"红线<买点"的反常卡。
+    # 铁律:回踩限价绝不挂到现价之上(不追);止损恒在买点下方;红线(不追高上限)恒不低于买点。
+    if isinstance(entry, (int, float)) and isinstance(现价, (int, float)) \
+            and method in ("回踩MA5", "回踩MA20", "回踩前低"):
+        entry = min(entry, 现价)                       # 回踩限价不挂到现价之上
+    if isinstance(entry, (int, float)):
+        if isinstance(stop, (int, float)) and stop >= entry:
+            stop = entry * 0.98                        # 止损恒低于买点
+        if isinstance(cap, (int, float)):
+            cap = max(cap, entry)                      # 红线恒不低于买点
+        else:
+            cap = entry
     stock["挂单价"] = _r3(entry)
     stock["止损价"] = _r3(stop)
     stock["不追高上限"] = _r3(cap)
