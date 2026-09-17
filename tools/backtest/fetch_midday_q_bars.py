@@ -133,13 +133,19 @@ def _parse_rows(rs) -> list[dict]:
 def _ok_on_disk(path: Path, start: str, end: str) -> bool:
     """已落盘文件是否可信(幂等判据)。
 
-    只判"存在"不够 —— 并发截断会留下**看似正常的半份文件**(坑②)。
-    故同时校验:①区间已覆盖 ②每个交易日的 bar 数不少于 KEEP_TIMES 的一半
-    (留松量:个别日确实可能缺某时刻,如停牌半天)。
+    只判"存在"不够 —— 并发/上限截断会留下**看似正常的半份文件**(坑②④)。
+    故校验三项:①起始已覆盖 ②末尾已覆盖 ③绝大多数交易日的 bar 数达标。
 
-    ⚠️ ①的"区间已覆盖"用 `max(date) >= end - 容差`:end 常落在非交易日/
-    该票停牌日,严格相等会把正常票误判成不完整。容差 10 个自然日足够跨周末+小长假,
-    同时仍能拦住 42/84/125 日那种**整段尾部缺失**(坑④,差几十天)。
+    ⚠️ 三项都要留容差,否则会把正常票误判成需重取(等于白跑数小时):
+
+    · **区间两端各留 10 天** —— start/end 常落在非交易日(周末/长假)或该票停牌日。
+      实证:请求 start=2026-01-02(元旦后周五),首个有数据交易日是 01-05(周一),
+      start 侧不给容差时 **100% 的票被误判**。10 天足够跨周末+小长假,
+      同时仍能拦住 42/84/125 日那种整段缺失(差几十天)。
+
+    · **每日 bar 数允许少数日不达标** —— 停牌半日/临时休市会让某天只有 2 根,
+      用 `.all()` 则单日异常就否定整票。实证:000002 有 166 天是完整 7 根、
+      仅末日 2 根,却被判废。故改为要求 **≥95% 的交易日达标**。
     """
     if not path.exists():
         return False
@@ -149,13 +155,15 @@ def _ok_on_disk(path: Path, start: str, end: str) -> bool:
         return False
     if df.empty:
         return False
-    if str(df["date"].min()) > start:
+    start_ceil = (pd.Timestamp(start) + pd.Timedelta(days=10)).strftime("%Y-%m-%d")
+    if str(df["date"].min()) > start_ceil:
         return False
     end_floor = (pd.Timestamp(end) - pd.Timedelta(days=10)).strftime("%Y-%m-%d")
     if str(df["date"].max()) < end_floor:
         return False
     per_day = df.groupby("date").size()
-    return bool((per_day >= len(KEEP_TIMES) // 2).all())
+    good_ratio = float((per_day >= len(KEEP_TIMES) // 2).mean())
+    return good_ratio >= 0.95
 
 
 

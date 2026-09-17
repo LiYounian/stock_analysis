@@ -146,6 +146,67 @@ def test_ok_on_disk_tolerates_end_on_nontrading_day():
         assert F._ok_on_disk(path, "2026-01-02", "2026-09-10")
 
 
+def test_ok_on_disk_tolerates_start_on_nontrading_day():
+    """start 侧同样要容差 —— 回归锁。
+
+    请求 start=2026-01-02(元旦后周五)时,首个有数据交易日常是 01-05(周一)。
+    start 侧漏了容差会导致 **100% 的票被判需重取**(实测踩过,等于白跑 7 小时)。
+    """
+    import pathlib
+    import tempfile
+    with tempfile.TemporaryDirectory() as td:
+        path = pathlib.Path(td) / "s.parquet"
+        rows = []
+        for d in ("2026-01-05", "2026-06-01", "2026-09-10"):   # 首日晚 start 3 天
+            for t in F.KEEP_TIMES:
+                rows.append({"date": d, "time": t, "open": 1.0, "high": 1.0,
+                              "low": 1.0, "close": 1.0, "volume": 1.0,
+                              "amount": 1.0})
+        pd.DataFrame(rows).to_parquet(path, index=False)
+        assert F._ok_on_disk(path, "2026-01-02", "2026-09-10"), \
+            "start 侧容差缺失 → 正常票被误判为需重取"
+
+
+def test_ok_on_disk_tolerates_few_short_days():
+    """个别交易日 bar 不足(停牌半日)不该否定整票 —— 回归锁。
+
+    实测:000002 有 166 天完整 7 根、仅末日 2 根,用 `.all()` 会被整票判废。
+    改为要求 ≥95% 的交易日达标。
+    """
+    import pathlib
+    import tempfile
+    with tempfile.TemporaryDirectory() as td:
+        path = pathlib.Path(td) / "p.parquet"
+        rows = []
+        days = [f"2026-{m:02d}-{d:02d}" for m in range(1, 10) for d in (1, 5, 10)]
+        for i, d in enumerate(days):
+            times = F.KEEP_TIMES if i < len(days) - 1 else F.KEEP_TIMES[:2]
+            for t in times:
+                rows.append({"date": d, "time": t, "open": 1.0, "high": 1.0,
+                              "low": 1.0, "close": 1.0, "volume": 1.0,
+                              "amount": 1.0})
+        pd.DataFrame(rows).to_parquet(path, index=False)
+        assert F._ok_on_disk(path, "2026-01-01", "2026-09-10"), \
+            "单日停牌导致整票被判废(per_day 校验过严)"
+
+
+def test_ok_on_disk_rejects_many_short_days():
+    """但**大量**日 bar 不足仍要判不可信(那是真截断/坏数据)。"""
+    import pathlib
+    import tempfile
+    with tempfile.TemporaryDirectory() as td:
+        path = pathlib.Path(td) / "q.parquet"
+        rows = []
+        days = [f"2026-{m:02d}-{d:02d}" for m in range(1, 10) for d in (1, 5, 10)]
+        for d in days:
+            for t in F.KEEP_TIMES[:2]:            # 每天都只 2 根
+                rows.append({"date": d, "time": t, "open": 1.0, "high": 1.0,
+                              "low": 1.0, "close": 1.0, "volume": 1.0,
+                              "amount": 1.0})
+        pd.DataFrame(rows).to_parquet(path, index=False)
+        assert not F._ok_on_disk(path, "2026-01-01", "2026-09-10")
+
+
 def test_ok_on_disk_still_rejects_segment_truncation():
     """但 42/84/125 日那种整段尾部缺失(差几十天)必须仍被拦住。"""
     import tempfile, pathlib
