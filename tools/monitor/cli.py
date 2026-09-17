@@ -89,7 +89,7 @@ def cmd_run(args) -> None:
         print("当前无 watchlist,先 load-picks / add")
         return
     engine.run(wl, get_notifier(args.notifier), interval=args.interval,
-               respect_session=not args.no_session)
+               respect_session=not args.no_session, max_alerts_per_min=args.max_per_min)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -123,6 +123,8 @@ def build_parser() -> argparse.ArgumentParser:
     rn.add_argument("--interval", type=float, default=4.0)
     rn.add_argument("--notifier", default="desktop")
     rn.add_argument("--no-session", action="store_true", help="忽略交易时段闸门(联调用)")
+    rn.add_argument("--max-per-min", type=int, default=6, dest="max_per_min",
+                    help="全局每分钟弹窗上限(防刷屏),<=0 关闭节流")
     rn.set_defaults(func=cmd_run)
     return p
 

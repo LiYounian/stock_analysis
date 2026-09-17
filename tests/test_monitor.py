@@ -17,7 +17,7 @@ from datetime import datetime, timedelta
 import pytest
 
 from tools.monitor import converter, engine
-from tools.monitor.notify import DesktopNotifier, LogNotifier, get_notifier
+from tools.monitor.notify import DesktopNotifier, LogNotifier, Notifier, ThrottledNotifier, get_notifier
 from tools.monitor.schema import CST, Alert, Trigger, WatchItem, Watchlist
 
 
@@ -182,6 +182,51 @@ def test_desktop_notifier_degrades(monkeypatch):
     assert n._enabled is False
     n.notify(Alert(code="c", name="n", trigger_id="t", kind="stop_loss",
                    action="止损", price=1.0, value=2.0))                # 不抛异常即通过
+
+
+def test_throttle_caps_per_minute():
+    """全局每分钟上限:超出丢弃弹窗;窗口滑过后恢复。alerts.jsonl 全量留痕由引擎独立完成,不受影响。"""
+    got = []
+
+    class _Rec(Notifier):
+        name = "rec"
+        def notify(self, alert):
+            got.append(alert.trigger_id)
+
+    clk = {"t": 0.0}
+    th = ThrottledNotifier(_Rec(), max_per_min=2, clock=lambda: clk["t"])
+
+    def _a(i):
+        return Alert(code="c", name="n", trigger_id=str(i), kind="stop_loss",
+                     action="x", price=1.0, value=1.0)
+
+    for i in range(5):                       # 同一分钟发5条 → 只放行前2条
+        th.notify(_a(i))
+    assert got == ["0", "1"]
+    clk["t"] = 61.0                          # 窗口滑过 → 再放行
+    th.notify(_a(9))
+    assert got == ["0", "1", "9"]
+
+
+def test_throttle_in_engine_run(tmp_path, monkeypatch):
+    """引擎默认包 ThrottledNotifier:多票同轮触发时弹窗受全局上限约束,jsonl 仍全量落。"""
+    items = [WatchItem(code=f"00000{i}", name=f"票{i}", triggers=[
+        Trigger(id="stop", kind="stop_loss", op="<=", value=10.0, action="止损")]) for i in range(4)]
+    wl = Watchlist(date="2026-09-17", items=items)
+    got = []
+
+    class _Rec(LogNotifier):
+        def notify(self, alert):
+            got.append(alert.code)
+
+    import tools.monitor.engine as eng
+    monkeypatch.setattr(eng.gtimg_quote, "fetch_quotes",
+                        lambda codes: {c: {"price": 9.0} for c in codes})
+    eng.run(wl, _Rec(), interval=0, root=tmp_path, max_rounds=1,
+            respect_session=False, max_alerts_per_min=2)
+    assert len(got) == 2                                          # 4票触发,弹窗被限到2
+    apath = tmp_path / "2026-09-17_alerts.jsonl"
+    assert len(apath.read_text(encoding="utf-8").splitlines()) == 4   # jsonl 全量留痕
 
 
 def test_get_notifier_fallback():

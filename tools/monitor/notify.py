@@ -64,6 +64,37 @@ class DesktopNotifier(Notifier):
             logger.warning("osascript 弹窗失败(已降级日志):%s", e)
 
 
+class ThrottledNotifier(Notifier):
+    """全局弹窗节流(防开盘/尾盘剧烈波动时十几票同时触发刷屏)。
+
+    装饰任意底层 notifier:滑动 60s 窗口内最多弹 max_per_min 条,超出的**丢弃弹窗**并记日志。
+    注意:只节流"弹窗"这一步;alerts.jsonl 全量留痕由引擎独立完成,不受本节流影响(复盘不丢)。
+    clock 可注入(默认 time.monotonic),便于测试。与去抖 once 正交:once 管"每票每触发一次",
+    本节流管"全局每分钟总量"。
+    """
+    name = "throttle"
+
+    def __init__(self, inner: Notifier, max_per_min: int = 6, *, clock=None) -> None:
+        import time as _t
+        from collections import deque
+        self._inner = inner
+        self._max = max_per_min
+        self._clock = clock or _t.monotonic
+        self._hits = deque()
+        self.name = f"throttle({getattr(inner, 'name', '?')})"
+
+    def notify(self, alert: Alert) -> None:
+        now = self._clock()
+        while self._hits and now - self._hits[0] >= 60.0:
+            self._hits.popleft()
+        if len(self._hits) >= self._max:
+            logger.info("弹窗节流:本分钟已弹 %d 条(上限%d),略过 %s(仍落 alerts.jsonl)",
+                        len(self._hits), self._max, alert.title())
+            return
+        self._hits.append(now)
+        self._inner.notify(alert)
+
+
 class MultiNotifier(Notifier):
     """广播到多个后端(留给未来:桌面+bot 同时发)。"""
     name = "multi"

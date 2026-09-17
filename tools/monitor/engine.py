@@ -17,7 +17,7 @@ from typing import Optional
 
 from tools.collectors import calendar as cal
 from tools.collectors import gtimg_quote
-from tools.monitor.notify import Notifier, get_notifier
+from tools.monitor.notify import Notifier, ThrottledNotifier, get_notifier
 from tools.monitor.schema import CST, WATCH_DIR, Alert, Trigger, WatchItem, Watchlist
 
 logger = logging.getLogger("monitor.engine")
@@ -112,9 +112,15 @@ def _append_alert(date: str, alert: Alert, root: Optional[Path] = None) -> None:
 
 def run(watchlist: Watchlist, notifier: Optional[Notifier] = None, *,
         interval: float = 4.0, root: Optional[Path] = None,
-        max_rounds: Optional[int] = None, respect_session: bool = True) -> None:
-    """盯当日 watchlist。max_rounds/respect_session 供测试与联调(生产缺省常驻+守时段)。"""
+        max_rounds: Optional[int] = None, respect_session: bool = True,
+        max_alerts_per_min: int = 6) -> None:
+    """盯当日 watchlist。max_rounds/respect_session 供测试与联调(生产缺省常驻+守时段)。
+
+    max_alerts_per_min>0 时用 ThrottledNotifier 包裹(全局弹窗节流·防刷屏);<=0 关闭节流。
+    """
     notifier = notifier or get_notifier()
+    if max_alerts_per_min and max_alerts_per_min > 0:
+        notifier = ThrottledNotifier(notifier, max_alerts_per_min)
     codes = watchlist.codes()
     if not codes:
         logger.warning("watchlist 为空,无可盯标的")
