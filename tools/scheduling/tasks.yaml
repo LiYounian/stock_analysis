@@ -242,3 +242,113 @@ tasks:
     enabled: false
     notify_on: [failure]
     tags: [local, git]
+
+  # ────────────────────────────────────────────────────────────────────
+  # 午盘 Q(14:30 首判 + 14:50 复核 → 尾盘买 → 次日尾盘卖)
+  #
+  # 为什么要 3 个专用快照 job,而不复用现有 com.stock.intraday(slot=1030):
+  #   共用的 intraday_snapshot.sh 裸调 --slot、不传 --codes → 落到 resolve_targets()
+  #   的默认标的「上一交易日选股 ∪ 自选池」(约18只),那是"跟踪已知标的"语义;
+  #   午盘 Q 要的是"扫固定焦点池126只找新候选"。实证 2026-09-16:不传 --codes 的
+  #   1430 快照只覆盖焦点池 6/126(4.8%)→ 选股结果无效。
+  #   按 M1 契约稿 §一:**共用采集脚本零改**,午盘Q只加自己的 wrapper/plist 传对参数。
+  #
+  # breadth_1430/1450:现有 com.stock.breadth 只跑 15:05(slot=1505),覆盖不到午盘Q
+  #   判定时点;market_breadth.sh 已由 BREADTH_SLOT 参数化 → 零改脚本,只加 plist。
+  #
+  # 时序(launchd 无 job 依赖机制 → M1契约§六.3 方案α 固定错峰;
+  #      StartCalendarInterval 不支持秒,粒度=分钟):
+  #   10:30  快照 1030 ── Q1 AmPmRatio 的上午量能基准(缺则降级用 vol_ratio,
+  #                        实测 94% 的票都能过阈值 → 该过滤形同虚设)
+  #   14:30  快照 1430 + breadth 1430
+  #   14:31  gate+screen 1430(首判)
+  #   14:50  快照 1450 + breadth 1450
+  #   14:51  gate+screen 1450(复核,与首判交叉确认)
+  #   14:53  gate+screen final(合并两段;闸门翻转到弱势/崩盘则强制清空)
+  #
+  # ⚠️ 全部 enabled: false —— 午盘Q三条策略 M3.a 回测**均未达标**(按 _回测与评估口径.md
+  #   §五 裁决:回撤 -20%~-62% 远超 -10% 红线,且 Q1/Q2 超额收益为负、bootstrap 95%CI
+  #   跨 0 不显著)。这些 job 的作用是**为 M3.b 分时回测积累真实快照**(需 60 交易日),
+  #   属数据采集,不代表策略可上生产。装载与否由用户决定(runbook 明示 agent 不执行 launchctl)。
+  - id: midday_q_snapshot_1030
+    description: "午盘Q专用快照 10:30(焦点池126只;Q1 AmPmRatio 的上午量能基准)"
+    cmd: ["bash", "ops/launchd/midday_q_snapshot.sh"]
+    cron: "30 10 * * mon-fri"
+    timeout_sec: 600
+    retries: 1
+    enabled: false
+    notify_on: [failure, misfire]
+    tags: [local, intraday, midday_q]
+
+  - id: midday_q_snapshot_1430
+    description: "午盘Q专用快照 14:30(焦点池126只;首判数据源)"
+    cmd: ["bash", "ops/launchd/midday_q_snapshot.sh"]
+    cron: "30 14 * * mon-fri"
+    timeout_sec: 600
+    retries: 1
+    enabled: false
+    notify_on: [failure, misfire]
+    tags: [local, intraday, midday_q]
+
+  - id: midday_q_snapshot_1450
+    description: "午盘Q专用快照 14:50(焦点池126只;复核数据源)"
+    cmd: ["bash", "ops/launchd/midday_q_snapshot.sh"]
+    cron: "50 14 * * mon-fri"
+    timeout_sec: 600
+    retries: 1
+    enabled: false
+    notify_on: [failure, misfire]
+    tags: [local, intraday, midday_q]
+
+  - id: breadth_1430
+    description: "全A广度 14:30 slot(午盘Q闸门 G3/G4/G5 用;复用 market_breadth.sh)"
+    cmd: ["python", "-m", "tools.pipeline.market_breadth", "--slot", "1430"]
+    cron: "30 14 * * mon-fri"
+    timeout_sec: 600
+    retries: 1
+    enabled: false
+    notify_on: [failure, misfire]
+    tags: [local, intraday, breadth, midday_q]
+
+  - id: breadth_1450
+    description: "全A广度 14:50 slot(午盘Q闸门 G3/G4/G5 用;复用 market_breadth.sh)"
+    cmd: ["python", "-m", "tools.pipeline.market_breadth", "--slot", "1450"]
+    cron: "50 14 * * mon-fri"
+    timeout_sec: 600
+    retries: 1
+    enabled: false
+    notify_on: [failure, misfire]
+    tags: [local, intraday, breadth, midday_q]
+
+  - id: midday_q_1430
+    description: "午盘Q 首判 14:31(gate.stage1_1430 + screen.stage1_1430)"
+    cmd: ["bash", "ops/launchd/midday_q_pipeline.sh"]
+    cron: "31 14 * * mon-fri"
+    timeout_sec: 900
+    retries: 1
+    enabled: false
+    depends_on: [midday_q_snapshot_1430, breadth_1430]
+    notify_on: [failure, misfire]
+    tags: [local, intraday, midday_q, screen]
+
+  - id: midday_q_1450
+    description: "午盘Q 复核 14:51(gate.stage2_1450 + screen.stage2_1450;与首判交叉确认)"
+    cmd: ["bash", "ops/launchd/midday_q_pipeline.sh"]
+    cron: "51 14 * * mon-fri"
+    timeout_sec: 900
+    retries: 1
+    enabled: false
+    depends_on: [midday_q_snapshot_1450, breadth_1450, midday_q_1430]
+    notify_on: [failure, misfire]
+    tags: [local, intraday, midday_q, screen]
+
+  - id: midday_q_final
+    description: "午盘Q 收官 14:53(合并两段;闸门翻转到弱势/崩盘则强制清空)"
+    cmd: ["bash", "ops/launchd/midday_q_pipeline.sh"]
+    cron: "53 14 * * mon-fri"
+    timeout_sec: 600
+    retries: 1
+    enabled: false
+    depends_on: [midday_q_1450]
+    notify_on: [failure, misfire]
+    tags: [local, intraday, midday_q, screen]

@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.stock.breadth_1450</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>/Users/yqg/.local/state/stock/bin/stock-launchd-bootstrap.sh</string>
+    <string>market_breadth.sh</string>
+  </array>
+  <!-- 午盘 Q 需要 1430/1450 两个时点的全A广度(gate 的 G3/G4/G5)。
+       现有 com.stock.breadth 只跑 15:05(slot=1505),覆盖不到午盘 Q 的判定时点。
+       market_breadth.sh 已由 BREADTH_SLOT 参数化 → **零改共用脚本**,只加本 plist(M1契约§2.2)。
+       gate 会在读之前把 data/breadth/<date>.json 拷成 <date>_T<slot>.json 副本(§六.1 方案β),
+       故同日多个 slot 互不覆盖。 -->
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>BREADTH_SLOT</key>
+    <string>1450</string>
+  </dict>
+  <key>StartCalendarInterval</key>
+  <array>
+    <dict><key>Weekday</key><integer>1</integer><key>Hour</key><integer>14</integer><key>Minute</key><integer>50</integer></dict>
+    <dict><key>Weekday</key><integer>2</integer><key>Hour</key><integer>14</integer><key>Minute</key><integer>50</integer></dict>
+    <dict><key>Weekday</key><integer>3</integer><key>Hour</key><integer>14</integer><key>Minute</key><integer>50</integer></dict>
+    <dict><key>Weekday</key><integer>4</integer><key>Hour</key><integer>14</integer><key>Minute</key><integer>50</integer></dict>
+    <dict><key>Weekday</key><integer>5</integer><key>Hour</key><integer>14</integer><key>Minute</key><integer>50</integer></dict>
+  </array>
+  <key>RunAtLoad</key>
+  <false/>
+  <key>StandardOutPath</key>
+  <string>/Users/yqg/.local/state/stock/breadth_1450.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/yqg/.local/state/stock/breadth_1450.err.log</string>
+</dict>
+</plist>
