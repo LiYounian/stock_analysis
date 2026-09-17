@@ -33,7 +33,7 @@ def _hist():
 
 
 _Q = {"price": 11.0, "open": 10.5, "high": 11.3, "low": 10.4,
-      "volume": 2000.0, "amount_wan": 2200.0, "turnover": 2.5, "pct_chg": 8.9}
+      "volume": 2000.0, "amount_wan": 2200.0, "turnover": 2.5, "pct_chg": 8.9}   # volume 已是 gtimg_quote 归一后的「股」
 
 
 # ————————————————————————————————————————————————
@@ -45,7 +45,7 @@ def test_midday_bar_row_units_and_close():
     assert list(bar.columns) == isr._MASTER_COLS          # schema 对齐主档
     assert r["date"] == pd.Timestamp("2026-09-08")
     assert r["close"] == 11.0                              # close = 11:30 冻结价
-    assert r["volume"] == 2000.0 * 100                     # 手→股
+    assert r["volume"] == 2000.0                           # gtimg_quote 已归一「股」,midday_bar 不再 ×100
     assert r["amount"] == 2200.0 * 10000                   # 万元→元
     assert r["turnover"] == 2.5 and r["pct_chg"] == 8.9    # 百分数同口径直取
 

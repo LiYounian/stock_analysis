@@ -53,23 +53,55 @@ def _num(x):
         return None
 
 
+def _to_shares(code, vol, price, amt_wan):
+    """gtimg 成交量归一到主档口径「股」,**采集层单一归一点**,下游不再 ×100。
+
+    背景:gtimg(`qt.gtimg.cn` 批量快照,以及 `fqkline` K线端点)对**科创板 688/689
+    段返回"股"**、其余板块返回"手"(2026-09-17 在线实证见 `exchange.is_star_market`)。
+    历史上采集层对全部代码一律 ×100 → 618 只科创板 volume 被高估 100 倍。
+
+    判据优先级:①**量额自证**——`amount(元) ≈ close(元) × volume(股)` ⇒
+    `vol×price/(amount)` 比值≈1 说明本就是"股",≈0.01 说明是"手"需 ×100;
+    ②自证不了(缺 amount/price 或比值落在灰区)→ 回落**代码段规则**
+    (科创板"股"、其余"手→×100")。自证优先于代码段:即便代码段判错、或源方哪天
+    改口径,只要 amount 在位就能纠回来;两者都用不上时保守按代码段。
+    """
+    if vol is None:
+        return None
+    if price and amt_wan and vol > 0:
+        r = vol * price / (amt_wan * 1e4)
+        if 0.5 <= r <= 2.0:                 # 已是「股」
+            return vol
+        if 0.005 <= r <= 0.02:              # 是「手」,×100 → 股
+            return vol * 100.0
+        logger.warning("gtimg %s 量额比 %.3g 落灰区,无法自证单位,回落代码段规则", code, r)
+    return vol if exchange.is_star_market(code) else vol * 100.0
+
+
 def parse_line(line: str) -> tuple[str, dict] | None:
-    """单行 `v_sz002811="51~郑中设计~002811~..."` → (code, 字段 dict);异常/空行 → None。"""
+    """单行 `v_sz002811="51~郑中设计~002811~..."` → (code, 字段 dict);异常/空行 → None。
+
+    `volume` 已归一到主档口径「股」(见 `_to_shares`);`volume_raw` 保留源方原值供审计。
+    """
     parts = line.split("~")
     if len(parts) < _MIN_PARTS:
         return None
     code = parts[2].strip()
     if not code:
         return None
+    vol_raw = _num(parts[6])                 # 源方成交量:688/689 为股、其余为手
+    price = _num(parts[3])
+    amt_wan = _num(parts[37])
     return code, {
         "name": parts[1],
-        "price": _num(parts[3]),            # 现价
+        "price": price,                     # 现价
         "prev_close": _num(parts[4]),       # 昨收
         "open": _num(parts[5]),
         "high": _num(parts[33]),
         "low": _num(parts[34]),
-        "volume": _num(parts[6]),           # 成交量(手)
-        "amount_wan": _num(parts[37]),      # 成交额(万元)
+        "volume": _to_shares(code, vol_raw, price, amt_wan),   # 已归一「股」,下游不再 ×100
+        "volume_raw": vol_raw,              # 源方原值(688/689=股、其余=手),审计用
+        "amount_wan": amt_wan,              # 成交额(万元)
         "pct_chg": _num(parts[32]),         # 涨跌幅%
         "change": _num(parts[31]),          # 涨跌额
         "vol_ratio": _num(parts[49]),       # 量比

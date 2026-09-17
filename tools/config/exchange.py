@@ -98,3 +98,18 @@ def is_bj(code) -> bool:
 def is_a_code(code) -> bool:
     """是否 6 位 A 股代码(能判出交易所即为是)。不排除指数代码,调用方另行剔除。"""
     return exchange_of(code) is not None
+
+
+def is_star_market(code) -> bool:
+    """是否科创板代码段:688xxx(科创板股票)+ 689xxx(科创板 CDR)。
+
+    为什么这条判据也放真源:腾讯 gtimg 的两个端点(批量快照 `qt.gtimg.cn`、日K
+    `web.ifzq.gtimg.cn/fqkline`)对这两段返回的 volume 单位是**股**,其余板块是**手**
+    (2026-09-17 在线实测:688981/688802/688795/689009 的 volume×price/amount ≈ 1,
+    600519/300750/000001/920002 ≈ 0.01)。采集层若一律 ×100 就把 618 只票的成交量
+    高估 100 倍——判"哪段是科创板"只写这一份,采集层按它条件化归一。
+    """
+    c = str(code).strip()
+    if len(c) != 6 or not c.isdigit():
+        return False
+    return c[:3] in ("688", "689")
