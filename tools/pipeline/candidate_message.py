@@ -72,7 +72,7 @@ def _cfg() -> dict:
 def _concurrency(cfg: dict | None = None) -> int:
     """候选池富集(采集+情绪LLM+组装+回灌打分)的**有界并发度**(config「消息面回灌.并发数」)。
 
-    config 默认 12(09-13 B1 提速由 6 上调;env CANDMSG_WORKERS 覆盖);**返回 1 = 退回串行**
+    config 默认 6(09-13 B1 提速曾由 6 上调到 12,09-18 H1 因 EMFILE 回调到 6;env CANDMSG_WORKERS 覆盖);**返回 1 = 退回串行**
     (kill-switch,逐值等价旧串行路径)。下限钳到 1(config 误配 0/负数不致零线程)。别太高防 LLM
     网关 429(见 config 注释,client 自带退避;首日盯 429)。
     (注:cfg 完全缺「并发数」键时的防御兜底仍为 6——生产恒读 config 走 12,该兜底只防 config 结构缺失。)

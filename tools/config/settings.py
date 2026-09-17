@@ -72,7 +72,11 @@ LLM_RETRY_BACKOFF_BASE = float(os.getenv("LLM_RETRY_BACKOFF_BASE", "0.5"))  # �
 # 上调 4→10 直击 I/O 主体;仍可经 env 覆盖(想回退稳妥值即 LLM_EXTRACT_WORKERS=4,无需改代码)。
 # ⚠️上线首日盯网关 429/Connection error 日志(client.py 会 WARNING「LLM 瞬时错误…退避」),
 #   若失败率抬头就经 env 回调到 6/8。
-LLM_EXTRACT_WORKERS = int(os.getenv("LLM_EXTRACT_WORKERS", "10"))   # ↑并发直击I/O(4→10);盯429限流,超标 env 回调
+# **09-18 H1 回调 10→4**:09-13 提速后收盘闭环(launchd 下 fd 软限仅 256)09-14~17 连崩 4 天 EMFILE(Errno 24)——
+#   外层 ENRICH_WORKERS × 内层本值嵌套 = 100 在飞 LLM 请求,每次 get_client() 新建不关闭的 httpx 客户端把
+#   fd 吃满。回到 09-13 前实测稳定值 4;待 client 复用/关闭 + 全局 in-flight 闸(H1-F4)落地后再逐步调回。
+#   见 docs/计划/2026-09-18_H1H5_数据地基缺陷_诊断与修复方案.md §H1。
+LLM_EXTRACT_WORKERS = int(os.getenv("LLM_EXTRACT_WORKERS", "4"))   # 09-18 回稳妥值 4(09-13 曾提到 10 → EMFILE);F4 后再调
 NEWS_EXTRACT_MAX = int(os.getenv("NEWS_EXTRACT_MAX", "40"))        # 单票送 LLM 抽取的最近条数上限(原文仍全量落盘)
 # 关思考模式开关:实测对当前 deepseek-v4-pro 中性(网关本就不花时间思考),
 # 为将来换带思考模型自动生效预留;走 extra_body={"enable_thinking": False}。

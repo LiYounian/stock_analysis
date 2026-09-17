@@ -539,10 +539,10 @@ def _enrich_report(codes: list[str], no_llm: bool, as_of: str) -> dict:
 def _enrich_workers() -> int:
     """收盘选股主路径(enrich_candidates)新闻/LLM 富集的**有界并发度**(config「消息面富集.并发数」)。
 
-    config 默认 10(09-13 B1 提速由 4 上调;env ENRICH_WORKERS 覆盖);**返回 1 = 退回串行**
-    (kill-switch,逐值等价旧串行路径)。下限钳到 1(config 误配 0/负数不致零线程)。别太高防 LLM
-    网关 429(见 config 注释,client 自带退避;首日盯 429)。收盘主路径专用——其它调用方不读本值。
-    (注:cfg 缺「并发数」键时的防御兜底仍为 4——生产恒读 config 走 10。)
+    config 默认 4(09-13 B1 提速曾由 4 上调到 10,09-18 H1 因 launchd fd 软限 256 下 EMFILE 连崩回调到 4;
+    env ENRICH_WORKERS 覆盖);**返回 1 = 退回串行**(kill-switch,逐值等价旧串行路径)。下限钳到 1
+    (config 误配 0/负数不致零线程)。别太高防 LLM 网关 429 与 fd 打满(见 config 注释;F4 根治后再调)。
+    收盘主路径专用——其它调用方不读本值。
     """
     from tools.config.strategy import THRESHOLDS
     c = THRESHOLDS.get("消息面富集", {}) or {}

@@ -36,6 +36,11 @@ cd "$REPO"
 #   客户端把 fd 吃满。hard=unlimited,进程自己抬软限是允许的;抬不到 65536 退 10240,再不行留原值
 #   (tools/run.py 入口还有 setrlimit 兜底)。只改本进程,不动 plist / 系统 launchctl limit。
 ulimit -Sn 65536 2>/dev/null || ulimit -Sn 10240 2>/dev/null || true
+# —— H1-F3 · LLM 嵌套并发回到安全值(2026-09-18):09-13 B1 提速把 ENRICH/LLM_EXTRACT 4→10、CANDMSG 6→12,
+#   外层逐票 × 内层逐条 news-item 嵌套 → 峰值在飞 HTTPS 连接 100~200,叠加 client 每调用新建不关闭,
+#   下一个收盘(09-14)起连崩 4 天 EMFILE。回到 09-13 前实测稳定值 4/4/6(峰值在飞 16~24)。
+#   已在 sync.env / plist 显式设置的仍优先(${VAR:-默认});client 复用/关闭根治(F4)落地后再逐步调回。
+export ENRICH_WORKERS="${ENRICH_WORKERS:-4}" LLM_EXTRACT_WORKERS="${LLM_EXTRACT_WORKERS:-4}" CANDMSG_WORKERS="${CANDMSG_WORKERS:-6}"
 PY="${STOCK_PYTHON:-$HOME/.conda/envs/stock_analysis/bin/python}"
 LOG="${STOCK_INTRADAY_SCREEN_LOG:-$HOME/.local/state/stock/intraday_screen.log}"
 mkdir -p "$(dirname "$LOG")"

@@ -540,7 +540,8 @@ THRESHOLDS = {
         # I/O 主体;经 env CANDMSG_WORKERS 覆盖(**设 1 = 退回串行** kill-switch;想回稳妥值即设 6),不写死。
         # 别太高:每票内 news-item 已按 LLM_EXTRACT_WORKERS 并发,叠加本值峰值在飞 LLM 请求会放大,
         # 网关(tools/llm/client.py)会 429 限流(client 自带指数退避);⚠️上线首日盯 429 日志,大量 429 就 env 调低。
-        "并发数": int(os.getenv("CANDMSG_WORKERS", "12")),   # ↑并发直击I/O(6→12);盯429限流,超标 env 回调
+        # 09-18 H1 回调 12→6:09-13 提速后 launchd(fd 软限 256)下 EMFILE 连崩 4 天,回 09-13 前稳定值;F4 后再调。
+        "并发数": int(os.getenv("CANDMSG_WORKERS", "6")),   # 09-18 回稳妥值 6(09-13 曾提到 12 → EMFILE);F4 后再调
     },
     # ————————————————————————————————————————————————
     # 消息面富集(收盘选股主路径 screenall → run_screen_all → enrich_candidates):对候选集
@@ -557,7 +558,10 @@ THRESHOLDS = {
     #     仍默认串行不受影响。
     # ————————————————————————————————————————————————
     "消息面富集": {
-        "并发数": int(os.getenv("ENRICH_WORKERS", "10")),   # ↑并发直击I/O(4→10,收盘308情绪LLM);盯429,超标 env 回调
+        # 09-18 H1 回调 10→4:09-13 提速后收盘闭环(launchd fd 软限 256)09-14~17 连崩 4 天 EMFILE——本值 × 内层
+        #   LLM_EXTRACT_WORKERS 嵌套 = 100 在飞请求 + client 每调用新建不关闭。回 09-13 前实测稳定值;
+        #   待 client 复用/关闭 + 全局 in-flight 闸(H1-F4)落地后再逐步调回。见 docs/计划/2026-09-18_H1H5_*.md §H1。
+        "并发数": int(os.getenv("ENRICH_WORKERS", "4")),   # 09-18 回稳妥值 4(09-13 曾提到 10 → EMFILE);F4 后再调
     },
     # ————————————————————————————————————————————————
     # 事件驱动(F7·合议 P2):PEAD 业绩超预期漂移 + 增减持/回购。

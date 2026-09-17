@@ -78,7 +78,10 @@ def test_cmd_screenall_passes_close_skip(monkeypatch):
 # ————————————————————————————————————————————————
 # ② I/O 并发默认值已上调 + 可 env 覆盖(直击 I/O 主体)
 # ————————————————————————————————————————————————
-# (LLM_EXTRACT_WORKERS 4→10 / FETCH_WORKERS 8→16 / 消息面回灌 6→12 / 消息面富集 4→10)
+# (09-13 B1:LLM_EXTRACT_WORKERS 4→10 / FETCH_WORKERS 8→16 / 消息面回灌 6→12 / 消息面富集 4→10)
+# (09-18 H1-F3 回调:三处 LLM 嵌套并发回 4/6/4——launchd 下 fd 软限 256,10×10 嵌套 + client 不关闭
+#  → 收盘闭环 09-14~17 连崩 4 天 EMFILE;FETCH_WORKERS 非 LLM 路径、且收盘 plist 已钉 1,保持 16。
+#  待 H1-F4(client 复用/关闭 + 全局 in-flight 闸)落地后才允许再调高。)
 _CONC_ENVS = ["LLM_EXTRACT_WORKERS", "FETCH_WORKERS", "CANDMSG_WORKERS", "ENRICH_WORKERS"]
 
 
@@ -90,15 +93,21 @@ def _reload_config():
     return s, st
 
 
-def test_concurrency_defaults_raised():
-    """无 env 时的真·默认值已按 profile 报告上调(锁不被重写调回稳妥值)。"""
+def test_concurrency_defaults_safe_after_emfile():
+    """无 env 时的真·默认值:LLM 嵌套并发锁在安全值 4/6/4(H1-F3),FETCH 保持 16。
+
+    为什么锁低不锁高:09-13 把 LLM 两层并发提到 10×10 后,launchd 进程(fd 软限 256)在下一个收盘
+    即 EMFILE、连崩 4 天,per-stock 记录退化为午盘版。**在 H1-F4(client 复用/关闭 + 全局 in-flight
+    闸)落地并有测试锁 fd 有界之前,谁把这三处默认值调回 10/12 这条测试就红**——这是刻意的。
+    """
     saved = {k: os.environ.pop(k, None) for k in _CONC_ENVS}
     try:
         s, st = _reload_config()
-        assert s.LLM_EXTRACT_WORKERS == 10            # 4→10
-        assert s.FETCH_WORKERS == 16                  # 8→16
-        assert st.THRESHOLDS["消息面回灌"]["并发数"] == 12   # 6→12
-        assert st.THRESHOLDS["消息面富集"]["并发数"] == 10   # 4→10
+        assert s.LLM_EXTRACT_WORKERS == 4             # 10→4(H1-F3)
+        assert s.FETCH_WORKERS == 16                  # 8→16 保留(非 LLM;收盘 plist 钉 1)
+        assert st.THRESHOLDS["消息面回灌"]["并发数"] == 6    # 12→6(H1-F3)
+        assert st.THRESHOLDS["消息面富集"]["并发数"] == 4    # 10→4(H1-F3)
+        assert st.THRESHOLDS["消息面富集"]["并发数"] * s.LLM_EXTRACT_WORKERS <= 24   # 嵌套峰值在飞 ≤ 24
     finally:
         for k, v in saved.items():
             if v is not None:
