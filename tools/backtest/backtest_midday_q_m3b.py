@@ -53,6 +53,7 @@ import pandas as pd
 from tools.config import midday_q_universe as UNIV
 from tools.config import settings
 from tools.store import repo as store
+from tools.strategy import midday_q_signals as S
 
 logger = logging.getLogger("backtest.midday_q_m3b")
 
@@ -244,7 +245,16 @@ def _daily_ctx(daily: pd.DataFrame, date: str) -> dict | None:
 
 
 def _limit_pct(code: str) -> float:
-    return 0.20 if (code.startswith("30") or code.startswith("68")) else 0.10
+    """该票涨跌幅上限(小数)。委托生产侧单一真源 `midday_q_signals.board_limit_pct()`。
+
+    不自己判 `startswith("30"/"68")` —— 两个理由:
+      1. 宪法:同一条"代码→板块"规则不得散落多处各自演化
+         (见 tests/test_exchange_single_source.py 防复发闸门);
+      2. **回测必须与生产同口径** —— 生产 screener 判涨停用的就是那套表,
+         回测另写一份的话,"哪些票算涨停不可买"两边会悄悄不一致,
+         回测结论就不能用来推断生产表现。
+    """
+    return S.board_limit_pct(code)
 
 
 # ────────────────────────────── 大盘闸门(焦点池内广度代理) ──────────────────────────────

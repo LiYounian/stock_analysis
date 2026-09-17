@@ -65,6 +65,7 @@ from pathlib import Path
 
 import pandas as pd
 
+from tools.config import exchange as EX
 from tools.config import midday_q_universe as UNIV
 from tools.config import settings
 
@@ -81,20 +82,28 @@ CODE_NAME_JSON = settings.PROJECT_ROOT / "config" / "code_name.json"
 #   1500 收盘(对照 M3.a 的收盘代理口径,量化降级偏差)
 KEEP_TIMES = ("0935", "1030", "1425", "1430", "1445", "1450", "1500")
 
-# 北交所代码段:8xx/4xx(老)+ 92x(新)。午盘Q票池口径排北交所(流动性/涨跌幅规则不同)。
-_BJ_PREFIX = ("4", "8", "92")
 
 MAX_ATTEMPTS = 4            # 每票最多尝试次数(应对坑①②的瞬时失败)
 _RETRY_BASE_SEC = 1.5       # 退避基数:第 k 次失败后睡 1.5*k 秒
 
 
-def _bs_code(code: str) -> str:
-    """6位代码 → baostock 格式(sh./sz.)。沪(6/9)= sh,深(0/2/3)= sz。"""
-    return f"sh.{code}" if code[0] in ("6", "9") else f"sz.{code}"
+def _bs_code(code: str) -> str | None:
+    """6位代码 → baostock 格式(`sh.600519`)。北交所返回 None(baostock 不覆盖)。
+
+    委托 `tools.config.exchange.dotted()` 单一真源 —— 不自己判前缀
+    (宪法:同一条"代码→交易所"规则不得散落多处各自演化,
+     见 tests/test_exchange_single_source.py 的防复发闸门)。
+    真源还记录了实测:北交所传 `sz.920002` 会返 success 但 0 行(静默空),
+    故它显式返 None 让调用方记降级,而不是伪装成"这只票没数据"。
+    """
+    return EX.dotted(code)
 
 
 def fullA_codes() -> list[str]:
     """全A代码(排北交所),取自 config/code_name.json(离线,不打 akshare)。
+
+    排北交所用 `exchange.is_bj()`(覆盖 920 现行段 + 43/83/87 历史段),
+    不自己写前缀元组 —— 自己写过 `("4","8","92")`,漏了 43/83/87 段里的细节。
 
     刻意不用 `backtest.screen_forward_common.universe_codes()` —— 那个依赖
     已落地主档(data/master/kline),本机主档只有焦点池 126 只,拿不到全A。
@@ -103,7 +112,7 @@ def fullA_codes() -> list[str]:
         data = json.load(f)
     codes = list(data) if isinstance(data, dict) else list(data)
     return sorted(c for c in map(str, codes)
-                   if len(c) == 6 and not c.startswith(_BJ_PREFIX))
+                   if len(c) == 6 and EX.is_a_code(c) and not EX.is_bj(c))
 
 
 def resolve_codes(universe: str, limit: int | None = None) -> list[str]:
@@ -197,10 +206,10 @@ def _month_chunks(start: str, end: str, months: float = 1.5) -> list[tuple[str, 
     return out
 
 
-def _query_segment(bs, code: str, start: str, end: str) -> tuple[list[dict], str]:
-    """拉单段。返回 (rows, error_code)。调用方负责会话与重试。"""
+def _query_segment(bs, bs_code: str, start: str, end: str) -> tuple[list[dict], str]:
+    """拉单段。返回 (rows, error_code)。调用方负责会话/重试/代码转换。"""
     rs = bs.query_history_k_data_plus(
-        _bs_code(code),
+        bs_code,
         "date,time,open,high,low,close,volume,amount",
         start_date=start, end_date=end, frequency="5", adjustflag="3")
     return _parse_rows(rs), rs.error_code
@@ -216,6 +225,12 @@ def fetch_one(code: str, start: str, end: str) -> tuple[str, int, int, str]:
     """
     import baostock as bs
 
+    bs_code = _bs_code(code)
+    if bs_code is None:
+        # 北交所:baostock 不覆盖(传 sz./sh. 会返 success 但 0 行的静默空)。
+        # 票池已排北交所,这里是双保险 —— 显式判"源不支持",不伪装成"无数据"。
+        return (code, 0, 0, "unsupported")
+
     out = OUT_DIR / f"{code}.parquet"
     segments = _month_chunks(start, end)
     all_rows: list[dict] = []
@@ -230,7 +245,7 @@ def fetch_one(code: str, start: str, end: str) -> tuple[str, int, int, str]:
                 if lg.error_code != "0":
                     time.sleep(_RETRY_BASE_SEC * attempt)
                     continue
-                rows, err = _query_segment(bs, code, seg_start, seg_end)
+                rows, err = _query_segment(bs, bs_code, seg_start, seg_end)
                 try:
                     bs.logout()
                 except Exception:

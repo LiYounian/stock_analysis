@@ -25,6 +25,28 @@ def test_bs_code_mapping():
     assert F._bs_code("688008") == "sh.688008"
 
 
+def test_bs_code_returns_none_for_beijing():
+    """北交所 baostock 不覆盖(传 sz./sh. 会返 success 但 0 行的静默空)→ 须显式 None。"""
+    for c in ("920819", "430047", "830799"):
+        assert F._bs_code(c) is None, f"{c} 应判为源不支持,而非伪装成可查"
+
+
+def test_limit_pct_delegates_to_production_source():
+    """回测的涨跌幅上限必须与生产 screener 同源。
+
+    两个理由:①防复发闸门要求"代码→板块"规则单一真源;
+    ②**回测与生产必须同口径** —— 否则"哪些票算涨停不可买"两边悄悄不一致,
+    回测结论就不能用来推断生产表现。
+    """
+    from tools.strategy import midday_q_signals as S
+    for c in ("600519", "000001", "300308", "688008"):
+        assert M._limit_pct(c) == S.board_limit_pct(c)
+    # 板块语义本身也锁一下(别哪天真源表被改坏了没人发现)
+    assert M._limit_pct("600519") == pytest.approx(0.10)     # 沪主板
+    assert M._limit_pct("300308") == pytest.approx(0.20)     # 创业板
+    assert M._limit_pct("688008") == pytest.approx(0.20)     # 科创板
+
+
 def test_keep_times_covers_decision_points():
     """1430/1450 是午盘Q的判定时点,必须在采集时刻里;0935 作当日 open 锚。"""
     for t in ("0935", "1430", "1450"):

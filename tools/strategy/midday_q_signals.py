@@ -22,6 +22,9 @@ import pandas as pd
 from tools.analysis.market_forecast.breadth import board_of
 
 # 板块 → 常规涨跌幅上限(百分数,ST 例外由 quote 里的 name 前缀识别)
+# ⚠️ 这是午盘Q"板块→涨跌幅上限"的**单一真源**:生产 screener 与 M3.b 回测共用,
+#    避免回测自己按 10%/20% 判前缀、生产按另一套,导致两边涨停判定不一致。
+#    回测侧入口是公开函数 `board_limit_pct()`(下方),别再复制这张表。
 _BOARD_LIMIT_PCT: dict[str, float] = {
     "主板": 10.0,
     "创业板": 20.0,
@@ -29,6 +32,20 @@ _BOARD_LIMIT_PCT: dict[str, float] = {
     "北交所": 30.0,
 }
 _ST_LIMIT_PCT: float = 5.0
+
+
+def board_limit_pct(code: str, *, is_st: bool = False) -> float:
+    """该票的常规涨跌幅上限(**小数**,如 0.10 / 0.20)。
+
+    板块判定委托 `breadth.board_of()`(单一真源),不自己判代码前缀
+    —— 见 tests/test_exchange_single_source.py 的防复发闸门。
+    供回测层复用:回测手上通常只有 prev_close 浮点值、没有完整 quote dict,
+    用不了 `limit_up_price(quote, code)`,故另开这个只吃 code 的入口。
+    """
+    if is_st:
+        return _ST_LIMIT_PCT / 100.0
+    return _BOARD_LIMIT_PCT.get(board_of(code), 10.0) / 100.0
+
 
 # 排除阈值
 NEAR_LIMIT_UP_BUFFER = 0.985      # price < 涨停价 × 0.985(Q1 排除)
