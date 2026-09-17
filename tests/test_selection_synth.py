@@ -254,6 +254,101 @@ def test_non_gating_不改上游(monkeypatch, tmp_path):
     assert focus == snapshot        # 合成不得原地修改读入的 sector_focus(消息驱动块)
 
 
+# ──────────────── ⑩ 入场/止损 程序回填(堵『大模型写数字』) ────────────────
+def test_fill_entry_exit_各入场方式精确值():
+    """每种入场方式回填的挂单价/止损价/不追高上限=程序按 ma5/ma20/前低/现价 算的精确值。"""
+    form = {"ma5": 110.0, "ma20": 105.0, "前低": 100.0, "现价": 112.0}
+
+    s = ss.fill_entry_exit({"入场方式": "回踩MA5"}, form)
+    assert (s["挂单价"], s["止损价"], s["不追高上限"]) == (110.0, 105.0, 112.0)
+
+    s = ss.fill_entry_exit({"入场方式": "回踩MA20"}, form)
+    assert (s["挂单价"], s["止损价"], s["不追高上限"]) == (105.0, 100.0, 112.0)
+
+    s = ss.fill_entry_exit({"入场方式": "回踩前低"}, form)
+    assert (s["挂单价"], s["止损价"], s["不追高上限"]) == (100.0, 98.0, 112.0)  # 前低×0.98
+
+    for m in ("突破确认", "缩量企稳"):
+        s = ss.fill_entry_exit({"入场方式": m}, form)
+        assert (s["挂单价"], s["止损价"], s["不追高上限"]) == (112.0, 105.0, 114.24)  # 现价×1.02
+
+
+def test_fill_entry_exit_缺省或非法方式兜底回踩MA5():
+    form = {"ma5": 50.0, "ma20": 48.0, "前低": 45.0, "现价": 52.0}
+    for bad in (None, "", "乱填", "回踩布林"):
+        s = ss.fill_entry_exit({"入场方式": bad}, form)
+        assert s["入场方式"] == "回踩MA5"          # 兜底并回写留痕
+        assert s["挂单价"] == 50.0 and s["止损价"] == 48.0
+
+
+def test_fill_entry_exit_LLM文字数字被忽略以回填为准():
+    """核心语义:LLM 即便在文字里写了价位数字,最终价位=程序回填(大模型不产数字)。"""
+    form = {"ma5": 110.0, "ma20": 105.0, "前低": 100.0, "现价": 112.0}
+    # LLM 硬塞了自由文字价位(旧 schema 遗留 / 越权)
+    stock = {"入场方式": "回踩MA5", "入场": "挂 999 元", "止损": "跌破 888 元"}
+    ss.fill_entry_exit(stock, form)
+    assert stock["挂单价"] == 110.0 and stock["止损价"] == 105.0   # 忽略 999/888,以 ma5/ma20 为准
+
+
+def test_fill_entry_exit_数据不足不编():
+    for bad_form in ({"数据不足": True}, None, {}):
+        s = ss.fill_entry_exit({"入场方式": "回踩MA5"}, bad_form)
+        assert s["挂单价"] is None and s["止损价"] is None and s["不追高上限"] is None
+        assert "数据不足" in (s.get("价位说明") or "")
+
+
+def test_fill_entry_exit_均线空头单调性夹逼():
+    """现价跌破均线(均线空头)时,操作卡仍须满足铁律 止损<买点≤红线,不出反常卡。"""
+    # 现价 25.69 < ma5 25.92 < ma20 26.26(下跌趋势):回踩MA5 旧逻辑会给 买点25.92>红线25.69、止损26.26>买点
+    form = {"ma5": 25.92, "ma20": 26.26, "前低": 24.5, "现价": 25.69}
+    for m in ss.ENTRY_METHODS:
+        s = ss.fill_entry_exit({"入场方式": m}, dict(form))
+        e, st, cap = s["挂单价"], s["止损价"], s["不追高上限"]
+        assert st < e <= cap, f"{m}: 违反 止损<买点≤红线 (止损{st} 买点{e} 红线{cap})"
+        # 回踩类不挂到现价之上(不追)
+        if m in ("回踩MA5", "回踩MA20", "回踩前低"):
+            assert e <= form["现价"], f"{m}: 回踩限价 {e} 挂到了现价 {form['现价']} 之上"
+
+
+# ──────────────── ⑪ schema:LLM 不产数字(只给入场方式枚举) ────────────────
+def test_schema_no_llm_price():
+    sch = ss.SELECTION_SCHEMA["个股"]
+    assert "入场方式" in sch and "回踩MA5" in sch
+    assert "绝不要写任何价位数字" in sch
+    # 旧的『让 LLM 写价位』职责已删(schema 不再要求 LLM 输出 止损 文字价位)
+    assert "止损:文字" not in sch
+
+
+def test_schema_no_llm_price_end2end(monkeypatch, tmp_path):
+    """端到端:_FakeClient 在文字里塞了 入场='~ma5'/止损='ma20',最终价位字段=程序按 form 回填。"""
+    date, _ = _fake_synthesize(monkeypatch, tmp_path)
+    result = ss.synthesize(date, data_root=tmp_path, client=_FakeClient())
+    stocks = {s["code"]: s for b in result["板块"] for s in b["个股"]}
+    s = stocks["002463"]                       # 健康票·推荐·form 齐全
+    form = s["形态"]
+    # 挂单价来自程序回填(默认回踩MA5 → min(ma5,现价)·回踩限价不挂到现价之上),不是 LLM 文字里的字符串
+    assert s["挂单价"] == min(form["ma5"], form["现价"])
+    assert isinstance(s["挂单价"], (int, float)) and isinstance(s["止损价"], (int, float))
+    # 单调性铁律成立(止损<买点≤红线),不受趋势/LLM 文字影响
+    assert s["止损价"] < s["挂单价"] <= s["不追高上限"]
+    # 605058 form 齐全但被剔除,价位仍程序回填,不受 LLM 文字影响
+    assert isinstance(stocks["605058"].get("挂单价"), (int, float))
+
+
+# ──────────────── ⑫ render 通俗操作卡 + 两层闸门脚注 ────────────────
+def test_render_operatecard(monkeypatch, tmp_path):
+    date, _ = _fake_synthesize(monkeypatch, tmp_path)
+    result = ss.synthesize(date, data_root=tmp_path, client=_FakeClient())
+    md = ss.render_md(result)
+    # 通俗金额:买点带"元"、挂限价、不追高红线
+    assert "买点：" in md and "元" in md and "挂限价买" in md
+    assert "红线：高于" in md and "别买" in md
+    assert "止损：跌破" in md
+    # 两层闸门脚注:价位层(不滞后) + 时机层(日内线·暂未接入)
+    assert "价位层" in md and "时机层" in md
+    assert "日内线" in md and "不滞后" in md and "暂未接入" in md
+
+
 if __name__ == "__main__":
     import sys
     sys.exit(pytest.main([__file__, "-v"]))

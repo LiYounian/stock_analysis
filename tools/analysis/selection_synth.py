@@ -211,6 +211,7 @@ def pattern_metrics(df: pd.DataFrame, code: str, *, date: str) -> dict:
 
     hi20, hi60 = float(np.max(h[-20:])), float(np.max(h[-60:]))
     lo60 = float(np.min(lo[-60:]))
+    lo20 = float(np.min(lo[-20:]))            # 近20日最低价 → 回踩前低入场/止损锚点
     vol = df["volume"].to_numpy(float)
     vr = float(vol[-1] / np.mean(vol[-6:-1])) if len(vol) >= 6 and np.mean(vol[-6:-1]) else None
     # ATR14%
@@ -230,6 +231,7 @@ def pattern_metrics(df: pd.DataFrame, code: str, *, date: str) -> dict:
     return {
         "现价": round(close, 3),
         "ma5": round(ma5, 3), "ma20": round(ma20, 3), "ma60": round(ma60, 3),
+        "前低": round(lo20, 3),
         "当日涨跌": round(close / float(c[-2]) - 1.0, 4) if len(c) >= 2 else None,
         "ret5": _ret(5), "ret10": _ret(10), "ret20": _ret(20),
         "均线多头": bool(ma5 > ma10 > ma20 and close >= ma5),
@@ -327,6 +329,73 @@ def run_extra_strategies(as_of: str, *, top_k: int = EXTRA_TOP_K,
     return hits
 
 
+# ════════════════════ 入场/止损 程序回填(堵『大模型写数字』漏洞) ════════════════════
+# LLM 只据形态从下列枚举选一个『入场方式』(不产任何价位数字);挂单价/止损价/不追高上限一律程序回填。
+ENTRY_METHODS = ("回踩MA5", "回踩MA20", "回踩前低", "突破确认", "缩量企稳")
+_入场方式_默认 = "回踩MA5"           # LLM 缺/乱填 → 兜底回踩MA5(最保守·站上5日线才买)
+
+
+def _r3(v) -> Optional[float]:
+    return round(float(v), 3) if isinstance(v, (int, float)) else None
+
+
+def fill_entry_exit(stock: dict, form: Optional[dict]) -> dict:
+    """**程序回填**入场/止损价位(核心·堵『大模型抄写数字』转写风险)。
+
+    据 `stock['入场方式']`(枚举) + 程序已算好的 `form`(ma5/ma20/前低/现价),算出三个数值写回 stock:
+      · 挂单价(entry) / 止损价(stop) / 不追高上限(cap)
+    映射(初版·方案 §3.1;判据固定,不对既往赢家调参):
+      · 回踩MA5   → 挂单=ma5;   止损=ma20;      不追高=现价
+      · 回踩MA20  → 挂单=ma20;  止损=前低;      不追高=现价
+      · 回踩前低  → 挂单=前低;  止损=前低×0.98; 不追高=现价
+      · 突破确认/缩量企稳 → 挂单=现价; 止损=ma20; 不追高=现价×1.02
+
+    **LLM 若在文字里仍写了数字 → 程序一律忽略,以本回填为准**(defense-in-depth,仿 hard_veto)。
+    form 数据不足 → 三价位=None + 标『数据不足·人工确认』,绝不编。
+    """
+    form = form or {}
+    method = stock.get("入场方式")
+    if method not in ENTRY_METHODS:
+        method = _入场方式_默认               # 缺/非法枚举 → 兜底,并回写留痕
+        stock["入场方式"] = method
+    if form.get("数据不足") or not form:
+        stock["挂单价"] = stock["止损价"] = stock["不追高上限"] = None
+        stock["价位说明"] = "数据不足·人工确认"
+        return stock
+    ma5, ma20 = form.get("ma5"), form.get("ma20")
+    前低, 现价 = form.get("前低"), form.get("现价")
+    entry = stop = cap = None
+    if method == "回踩MA5":
+        entry, stop, cap = ma5, ma20, 现价
+    elif method == "回踩MA20":
+        entry, stop, cap = ma20, 前低, 现价
+    elif method == "回踩前低":
+        entry = 前低
+        stop = 前低 * 0.98 if isinstance(前低, (int, float)) else None
+        cap = 现价
+    else:  # 突破确认 / 缩量企稳:回踩确认位=现价挂单,给 2% 追高容忍上限
+        entry = 现价
+        stop = ma20
+        cap = 现价 * 1.02 if isinstance(现价, (int, float)) else None
+    # 单调性夹逼:防均线空头/现价跌破均线时出现"止损≥买点"或"红线<买点"的反常卡。
+    # 铁律:回踩限价绝不挂到现价之上(不追);止损恒在买点下方;红线(不追高上限)恒不低于买点。
+    if isinstance(entry, (int, float)) and isinstance(现价, (int, float)) \
+            and method in ("回踩MA5", "回踩MA20", "回踩前低"):
+        entry = min(entry, 现价)                       # 回踩限价不挂到现价之上
+    if isinstance(entry, (int, float)):
+        if isinstance(stop, (int, float)) and stop >= entry:
+            stop = entry * 0.98                        # 止损恒低于买点
+        if isinstance(cap, (int, float)):
+            cap = max(cap, entry)                      # 红线恒不低于买点
+        else:
+            cap = entry
+    stock["挂单价"] = _r3(entry)
+    stock["止损价"] = _r3(stop)
+    stock["不追高上限"] = _r3(cap)
+    stock.pop("价位说明", None)
+    return stock
+
+
 # ════════════════════ DeepSeek 分析师合成(双依据提示词 + schema) ════════════════════
 # 每票输出档:文字优先(仿 board_verdict rubric),建议分 0-10 供排序。
 SELECTION_SCHEMA = {
@@ -334,8 +403,9 @@ SELECTION_SCHEMA = {
             "建议分:0-10 数值(与档位定义一致), "
             "理由:一句话≤50字·**必须分别点明『策略依据』与『板块依据』**"
             "(如『策略:council看多+动量命中;板块:电子利好·强催化』), "
-            "入场:据个股形态给合适入场文字(回踩支撑限价/突破确认/缩量企稳等按票而定·不追高), "
-            "止损:文字(如跌破关键均线/前低), 风险:一句话}"),
+            "入场方式:据个股形态从 {回踩MA5, 回踩MA20, 回踩前低, 突破确认, 缩量企稳} **只选一个类型**"
+            "(**绝不要写任何价位数字**——挂单价/止损价/不追高上限全部由程序按均线/前低回填), "
+            "风险:一句话}"),
     "规避提示": "一句话:本组需规避/降级的情形(板块消息转弱/资金流出/高位拥挤等),无则写『无』",
 }
 
@@ -387,8 +457,10 @@ def SELECTION_SYNTH_INSTRUCTION(group_name: str, regime: dict, *,
         "(所属板块消息利好/利空/催化/中性,及为何加成或降级或中性)**。两条都要出现。\n"
         "② **策略线不被板块旁路**:策略直选的强票即使无板块催化,只要策略面强+形态健康,照常可给推荐;"
         "**不因『板块没被判利好』就一刀切剔除或降级**。\n"
-        "③ **催化优先 × 不追高 × 入场按票而定**:选催化/策略驱动的强势票;入场**据个股形态给合适方式**"
-        "(回踩支撑限价 / 突破确认 / 缩量企稳等,不要一律写『回踩』),但**一律不追涨停/不追高开**。\n"
+        "③ **催化优先 × 不追高 × 入场只选类型(不产数字)**:选催化/策略驱动的强势票;入场**据个股形态给合适方式**"
+        "——从 {回踩MA5, 回踩MA20, 回踩前低, 突破确认, 缩量企稳} 选一个『入场方式』"
+        "(**只给类型·绝不写价位数字**,挂单价/止损价/不追高上限由程序按均线/前低回填),"
+        "但**一律不追涨停/不追高开**。\n"
         "④ **龙头/中军/策略为主线,跟涨(补涨先锋)只作『联动观察』不进主选**:跟涨角色最高只给『观察』档。\n"
         "⑤ **反选剔除(命中任一即『剔除』档、建议分≤2)**:财报高危红旗(财报红旗数≥1)/龙虎榜否决/"
         "涨停不可买/极高位高抛压(获利盘≥0.95 或 位置pos60≥0.95 且距高接近0)。\n"
@@ -524,8 +596,8 @@ def synthesize_group(group_name: str, board_ctx: Optional[dict], candidates: lis
     except Exception as e:                                # noqa: BLE001
         logger.warning("组 %s 合成 LLM 失败:%s", group_name, e)
         r = {"个股": [{"code": c["code"], "name": c.get("name", ""), "档": "观察",
-                      "建议分": None, "理由": "LLM合成失败降级", "入场": None,
-                      "止损": None, "风险": "研判缺失,需人工"} for c in candidates],
+                      "建议分": None, "理由": "LLM合成失败降级", "入场方式": None,
+                      "风险": "研判缺失,需人工"} for c in candidates],
              "规避提示": f"LLM失败:{str(e)[:40]}"}
     # 回挂原始多维数据(留痕、人工可核)+ 硬纪律 + 规避降级 + 来源标注
     by_code = {s.get("code"): s for s in (r.get("个股") or [])}
@@ -541,6 +613,8 @@ def synthesize_group(group_name: str, board_ctx: Optional[dict], candidates: lis
         s["形态"] = form_map.get(c["code"])
         apply_hard_discipline(s, c.get("role"), s["council"], s["形态"])
         apply_avoid_downgrade(s, c.get("规避"))
+        # 入场/止损价位一律程序回填(LLM 只给『入场方式』枚举;文字里若含数字被忽略,以回填为准)
+        fill_entry_exit(s, s["形态"])
         merged.append(s)
     merged.sort(key=lambda s: (s.get("建议分") if isinstance(s.get("建议分"), (int, float))
                                else -1), reverse=True)
@@ -727,6 +801,67 @@ def _fmt_form(form: Optional[dict]) -> str:
     return "/".join(parts)
 
 
+# 两层闸门脚注(方案 §3.3):价位层程序静态挂单闸门(本轮落地) + 时机层实时盘中(归日内线·暂未接入)。
+_闸门脚注 = (
+    "**入场闸门分两层**:(1)**价位层**=均线/前低算出的静态挂单闸门,**开盘前已定、当日可用不滞后**"
+    "(今日照挂限价买+不追高即可);(2)**时机层**=当日盘中「此刻扣不扣扳机」,需实时分时信号"
+    "(现价站上均线+量比>1+不追涨停/封单确认),**归日内线,本轮暂未接入——先按价位层挂单+不追高操作**。"
+)
+
+
+def _signal_str(form: Optional[dict]) -> str:
+    """把形态指标拼成一句通俗『信号』(昨涨跌·量比·距高·获利·多头)。数据不足 → 提示。"""
+    if not form or form.get("数据不足"):
+        return "形态数据不足·人工确认"
+    parts: list[str] = []
+    if form.get("当日涨跌") is not None:
+        parts.append(f"昨{_fmt_pct(form['当日涨跌'])}")
+    if form.get("量比") is not None:
+        parts.append(f"量比{form['量比']}")
+    if form.get("距20高") is not None:
+        parts.append(f"距20高{_fmt_pct(form['距20高'])}")
+    wr = form.get("获利盘")
+    if wr is not None:
+        parts.append(f"获利{wr * 100:.0f}%")
+    elif form.get("位置pos60") is not None:
+        parts.append(f"pos60={form['位置pos60']:.2f}")
+    if form.get("均线多头"):
+        parts.append("均线多头")
+    if form.get("涨停不可买"):
+        parts.append("涨停不可买")
+    return "·".join(parts) or "-"
+
+
+def _operate_card(board: str, s: dict) -> list[str]:
+    """单票**通俗操作卡**(方案 §3.2):买点(元·区间·入场方式)/止损(元)/红线(不追高·元)/信号/理由。
+
+    价位全部来自程序回填字段(挂单价/止损价/不追高上限);None → 『数据不足·人工确认』,不编。
+    """
+    form = s.get("形态") or {}
+    name = s.get("name") or ""
+    档 = s.get("档") or "-"
+    score = s.get("建议分")
+    score_s = f"{score}" if isinstance(score, (int, float)) else "-"
+    方式 = s.get("入场方式") or "-"
+    entry, stop, cap = s.get("挂单价"), s.get("止损价"), s.get("不追高上限")
+    lines = [f"- **{name} {s['code']}** ｜ {档} {score_s} ｜ 来源：{s.get('来源') or '-'} ｜ 组：{board}"]
+    if isinstance(entry, (int, float)):
+        lines.append(f"  - 买点：{entry:.2f}–{entry * 1.005:.2f} 元 挂限价买（{方式}，不追高）")
+    else:
+        lines.append(f"  - 买点：数据不足·人工确认（{方式}）")
+    if isinstance(stop, (int, float)):
+        lines.append(f"  - 止损：跌破 {stop:.2f} 元 走")
+    else:
+        lines.append("  - 止损：数据不足·人工确认")
+    if isinstance(cap, (int, float)):
+        lines.append(f"  - 红线：高于 {cap:.2f} 元 = 追高别买")
+    else:
+        lines.append("  - 红线：数据不足·人工确认")
+    lines.append(f"  - 信号：{_signal_str(form)}")
+    lines.append(f"  - 理由：{s.get('理由') or '-'}")
+    return lines
+
+
 def render_md(result: dict) -> str:
     date = result["date"]
     reg = result.get("regime") or {}
@@ -782,14 +917,16 @@ def render_md(result: dict) -> str:
                 picks.append((b["board"], s))
     L.append("")
 
-    L.append("## 四、主选深度（推荐 · 回踩限价入场 · 双依据）\n")
+    L.append("## 四、主选操作卡（推荐 · 程序回填价位 · 不追高）\n")
+    L.append(f"> {_闸门脚注}")
+    L.append("> 价位（买点/止损/红线）均为**程序按均线/前低回填的数值**（大模型只选『入场方式』类型、不产数字）。\n")
     if picks:
-        L.append("| 组 代码 名称 | 来源 | 理由(策略依据+板块依据) | 入场(回踩限价·不追高) | 止损 | 风险 |")
-        L.append("|---|---|---|---|---|---|")
         for board, s in sorted(picks, key=lambda x: -(x[1].get("建议分") or 0)):
-            L.append(f"| {board} {s['code']} {s.get('name')} | {s.get('来源') or '-'} | "
-                     f"{s.get('理由') or '-'} | {s.get('入场') or '-'} | {s.get('止损') or '-'} | "
-                     f"{s.get('风险') or '-'} |")
+            L.extend(_operate_card(board, s))
+            风险 = s.get("风险")
+            if 风险 and 风险 != "-":
+                L.append(f"  - 风险：{风险}")
+            L.append("")
     else:
         L.append("_今日无『推荐』档（宁缺毋滥/降仓/只留有硬催化或强策略的）。_")
     L.append("")
@@ -825,6 +962,9 @@ def render_md(result: dict) -> str:
     L.append("- **角色**：龙头/中军取自消息驱动块+角色关系表；跟涨=补涨先锋只作联动观察；"
              "策略=策略线直选（无板块角色）。")
     L.append("- **龙头/中军/策略为主线，跟涨只联动观察**；规避板块内票降级（除非策略面极强+形态健康）。")
+    L.append(f"- **入场闸门**：{_闸门脚注}")
+    L.append("- **价位来源**：买点/止损/红线=程序据均线(ma5/ma20)/前低回填（大模型只据形态选『入场方式』类型、"
+             "不产任何价位数字；文字里若含数字一律以程序回填为准）。")
     L.append(f"\n---\n*{result.get('免责')} 数据来源：sector_focus 消息驱动块+规避板块池 + 角色关系表 + "
              "screen_council 全A策略0合议(+附加策略) + as-of 形态。*")
     return "\n".join(L)
