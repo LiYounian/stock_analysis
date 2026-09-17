@@ -1,0 +1,468 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>每日选股 · 流程 / 提示词 / 参考变量（审阅版）</title>
+<style>
+  :root{
+    --bg:#f5f6f8; --card:#ffffff; --ink:#1f2733; --muted:#6b7686; --line:#e4e8ee;
+    --accent:#2f6df6; --accent-soft:#eaf1ff; --green:#188a5a; --green-soft:#e6f5ee;
+    --amber:#b7791f; --amber-soft:#fdf3e2; --red:#c0392b; --red-soft:#fdecea;
+    --purple:#6c4bd6; --purple-soft:#efeaff; --teal:#0f8b8b; --teal-soft:#e4f5f5;
+    --slate:#48566b; --slate-soft:#eef1f6;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",Segoe UI,Roboto,Helvetica,Arial,sans-serif;
+    line-height:1.65;font-size:15px}
+  .wrap{max-width:1120px;margin:0 auto;padding:28px 20px 80px}
+  header.top{background:linear-gradient(135deg,#1f2b45,#2f4a86);color:#fff;border-radius:16px;padding:26px 30px;margin-bottom:22px;box-shadow:0 6px 24px rgba(31,43,69,.18)}
+  header.top h1{margin:0 0 6px;font-size:24px;letter-spacing:.3px}
+  header.top .sub{opacity:.9;font-size:14px}
+  .disclaimer{margin-top:14px;background:rgba(255,255,255,.12);border:1px solid rgba(255,255,255,.25);border-radius:10px;padding:10px 14px;font-size:13px}
+  nav.toc{display:flex;flex-wrap:wrap;gap:8px;margin:18px 0 26px}
+  nav.toc a{background:var(--card);border:1px solid var(--line);border-radius:20px;padding:6px 14px;color:var(--slate);text-decoration:none;font-size:13px;transition:.15s}
+  nav.toc a:hover{border-color:var(--accent);color:var(--accent)}
+  section{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:24px 26px;margin-bottom:22px;box-shadow:0 2px 10px rgba(31,39,51,.03)}
+  h2{font-size:20px;margin:0 0 4px;display:flex;align-items:center;gap:10px}
+  h2 .n{display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;background:var(--accent);color:#fff;border-radius:8px;font-size:15px;flex:none}
+  h2 .tag{font-size:12px;font-weight:400;color:var(--muted);border:1px solid var(--line);border-radius:12px;padding:2px 10px}
+  .lead{color:var(--muted);font-size:14px;margin:6px 0 18px}
+  h3{font-size:16px;margin:24px 0 10px;padding-left:10px;border-left:3px solid var(--accent)}
+  h4{font-size:14px;margin:16px 0 6px;color:var(--slate)}
+  p{margin:8px 0}
+  .muted{color:var(--muted)}
+  code,.mono{font-family:"SF Mono",Menlo,Consolas,monospace;font-size:12.5px;background:#f0f2f5;border:1px solid var(--line);border-radius:5px;padding:1px 6px}
+  /* ---- flow diagram ---- */
+  .flow{display:flex;flex-direction:column;gap:0}
+  .flow-row{display:flex;align-items:stretch;gap:14px;flex-wrap:wrap}
+  .node{flex:1 1 210px;min-width:200px;border-radius:12px;padding:14px 16px;border:1px solid var(--line);background:var(--card);position:relative}
+  .node .k{font-size:11px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;opacity:.75}
+  .node .t{font-weight:700;font-size:15px;margin:3px 0 8px}
+  .node ul{margin:6px 0 0;padding-left:16px}
+  .node li{font-size:12.5px;margin:2px 0;color:var(--slate)}
+  .node .io{font-size:11.5px;color:var(--muted);margin-top:8px;border-top:1px dashed var(--line);padding-top:6px}
+  .n-collect{background:var(--slate-soft);border-color:#d8deea}
+  .n-market{background:var(--accent-soft);border-color:#cfe0ff}
+  .n-sector{background:var(--teal-soft);border-color:#c9ebeb}
+  .n-strat{background:var(--purple-soft);border-color:#dcd2ff}
+  .n-council{background:var(--amber-soft);border-color:#f4e2bf}
+  .n-analyst{background:var(--green-soft);border-color:#c4e9d6}
+  .n-out{background:#1f2b45;color:#fff;border-color:#1f2b45}
+  .n-out .k,.n-out li,.n-out .io{color:#dfe6f3;opacity:.92}
+  .arrow-down{display:flex;justify-content:center;color:var(--muted);font-size:20px;line-height:1;margin:8px 0}
+  .flow-note{font-size:12px;color:var(--muted);margin:2px 0 12px;text-align:center}
+  /* ---- tables ---- */
+  table{width:100%;border-collapse:collapse;margin:12px 0;font-size:13px}
+  th,td{border:1px solid var(--line);padding:8px 10px;text-align:left;vertical-align:top}
+  th{background:#f3f6fb;font-weight:700;color:var(--slate)}
+  tr:nth-child(even) td{background:#fafbfc}
+  .pill{display:inline-block;font-size:11px;border-radius:10px;padding:1px 8px;margin:1px 2px 1px 0;white-space:nowrap}
+  .p-blue{background:var(--accent-soft);color:var(--accent)}
+  .p-green{background:var(--green-soft);color:var(--green)}
+  .p-amber{background:var(--amber-soft);color:var(--amber)}
+  .p-red{background:var(--red-soft);color:var(--red)}
+  .p-purple{background:var(--purple-soft);color:var(--purple)}
+  .p-teal{background:var(--teal-soft);color:var(--teal)}
+  .p-slate{background:var(--slate-soft);color:var(--slate)}
+  /* ---- prompt module card ---- */
+  .mod{border:1px solid var(--line);border-radius:12px;padding:0;margin:14px 0;overflow:hidden}
+  .mod>.head{background:#f3f6fb;padding:10px 16px;font-weight:700;display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap}
+  .mod>.head .badge{font-size:11px;font-weight:600;color:#fff;background:var(--slate);border-radius:10px;padding:2px 9px}
+  .mod>.body{padding:12px 16px}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+  .kv{font-size:13px}
+  .kv b{color:var(--slate)}
+  @media(max-width:640px){.grid2{grid-template-columns:1fr}}
+  .callout{border-radius:10px;padding:12px 14px;margin:12px 0;font-size:13px}
+  .c-warn{background:var(--amber-soft);border:1px solid #f0dcae}
+  .c-info{background:var(--accent-soft);border:1px solid #cfe0ff}
+  .c-danger{background:var(--red-soft);border:1px solid #f3c9c3}
+  .foot{color:var(--muted);font-size:12px;text-align:center;margin-top:30px}
+  ol.todo{counter-reset:t;list-style:none;padding-left:0}
+  ol.todo>li{background:#fafbfc;border:1px solid var(--line);border-left:4px solid var(--amber);border-radius:8px;padding:10px 14px 10px 40px;margin:8px 0;position:relative}
+  ol.todo>li:before{counter-increment:t;content:counter(t);position:absolute;left:12px;top:10px;width:20px;height:20px;background:var(--amber);color:#fff;border-radius:50%;font-size:12px;display:flex;align-items:center;justify-content:center;font-weight:700}
+  .src-list{columns:2;column-gap:24px;font-size:12.5px;color:var(--slate)}
+  @media(max-width:640px){.src-list{columns:1}}
+  .src-list code{display:inline-block;margin:1px 0}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="top">
+  <h1>每日选股 · 流程 / 提示词 / 参考变量</h1>
+  <div class="sub">stock_analysis 项目当前真实实现的审阅文档 · 面向业务 · 依据代码与 SKILL 如实记录</div>
+  <div class="disclaimer">⚠️ <b>测试环境研究模拟，非投资建议。</b>本页所有流程、预测、评分均用于研究/评估分析思路与策略数值，不构成任何真实交易推荐。凡代码/SKILL 中不明确处，本文以「<b>待确认</b>」标注，不臆造。</div>
+</header>
+
+<nav class="toc">
+  <a href="#flow">① 流程全景</a>
+  <a href="#prompt">② 提示词模块</a>
+  <a href="#strat">③ 策略清单</a>
+  <a href="#vars">④ 参考信息 / 变量清单</a>
+  <a href="#todo">⑤ 待确认 / 可调整</a>
+</nav>
+
+<!-- ================= 流程 ================= -->
+<section id="flow">
+  <h2><span class="n">1</span>流程全景（从新闻/盘面到每日选股产出）</h2>
+  <p class="lead">选股每天分两条线跑：机器先在收盘后完成「数据采集 → 大盘研判 → 板块冷热 → 全A多策略候选 → 策略0合议」的闭环，把结果落到 <code>data/analysis/&lt;当日&gt;/</code>；然后 LLM「分析师」按 SKILL 提示词读这些产物做综合研判，选出 3–5 只并逐票深度分析。触发链：收盘闭环 <code>com.stock.pullrefresh</code>（工作日 15:40 起）跑完 → 晚间选股定时任务 <code>daily-stock-selection</code>（18:36）开工；次日午休有 <code>daily-stock-noon-analysis</code>（11:45）盯盘。</p>
+
+  <div class="flow">
+    <div class="flow-row">
+      <div class="node n-collect">
+        <div class="k">机器 · Stage 1</div>
+        <div class="t">数据采集 / 收盘闭环</div>
+        <ul>
+          <li>K线·指数、财报/基本面、资金流</li>
+          <li>龙虎榜、筹码、一致预期、股东户数</li>
+          <li>新闻/政策/舆情、北向、两融、事件</li>
+        </ul>
+        <div class="io"><b>输入</b> 行情/公告/新闻源 → <b>输出</b> 全A per-stock JSON + 各策略视图</div>
+      </div>
+    </div>
+    <div class="arrow-down">▼</div>
+    <div class="flow-note">同一份闭环产物，向下三路并行喂给「大盘 / 板块 / 多策略」</div>
+    <div class="flow-row">
+      <div class="node n-market">
+        <div class="k">机器 · Stage 2</div>
+        <div class="t">整体盘面 / 大盘研判</div>
+        <ul>
+          <li>沪深300(背景) + 全A等权 proxy(个股β基准)</li>
+          <li>T+1/T+5 上行概率 + 方向 + 五档</li>
+          <li>宏观净方向/情景、利率、汇率、LPR</li>
+        </ul>
+        <div class="io"><b>参考</b> 广度/两融/情绪/宏观 → <b>输出</b> <code>market_forecast.json</code> · <code>market_daily.md</code></div>
+      </div>
+      <div class="node n-sector">
+        <div class="k">机器 · Stage 3</div>
+        <div class="t">板块冷热 / 占优战场</div>
+        <ul>
+          <li>风险偏好(进攻/中性/防守)、宏观情景</li>
+          <li>重点板块池 focus_score、催化、拥挤/冷热</li>
+          <li>角色表：龙头/中军/补涨先锋/弹性股</li>
+        </ul>
+        <div class="io"><b>参考</b> 新闻催化+成交+涨停广度+动量 → <b>输出</b> <code>sector_focus.json</code>（non-gating 参考锚）</div>
+      </div>
+      <div class="node n-strat">
+        <div class="k">机器 · Stage 4</div>
+        <div class="t">全A 多策略候选</div>
+        <ul>
+          <li>动量组合 / 最强选股 / 量价放量</li>
+          <li>放量后缩量回踩 / 最大范围 / 扣非质量</li>
+          <li>反转低换手 / 半导体多因子 / 趋势模板…</li>
+        </ul>
+        <div class="io"><b>输入</b> 全A K线/因子 → <b>输出</b> 各策略视图 JSON（命中票+分值）</div>
+      </div>
+    </div>
+    <div class="arrow-down">▼</div>
+    <div class="flow-row">
+      <div class="node n-council">
+        <div class="k">机器 · Stage 5</div>
+        <div class="t">策略0 · 多专家合议</div>
+        <ul>
+          <li>全A逐票 technical.compute → 8 专家合议</li>
+          <li>产：综合分 / 综合方向 / 合议置信度 / 参与专家数 / 口径多样性</li>
+          <li>风控 veto：<b>财报红旗</b> + <b>龙虎榜否决</b>（正交 OR，降权/否决沉底）</li>
+        </ul>
+        <div class="io"><b>输入</b> 各票技术+财报块+板块 → <b>输出</b> <code>策略0合议.json</code> Top N</div>
+      </div>
+    </div>
+    <div class="arrow-down">▼</div>
+    <div class="flow-row">
+      <div class="node n-analyst">
+        <div class="k">LLM 分析师 · Stage 6（选股主体）</div>
+        <div class="t">分析师综合研判（SKILL 提示词驱动）</div>
+        <ul>
+          <li>读最新经验沉淀 + 大盘/板块/全部策略视图</li>
+          <li>从多策略挖 3–5 只（多命中/极值/多样化）</li>
+          <li>逐票：定性→数据层→消息面→交叉→深度结论（区分 α 个股 / β 大盘）</li>
+          <li>必写：⑦退出纪律 ⑧触发信号 ⑨盯点单问化</li>
+        </ul>
+        <div class="io"><b>输入</b> 闭环全部产物 → <b>处理</b> 人工深度研判（非纯规则）</div>
+      </div>
+    </div>
+    <div class="arrow-down">▼</div>
+    <div class="flow-row">
+      <div class="node n-out">
+        <div class="k">产出 · Stage 7</div>
+        <div class="t">每日选股产物</div>
+        <ul>
+          <li><code>docs/每日分析/选股/&lt;当日&gt;.md</code>（含 <code>&lt;!-- PICKS: … --&gt;</code> 机读锚点 + 买入建议排序表）</li>
+          <li><code>data/analysis/&lt;当日&gt;/每日选股.json</code>（write_picks 工具，过枚举/情绪质量/防未来/PICKS一致性校验）</li>
+          <li>次日午休 <code>日内_&lt;当日&gt;.md</code>（盯盘集~19只，尾盘买/持/卖倾向）</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <div class="callout c-info">
+    <b>编排的真实形态（诚实边界）：</b><code>tools/pipeline/pipeline.py</code> 目前是骨架（<code>NotImplementedError</code>）。实际编排靠 launchd 定时（<code>pullrefresh</code>/<code>screenall</code>/<code>commitdocs</code>）+ 各 <code>screen_*</code> 模块 CLI + 分析师 SKILL，<b>不是单一 DAG</b>。所以「流程」的权威源分散在 launchd 配置、各 screener 与 SKILL 里。
+  </div>
+</section>
+
+<!-- ================= 提示词 ================= -->
+<section id="prompt">
+  <h2><span class="n">2</span>提示词模块说明<span class="tag">来源：daily-stock-selection / daily-stock-noon-analysis SKILL.md</span></h2>
+  <p class="lead">选股主体是一个 LLM「分析师」角色，其行为由定时任务 SKILL（提示词）逐段约束。下面把主提示词 <code>daily-stock-selection/SKILL.md</code>（收盘 18:36 晚间选股）拆成模块，每块给：<b>角色/任务 · 输入→输出 · 这段干嘛 · 涉及变量</b>；末尾附午盘 SKILL。</p>
+
+  <div class="mod">
+    <div class="head"><span>角色总纲</span><span class="badge">SKILL 头</span></div>
+    <div class="body">
+      <div class="grid2">
+        <div class="kv"><b>角色/任务</b>：stock_analysis 每日选股分析师（定时任务·收盘后选股 + 深度预测）。目标是从全部策略多维度挖 3–5 只、逐票深度研判并给明确买入排序。</div>
+        <div class="kv"><b>输入→输出</b>：输入=当日闭环全部产物 + 最新经验沉淀；输出=<code>选股/&lt;当日&gt;.md</code> + <code>每日选股.json</code>。</div>
+      </div>
+      <div class="kv" style="margin-top:8px"><b>作用</b>：确立「测试环境·非投资建议·防未来函数·不改代码·绝不反问」的总铁律，并绑定工作目录与 conda python。</div>
+      <div class="kv"><b>变量</b>：<span class="pill p-slate">工作目录</span><span class="pill p-slate">python 环境</span></div>
+    </div>
+  </div>
+
+  <div class="mod">
+    <div class="head"><span>开工护栏 + 漂移检测</span><span class="badge">task_guard begin</span></div>
+    <div class="body">
+      <div class="grid2">
+        <div class="kv"><b>任务</b>：跑 <code>task_guard.sh begin</code>，算「预期触发时刻 vs 实际执行时刻」的漂移。</div>
+        <div class="kv"><b>输入→输出</b>：输入=cron 时刻/系统时钟；输出=<code>DRIFT_FLAG</code>（ok / late）+ <code>DRIFT_NOTE</code>。</div>
+      </div>
+      <div class="kv" style="margin-top:8px"><b>作用</b>：后台会话在桌面 App 非活动时会被挂起数小时，实际执行常远晚于 cron。漂移>30min 时要把说明写进产出，并点出哪个维度因漂移未能检验，<b>绝不把「实际采到的数据」当成「预期时点数据」陈述</b>。</div>
+      <div class="kv"><b>变量</b>：<span class="pill p-amber">DRIFT_FLAG</span><span class="pill p-amber">DRIFT_NOTE</span></div>
+    </div>
+  </div>
+
+  <div class="mod">
+    <div class="head"><span>闭环就绪门控（硬）</span><span class="badge">前置检查</span></div>
+    <div class="body">
+      <div class="grid2">
+        <div class="kv"><b>任务</b>：确认当日为 A 股交易日，且盘后闭环已完成后才开工。</div>
+        <div class="kv"><b>输入→输出</b>：输入=<code>data/sync_receipts/&lt;当日&gt;.json</code> + 策略视图齐全度；输出=开工 / 有界轮询等待 / 跳过留痕。</div>
+      </div>
+      <div class="kv" style="margin-top:8px"><b>作用</b>：防时序竞态。判据两条都要满足：① 存在当日 sync 收据；② 策略视图齐全（动量组合/半导体多因子/反转低换手/放量后缩量回踩/最大范围/最强/策略0合议/量价放量/指标条件化 等）。未就绪→每 2 分钟重查、最多等 90 分钟；仍不就绪才跳过（写 <code>&lt;!-- PICKS: none --&gt;</code>）。另有「盘尾复盘互斥门控」<code>task_guard.sh wait daily-stock-eod-review 30</code>，避免两个定时会话撞车。</div>
+      <div class="kv"><b>变量</b>：<span class="pill p-slate">sync_receipts</span><span class="pill p-slate">策略视图齐全度</span><span class="pill p-slate">EOD 复盘锁</span></div>
+    </div>
+  </div>
+
+  <div class="mod">
+    <div class="head"><span>市场环境判断（β 背景）</span><span class="badge">第二步</span></div>
+    <div class="body">
+      <div class="grid2">
+        <div class="kv"><b>任务</b>：读 <code>market_forecast.json</code> 给市场环境定性（偏多/偏空/震荡），作量化 β 背景。</div>
+        <div class="kv"><b>输入→输出</b>：输入=大盘预测 v0.5（沪深300 + 全A等权 proxy）；输出=市场环境一句话定性 + β 风险标注。</div>
+      </div>
+      <div class="kv" style="margin-top:8px"><b>作用</b>：<b>选股 β 以 proxy（全A等权=个股β基准）为准</b>，权重股偏多≠个股偏多。预测命中率约 55%，<b>作背景、非硬门控</b>；大盘偏空时买入表态更谨慎并标 β 风险。<b>capitulation β 例外</b>：读 <code>data/signals/capitulation/&lt;当日&gt;.json</code>，若 <code>capitulation=true</code>（破位广度+近端崩跌双极端）则放松「普跌整体降级」、给 β 敞口，但绝不据此给个股加「超跌 α 分」。</div>
+      <div class="kv"><b>变量</b>：<span class="pill p-blue">p_up(T+1/T+5)</span><span class="pill p-blue">方向/五档</span><span class="pill p-blue">三维贡献(技术/广度/消息面)</span><span class="pill p-blue">分歧标记</span><span class="pill p-blue">capitulation</span></div>
+    </div>
+  </div>
+
+  <div class="mod">
+    <div class="head"><span>选股：从全部策略多维度挖 3–5 只</span><span class="badge">选股</span></div>
+    <div class="body">
+      <div class="grid2">
+        <div class="kv"><b>任务</b>：读全部策略视图，按 ①多策略命中 ②单策略极值 ③多样化，选 3–5 只，每只写清命中哪些策略+分值、标类型。</div>
+        <div class="kv"><b>输入→输出</b>：输入=各策略视图 + 策略0合议；输出=候选清单（含「买入候选/检验样本」类型，必须有真买入候选）。</div>
+      </div>
+      <div class="kv" style="margin-top:8px"><b>作用</b>：目标挖 3–5 只可买入候选；<b>弱市优质不足时诚实说「只有 N 只够格」、绝不降标准硬塞满</b>（硬凑=把 β 风险伪装成 α 机会）。</div>
+      <div class="kv"><b>变量</b>：<span class="pill p-purple">命中策略集</span><span class="pill p-purple">综合分</span><span class="pill p-purple">合议置信度</span><span class="pill p-purple">口径多样性</span></div>
+    </div>
+  </div>
+
+  <div class="mod">
+    <div class="head"><span>2B · 选股权重微调（已验证证据）</span><span class="badge">相对权重·非硬门控</span></div>
+    <div class="body">
+      <div class="kv"><b>作用</b>：按回测已验证的证据调相对权重与标注（不改主流程、不新增硬门控）：</div>
+      <ul style="margin:6px 0 0">
+        <li><b>普跌日不反动量</b>：绝不因「超买/高 winner_rate/获利盘高」系统性否决或降权动量票——回测证伪「弱市避高 β」，弱市高 β 票次日胜率反而更高；动量票在普跌日仍是首选 α 候选，用回踩限价入场。</li>
+        <li><b>半导体多因子命中降权</b>：该策略被诊断跨口径拖累次日 α（约 −1.26%），top 命中降权、不单独据它进候选。</li>
+        <li><b>winner_rate 分档</b>：wr 80~95 中段是真拖累段→命中该段降权；<b>wr&gt;99 强势票不降权</b>——回测坐实「回踩限价入场正期望、追高开负期望」，故对 wr&gt;99 标 <code>gap-fade</code>：照常入选、挂昨收~昨收−1% 回踩限价、不追高开、D+1 了结不持 D+2。</li>
+      </ul>
+      <div class="kv" style="margin-top:6px"><b>变量</b>：<span class="pill p-amber">winner_rate 分档</span><span class="pill p-amber">次日高开回落风险</span><span class="pill p-amber">gap-fade 标记</span></div>
+    </div>
+  </div>
+
+  <div class="mod">
+    <div class="head"><span>2C · 板块预测系统消费（P-a）</span><span class="badge">分析师参考·non-gating</span></div>
+    <div class="body">
+      <div class="kv"><b>作用</b>：若当日 <code>sector_focus.json</code> 存在，读作分析参考（不覆盖逐票研判）：</div>
+      <ul style="margin:6px 0 0">
+        <li><b>① regime→战略切换</b>：读顶层 <code>风险偏好</code>{进攻/中性/防守} + <code>宏观情景</code>{加息紧缩/降息宽松/关税冲击/中性}→按预案表调动量口径/规避口径/板块偏好/仓位表态。<b>催化优先</b>：有硬催化的强势票任何 regime 都可进候选。</li>
+        <li><b>② 消息面综合</b>：读 <code>market_daily.md</code>（宏观+大盘档+重点/规避板块）补个股级新闻之外的板块/宏观面。</li>
+        <li><b>③ 占优板块 roster</b>：<code>重点板块池</code>→各板块角色表（龙头/中军/补涨先锋/弹性股）作研判战场背景。<b>被证伪的只是「机械把 roster 无脑覆盖式补入候选」</b>，板块分析作研判背景的价值照常用。</li>
+      </ul>
+      <div class="kv" style="margin-top:6px"><b>变量</b>：<span class="pill p-teal">风险偏好</span><span class="pill p-teal">宏观情景</span><span class="pill p-teal">focus_score</span><span class="pill p-teal">角色表</span></div>
+    </div>
+  </div>
+
+  <div class="mod">
+    <div class="head"><span>逐票深度分析 SOP</span><span class="badge">核心</span></div>
+    <div class="body">
+      <div class="grid2">
+        <div class="kv"><b>任务</b>：对每只候选走「定性分票→数据层→消息面（强制 baidu_news + 必要 WebSearch）→数据×消息面交叉→深度结论」。</div>
+        <div class="kv"><b>输入→输出</b>：输入=per-stock JSON + 原始新闻/公告/舆情；输出=每票深度预测（明日情景 + 1日/5日方向置信 + 区分 α/β + 我 vs 系统 + 盯点）。</div>
+      </div>
+      <div class="kv" style="margin-top:8px"><b>作用</b>：明确表态不对冲（买入/可参与/观望/规避 + 理由）；游资情绪票只标风险不给方向；高位巨量区分主力 vs 融资盘；情绪质量必标，<code>质量∈{unknown,missing}</code> 的票是消息面盲区、不得给「买入·首选」最强表态。</div>
+      <div class="kv"><b>变量</b>：<span class="pill p-green">量价形态</span><span class="pill p-green">财报五维</span><span class="pill p-green">资金流(主力/融资)</span><span class="pill p-green">情绪三层质量</span><span class="pill p-green">α/β 归因</span></div>
+    </div>
+  </div>
+
+  <div class="mod">
+    <div class="head"><span>判对之后：三条必填（硬）</span><span class="badge">⑦⑧⑨</span></div>
+    <div class="body">
+      <ul style="margin:0">
+        <li><b>⑦退出/止盈纪律</b>（买入候选必填）：什么条件减仓/清仓（价格位/形态破坏/时间止损/催化落空）；若次日涨停封板卖不出，预先写明处理；不许只写「只做短线」这种无触发条件的话。</li>
+        <li><b>⑧方向前提=触发信号</b>：方向若依赖尚未出现的触发（放量收阳/主买翻正/行业催化），只能给「低波动待动」，不得给方向。<b>超跌反抽首入场闸门=放量收阳（量比&gt;1.5 且收阳）</b>，MA5 降为趋势确认/加仓档。</li>
+        <li><b>⑨盯点单问化</b>：每条盯点是可独立判定的单一问题（能用 是/否/无数据 回答）。<b>估值/筹码环节固定加一问</b>：有无存续可转债/推进中定增/临近解禁。</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="mod">
+    <div class="head"><span>产出 + 机读锚点 + 结构化 JSON</span><span class="badge">产出</span></div>
+    <div class="body">
+      <div class="kv"><b>作用</b>：写 <code>选股/&lt;当日&gt;.md</code>——文件<b>第一行必须</b>是 <code>&lt;!-- PICKS: 代码1,代码2,... --&gt;</code>（午盘/盯盘识别「昨日选股」的权威源）；正文含逐票分析 + 「买入建议排序」表。之后调 <code>tools.analysis.write_picks</code> 生成 <code>每日选股.json</code>，名称/收盘价/命中分值由工具从 record 回填（不手打），并过 枚举/必填/情绪质量/防未来/PICKS一致性 校验，<b>不过则改正重跑、绝不带错落盘</b>。</div>
+      <div class="kv"><b>变量</b>：<span class="pill p-slate">PICKS 锚点</span><span class="pill p-slate">买入建议排序表</span><span class="pill p-slate">market-regime</span></div>
+    </div>
+  </div>
+
+  <h3>午盘提示词 · daily-stock-noon-analysis（11:45）</h3>
+  <div class="mod">
+    <div class="head"><span>午盘超短线分析师</span><span class="badge">盯盘集~19只·非全A</span></div>
+    <div class="body">
+      <div class="grid2">
+        <div class="kv"><b>角色/任务</b>：交易日午休（约 11:45，11:30 已收市）对盯盘集（前日选股 ∪ 自选池）做午盘研判，给尾盘买/持/卖倾向。</div>
+        <div class="kv"><b>输入→输出</b>：输入=午盘快照 <code>data/intraday/&lt;当日&gt;/T1145.json</code>（11:31 冻结价）+ 前日选股结论；输出=<code>日内_&lt;当日&gt;.md</code>（第一行同样带 PICKS 锚点）。</div>
+      </div>
+      <div class="kv" style="margin-top:8px"><b>作用</b>：逐票给午盘状态（vs 昨收/早盘、量能异动）+ 大盘 β（普涨/普跌/高低切）+ 结合触发闸门给尾盘倾向 + 关键价位。<b>与晚间一致「不反动量」</b>：强势放量票给「回踩限价可参与」而非一刀切放弃。<b>防未来硬红线</b>：只用 ≤11:31 冻结快照的信息。范围只覆盖盯盘集~19只、非全A重筛。</div>
+      <div class="kv"><b>变量</b>：<span class="pill p-blue">T1145 午盘价</span><span class="pill p-blue">vs 昨收/早盘</span><span class="pill p-blue">量比/异动</span><span class="pill p-blue">触发闸门是否触发</span></div>
+    </div>
+  </div>
+</section>
+
+<!-- ================= 策略清单 ================= -->
+<section id="strat">
+  <h2><span class="n">3</span>策略清单（候选怎么来 + 打分）<span class="tag">来源：tools/pipeline/screen_*.py · config/strategy.py</span></h2>
+  <p class="lead">全A 层面跑多个规则型/因子型 screener，各自产一份视图 JSON（命中票 + 分值）。分析师从这些视图里挖候选。下表如实标注每个策略抓什么、关键参数、是否在产。</p>
+  <table>
+    <thead><tr><th style="width:20%">策略（视图名）</th><th style="width:13%">类型</th><th>抓什么形态/因子</th><th style="width:22%">关键参数（代码实测）</th><th style="width:9%">状态</th></tr></thead>
+    <tbody>
+      <tr><td><b>策略0 · 多专家合议</b><br><code>策略0合议.json</code></td><td>合议/风控汇聚</td><td>全A逐票 technical.compute → 8 专家合议（超买超卖/拐点/资金流/情绪三层/多因子/事件驱动/板块轮动/财报）→ 统一风控 veto。产综合分/综合方向/合议置信度/参与专家数/口径多样性。</td><td>财报红旗 + 龙虎榜否决（<code>entry_veto</code>）正交 OR 合成，降权/否决沉底</td><td><span class="pill p-green">在产</span></td></tr>
+      <tr><td><b>最强选股（S05）</b><br><code>最强选股.json</code></td><td>规则·看多</td><td>六均线多头 + 近期连续大涨 + 高位区间 + 筹码高度获利（winner_rate）。是 wr 分档/gap-fade 的数据源。</td><td>均线 5/10/20/30/60/200；涨幅窗口 11、阈值 5%、次数 2；高位 0.9~1.2×H52(250)；获利比阈值 95；筹码源=本地 chip 推演</td><td><span class="pill p-green">在产</span></td></tr>
+      <tr><td><b>量价放量（S04）</b><br><code>量价放量.json</code></td><td>规则·看多</td><td>放量突破/上涨本身（与 S02 互补）。3 个可勾选子信号取并集：单日放量 / 低位放量 / …</td><td>单日放量：换手×1.7、涨幅 3%、MA50&gt;MA200 且 MA200 上行</td><td><span class="pill p-green">在产</span></td></tr>
+      <tr><td><b>放量后缩量回踩（S02）</b><br><code>放量后缩量回踩.json</code></td><td>规则·布尔组合</td><td>买「放量之后」的缩量回踩：C1 周线近期放量 · C2 MA5&gt;MA10 · C3 当日收阴收跌 · C4 接近地量 · C5 贴 10 日线（五条全满足）。</td><td>五条硬规则 C1..C5 全 AND、单日触发</td><td><span class="pill p-green">在产</span></td></tr>
+      <tr><td><b>最大范围选股（S03）</b><br><code>最大范围选股.json</code></td><td>规则·看多·纯OHLC</td><td>高位强势 + 均线多头 + 近期有过大阳 + 当日未大跌。</td><td>距高点 0.82~1.1×HHV(250)；MA10/20/50 多头；大阳窗口 32、单日涨阈 6%；当日回撤≤4%；排除 8/4 开头（北交所）</td><td><span class="pill p-green">在产</span></td></tr>
+      <tr><td><b>扣非质量（#31）</b><br><code>扣非质量.json</code></td><td>因子·横截面</td><td>全A 按利润质量排序（与位置型正交）：扣非增速/扣非占归母/现金含量/毛利率/质量领先度，各维 winsor+zscore 复合取 Top30。</td><td>winsor 3.0；多期 N=5；成交额≥5000万；流通市值≥20亿；剔 ST + 流动性门</td><td><span class="pill p-green">在产</span></td></tr>
+      <tr><td><b>动量组合（策略4）</b><br><code>动量组合.json</code></td><td>因子·价格动量</td><td>仅 A 腿（纯价格动量：加权对数动量 + 拉普拉斯闸门 + R²）。B 腿（红利动量·需基本面质地）在全A screener 跳过、由 web 在自选池实时跑。</td><td>加权对数动量 + R² 质量闸</td><td><span class="pill p-green">在产</span></td></tr>
+      <tr><td><b>反转低换手组合（策略10）</b><br><code>反转低换手组合.json</code></td><td>因子·量价复合</td><td>反转 rev5 + 低换手 turn20，各自 winsor+zscore 后等权（0.50/0.50）取 Top20。纯量价、不触基本面。</td><td>反转窗口 5、换手窗口 20、成交额≥5000万；前向观测中</td><td><span class="pill p-green">在产</span></td></tr>
+      <tr><td><b>半导体多因子（策略5）</b><br><code>半导体多因子.json</code></td><td>因子·行业限池</td><td>限申万二级 801081 半导体池（约178只）；3 因子加权：研发/营收×0.6 + 研发/市值×0.2 + 营收增速×0.2。</td><td>winsor+zscore；缺研发率/营收增速/总市值→剔</td><td><span class="pill p-amber">在产·2B 降权</span></td></tr>
+      <tr><td><b>指标条件化状态排序（策略11）</b></td><td>状态排序</td><td>按 state_pool 基线上涨概率%降序 + 置信度 tiebreak，三 horizon TopK。</td><td>依赖预建 <code>state_pool.parquet</code>（本 screener 不建池）</td><td><span class="pill p-slate">草稿/依赖数据线</span></td></tr>
+      <tr><td><b>形态选股（模块二）</b> / <b>趋势模板</b>（米勒维尼）/ <b>SEPA+VCP</b></td><td>形态/趋势过滤</td><td>形态选股：两阶段（便宜筛全A K线→贵活只对候选采基本面+公告）+ 双层 RS + 量能。趋势模板：Return250→横截面 RPS→8 条判定。SEPA+VCP：均线入池→VCP 收缩。</td><td>RS 基准=沪深300；趋势模板 min_bars=250</td><td><span class="pill p-slate">在产/存档并行</span></td></tr>
+      <tr><td><b>趋势深跌反包（S01）</b> / <b>箱体（策略3）</b></td><td>规则·已下线</td><td>S01 全史诊断坐实入场方向反（dead-cat bounce）、显著负；箱体放量突破「追高见光死」、显著负。</td><td>—</td><td><span class="pill p-red">已下线·仅存档不接生产</span></td></tr>
+    </tbody>
+  </table>
+
+  <h4>策略0 · 合议怎么产综合分</h4>
+  <p class="muted" style="font-size:13px">8 专家=<span class="pill p-slate">超买超卖</span><span class="pill p-slate">拐点</span><span class="pill p-slate">资金流</span><span class="pill p-slate">情绪三层</span><span class="pill p-slate">多因子</span><span class="pill p-slate">事件驱动</span><span class="pill p-slate">板块轮动</span><span class="pill p-slate">财报</span>。每专家给 方向/强度/置信度/默认权重/依据，加权汇总为<b>综合方向 + 综合分</b>；<b>合议置信度</b>=专家一致度，<b>参与专家数 / 口径多样性 / 覆盖口径</b>=有多少独立视角发声。<b>注意（诚实边界）</b>：全A逐票时，资金流/多因子/情绪/事件因无全A数据<b>自然弃权</b>，只有技术类 + 有财报 raw 的票财报专家发声——所以全A口径下实际参与专家常常有限，综合分主要由技术+财报(+板块)驱动。</p>
+</section>
+
+<!-- ================= 变量清单 ================= -->
+<section id="vars">
+  <h2><span class="n">4</span>参考信息 / 变量清单（代表什么、说明什么）</h2>
+  <p class="lead">下面把选股实际参考的变量列全，按「整体盘面 → 板块 → 策略命中 → 个股」四层。字段名取自真实产物（<code>market_forecast.json</code> / <code>sector_focus.json</code> / per-stock JSON，样例日 2026-09-16）。</p>
+
+  <h3>4.1 整体盘面 / 大盘（β 背景）</h3>
+  <table>
+    <thead><tr><th style="width:24%">变量</th><th style="width:30%">字段 / 取值</th><th>代表什么 · 说明什么</th></tr></thead>
+    <tbody>
+      <tr><td>上行概率 + 方向</td><td><code>p_up</code>(T+1/T+5)、<code>direction</code>、五档 <code>bucket</code></td><td>沪深300（<b>hs300 背景</b>）与全A等权（<b>proxy=个股β基准</b>）各一套。选股 β 以 proxy 为准。命中率约 55%，是弱信号背景、非硬门控。</td></tr>
+      <tr><td>三/四维贡献</td><td><code>factor_contrib</code>：技术 / 广度 / 消息面 / 资金流</td><td>拆解方向概率来自哪个维度（技术转负=乖离/回吐风险，广度正=普涨基础）。</td></tr>
+      <tr><td>分歧标记</td><td><code>分歧标记.类型</code>（如「权重搭台中小盘偏弱」）、背离差值、方向档背离</td><td>hs300 与 proxy 背离时提示「指数护盘≠个股普涨」，买入更谨慎。</td></tr>
+      <tr><td>市场广度</td><td><code>breadth_snapshot</code>：total / adv / dec / limit_up / limit_down / <b>net_adv 净广度</b> / above_ma20_ratio</td><td>涨跌家数、涨停/跌停数、净广度衡量普涨/普跌强度。</td></tr>
+      <tr><td>宏观净方向 / 情景</td><td><code>宏观净方向</code>{偏多/中性/偏空}、<code>宏观情景</code>{加息紧缩/降息宽松/关税冲击/中性}</td><td>宏观总基调；情景直接驱动 2C 的 regime 战略切换（如降息宽松→追动量、加息紧缩→防守规避利率敏感成长）。</td></tr>
+      <tr><td>利率</td><td>中国 10Y 国债收益率（环比）、中美利差、LPR 1Y/5Y</td><td>加息/降息与流动性环境代理。<b>中美利差本地样例为 None（待接）</b>。</td></tr>
+      <tr><td>汇率</td><td>美元中间价（环比）</td><td>汇率方向；人民币贬值/升值对外向板块的背景。</td></tr>
+      <tr><td>关税 / 地缘</td><td>无专用结构化字段，经 <code>sentiment_policy</code> / <code>news</code> 文本间接覆盖</td><td>关税冲击/地缘作为「宏观情景」候选之一体现，<b>但无独立采集器</b>（待确认第 1 条）。</td></tr>
+      <tr><td>北向资金</td><td><code>northbound</code></td><td>外资流向。<b>市场诚实边界注明：北向 raw 本地缺、待接</b>。</td></tr>
+      <tr><td>两融</td><td><code>fundflow_snapshot</code>：融资余额 / 融资买入额 / 融资融券余额（margin）</td><td>杠杆资金强弱；也用于个股「主力 vs 融资盘」甄别的宏观背景。</td></tr>
+      <tr><td>市场综合研判</td><td><code>market_daily.md</code>：宏观研判 / 大盘风险偏好 / 重点选股板块池</td><td>把上面变量汇成一页给分析师的消息面综合背景。</td></tr>
+    </tbody>
+  </table>
+
+  <h3>4.2 板块（冷热 / 催化 / 角色）</h3>
+  <table>
+    <thead><tr><th style="width:24%">变量</th><th style="width:26%">字段</th><th>代表什么 · 说明什么</th></tr></thead>
+    <tbody>
+      <tr><td>风险偏好 / regime</td><td><code>风险偏好</code>{进攻/中性/防守} + 广度档 + hs300/proxy 方向</td><td>板块系统给的整体攻防档，驱动 2C 战略切换。</td></tr>
+      <tr><td>重点板块池</td><td><code>focus_score</code>、成交占比、涨停数、动量截面档、拥挤档</td><td>哪些板块占优（focus 综合：新闻催化 0.40 最高权重 + 成交占比 + 当日涨停广度 + 截面动量）。</td></tr>
+      <tr><td>冷热</td><td><code>冷热</code>{正常活跃/过冷/过热}</td><td>仅作风险上下文，<b>不据它挑板块</b>；「过冷（面板冷但当日活跃）」提示背离。</td></tr>
+      <tr><td>新闻净催化</td><td><code>新闻净催化</code> = 利好条 − 利空条</td><td>板块级消息面强弱；催化优先——有真催化的强势票不因超买规避。</td></tr>
+      <tr><td>角色表</td><td>roster：<b>龙头 / 中军 / 补涨先锋 / 弹性股</b></td><td>板块内部结构，供分析师定向盯防（谁领涨、谁跟涨、有无硬催化）。</td></tr>
+    </tbody>
+  </table>
+  <div class="callout c-warn" style="font-size:12.5px"><b>板块系统定位：</b>当前 <code>sector_focus.json</code> 是 <b>non-gating · forward-shadow</b>，口径注明「不进生产选股（P3 gated 才接）」——即目前只是分析师参考锚，尚未真正闭环进选股算法。</div>
+
+  <h3>4.3 策略命中（哪些策略选中了某票、各数值含义）</h3>
+  <table>
+    <thead><tr><th style="width:26%">变量</th><th>含义</th></tr></thead>
+    <tbody>
+      <tr><td>命中策略集</td><td>该票被哪些策略选中（如「最强选股 + 量价放量 + 最大范围选股」）。<b>多策略命中≠多维确认</b>：需前置闸门，同源命中要打折。</td></tr>
+      <tr><td>综合分</td><td>策略0合议加权后的方向强度分（越高越偏多）。</td></tr>
+      <tr><td>合议置信度</td><td>专家意见一致程度（1.0=高度一致）。</td></tr>
+      <tr><td>参与专家数 / 口径多样性 / 覆盖口径</td><td>有多少独立视角发声、覆盖了哪几类口径（技术/板块/质地…）。多样性高=多维印证。</td></tr>
+      <tr><td>winner_rate 分档</td><td>获利盘比例分档（<code>&gt;99</code> / <code>95-99</code> / <code>80-95</code>）。80~95 中段降权；&gt;99 不降权但标 gap-fade。</td></tr>
+      <tr><td>次日高开回落风险</td><td>由 S05 输出，标记高位强势票的 gap-fade 风险（回踩限价买、不追高开）。</td></tr>
+      <tr><td>财报风险 / 龙虎榜否决</td><td>策略0 风控 veto：财报红旗、龙虎榜 <code>entry_veto</code>（近端净买上榜方向）触发则降权/沉底。</td></tr>
+    </tbody>
+  </table>
+
+  <h3>4.4 个股参考变量（per-stock JSON 各块）</h3>
+  <p class="muted" style="font-size:13px">每票一份 <code>data/analysis/&lt;当日&gt;/&lt;code&gt;.json</code>，含以下块（每块带 <b>口径日期 / 新鲜度</b>，标注该字段是否当日新鲜）。</p>
+  <table>
+    <thead><tr><th style="width:16%">块</th><th style="width:34%">关键字段</th><th>代表什么 · 说明什么</th></tr></thead>
+    <tbody>
+      <tr><td><b>snapshot</b> 量价形态</td><td>close / pct_chg / ma(5/10/20/60,排列) / macd(状态) / kdj / rsi / <b>bias20</b> / <b>vol_ratio</b> / vol_state</td><td>当日量价与均线结构。bias20=对 20 日均线乖离（极端乖离=透支），vol_ratio/vol_state=放量/缩量。</td></tr>
+      <tr><td><b>valuation</b> 估值</td><td>pe_ttm / pb / mktcap_yi / mode（PE适用/PEG）/ pe_valid</td><td>估值贵贱、结合增速看 PEG。<b>样例口径日期常滞后 as_of（陈旧）</b>。</td></tr>
+      <tr><td><b>fundamental</b> 基本面</td><td>营收 / 净利 / 营收增速 / 净利增速 / ROE / 毛利率 / 净利率 / 负债率 / 每股股利</td><td>成长性与盈利能力速览。</td></tr>
+      <tr><td><b>financial</b> 财报五维</td><td><b>five_dims：成长 / 质量 / 健康 / 运营 / 回报</b>；quality_score + 评级；扣非/现金含量/审计意见+机构档位；合同负债/在手订单；qualitative 文本红旗</td><td>财报质地打分（五维雷达）。审计意见/机构档位作硬闸；扣非占归母、现金含量 CFO/净利 判断利润成色。</td></tr>
+      <tr><td><b>signals</b> 信号</td><td>trend（评级/得分）、reversal（超跌/放量反包/低位金叉/底背离/拐点评分）、ob_os（超买超卖 verdict/resonance）</td><td>趋势/反转/超买超卖三类技术信号，合议专家的原料。</td></tr>
+      <tr><td><b>prediction</b> 预测</td><td>atr / atr_pct / 支撑位 / 压力位 / 情景预测(1日/5日/10日) / 买卖倾向 / 指标条件化预测 / 结构位</td><td>波动幅度、支撑压力、概率化情景。诚实标注「概率基于历史频率、非未来保证」。</td></tr>
+      <tr><td><b>sentiment</b> 情绪三层</td><td>净情绪分 / <b>质量(ok/partial/unknown/missing)</b> / 覆盖率 / 三层(新闻·舆情·事件) / events</td><td>消息面情绪。<b>质量=unknown/missing 时净情绪为 null 而非 0.0，是盲区，不得据此给最强表态</b>。</td></tr>
+      <tr><td><b>fundflow</b> 资金流</td><td>今日主力净流入 / 主力净占比 / 近5日主力合计 / 主力连续净流入天数</td><td>主力资金强弱。用于区分「真主力流入 vs 融资盘买入」。</td></tr>
+      <tr><td><b>chip</b> 筹码</td><td>获利比例 / 平均成本 / 成本区间上下沿 / 集中度90</td><td>获利盘比例（S05 winner_rate 源）、筹码集中度。高获利比例=抛压潜在大。</td></tr>
+      <tr><td><b>consensus</b> 一致预期</td><td>预期 EPS 当年/次年 / 预期增速 / 覆盖机构数</td><td>卖方一致预期，覆盖机构数=关注度。</td></tr>
+      <tr><td><b>holder</b> 股东户数</td><td>最新股东户数 / 户数环比 / 连续减少期数</td><td>筹码分散/集中趋势（户数降=集中，偏正）。<b>样例常陈旧/缺失</b>。</td></tr>
+      <tr><td><b>tick</b> 盘口微观</td><td>主买占比 / 主卖占比 / 净主动买量 / 大单笔数</td><td>盘口主动买卖力量。<b>样例口径陈旧</b>。</td></tr>
+      <tr><td><b>lhb_veto</b> 龙虎榜否决</td><td>triggered / mode(<code>entry_veto</code>) / net_buy_ratio / direction / n_recent</td><td>近端龙虎榜净买上榜方向；作策略0的入场否决/降权信号。</td></tr>
+      <tr><td><b>financing</b> 融资/解禁</td><td>固定一问：有存续可转债 / 有推进中定增 / 有临近解禁(90日)</td><td>存量融资与解禁=中期摊薄/供给面变量，对应 SKILL「固定加一问」。</td></tr>
+      <tr><td><b>events</b> 事件</td><td>date / type / impact / title</td><td>公告事件流（诉讼/仲裁/投资等），impact 标利好/利空。</td></tr>
+      <tr><td><b>provenance</b> 出处</td><td>各数据源可信度 / 新鲜度标记</td><td>逐块标注数据来源与是否新鲜，防「用陈旧/兜底值当利好」。</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<!-- ================= 待确认 ================= -->
+<section id="todo">
+  <h2><span class="n">5</span>待确认 / 可调整清单</h2>
+  <p class="lead">读代码/产物时发现的、当前实现与「理想」有差距或含糊之处，列给用户探讨（不改动任何生产代码/SKILL）。</p>
+  <ol class="todo">
+    <li><b>国际新闻 / 关税 / 地缘覆盖度不均。</b>利率、汇率有结构化字段；国际龙头（英伟达/台积电）专用海外 feed「待接」，现经国内财经媒体间接覆盖；关税/地缘无独立采集器，仅经 <code>sentiment_policy</code>/<code>news</code> 文本间接进入「宏观情景」。任务书要求呈现的「加息/降息/汇率/关税/地缘」中，后两者目前是弱覆盖——是否需补专用源？</li>
+    <li><b>北向 raw 本地缺、待接；大宗金额聚合口径待细化。</b>（<code>market_daily.md</code> 诚实边界原文）当前北向变量存在但底层 raw 未到位。</li>
+    <li><b>板块系统尚未真正闭环进选股。</b><code>sector_focus.json</code> 为 non-gating/forward-shadow，口径注明「不进生产选股（P3 gated 才接）」，当前只是分析师参考锚。是否推进到 gating？</li>
+    <li><b>部分个股字段「陈旧」。</b>样例中估值/基本面（口径 09-08）、盘口 tick（09-11）、股东户数（09-04）滞后于 as_of（09-16）。选股用到的部分变量并非当日新鲜——是否需要提升刷新频率或在选股时对陈旧字段降权？</li>
+    <li><b>全A 逐票时消息面/情绪多为盲区。</b>样例个股 <code>sentiment</code> 新闻/舆情样本数 0、质量 missing；策略0里资金流/多因子/情绪/事件对全A自然弃权。消息面只对「策略选中集∪自选池」采集——分析师需对候选补采，但候选之外的全A票消息面缺失。</li>
+    <li><b>已下线策略仍在代码库。</b>S01（趋势深跌反包）、箱体（策略3）经诊断显著负、仅存档不接生产。建议确认前端选股页/编排/回放确已摘除、无误用。</li>
+    <li><b>大盘预测是弱信号。</b><code>market_forecast</code> 整体方向命中约 55%（较纯惯性约 +4pt），SKILL 明确「作背景、非硬门控」。使用者需理解其定位，不宜当强前瞻依据。</li>
+    <li><b>编排无单一 DAG。</b><code>pipeline.py</code> 是骨架（NotImplementedError），真实编排分散在 launchd（pullrefresh/screenall/commitdocs）+ 各 screener CLI + 分析师 SKILL。流程「真源」不集中，转交时需同时看这几处。</li>
+    <li><b>策略0「多专家合议」在全A口径下参与专家有限。</b>综合分主要由技术 +（有 raw 时）财报 + 板块驱动，资金流/情绪/多因子/事件多弃权。「多专家」名义与全A实际参与度之间有落差，评估综合分权重时需知晓。</li>
+    <li><b>选股主体是 LLM 人工研判、非算法 top。</b>最终 3–5 只由分析师按 SKILL 主观从策略视图挑选并深度研判，可复现性依赖「经验沉淀」文档版本（<code>v&lt;日期&gt;.md</code>，累积 33 条经验/纪律）。若追求确定性/可回测，需明确「哪些是硬规则、哪些是分析师自由裁量」。</li>
+  </ol>
+</section>
+
+<div class="foot">
+  依据：daily-stock-selection / daily-stock-noon-analysis SKILL.md · docs/计划/每日选股分析机制.md · tools/pipeline/screen_*.py · tools/config/strategy.py · data/analysis/2026-09-16/（market_forecast / sector_focus / 各策略视图 / 600150.json）· 经验沉淀 v2026-09-16。<br>
+  ⚠️ 测试环境研究模拟，非投资建议。
+</div>
+
+</div>
+</body>
+</html>

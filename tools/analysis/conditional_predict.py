@@ -24,6 +24,7 @@ from tools.analysis import indicator_state as ist
 from tools.analysis import technical as ta
 from tools.config import settings
 from tools.config.strategy import THRESHOLDS
+from tools.llm import rubric_map as rm
 
 logger = logging.getLogger("analysis.conditional_predict")
 
@@ -666,7 +667,7 @@ def root_structural_signal(sentiment: dict | None) -> float | None:
                 continue
             if e.get("与本股关系") not in rel_w:
                 continue
-            st = _to_num(e.get("影响强度"))
+            st = rm.strength_to_num(e.get("影响强度"), default=None)  # 文字档→数值(兼容legacy;缺失→None跳过)
             persist = e.get("持续性") if use_persist else None
             if persist is not None:                        # 有真结构性分类
                 if persist != "结构性持续":                # 短暂事件/中性 → 见光死,不进倾斜

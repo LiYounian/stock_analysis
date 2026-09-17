@@ -63,6 +63,51 @@ tasks:
     notify_on: [failure, misfire]
     tags: [local, intraday, watch]
 
+  # 消息驱动板块研判每日(工作日 14:00·下午不冲突时段):【2026-09-16 升级·程序化流水线 S3→S4 链】
+  # live sh(sector_news_catalyst.sh)重指向:先跑 S3 board_news_collect_run(读S2表→定向采集 龙头/中军/主力
+  #   新闻+政策+国际+LHB → raw 过程文件·只抓不判无 LLM)→ 再跑 S4 board_verdict_run(读raw→DeepSeek-v4-pro
+  #   思考关 按 rubric 文字分级研判+去重增量 → catalyst_<date>.json 全板块 + 扩 sector_focus 消息驱动块)。
+  #   retire 内部耦合的 news_catalyst_run(采集与研判解耦为两阶段·全板块覆盖)。供选股利好板块→深度分析支撑路径。
+  # plist=com.stock.sector_news_catalyst.plist;**用户已 launchctl load(live);plist 路径不变→下个14:00自动跑升级链、无需reload**。
+  # cron 与 plist 的 14:00 mon-fri 严格等价(test_scheduler_launchd_equivalence 锁)。cmd 记 S4 终点模块(S3 由 sh 前置)。
+  - id: sector_news_catalyst
+    description: "消息驱动板块研判(14:00·S3采集→S4研判链);全板块DeepSeek rubric文字分级+去重;live升级内核,同slot"
+    cmd: ["python", "-m", "tools.analysis.sector_forecast.board_verdict_run"]
+    cron: "0 14 * * mon-fri"
+    timeout_sec: 1800
+    retries: 1
+    enabled: false
+    notify_on: [failure, misfire]
+    tags: [local, afternoon, sector, news]
+
+  # 程序化流水线 S1(周度·纯量价无 LLM):全申万一级板块清单 + 热门标记 + 与上周 diff →
+  # data/analysis/sector_universe.json + history 归档。解决"板块只 10 个"。每周一 18:00(盘后·数据新鲜)。
+  # plist=com.stock.sector_universe.plist(草案);**enabled:false + 待用户 launchctl 装载**。
+  # cron 与 plist 的 周一18:00 严格等价(test_scheduler_launchd_equivalence 锁)。前置:S1 代码已合 main。
+  - id: sector_universe
+    description: "S1 板块universe周维护(周一18:00);全申万一级+热门标记+上周diff;纯量价;草案待装载,默认关"
+    cmd: ["python", "-m", "tools.analysis.sector_forecast.sector_universe_run"]
+    cron: "0 18 * * mon"
+    timeout_sec: 900
+    retries: 1
+    enabled: false
+    notify_on: [failure, misfire]
+    tags: [local, weekly, sector, universe]
+
+  # 程序化流水线 S2(周度·纯量价+龙虎榜净买proxy无 LLM):读 S1 全板块 → 五角色(龙头/中军/先锋/弹性/主力)+
+  # 周度变更留痕 → data/sector_roster_table/<板块>.json + changes/roster_changes_<周>.md。保留每日 roles 版对照。
+  # 每周一 18:30(排在 S1 18:00 之后,读本周 universe)。plist=com.stock.sector_roster_table.plist(草案);
+  # **enabled:false + 待用户 launchctl 装载**。cron 与 plist 的 周一18:30 严格等价。前置:S2 代码已合 main。
+  - id: sector_roster_table
+    description: "S2 角色关系表周维护(周一18:30);五角色含主力LHB proxy+周度变更留痕;纯量价;草案待装载,默认关"
+    cmd: ["python", "-m", "tools.analysis.sector_forecast.sector_roster_table_run"]
+    cron: "30 18 * * mon"
+    timeout_sec: 1800
+    retries: 1
+    enabled: false
+    notify_on: [failure, misfire]
+    tags: [local, weekly, sector, roster]
+
   - id: breadth
     description: 市场宽度(收盘后 15:05)
     cmd: ["python", "-m", "tools.pipeline.market_breadth", "--slot", "1505"]
@@ -135,6 +180,21 @@ tasks:
     retries: 1
     notify_on: [failure, misfire]
     tags: [local, forward-shadow, avoidance]
+
+  # 消息驱动板块选股 M3 forward 记分器(工作日 21:15,veto_track 21:00 之后·闭环末端):
+  # 读当日 sector_focus 消息驱动块(缺则回退真 catalyst 官方转换)→ 回踩限价入场→记 D+1/D+2 绝对收益。
+  # 龙头(个股催化)与跟涨(补涨联动观察)严格分开、分层;non-gating·纯记录·**绝不接 live 选股/不写 sector_focus**。
+  # plist=com.stock.sector_news_forward_shadow.plist(草案);**enabled:false + 待用户 launchctl 装载**。
+  # cron 与 plist 的 21:15 mon-fri 严格等价(test_scheduler_launchd_equivalence 锁)。
+  - id: sector_news_forward_shadow
+    description: "消息驱动板块选股 forward 记分器(21:15);龙头/跟涨分列·回踩限价→D+1/D+2 绝对收益;non-gating 攒样本"
+    cmd: ["python", "-m", "tools.research.sector_news_forward"]
+    cron: "15 21 * * mon-fri"
+    timeout_sec: 900
+    retries: 1
+    enabled: false
+    notify_on: [failure, misfire]
+    tags: [local, forward-shadow, sector, news]
 
   # 板块预测系统每日 runner(工作日 19:45,闭环后·shadow批前):产 sector_focus/market_daily/roster。
   # forward-shadow·non-gating·不接生产选股(接入 gated 待 B' 覆盖验证)。plist=com.stock.sector_forecast.plist。

@@ -49,12 +49,20 @@ data/analysis/panel.json
 # 随 data/analysis/backtest/*forward_scorecard.csv 惯例:派生数据不入库,避免每日 diff 弄脏工作树。
 data/analysis/backtest/nextday_scorecard.csv
 
+# 统一大复盘汇总记分卡（tools/review 生成的派生 KPI 滚存，可从产物+kline 再生，不入库）。
+data/analysis/backtest/grand_review_scorecard.csv
+
 # 定时任务运行期产物（护栏锁 / OS级盘中快照），纯滚存不入库
 data/task_locks/
 data/intraday/
 
 # 每日 forward 影子跑证据库（v2r 扩样，纯 dry-run 旁路滚存，不入库；同 forward_scorecard 机制）
 data/shadow_forward/
+
+# 消息驱动板块研判每日增量产出(catalyst_<date>.json 含真实新闻原文 + LLM 分级研判、
+# analyzed/ 去重滚动归纳):每日重生的派生数据、含新闻内容,不入库(脱敏·避免每日 diff 弄脏)。
+# 面向合作者的摘要「消息驱动」块已并入 tracked 的 data/analysis/<date>/sector_focus.json。
+data/sector_news/
 
 # 运行日志不入库
 logs/
@@ -63,3 +71,10 @@ logs/
 # trailing 广度缓存(增量重建) + 逐日 β 择时信号。生产数据在主仓、按需重建,不入库。
 data/breadth_series/
 data/signals/
+
+# 程序化流水线 S1/S2 周度派生过程文件(量价重算·可复现·自带 roster_changes/history 变更留痕):不入库,避免每周 diff 弄脏。
+data/analysis/sector_universe.json
+data/sector_roster_table/
+
+# 盯盘监控运行时产物(watchlist + alert流水),不入库
+data/watch/

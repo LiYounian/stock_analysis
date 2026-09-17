@@ -25,8 +25,8 @@ class _Fake:
     def extract(self, text, schema, *, instruction, temperature=0.0):
         if "受影响行业" in schema:
             return {"影响方向": "利好", "影响强度": 4, "受影响行业": ["半导体"]}
-        if "净情绪" in schema:
-            return {"净情绪": 0.6, "多空": "偏多", "依据": "x"}
+        if "多空" in schema:                       # UGC:文字档(净情绪由代码回填)
+            return {"多空": "偏多", "依据": "x"}
         return {"事件类型": "业绩", "影响方向": "利好", "影响强度": 4,
                 "与本股关系": "直接", "摘要": "x"}
 
@@ -35,7 +35,7 @@ class _NeutralNews(_Fake):
     """新闻判「中性」→ 净情绪算 0.0 但样本数>0(用于区分「真中性」与「无数据」)。"""
 
     def extract(self, text, schema, *, instruction, temperature=0.0):
-        if "受影响行业" in schema or "净情绪" in schema:
+        if "受影响行业" in schema or "多空" in schema:
             return super().extract(text, schema, instruction=instruction)
         return {"事件类型": "业绩", "影响方向": "中性", "影响强度": 3,
                 "与本股关系": "直接", "摘要": "x"}

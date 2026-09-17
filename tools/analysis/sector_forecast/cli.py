@@ -91,6 +91,15 @@ def main(argv: list[str] | None = None) -> int:
     fpath = F.write_focus(date, panel=panel, macro=macro)
     log.info("重点板块池 → %s", fpath)
 
+    # 消息驱动块:若当日已有 catalyst_<date>.json(14:00 增量产出),扩进 sector_focus(不重烧 LLM)
+    try:
+        from tools.analysis.sector_forecast import news_focus_block as NB
+        ep = NB.enrich_sector_focus(date)          # cat=None → 读已落盘 catalyst
+        if ep:
+            log.info("sector_focus 扩「消息驱动」块 → %s", ep)
+    except Exception as e:
+        log.warning("扩消息驱动块跳过(不影响面板/两步):%s", e)
+
     if not args.no_report:
         from tools.analysis.sector_forecast import daily_report as DR
         mp, jp = DR.write_report(date, panel=panel, macro=macro)

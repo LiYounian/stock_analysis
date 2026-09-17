@@ -30,7 +30,7 @@ providers:
     notes: 内部网关;DeepSeek 主力。P1 全 purpose 默认路由至此,保证行为零变化。
 
   qwen_max:
-    kind: openai_compat             # 用户拍板:千问走 fintopia 网关 OpenAI 兼容(非 qwen-delegate CLI)
+    kind: openai_compat             # 用户拍板:千问走 内部网关 OpenAI 兼容(非 qwen-delegate CLI)
     model: qwen3.8-max              # 升级千问只改这一行
     base_url_env: QWEN_BASE_URL     # 网关地址变量名(值在本机 shell,不入库)
     api_key_env: QWEN_API_KEY
@@ -38,7 +38,7 @@ providers:
       enable_thinking: false
       timeout: 60
     enabled: true
-    notes: fintopia 网关 OpenAI 兼容。P1 已注册可切换,但暂不默认路由(迁移在 P2 影子跑达标后切主)。
+    notes: 内部网关 OpenAI 兼容。P1 已注册可切换,但暂不默认路由(迁移在 P2 影子跑达标后切主)。
 
 # —— 任务路由表:purpose(用途)→ primary(主 provider)[+ fallback 链] ——
 # purpose 覆盖现有全部 LLM 触点(见设计 §1.1):

@@ -18,6 +18,8 @@ import signal
 from pathlib import Path
 from typing import Optional
 
+from tools.llm import rubric_map as rm
+
 logger = logging.getLogger("sector_forecast.news_store")
 
 STORE_VERSION = "v1-2026-09-16"
@@ -178,7 +180,8 @@ def derive_macro(indicators: dict, news: dict) -> dict:
     def _net(theme):
         # 主题的**净方向×强度**(利好+/利空−):命中主题词≠利空,须看该条实际方向
         # (如"算力+出口管制"多为国产替代利好,不能当加息式利空计数)。
-        return sum({"利好": 1, "利空": -1}.get(x.get("方向"), 0) * (x.get("强度") or 0)
+        return sum({"利好": 1, "利空": -1}.get(x.get("方向"), 0)
+                   * rm.strength_to_num(x.get("强度"), default=0.0)   # 文字档→数值(兼容legacy)
                    for x in hits.get(theme, []))
     # 宏观净方向以**硬指标(利率/汇率)为主**;新闻只作辅助且**封顶**——大量板块新闻
     # 顺带提到宏观词(如"算力+出口管制"=国产替代利好)属**板块催化**(focus 已计),

@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  消息驱动板块研判 · 每日增量(草案 · 不自动 load;由用户本人 launchctl load,约法)。
+  时点:工作日 14:00(下午不冲突时段,用户口径)——避开 15:40 pullrefresh EOD 重活;每天增量、去重。
+  真调 LLM(rubric 文字研判)→ wrapper 解析网关凭证。前置:消息驱动代码需已在主仓 main。
+  装载:launchctl load ~/Library/LaunchAgents/com.stock.sector_news_catalyst.plist
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.stock.sector_news_catalyst</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>/Users/yqg/Documents/projects/stock_analysis/ops/launchd/sector_news_catalyst.sh</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>/Users/yqg/Documents/projects/stock_analysis</string>
+  <key>StartCalendarInterval</key>
+  <array>
+    <dict><key>Weekday</key><integer>1</integer><key>Hour</key><integer>14</integer><key>Minute</key><integer>0</integer></dict>
+    <dict><key>Weekday</key><integer>2</integer><key>Hour</key><integer>14</integer><key>Minute</key><integer>0</integer></dict>
+    <dict><key>Weekday</key><integer>3</integer><key>Hour</key><integer>14</integer><key>Minute</key><integer>0</integer></dict>
+    <dict><key>Weekday</key><integer>4</integer><key>Hour</key><integer>14</integer><key>Minute</key><integer>0</integer></dict>
+    <dict><key>Weekday</key><integer>5</integer><key>Hour</key><integer>14</integer><key>Minute</key><integer>0</integer></dict>
+  </array>
+  <key>RunAtLoad</key>
+  <false/>
+  <key>StandardOutPath</key>
+  <string>/Users/yqg/.local/state/stock/sector_news_catalyst.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/yqg/.local/state/stock/sector_news_catalyst.err.log</string>
+</dict>
+</plist>

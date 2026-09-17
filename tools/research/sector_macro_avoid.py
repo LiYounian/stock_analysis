@@ -33,6 +33,7 @@ from dataclasses import dataclass, field, asdict
 
 from tools.analysis import industry_map
 from tools.collectors import code_industry
+from tools.llm import rubric_map as rm
 
 logger = logging.getLogger("research.sector_macro_avoid")
 
@@ -128,10 +129,7 @@ def aggregate_macro(msgs: list[dict]) -> dict[str, SectorMacro]:
         themes = match_themes(msg)
         if not themes:
             continue
-        try:
-            strength = float(msg.get("影响强度") or 0)
-        except (TypeError, ValueError):
-            strength = 0.0
+        strength = rm.strength_to_num(msg.get("影响强度"), default=0.0)  # 文字档→数值(兼容legacy)
         sign = _DIR_SIGN.get(str(msg.get("影响方向") or ""), 0)
         direction = str(msg.get("影响方向") or "")
         inds = msg.get("industries") or msg.get("受影响行业") or []
