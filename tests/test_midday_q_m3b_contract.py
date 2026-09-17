@@ -31,6 +31,75 @@ def test_keep_times_covers_decision_points():
         assert t in F.KEEP_TIMES, f"{t} 不在 KEEP_TIMES,回测拿不到判定价"
 
 
+# ── 全A票池 / 北交所排除 ──
+
+def test_fullA_excludes_beijing():
+    """北交所(4/8/92 段)必须排除 —— 涨跌幅规则与流动性都不同,午盘Q口径不含。"""
+    codes = F.fullA_codes()
+    assert codes, "全A票池为空"
+    bad = [c for c in codes if c.startswith(("4", "8", "92"))]
+    assert not bad, f"北交所代码未排除:{bad[:5]}"
+    assert all(len(c) == 6 for c in codes), "存在非6位代码"
+    # 规模合理性:主板+创业板+科创板,应在数千量级
+    assert 3000 < len(codes) < 8000, f"全A数量异常:{len(codes)}"
+
+
+def test_fullA_is_sorted_and_unique():
+    """排序+去重 → 断点续跑时顺序稳定,不会重复取。"""
+    codes = F.fullA_codes()
+    assert codes == sorted(codes)
+    assert len(codes) == len(set(codes))
+
+
+def test_resolve_codes_switches_universe():
+    focus = F.resolve_codes("focus")
+    full = F.resolve_codes("fullA")
+    assert len(full) > len(focus), "fullA 应远多于 focus"
+    assert len(F.resolve_codes("fullA", limit=7)) == 7
+
+
+# ── 幂等判据必须校验内容,不只是存在性(坑②:并发会留半份文件) ──
+
+def test_ok_on_disk_rejects_missing_file(tmp_path):
+    assert not F._ok_on_disk(tmp_path / "nope.parquet", "2026-01-02", "2026-09-10")
+
+
+def test_ok_on_disk_rejects_partial_range(tmp_path):
+    """文件存在但区间没覆盖到 → 判不可信,要重取。"""
+    p = tmp_path / "x.parquet"
+    pd.DataFrame([{"date": "2026-05-01", "time": t, "open": 1.0, "high": 1.0,
+                    "low": 1.0, "close": 1.0, "volume": 1.0, "amount": 1.0}
+                   for t in F.KEEP_TIMES]).to_parquet(p, index=False)
+    assert not F._ok_on_disk(p, "2026-01-02", "2026-09-10")
+
+
+def test_ok_on_disk_rejects_too_few_bars_per_day(tmp_path):
+    """区间齐但每日 bar 数太少(截断的半份文件)→ 判不可信。"""
+    p = tmp_path / "y.parquet"
+    rows = []
+    for d in ("2026-01-02", "2026-09-10"):
+        rows.append({"date": d, "time": "0935", "open": 1.0, "high": 1.0,
+                      "low": 1.0, "close": 1.0, "volume": 1.0, "amount": 1.0})
+    pd.DataFrame(rows).to_parquet(p, index=False)          # 每日只 1 根
+    assert not F._ok_on_disk(p, "2026-01-02", "2026-09-10")
+
+
+def test_ok_on_disk_accepts_complete(tmp_path):
+    p = tmp_path / "z.parquet"
+    rows = []
+    for d in ("2026-01-02", "2026-05-06", "2026-09-10"):
+        for t in F.KEEP_TIMES:
+            rows.append({"date": d, "time": t, "open": 1.0, "high": 1.0,
+                          "low": 1.0, "close": 1.0, "volume": 1.0, "amount": 1.0})
+    pd.DataFrame(rows).to_parquet(p, index=False)
+    assert F._ok_on_disk(p, "2026-01-02", "2026-09-10")
+
+
+def test_retry_budget_is_positive():
+    """重试上限必须 >1 —— baostock 并发瞬时失败靠重试救回(实测能救回相当比例)。"""
+    assert F.MAX_ATTEMPTS > 1
+
+
 # ────────────────────────────── 防未来(核心红线) ──────────────────────────────
 
 def _bars(rows):
