@@ -321,3 +321,85 @@ def test_q3_not_backtestable():
     """东财分时资金流只返当天 → Q3 不能假装能回测,不得出现在 STRATEGIES。"""
     assert "Q3" not in M.STRATEGIES
     assert set(M.STRATEGIES) == {"Q1", "Q2"}
+
+
+# ────────── 采集截断防护:覆盖率门槛 + 从 bar 聚合日线(2026-09-17 加) ──────────
+#
+# 背景:全A 采集实测约 27% 的票末日聚集在 03-11/05-14/07-13(交易日 42/84/125,
+# 完整票 168),抽查都是正常在市公司 → baostock 分段限流截断,不是退市。
+# 这种票混进回测会让"同日截面"名不副实、等权基准被扭曲。
+
+def _write_bar_file(dirpath, code: str, dates: list[str]):
+    rows = []
+    for d in dates:
+        for t in M_KEEP:
+            rows.append({"date": d, "time": t, "open": 10.0, "high": 10.5,
+                          "low": 9.5, "close": 10.2, "volume": 100.0,
+                          "amount": 1000.0})
+    pd.DataFrame(rows).to_parquet(dirpath / f"{code}.parquet", index=False)
+
+
+M_KEEP = ("0935", "1030", "1425", "1430", "1445", "1450", "1500")
+
+
+def test_load_bars_drops_low_coverage(tmp_path, monkeypatch):
+    """交易日数明显少于全样本最大值的票 → 剔除(截断残缺票)。"""
+    monkeypatch.setattr(M, "BARS_DIR", tmp_path)
+    full = [f"2026-0{m}-0{d}" for m in (1, 2, 3, 4, 5) for d in (1, 2)]   # 10 日
+    _write_bar_file(tmp_path, "600001", full)
+    _write_bar_file(tmp_path, "600002", full)
+    _write_bar_file(tmp_path, "600003", full[:3])                          # 仅 3 日
+    got = M.load_bars(min_coverage=0.8)
+    assert set(got) == {"600001", "600002"}, "低覆盖票未被剔除"
+
+
+def test_load_bars_drops_stale_tail(tmp_path, monkeypatch):
+    """覆盖率够但**尾部整段缺失**(限流截断的典型形态)→ 也要剔除。"""
+    monkeypatch.setattr(M, "BARS_DIR", tmp_path)
+    late = [f"2026-06-{d:02d}" for d in range(1, 21)]
+    early = [f"2026-01-{d:02d}" for d in range(1, 20)]     # 19 日,覆盖率够但全在早期
+    _write_bar_file(tmp_path, "600001", late)
+    _write_bar_file(tmp_path, "600002", late)
+    _write_bar_file(tmp_path, "600003", early)
+    got = M.load_bars(min_coverage=0.8, require_end_within=3)
+    assert "600003" not in got, "尾部整段缺失的票未被剔除"
+    assert set(got) == {"600001", "600002"}
+
+
+def test_load_bars_keeps_all_when_uniform(tmp_path, monkeypatch):
+    """都完整时不该误杀。"""
+    monkeypatch.setattr(M, "BARS_DIR", tmp_path)
+    ds = [f"2026-03-{d:02d}" for d in range(1, 11)]
+    for c in ("600001", "600002", "600003"):
+        _write_bar_file(tmp_path, c, ds)
+    assert len(M.load_bars(min_coverage=0.8)) == 3
+
+
+def test_daily_from_bars_is_self_sufficient(tmp_path, monkeypatch):
+    """全A 主档只有 126 只 → 日线必须能从分时自足聚合,否则 5000+ 只被静默跳过。"""
+    monkeypatch.setattr(M, "BARS_DIR", tmp_path)
+    ds = [f"2026-03-{d:02d}" for d in range(1, 26)]
+    _write_bar_file(tmp_path, "600001", ds)
+    bars = M.load_bars(min_coverage=0.5)
+    daily = M.daily_from_bars(bars)
+    assert set(daily) == set(bars), "聚合日线的票集应与分时一致"
+    df = daily["600001"]
+    assert list(df.columns) == ["date", "open", "high", "low", "close",
+                                "volume", "amount"]
+    assert len(df) == len(ds), "每个交易日应聚合成一行"
+    # open 取当日最早时刻、close 取最晚时刻
+    assert df["open"].iloc[0] == 10.0 and df["close"].iloc[0] == 10.2
+    # volume/amount 是采样点求和(7 个时刻)
+    assert df["volume"].iloc[0] == 100.0 * len(M_KEEP)
+
+
+def test_daily_from_bars_feeds_daily_ctx(tmp_path, monkeypatch):
+    """端到端:聚合出的日线要能喂 _daily_ctx(否则策略全被跳过)。"""
+    monkeypatch.setattr(M, "BARS_DIR", tmp_path)
+    ds = [f"2026-03-{d:02d}" for d in range(1, 26)]        # 25 日 ≥20,够算 MA20
+    _write_bar_file(tmp_path, "600001", ds)
+    daily = M.daily_from_bars(M.load_bars(min_coverage=0.5))
+    ctx = M._daily_ctx(daily["600001"], ds[-1])
+    assert ctx is not None, "聚合日线喂不动 _daily_ctx → 全A 回测会 0 笔"
+    assert ctx["prev_close"] == 10.2
+    assert ctx["vol_ma20"] > 0

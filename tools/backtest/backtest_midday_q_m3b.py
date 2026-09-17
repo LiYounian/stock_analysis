@@ -67,15 +67,37 @@ AS_OF_1450 = "1450"
 
 # ────────────────────────────── 数据加载 ──────────────────────────────
 
-def load_bars() -> dict[str, pd.DataFrame]:
-    """读 m3b_bars/*.parquet → {code: DataFrame(date,time,ohlcv)}。"""
+def load_bars(min_coverage: float = 0.8,
+               require_end_within: int = 10) -> dict[str, pd.DataFrame]:
+    """读 m3b_bars/*.parquet → {code: DataFrame(date,time,ohlcv)}。
+
+    ## 为什么要覆盖率门槛(2026-09-17 加)
+
+    全A 采集实测:约 **27%** 的票数据末日聚集在 03-11 / 05-14 / 07-13 三个日期
+    (交易日数 42 / 84 / 125,而完整票是 168)。抽查那几只都是正常在市公司
+    (冰山冷热/北京科锐/法尔胜…),**不是退市** —— 判断是 baostock 对长区间的
+    分段限流截断,且 `error_code` 仍返 0,采集侧的幂等校验对"整段尾部缺失"无感。
+
+    这种票混进回测会造成两个隐蔽错误:
+      1. **"同日截面"名不副实** —— 某日实际参与打分的票数远少于名义票池,
+         策略等于在一个悄悄缩小的池子里选股;
+      2. **等权基准被扭曲** —— 基准按当日有数据的票等权,若后半段只剩
+         73% 的票,基准代表的已不是原池子。
+
+    故默认剔除覆盖不足的票,并把剔除量 log 出来(不静默丢弃)。
+
+    参数:
+        min_coverage:       该票交易日数 / 全样本最大交易日数,低于此剔除
+        require_end_within: 该票末日距全样本最晚日不得超过 N 个交易日
+                            (拦"前面齐、尾部整段缺"的限流截断)
+    """
     out: dict[str, pd.DataFrame] = {}
     if not BARS_DIR.exists():
         raise FileNotFoundError(
             f"分时 bar 目录不存在:{BARS_DIR}\n"
             "先跑:python -m tools.backtest.fetch_midday_q_bars")
+    raw: dict[str, pd.DataFrame] = {}
     for p in sorted(BARS_DIR.glob("*.parquet")):
-        code = p.stem
         try:
             df = pd.read_parquet(p)
         except Exception as e:
@@ -83,13 +105,84 @@ def load_bars() -> dict[str, pd.DataFrame]:
             continue
         if df.empty:
             continue
+        raw[p.stem] = df
+    if not raw:
+        return out
+
+    # 全样本口径:最大交易日数 + 最晚日期
+    all_dates = sorted({d for df in raw.values()
+                         for d in df["date"].astype(str).tolist()})
+    max_days = max(df["date"].nunique() for df in raw.values())
+    latest = all_dates[-1]
+    cutoff_idx = max(0, len(all_dates) - 1 - require_end_within)
+    end_floor = all_dates[cutoff_idx]
+
+    dropped_short = dropped_stale = 0
+    for code, df in raw.items():
+        n = df["date"].nunique()
+        if n / max_days < min_coverage:
+            dropped_short += 1
+            continue
+        if str(df["date"].max()) < end_floor:
+            dropped_stale += 1
+            continue
         out[code] = df
-    logger.info("加载分时 bar %d 只", len(out))
+
+    logger.info("加载分时 bar %d 只(原 %d);剔除:覆盖率<%.0f%% %d 只、"
+                "末日早于 %s %d 只",
+                len(out), len(raw), min_coverage * 100, dropped_short,
+                end_floor, dropped_stale)
+    if (dropped_short + dropped_stale) > len(raw) * 0.3:
+        logger.warning("⚠️ 剔除了 %.0f%% 的票 —— 采集数据大面积不完整,"
+                       "回测结论的代表性受限,建议先补采",
+                       (dropped_short + dropped_stale) / len(raw) * 100)
+    return out
+
+
+def daily_from_bars(bars: dict[str, pd.DataFrame]) -> dict[str, pd.DataFrame]:
+    """从分时 bar 自行聚合出日线(算 MA / 昨收 / 历史均量用)。
+
+    ## 为什么不读主档(2026-09-17 改)
+
+    主档 `data/master/kline/` 只有 **126 只**(焦点池),而全A 分时有 5206 只。
+    若沿用 `load_daily()` 读主档,5000+ 只票会因拿不到 `_daily_ctx`
+    (MA/昨收/均量,Q1/Q2 的必要条件)而被**全部静默跳过** —— 全A 采集就白跑了。
+
+    分时 bar 自身含 date/ohlc/volume/amount,足以自足聚合:
+        open  = 当日最早采样时刻的 open(KEEP_TIMES 里是 0935)
+        close = 当日最晚采样时刻的 close(1500)
+        high/low/volume/amount = 当日各采样点的 max/min/sum
+
+    ⚠️ 诚实边界:volume/amount 是**采样点之和**(7 个时刻),不是全日总量;
+    high/low 是采样点极值,不是真实日内极值。这两项只用于
+    "相对自身历史的比值"(vol_ma20 比值、MA 排列),**同口径相除时偏差大部分抵消**;
+    但绝对量级不可与主档日线混用。
+    """
+    out: dict[str, pd.DataFrame] = {}
+    for code, bdf in bars.items():
+        df = bdf.sort_values(["date", "time"])
+        g = df.groupby("date", sort=True)
+        agg = pd.DataFrame({
+            "open": g["open"].first(),
+            "high": g["high"].max(),
+            "low": g["low"].min(),
+            "close": g["close"].last(),
+            "volume": g["volume"].sum(),
+            "amount": g["amount"].sum(),
+        }).reset_index()
+        if not agg.empty:
+            out[code] = agg
+    logger.info("从分时 bar 聚合日线 %d 只", len(out))
     return out
 
 
 def load_daily() -> dict[str, pd.DataFrame]:
-    """主档日线(算 MA / 昨收 / 历史均量用;只取 T-1 及以前 → 防未来)。"""
+    """主档日线(仅焦点池 126 只可用)。
+
+    ⚠️ 全A 回测请用 `daily_from_bars()` —— 主档只有焦点池,
+    读主档会让 5000+ 只全A票拿不到 MA/昨收上下文而被静默跳过。
+    保留本函数供"只跑焦点池且想用真实全日量"的场景对照。
+    """
     out: dict[str, pd.DataFrame] = {}
     for c in UNIV.get_focus_codes():
         try:
@@ -101,7 +194,7 @@ def load_daily() -> dict[str, pd.DataFrame]:
         df = df.copy()
         df["date"] = pd.to_datetime(df["date"]).dt.strftime("%Y-%m-%d")
         out[c] = df.sort_values("date").reset_index(drop=True)
-    logger.info("加载日线 %d 只", len(out))
+    logger.info("加载主档日线 %d 只", len(out))
     return out
 
 
@@ -650,13 +743,23 @@ def main() -> int:
     ap.add_argument("--start", default=None)
     ap.add_argument("--end", default=None)
     ap.add_argument("--out", default=None)
+    ap.add_argument("--daily-source", choices=("bars", "master"), default="bars",
+                    help="日线上下文(MA/昨收/均量)来源。bars=从分时聚合(全A可用,默认);"
+                         "master=读主档(只有焦点池126只,全A会静默跳过5000+只)")
+    ap.add_argument("--min-coverage", type=float, default=0.8,
+                    help="票的交易日覆盖率下限(剔采集截断的残缺票,见 load_bars)")
     a = ap.parse_args()
 
-    bars = load_bars()
-    daily = load_daily()
+    bars = load_bars(min_coverage=a.min_coverage)
     if not bars:
-        logger.error("无分时 bar,先跑 fetch_midday_q_bars")
+        logger.error("无分时 bar(或全被覆盖率门槛剔除),先跑 fetch_midday_q_bars")
         return 1
+    daily = load_daily() if a.daily_source == "master" else daily_from_bars(bars)
+    if a.daily_source == "master":
+        missing = len(bars) - sum(1 for c in bars if c in daily)
+        if missing:
+            logger.warning("⚠️ --daily-source=master 下有 %d 只票无主档日线,"
+                           "将被静默跳过;全A 请用默认 bars", missing)
 
     logger.info("跑 M3.b 回测 %s → %s ...", a.start or "最早", a.end or "最新")
     res = backtest(bars, daily, a.start, a.end)
