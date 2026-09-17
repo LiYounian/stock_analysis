@@ -49,6 +49,9 @@ data/analysis/panel.json
 # 随 data/analysis/backtest/*forward_scorecard.csv 惯例:派生数据不入库,避免每日 diff 弄脏工作树。
 data/analysis/backtest/nextday_scorecard.csv
 
+# 统一大复盘汇总记分卡（tools/review 生成的派生 KPI 滚存，可从产物+kline 再生，不入库）。
+data/analysis/backtest/grand_review_scorecard.csv
+
 # 定时任务运行期产物（护栏锁 / OS级盘中快照），纯滚存不入库
 data/task_locks/
 data/intraday/
