@@ -14,7 +14,8 @@
 """
 from __future__ import annotations
 
-import copy
+import numpy as np
+import pandas as pd
 
 from tools.analysis import selection_synth as ss
 
@@ -222,3 +223,28 @@ def test_显式启用_够格票被路由():
     assert s["入场方式"] == ss._旁路入场方式             # 够格 → 被路由旁路
     assert s.get("旁路命中")
     assert s["挂单价"] >= form_map["300502"]["现价"]     # 受控追高
+
+
+# ──────────────── ⑩ 回测向量化形态 == pattern_metrics(防漂移·单一真源) ────────────────
+def test_回测向量化form_对齐pattern_metrics():
+    """backtest_strong_bypass.precompute_bypass(末根)须与 pattern_metrics 同语义(容 pm 的四舍五入)。"""
+    from tools.backtest import backtest_strong_bypass as B
+    rng = np.random.default_rng(3)
+    n = 90
+    close = np.abs(10 + np.cumsum(rng.normal(0.05, 0.3, n))) + 5
+    high = close * (1 + np.abs(rng.normal(0.01, 0.01, n)))
+    low = close * (1 - np.abs(rng.normal(0.01, 0.01, n)))
+    vol = np.abs(rng.normal(1e6, 2e5, n))
+    df = pd.DataFrame({
+        "date": pd.bdate_range("2026-01-01", periods=n), "open": close * 0.999,
+        "high": high, "low": low, "close": close, "volume": vol,
+        "amount": close * vol, "turnover": np.full(n, 2.0),
+    })
+    F = B.precompute_bypass(df)
+    fa = B._form_at(F, n - 1)
+    pm = ss.pattern_metrics(df, "600000", date=df["date"].iloc[-1].strftime("%Y-%m-%d"))
+    assert fa["均线多头"] == pm["均线多头"]
+    for k, nd in [("量比", 2), ("位置pos60", 4), ("距60高", 4), ("当日涨跌", 4),
+                  ("ma5", 3), ("ma10", 3), ("ma20", 3), ("现价", 3),
+                  ("当日high", 3), ("当日low", 3)]:
+        assert abs(round(fa[k], nd) - pm[k]) < 10 ** (-nd) + 1e-9, f"{k} 漂移:{fa[k]} vs {pm[k]}"
