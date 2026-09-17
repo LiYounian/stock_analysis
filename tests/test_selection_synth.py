@@ -297,6 +297,29 @@ def test_fill_entry_exit_数据不足不编():
         assert "数据不足" in (s.get("价位说明") or "")
 
 
+# ──────────────── ⑪ schema:LLM 不产数字(只给入场方式枚举) ────────────────
+def test_schema_no_llm_price():
+    sch = ss.SELECTION_SCHEMA["个股"]
+    assert "入场方式" in sch and "回踩MA5" in sch
+    assert "绝不要写任何价位数字" in sch
+    # 旧的『让 LLM 写价位』职责已删(schema 不再要求 LLM 输出 止损 文字价位)
+    assert "止损:文字" not in sch
+
+
+def test_schema_no_llm_price_end2end(monkeypatch, tmp_path):
+    """端到端:_FakeClient 在文字里塞了 入场='~ma5'/止损='ma20',最终价位字段=程序按 form 回填。"""
+    date, _ = _fake_synthesize(monkeypatch, tmp_path)
+    result = ss.synthesize(date, data_root=tmp_path, client=_FakeClient())
+    stocks = {s["code"]: s for b in result["板块"] for s in b["个股"]}
+    s = stocks["002463"]                       # 健康票·推荐·form 齐全
+    form = s["形态"]
+    # 挂单价/止损价来自程序回填(默认回踩MA5 → ma5/ma20),不是 LLM 文字里的字符串
+    assert s["挂单价"] == form["ma5"] and s["止损价"] == form["ma20"]
+    assert isinstance(s["挂单价"], (int, float))
+    # 605058 form 齐全但被剔除,价位仍程序回填,不受 LLM 文字影响
+    assert isinstance(stocks["605058"].get("挂单价"), (int, float))
+
+
 if __name__ == "__main__":
     import sys
     sys.exit(pytest.main([__file__, "-v"]))
