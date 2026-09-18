@@ -25,6 +25,16 @@ def store_dir(tmp_path, monkeypatch):
     return store
 
 
+@pytest.fixture(autouse=True)
+def _no_724_stream(monkeypatch):
+    """默认关掉 L4 的 7x24 全量流并入,保持既有关键词/联播用例 hermetic(不触网、source 不掺 724)。
+
+    724 流的专项语义锁在 test_policy_stream.py;本文件只测关键词/联播两源与打标/落盘,
+    故把 _collect_stream 短路成空,避免 fetch_policy 默认 enable_stream=True 时真去拉快讯流。
+    """
+    monkeypatch.setattr(pol, "_collect_stream", lambda days: [])
+
+
 _EM_COLS = ["关键词", "新闻标题", "新闻内容", "发布时间", "文章来源", "新闻链接"]
 
 

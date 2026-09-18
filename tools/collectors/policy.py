@@ -143,7 +143,8 @@ def _normalize(row: dict, keyword: str) -> dict:
 
 def tag_and_dump(raw_items: list[dict], days: int | None = None,
                  require_industry_hit: bool = True,
-                 source: str = "eastmoney") -> list[dict]:
+                 source: str = "eastmoney",
+                 pretagged: list[dict] | None = None) -> list[dict]:
     """归一 + region/行业命中打标 + 时间窗过滤 + 去重 + 落盘(经 store 层)。
 
     取数与打标解耦:上层(WebSearch/akshare/mock)拿到原始条目后交此函数落库。
@@ -151,25 +152,37 @@ def tag_and_dump(raw_items: list[dict], days: int | None = None,
     或已归一键名({title,content,time,source,url,keyword})。
     require_industry_hit=True 时只保留命中票池行业的政策条目。
     source:实际命中的数据源名(eastmoney / cctv),写入 store 采集元数据 meta.source。
+
+    pretagged(L4):**已归一 + 已打标**的 policy 契约条目(如 policy_stream 的 7x24 流,
+    industries 已是申万一级、keyword="7x24流"),**跳过 _normalize / _match_industries**
+    (不再文本重打标覆盖预打标),但与 raw_items 走同一套时间窗 / require_industry_hit /
+    去重(url 优先,退化 title)/ 排序 / 落盘——两条进料并进同一个 policy_{date} 文件,
+    指同一事件(同 url/title)自然去重。
     """
     days = days or settings.NEWS_LOOKBACK_DAYS
     cutoff = (pd.Timestamp.today() - pd.Timedelta(days=days)).strftime("%Y-%m-%d")
 
     seen: set[str] = set()          # url 优先,退化用 title 去重
     out: list[dict] = []
-    for row in raw_items:
-        rec = _normalize(row, str(row.get("keyword") or row.get("关键词") or ""))
-        if not rec["title"]:
-            continue
-        if rec["date"] and rec["date"] < cutoff:      # 超窗丢弃
-            continue
-        if require_industry_hit and not rec["industries"]:
-            continue
-        dedup_key = rec["url"] or rec["title"]
+
+    def _admit(rec: dict) -> None:
+        """对一条已归一契约做 窗口/命中/去重 过滤,通过则收进 out。"""
+        if not rec.get("title"):
+            return
+        if rec.get("date") and rec["date"] < cutoff:      # 超窗丢弃
+            return
+        if require_industry_hit and not rec.get("industries"):
+            return
+        dedup_key = rec.get("url") or rec["title"]
         if dedup_key in seen:
-            continue
+            return
         seen.add(dedup_key)
         out.append(rec)
+
+    for row in raw_items:
+        _admit(_normalize(row, str(row.get("keyword") or row.get("关键词") or "")))
+    for rec in (pretagged or []):                          # L4:已打标条目直接过滤合并
+        _admit(rec)
 
     out.sort(key=lambda x: x["date"], reverse=True)
     today = pd.Timestamp.today().strftime("%Y-%m-%d")
@@ -234,7 +247,21 @@ def _collect_cctv(days: int) -> list[dict]:
     return raw
 
 
-def fetch_policy(keywords: list[str] | None = None, days: int | None = None) -> list[dict]:
+def _collect_stream(days: int) -> list[dict]:
+    """L4:拉东财 7x24 全量流并归一到 policy 契约(pretagged)。降级安全:任何失败返回 []。
+
+    抽成薄封装便于测试 mock / 关闭。max_days=1 只拉当日(冷启动回补由编排另传)。
+    """
+    try:
+        from tools.collectors import policy_stream
+        return policy_stream.collect_stream(max_days=1)
+    except Exception as e:                            # noqa: BLE001
+        logger.error("7x24 全量流并入失败,降级为空(不中止流水线): %s", e)
+        return []
+
+
+def fetch_policy(keywords: list[str] | None = None, days: int | None = None,
+                 enable_stream: bool = True) -> list[dict]:
     """按关键词检索近 days 天政策/宏观新闻,归并 + 行业命中打标 + 落盘。
 
     输入:keywords 行业+政策关键词(缺省用 default_keywords());days 回看窗口。
@@ -242,9 +269,12 @@ def fetch_policy(keywords: list[str] | None = None, days: int | None = None) -> 
     机制:逐关键词调东财 stock_news_em → 汇总;主源全失败/拿到空时回落新闻联播备源
     → 交 tag_and_dump 归一/打标/去重/落盘。meta.source 记实际命中源(eastmoney / cctv)。
     单关键词失败记 logger 跳过,不中断整批;两源均无结果才抛错不静默。
+    enable_stream(L4):并入东财 7x24 全量流(keyword="7x24流",默认开);全量流失败降级为空,
+    关键词/联播两源仍在,不构成单点(见 collectors.policy_stream)。
     """
     keywords = keywords or default_keywords()
     days = days or settings.NEWS_LOOKBACK_DAYS
+    stream = _collect_stream(days) if enable_stream else []
     raw_items: list[dict] = []
     failed: list[str] = []
     for kw in keywords:
@@ -271,12 +301,20 @@ def fetch_policy(keywords: list[str] | None = None, days: int | None = None) -> 
         raw_items = _collect_cctv(days)
         source = "cctv"
 
-    if not raw_items:
-        # 数据源无 SLA:两源皆空/被墙 → 降级为空(仍落空盘,保证下游 load_policy 不缺文件),
-        # 绝不 raise 中止整条流水线(政策层此时降级,情绪的政策层为空)。
-        logger.warning("政策采集两源均无结果(东财+联播,疑被墙/接口异常),降级为空,不中止流水线")
+    # meta.source 记实际有数据的进料(关键词 eastmoney/cctv、7x24 流 724),多源用 + 连接。
+    parts: list[str] = []
+    if raw_items:
+        parts.append(source)
+    if stream:
+        parts.append("724")
+    meta_source = "+".join(parts) if parts else "none"
+
+    if not raw_items and not stream:
+        # 数据源无 SLA:关键词两源 + 7x24 流皆空/被墙 → 降级为空(仍落空盘,保证下游 load_policy
+        # 不缺文件),绝不 raise 中止整条流水线(政策层此时降级,情绪的政策层为空)。
+        logger.warning("政策采集全源均无结果(东财+联播+7x24流,疑被墙/接口异常),降级为空,不中止流水线")
         return tag_and_dump([], days=days, source="none")
-    return tag_and_dump(raw_items, days=days, source=source)
+    return tag_and_dump(raw_items, days=days, source=meta_source, pretagged=stream)
 
 
 def load_policy(date: str | None = None) -> list[dict]:
