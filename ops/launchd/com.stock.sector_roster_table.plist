@@ -3,11 +3,11 @@
 <!--
   S2 角色关系表 周度维护(草案 · 不自动 load;由用户本人 launchctl load,约法)。
   定位:程序化流水线 S2(纯量价 + 龙虎榜净买 proxy;无 LLM)。读 S1 全板块 → 五角色(含主力)+ 周度变更留痕。
-  时点:每周一 18:30 —— 排在 S1(18:00,~70s)之后,确保读到本周 sector_universe.json;跑 ~3-5min(全板块)。
+  时点:每周六 18:30(2026-09 调整为周六;以 LIVE 为准)—— 排在 S1(周六 18:00,~70s)之后,确保读到本周 sector_universe.json;跑 ~3-5min(全板块)。
         非交易日由 runner 回退最近交易日。主力=LHB龙虎榜净买(PIT·T+1)proxy·诚实标覆盖度。
   前置:S2 代码已在主仓 main(717095c/合入 e199ebf);S1 已产 sector_universe.json(缺则回退全申万一级)。
   装载:launchctl load ~/Library/LaunchAgents/com.stock.sector_roster_table.plist(先把本文件与 sector_roster_table.sh 就位)。
-  cron 等价:tasks.yaml sector_roster_table = "30 18 * * mon"(test_scheduler_launchd_equivalence 锁)。
+  cron 等价:tasks.yaml sector_roster_table = "30 18 * * sat"(test_scheduler_launchd_equivalence 锁)。
 -->
 <plist version="1.0">
 <dict>
@@ -22,7 +22,7 @@
   <string>/Users/yqg/Documents/projects/stock_analysis</string>
   <key>StartCalendarInterval</key>
   <array>
-    <dict><key>Weekday</key><integer>1</integer><key>Hour</key><integer>18</integer><key>Minute</key><integer>30</integer></dict>
+    <dict><key>Weekday</key><integer>6</integer><key>Hour</key><integer>18</integer><key>Minute</key><integer>30</integer></dict>
   </array>
   <key>RunAtLoad</key>
   <false/>

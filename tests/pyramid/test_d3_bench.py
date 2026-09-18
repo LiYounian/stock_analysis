@@ -39,14 +39,36 @@ def test_resolve_bench_沪深300优先():
     assert r["value"] is not None and r["source"] == "沪深300"
 
 
-def test_resolve_bench_沪深300缺时回退market_ew():
-    """A13 核心：as_of=09-17 / score_asof=09-18，000300 无 09-18 → 回退 market_ew。"""
-    if not _has_ew():
-        pytest.skip("无 market_ew 基准")
-    r = D.resolve_bench("2026-09-17", 1, "2026-09-18", root=ROOT)
-    # 000300 到 09-17 → 沪深300 该窗为 None → 应回退 market_ew（有值）
+def test_resolve_bench_沪深300缺时回退market_ew(tmp_path):
+    """A13 核心（hermetic）：沪深300 覆盖不到目标窗时回退全A等权 market_ew。
+
+    不依赖真实 000300 采集到哪天（曾因线上刷新 000300 至 09-18 而误红）——
+    自造临时 data-root 锁死"沪深300缺窗"前提：
+      · 000300 指数快照只到 D0（09-17，缺 09-18）→ 沪深300 对 D0→D+1 窗返回 None；
+      · market_ew 净值覆盖到 D+1（09-18）→ 回退基准有值。
+    验 resolve_bench 落到 market_ew 且数值正确。
+    """
+    import pandas as pd
+
+    # 沪深300 指数：存为 data/raw/<date>/index_kline/000300.parquet（全历史快照），只到 09-17
+    bench_dir = tmp_path / "data" / "raw" / "2026-09-17" / "index_kline"
+    bench_dir.mkdir(parents=True)
+    pd.DataFrame({"date": ["2026-09-16", "2026-09-17"],
+                  "close": [4000.0, 4020.0]}).to_parquet(bench_dir / "000300.parquet")
+    # 全A等权净值：data/analysis/backtest/finval/market_ew.parquet，覆盖到 09-18
+    ew_dir = tmp_path / "data" / "analysis" / "backtest" / "finval"
+    ew_dir.mkdir(parents=True)
+    pd.DataFrame({"date": ["2026-09-16", "2026-09-17", "2026-09-18"],
+                  "ew_index": [1.00, 1.01, 1.02]}).to_parquet(ew_dir / "market_ew.parquet")
+
+    root = str(tmp_path)
+    # 前提自检：沪深300 该窗确实缺（D+1 超快照末日），回退源确实有值
+    assert D.bench_return("2026-09-17", 1, "2026-09-18", root=root) is None
+    r = D.resolve_bench("2026-09-17", 1, "2026-09-18", root=root)
     assert r["value"] is not None, "A13 回退失败：基准仍缺"
     assert r["source"] == "market_ew"
+    # 数值正确：ew 09-17→09-18 = 1.02/1.01-1 = 0.99%
+    assert r["value"] == round((1.02 / 1.01 - 1) * 100, 2)
 
 
 def test_D6_基准可得性_记分卡不再全缺():

@@ -303,6 +303,46 @@ def test_ugc_sentiment_ok_status(monkeypatch, tmp_path):
     assert r["净情绪"] == 0.0 and "degraded" not in r
 
 
+# ---------- 个股维度取政策条目:经 to_sw 归申万一级比对(词表漂移根治)----------
+def _stock(sector: str, code: str = "300308"):
+    from tools.config.stock_pool import Stock
+    return Stock(code=code, name="测试股", industry=sector, sector=sector)
+
+
+def test_stock_policy_items_matches_via_to_sw(monkeypatch):
+    """池 sector 与条目 industries 措辞不同但同属一申万一级 → 经 to_sw 归一后必须命中。
+
+    锁死"经 to_sw 归一比对"而非字符串直等:池「光模块」vs 条目「光通信」字面不等,
+    两者 to_sw 都→「通信」,取政策条目这条链路不再静默失配(修前该场景空转)。
+    """
+    monkeypatch.setattr(ev.stock_pool, "get", lambda code: _stock("光模块"))
+    monkeypatch.setattr(ev, "load_policy_scores", lambda: [
+        {"title": "光通信利好", "industries": ["光通信"], "受影响行业": []},        # to_sw→通信 命中
+        {"title": "LLM受影响行业命中", "industries": [], "受影响行业": ["光模块"]},  # 另一字段亦经 to_sw
+        {"title": "白酒无关", "industries": ["白酒"], "受影响行业": ["食品饮料"]},   # to_sw→食品饮料 不命中
+    ])
+    titles = [it["title"] for it in ev._stock_policy_items("300308")]
+    assert titles == ["光通信利好", "LLM受影响行业命中"]
+
+
+def test_stock_policy_items_string_equality_would_miss(monkeypatch):
+    """反向锁:字面直等在"光模块≠光通信"下会漏掉,归一后必须捞回(防回退成字符串直等)。"""
+    monkeypatch.setattr(ev.stock_pool, "get", lambda code: _stock("光模块"))
+    monkeypatch.setattr(ev, "load_policy_scores",
+                        lambda: [{"title": "只有光通信字样", "industries": ["光通信"]}])
+    # 字符串直等会返回空(光模块 not in [光通信]);归一后应命中
+    assert "光模块" not in ["光通信"]                       # 前提:直等确实失配
+    assert len(ev._stock_policy_items("300308")) == 1       # 归一后命中
+
+
+def test_stock_policy_items_unmappable_sector_abstains(monkeypatch):
+    """池 sector 归不到申万一级(to_sw→None)→ 弃权返回空,不硬凑错映射。"""
+    monkeypatch.setattr(ev.stock_pool, "get", lambda code: _stock("不存在的概念XYZ"))
+    monkeypatch.setattr(ev, "load_policy_scores",
+                        lambda: [{"title": "任意", "industries": ["通信"]}])
+    assert ev._stock_policy_items("300308") == []
+
+
 @pytest.mark.skipif(not lc.is_configured(), reason="LLM env 未配置")
 def test_live_extract_news():
     c = lc.get_client()

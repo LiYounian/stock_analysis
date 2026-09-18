@@ -11,6 +11,8 @@
 #    实际切换是 P3 人工 gated 步骤(见 docs/参考 runbook)。
 # ────────────────────────────────────────────────────────────────────────
 tasks:
+  # ⚠️ launchd 侧已停用为 .plist.disabled(见 runbook §3b:默认不装载,glob 不拾取)。
+  #    此处保留注册定义仅为**框架 canary / 历史留痕**,**非 live 装载态**——别据此以为午盘还在跑。
   - id: intraday
     description: 盘中快照(上午 10:30 slot)
     cmd: ["python", "-m", "tools.pipeline.intraday_snapshot", "--slot", "1030"]
@@ -20,6 +22,7 @@ tasks:
     notify_on: [failure, misfire]
     tags: [local, intraday]
 
+  # ⚠️ launchd 侧已停用为 .plist.disabled(见 runbook §3b);此处保留仅为框架 canary/历史,非 live 装载态。
   - id: intraday_noon
     description: 午盘快照(11:31 slot,与 intraday 同脚本不同 slot)
     cmd: ["python", "-m", "tools.pipeline.intraday_snapshot", "--slot", "1131"]
@@ -29,6 +32,7 @@ tasks:
     notify_on: [failure, misfire]
     tags: [local, intraday]
 
+  # ⚠️ launchd 侧已停用为 .plist.disabled(见 runbook §3b);此处保留仅为框架 canary/历史,非 live 装载态。
   - id: intraday_screen
     description: 午盘全A选股(11:32,午休对全A挑票)
     cmd: ["python", "-m", "tools.run", "intraday_screen"]
@@ -54,6 +58,7 @@ tasks:
     enabled: false
     tags: [local, intraday, deep, gray]
 
+  # ⚠️ launchd 侧已停用为 .plist.disabled(见 runbook §3b);此处保留仅为框架 canary/历史,非 live 装载态。
   - id: intraday_watch
     description: 下午实时观测循环(13:00 起动,脚本内 --until 14:57 自停)
     cmd: ["python", "-m", "tools.pipeline.intraday_watch", "--until", "14:57", "--interval", "300"]
@@ -81,13 +86,14 @@ tasks:
     tags: [local, afternoon, sector, news]
 
   # 程序化流水线 S1(周度·纯量价无 LLM):全申万一级板块清单 + 热门标记 + 与上周 diff →
-  # data/analysis/sector_universe.json + history 归档。解决"板块只 10 个"。每周一 18:00(盘后·数据新鲜)。
+  # data/analysis/sector_universe.json + history 归档。解决"板块只 10 个"。每周六 18:00(周末离线维护)。
   # plist=com.stock.sector_universe.plist(草案);**enabled:false + 待用户 launchctl 装载**。
-  # cron 与 plist 的 周一18:00 严格等价(test_scheduler_launchd_equivalence 锁)。前置:S1 代码已合 main。
+  # cron 与 plist 的 周六18:00 严格等价(test_scheduler_launchd_equivalence 锁)。前置:S1 代码已合 main。
+  # (2026-09 由周一调整为周六:以 LIVE ~/Library/LaunchAgents 现值为准,仓库源对齐。)
   - id: sector_universe
-    description: "S1 板块universe周维护(周一18:00);全申万一级+热门标记+上周diff;纯量价;草案待装载,默认关"
+    description: "S1 板块universe周维护(周六18:00);全申万一级+热门标记+上周diff;纯量价;草案待装载,默认关"
     cmd: ["python", "-m", "tools.analysis.sector_forecast.sector_universe_run"]
-    cron: "0 18 * * mon"
+    cron: "0 18 * * sat"
     timeout_sec: 900
     retries: 1
     enabled: false
@@ -96,12 +102,13 @@ tasks:
 
   # 程序化流水线 S2(周度·纯量价+龙虎榜净买proxy无 LLM):读 S1 全板块 → 五角色(龙头/中军/先锋/弹性/主力)+
   # 周度变更留痕 → data/sector_roster_table/<板块>.json + changes/roster_changes_<周>.md。保留每日 roles 版对照。
-  # 每周一 18:30(排在 S1 18:00 之后,读本周 universe)。plist=com.stock.sector_roster_table.plist(草案);
-  # **enabled:false + 待用户 launchctl 装载**。cron 与 plist 的 周一18:30 严格等价。前置:S2 代码已合 main。
+  # 每周六 18:30(排在 S1 18:00 之后,读本周 universe)。plist=com.stock.sector_roster_table.plist(草案);
+  # **enabled:false + 待用户 launchctl 装载**。cron 与 plist 的 周六18:30 严格等价。前置:S2 代码已合 main。
+  # (2026-09 由周一调整为周六:以 LIVE ~/Library/LaunchAgents 现值为准,仓库源对齐。)
   - id: sector_roster_table
-    description: "S2 角色关系表周维护(周一18:30);五角色含主力LHB proxy+周度变更留痕;纯量价;草案待装载,默认关"
+    description: "S2 角色关系表周维护(周六18:30);五角色含主力LHB proxy+周度变更留痕;纯量价;草案待装载,默认关"
     cmd: ["python", "-m", "tools.analysis.sector_forecast.sector_roster_table_run"]
-    cron: "30 18 * * mon"
+    cron: "30 18 * * sat"
     timeout_sec: 1800
     retries: 1
     enabled: false
@@ -132,6 +139,7 @@ tasks:
     tags: [local, eod, capitulation]
 
   # 午盘全A重筛(工作日 11:35,抢 13:00 前):全A量价重筛→尾盘候选。plist=com.stock.noon_fullA_screen.plist。
+  # ⚠️ launchd 侧已停用为 .plist.disabled(见 runbook §3b);此处保留仅为框架 canary/历史,非 live 装载态。
   - id: noon_fullA_screen
     description: "午盘全A重筛(11:35);全A量价重筛→尾盘回踩限价候选;正式午盘选股(踏空根治)"
     cmd: ["python", "-m", "tools.pipeline.noon_fullA_screen"]
@@ -235,6 +243,7 @@ tasks:
     notify_on: [failure, misfire]
     tags: [local, eod, sector]
 
+  # ⚠️ launchd 侧已停用为 .plist.disabled(见 runbook §3b);此处保留仅为框架 canary/历史,非 live 装载态。
   - id: intraday_review
     description: 盘尾复盘(17:00)
     cmd: ["python", "-m", "tools.run", "intraday_review"]
@@ -254,10 +263,14 @@ tasks:
     notify_on: [failure, misfire]
     tags: [local, eod]
 
+  # commitdocs 每工作日两固定时刻 13:30(午盘后)+ 22:40(夜间收尾):两时刻分钟不同,单条 cron
+  # 无法表达 → 用 cron 列表(多 trigger 并集,见 TaskSpec.build_trigger 的 OrTrigger)。
+  # 2026-09 由"11:20-22:20 每小时"精简为两时刻:以 LIVE 现值为准,plist SCI 与本 cron 列表并集严格等价
+  # (test_scheduler_launchd_equivalence 锁)。⚠️ 用 mon-fri(周一~五),对齐 LIVE Weekday 1-5。
   - id: commitdocs
-    description: 分析文档定时提交(每工作日 11:20-22:20 每小时)
+    description: 分析文档定时提交(每工作日 13:30 + 22:40 两次)
     cmd: ["bash", "ops/launchd/commit_analysis_docs.sh"]
-    cron: "20 11-22 * * mon-fri"
+    cron: ["30 13 * * mon-fri", "40 22 * * mon-fri"]
     timeout_sec: 300
     retries: 0
     notify_on: [failure]

@@ -3,11 +3,11 @@
 <!--
   S1 板块 universe 周度维护(草案 · 不自动 load;由用户本人 launchctl load,约法)。
   定位:程序化流水线 S1(纯量价、无 LLM)。周维护全申万一级板块清单 + 热门标记 + 与上周 diff。
-  时点:每周一 18:00 —— 排在 pullrefresh(15:40 收盘刷数据)之后,master kline 已就绪;跑 ~70s。
-        周一盘后出本周板块 universe,供 S2(18:30)读用。非交易日由 runner 回退最近交易日。
+  时点:每周六 18:00(2026-09 调整为周六;以 LIVE 为准)—— 周末盘后离线维护,master kline 已就绪;跑 ~70s。
+        出本周板块 universe,供 S2(周六 18:30)读用。非交易日由 runner 回退最近交易日。
   前置:S1 代码已在主仓 main(f8d2a9e/合入 e199ebf)。
   装载:launchctl load ~/Library/LaunchAgents/com.stock.sector_universe.plist(先把本文件与 sector_universe.sh 就位)。
-  cron 等价:tasks.yaml sector_universe = "0 18 * * mon"(test_scheduler_launchd_equivalence 锁)。
+  cron 等价:tasks.yaml sector_universe = "0 18 * * sat"(test_scheduler_launchd_equivalence 锁)。
 -->
 <plist version="1.0">
 <dict>
@@ -22,7 +22,7 @@
   <string>/Users/yqg/Documents/projects/stock_analysis</string>
   <key>StartCalendarInterval</key>
   <array>
-    <dict><key>Weekday</key><integer>1</integer><key>Hour</key><integer>18</integer><key>Minute</key><integer>0</integer></dict>
+    <dict><key>Weekday</key><integer>6</integer><key>Hour</key><integer>18</integer><key>Minute</key><integer>0</integer></dict>
   </array>
   <key>RunAtLoad</key>
   <false/>

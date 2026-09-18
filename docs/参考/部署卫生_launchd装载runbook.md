@@ -31,9 +31,9 @@ launchctl list | grep com.stock
 
 - 第 1 列是 PID:**非 `-` 表示正在跑**(如盘后 `com.stock.pullrefresh` 15:40 起可能跑 ~73min)。
 - 对正在跑的 job:**等它跑完再 unload/load**,或改在该 job 的非触发时段操作。
-- 各 job 触发时点见对应 plist 的 `StartCalendarInterval`(pullrefresh 15:40、breadth 15:05、
-  intraday 10:30、intraday_noon 11:31、intraday_screen 11:32、intraday_watch 13:00、
-  intraday_review 17:00、strong 20:00、commitdocs 工作日 11:20–22:20 每小时)。
+- 各 job 触发时点见对应 plist 的 `StartCalendarInterval`(在产:pullrefresh 15:40、breadth 15:05、
+  commitdocs 工作日 13:30+22:40。午盘 intraday/intraday_noon/intraday_screen/noon_fullA_screen/
+  intraday_watch/intraday_review 已停用为 `.plist.disabled`,见 §3b,不装载)。
 
 ---
 
@@ -78,15 +78,29 @@ launchctl list | grep "$LABEL"
 com.stock.pullrefresh
 com.stock.breadth
 com.stock.commitdocs
-com.stock.intraday
-com.stock.intraday_noon
-com.stock.intraday_review
-com.stock.intraday_screen
-com.stock.intraday_watch
 ```
 
-> 说明:`com.stock.intraday` 与 `com.stock.intraday_noon` 复用同一 wrapper `intraday_snapshot.sh`,
-> 靠各自 plist 的 `INTRADAY_SLOT`(1030 / 1145)区分,装载时互不影响。
+> 说明:`com.stock.commitdocs` 每工作日两时刻(13:30 午盘后 + 22:40 夜间收尾)自动提交分析文档,幂等。
+
+---
+
+## 3b. 已停用(默认不装载 · 午盘 6 任务)
+
+以下 6 个午盘 job **默认不装载**(2026-09 起停用),**不在上面第 3 节装载清单里**——照本 runbook 部署时**不要 load**:
+
+```
+com.stock.intraday            (10:30 快照)
+com.stock.intraday_noon       (11:31 午盘快照)
+com.stock.intraday_screen     (11:32 午盘全A选股)
+com.stock.noon_fullA_screen   (11:35 午盘全A重筛)
+com.stock.intraday_watch      (13:00 下午观测循环)
+com.stock.intraday_review     (17:00 盘尾复盘)
+```
+
+- **主防线(必守)**:它们不在第 3 节"在产 job 装载清单"里——照 runbook 部署的人不会 load 它们,这是"午盘不复活"的第一道也是主要防线。本仓**无任何"批量 `launchctl load ops/launchd/*.plist`"脚本**(`provision_deploy.sh` 只安装 bootstrap wrapper、从不碰 plist / `~/Library`),所以只要不手动 load,重部署不会复活它们。
+- **仓库源形态 = `.plist.disabled`(与 LIVE 字节级同形)**:这 6 个在仓库源已从 `com.stock.<x>.plist` **重命名为 `com.stock.<x>.plist.disabled`**(`git mv`,内容不变),和 LIVE `~/Library/LaunchAgents` 侧现状(同为 `.plist.disabled`,已验证不跑)完全一致。因文件名不再以 `.plist` 结尾,**任何按 `*.plist` 通配的工具都不会拾取它们**(等价登记测试 `test_scheduler_launchd_equivalence` 的 `com.stock.*.plist` glob 亦自动跳过——语义正确:非 live plist 不进 live 等价)。
+- 若将来要重新启用某个:把该文件 `git mv` 回 `com.stock.<x>.plist`、加回第 3 节清单,再由用户本人 `launchctl load` 装载。
+- **本轮只改仓库源(重命名 + 本清单),不碰 LIVE**(LIVE 已是 `.plist.disabled`,对)。
 
 ---
 
