@@ -32,11 +32,14 @@ tools:
     note: "≥2策略并集∪council top∪板块roster∪Agent主线∪全A K线过闸；K线复核不给特权"
   - name: gate
     塔层: "①塔基"
-    status: todo
+    status: done
     window: 窗1-量价工具族
     inputs: [as_of, code]
-    outputs: [层级T1T2T3, 触发原因]
-    note: "阈值写死+档位锁；688校正；放量收阳/站上MA5·前高/量比/未近涨停"
+    outputs: [层级, 触发原因, 收阳, 站上MA5, 站上前日高, 涨停, 极高位, 量比, pos60]
+    freshness: 主档K线口径日期
+    防未来: true
+    tests: tests/pyramid/test_gate_tool.py
+    note: "阈值写死+档位锁；688校正；T1量比≥1.5∧收阳∧站上MA5∧破前高∧未近涨停；涨停/极高位pos60≥0.95踢出"
   - name: price_volume
     塔层: "①塔基"
     status: done
