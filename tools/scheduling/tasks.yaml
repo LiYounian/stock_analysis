@@ -11,6 +11,8 @@
 #    实际切换是 P3 人工 gated 步骤(见 docs/参考 runbook)。
 # ────────────────────────────────────────────────────────────────────────
 tasks:
+  # ⚠️ launchd 侧已停用为 .plist.disabled(见 runbook §3b:默认不装载,glob 不拾取)。
+  #    此处保留注册定义仅为**框架 canary / 历史留痕**,**非 live 装载态**——别据此以为午盘还在跑。
   - id: intraday
     description: 盘中快照(上午 10:30 slot)
     cmd: ["python", "-m", "tools.pipeline.intraday_snapshot", "--slot", "1030"]
@@ -20,6 +22,7 @@ tasks:
     notify_on: [failure, misfire]
     tags: [local, intraday]
 
+  # ⚠️ launchd 侧已停用为 .plist.disabled(见 runbook §3b);此处保留仅为框架 canary/历史,非 live 装载态。
   - id: intraday_noon
     description: 午盘快照(11:31 slot,与 intraday 同脚本不同 slot)
     cmd: ["python", "-m", "tools.pipeline.intraday_snapshot", "--slot", "1131"]
@@ -29,6 +32,7 @@ tasks:
     notify_on: [failure, misfire]
     tags: [local, intraday]
 
+  # ⚠️ launchd 侧已停用为 .plist.disabled(见 runbook §3b);此处保留仅为框架 canary/历史,非 live 装载态。
   - id: intraday_screen
     description: 午盘全A选股(11:32,午休对全A挑票)
     cmd: ["python", "-m", "tools.run", "intraday_screen"]
@@ -54,6 +58,7 @@ tasks:
     enabled: false
     tags: [local, intraday, deep, gray]
 
+  # ⚠️ launchd 侧已停用为 .plist.disabled(见 runbook §3b);此处保留仅为框架 canary/历史,非 live 装载态。
   - id: intraday_watch
     description: 下午实时观测循环(13:00 起动,脚本内 --until 14:57 自停)
     cmd: ["python", "-m", "tools.pipeline.intraday_watch", "--until", "14:57", "--interval", "300"]
@@ -134,6 +139,7 @@ tasks:
     tags: [local, eod, capitulation]
 
   # 午盘全A重筛(工作日 11:35,抢 13:00 前):全A量价重筛→尾盘候选。plist=com.stock.noon_fullA_screen.plist。
+  # ⚠️ launchd 侧已停用为 .plist.disabled(见 runbook §3b);此处保留仅为框架 canary/历史,非 live 装载态。
   - id: noon_fullA_screen
     description: "午盘全A重筛(11:35);全A量价重筛→尾盘回踩限价候选;正式午盘选股(踏空根治)"
     cmd: ["python", "-m", "tools.pipeline.noon_fullA_screen"]
@@ -237,6 +243,7 @@ tasks:
     notify_on: [failure, misfire]
     tags: [local, eod, sector]
 
+  # ⚠️ launchd 侧已停用为 .plist.disabled(见 runbook §3b);此处保留仅为框架 canary/历史,非 live 装载态。
   - id: intraday_review
     description: 盘尾复盘(17:00)
     cmd: ["python", "-m", "tools.run", "intraday_review"]
