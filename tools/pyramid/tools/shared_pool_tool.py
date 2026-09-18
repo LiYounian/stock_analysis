@@ -105,7 +105,9 @@ def _load_agent(adir: str, as_of: str) -> Optional[set]:
     codes: set = set()
     for f in files:
         d = _load_json(f)
-        sels = d.get("selections") if isinstance(d, dict) else None
+        # 兼容两种顶层键：selections（英文格式）/ 选股（DeepSeek 收盘格式）。
+        # 二者结构一致（list[dict{code}]）；漏读 选股 会整块丢掉 DeepSeek 收盘推荐票。
+        sels = (d.get("selections") or d.get("选股")) if isinstance(d, dict) else None
         if isinstance(sels, list):
             codes |= {str(x["code"]) for x in sels if isinstance(x, dict) and x.get("code")}
     return codes or None

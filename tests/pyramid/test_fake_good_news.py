@@ -127,6 +127,57 @@ def test_run_无近期利好_无嫌疑(tmp_path):
     assert res.fields["命中数"] == 0
 
 
+def test_run_无events_K线0信号_无嫌疑(tmp_path):
+    """回归锁（Bug1）：events 缺 + 当日 K 线无信号 → 无嫌疑（不扣分）。
+
+    池内多数票无 per-stock json（events=None），若此路径把 0 命中默认判"低"，
+    会让全池排雷子分被系统性扭曲（干净票反被扣分）。锁死 0 信号=无嫌疑。
+    """
+    rows = _base_kline()
+    # 09-16 / 09-17 均平静：无高开走弱、无放量长上影 → 命中 0
+    rows.append({"date": "2026-09-16", "open": 10, "high": 10.2, "low": 9.9, "close": 10.05,
+                 "pct_chg": 0.5, "volume": 100, "amount": 1005})
+    rows.append({"date": "2026-09-17", "open": 10.05, "high": 10.2, "low": 9.95, "close": 10.1,
+                 "pct_chg": 0.5, "volume": 100, "amount": 1010})
+    kdir = tmp_path / "data" / "master" / "kline"
+    kdir.mkdir(parents=True)
+    pd.DataFrame(rows).to_parquet(kdir / "300010.parquet")  # 不写 events 文件
+    res = get("fake_good_news").run(AS_OF, "300010", root=str(tmp_path))
+    assert res.fields["events"] == "missing"
+    assert res.fields["命中数"] == 0
+    assert res.fields["嫌疑档"] == "无嫌疑"  # 关键：0 信号=无嫌疑，不是"低"
+    assert res.fields["高开走弱"] is False
+    assert res.fields["放量长上影"] is False
+
+
+def test_run_无events_命中1_低(tmp_path):
+    """回归锁（Bug1 边界）：events 缺但当日 K 线命中 1 判据 → 仍判"低"（未被误改松）。"""
+    rows = _base_kline()
+    # 09-17 高开走弱（+6% 高开 → 收 +1%）但量能平静（无放量长上影）→ 命中 1
+    rows.append({"date": "2026-09-16", "open": 10, "high": 10.2, "low": 9.9, "close": 10.0,
+                 "pct_chg": 0.0, "volume": 100, "amount": 1000})
+    rows.append({"date": "2026-09-17", "open": 10.6, "high": 10.7, "low": 10.0, "close": 10.1,
+                 "pct_chg": 1.0, "volume": 100, "amount": 1010})
+    kdir = tmp_path / "data" / "master" / "kline"
+    kdir.mkdir(parents=True)
+    pd.DataFrame(rows).to_parquet(kdir / "300011.parquet")
+    res = get("fake_good_news").run(AS_OF, "300011", root=str(tmp_path))
+    assert res.fields["events"] == "missing"
+    assert res.fields["命中数"] == 1
+    assert res.fields["嫌疑档"] == "低"
+
+
+def test_compose_无嫌疑不扣排雷子分():
+    """回归锁（Bug1 下游）：无嫌疑 → 假利好子分满分，排雷子分不扣该项。
+
+    对比"低"档（70）——修前 0 命中误判低会让干净票排雷子分掉 30 分。
+    """
+    from tools.pyramid.d2_compose import 子分_排雷
+    empty_exp = {"命中规则": []}
+    assert 子分_排雷({"嫌疑档": "无嫌疑"}, empty_exp) == 100.0
+    assert 子分_排雷({"嫌疑档": "低"}, empty_exp) == 70.0  # 锁死档位映射，防误动
+
+
 def test_run_无events标missing不编(tmp_path):
     rows = _base_kline()
     rows.append({"date": "2026-09-16", "open": 10, "high": 10.2, "low": 9.9, "close": 10.1,

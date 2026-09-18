@@ -2,12 +2,14 @@
 
 用纯函数 build_result + 各 raw set 直接锁死合成口径，不跑重扫描（K线过闸另有真数据冒烟）。
 """
+import json
 import os
 import pytest
 
 from tools.pyramid.tools.shared_pool_tool import (
     build_result,
     _extract_codes,
+    _load_agent,
     _SOURCE_ORDER,
 )
 from tools.pyramid.registry import get
@@ -82,6 +84,44 @@ def test_extract_codes():
            "nested": {"picks": [{"代码": "000001"}]}, "list": ["002415"]}
     codes = _extract_codes(obj)
     assert {"300308", "600995", "000001", "002415"} <= codes
+
+
+# ── _load_agent 键兼容锁（Bug2）──
+def _write_agent(adir, fname, payload):
+    with open(os.path.join(adir, fname), "w", encoding="utf-8") as f:
+        json.dump(payload, f, ensure_ascii=False)
+
+
+def test_load_agent_兼容选股键(tmp_path):
+    """回归锁（Bug2）：DeepSeek 收盘格式顶层键是「选股」而非 selections。
+
+    两者结构一致（list[dict{code}]）；只读 selections 会整块漏掉 DeepSeek 收盘推荐票。
+    """
+    adir = tmp_path
+    _write_agent(str(adir), "2026-09-17_agent收盘_deepseek.json",
+                 {"date": AS_OF, "选股": [{"code": "600995"}, {"code": "300308"}]})
+    codes = _load_agent(str(adir), AS_OF)
+    assert codes == {"600995", "300308"}
+
+
+def test_load_agent_selections仍照常(tmp_path):
+    """回归锁（Bug2 兼容）：英文 selections 键行为不变。"""
+    adir = tmp_path
+    _write_agent(str(adir), "2026-09-17_agent收盘_x.json",
+                 {"selections": [{"code": "000001"}, {"code": 600000}]})
+    codes = _load_agent(str(adir), AS_OF)
+    assert codes == {"000001", "600000"}
+
+
+def test_load_agent_两键并存取并集(tmp_path):
+    """selections 优先取真值；两文件分别用不同键都应被纳入。"""
+    adir = tmp_path
+    _write_agent(str(adir), "2026-09-17_agent收盘_a.json",
+                 {"selections": [{"code": "000001"}]})
+    _write_agent(str(adir), "2026-09-17_agent收盘_deepseek.json",
+                 {"选股": [{"code": "600995"}]})
+    codes = _load_agent(str(adir), AS_OF)
+    assert codes == {"000001", "600995"}
 
 
 # ── 真数据冒烟（跑真实全A扫描，~15s；无数据则跳过）──
