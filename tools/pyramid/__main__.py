@@ -29,6 +29,7 @@ def main(argv=None) -> int:
     p_tool.add_argument("--code", default=None)
     p_tool.add_argument("--data-root", default=None)
     p_tool.add_argument("--method", default=None, help="entry_price 入场方式(可选)")
+    p_tool.add_argument("--stage", default=None, help="experience_rules 作用环节(召回/排雷/排序/价位/择时,可选)")
 
     args = p.parse_args(argv)
     _load_all_tools()
@@ -48,6 +49,8 @@ def main(argv=None) -> int:
             kw["root"] = args.data_root
         if args.method:
             kw["method"] = args.method
+        if args.stage:
+            kw["环节"] = args.stage
         try:
             tool = registry.get(args.name)
         except KeyError as e:

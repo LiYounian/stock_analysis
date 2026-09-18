@@ -57,17 +57,22 @@ tools:
     note: "每票6字段(板块/冷热拥挤/RS分位pos60/角色/板块内排名/净催化)；focus_score档；缺字段标missing不编；档位语义锁_FS档/_RS档/_净催化档/_拥挤含义/_冷热含义"
   - name: experience_rules
     塔层: "经验"
-    status: todo
+    status: done
     window: 窗3-经验与假利好
     inputs: [as_of, "code?", "环节?"]
-    outputs: [命中规则条, 出处]
-    reuse: docs/每日分析/经验沉淀/*.md
-    note: "拆712K散文为结构化规则库(规则/环节/状态/证据)；消除每日43K输入"
+    outputs: [命中数, 命中规则, 存疑数, 总库条数, 适用条数, 出处]
+    freshness: 规则首见版本(≤as_of)；库晚于as_of标stale
+    防未来: true
+    reuse: docs/每日分析/经验沉淀/v*.md → data/analysis/经验规则库.json
+    tests: tests/pyramid/test_experience_rules.py
+    note: "拆712K散文为结构化规则库(规则/环节/状态/证据+首见版本防未来)；环节=召回/排雷/排序/价位/择时/通则；消除每日43K输入。构建:python -m tools.pyramid.tools.experience_rules_tool"
   - name: fake_good_news
     塔层: "②消息"
-    status: todo
+    status: done
     window: 窗3-经验与假利好
     inputs: [as_of, code]
-    outputs: [假利好嫌疑档, 判据命中]
-    reuse: [per-stock events, 主档K线 D-1/D 价格行为]
-    note: "利好兑现日高开走弱 + D-1结果回看(程序无记忆补丁)"
+    outputs: [嫌疑档, 命中数, 高开走弱, 放量长上影, 利好后回吐, 兑现日]
+    freshness: 有events=fresh；无events=missing(仅K线保守判)
+    防未来: true
+    reuse: [per-stock events, 主档K线 D0/D0+1 价格行为]
+    note: "档位:无嫌疑/低/中/高(写死);判据①近期利好②兑现日高开走弱/放量长上影③利好后回吐(程序无记忆补丁);无events标missing不编"
