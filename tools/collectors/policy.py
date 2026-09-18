@@ -31,7 +31,9 @@ from tools.store import repo as store
 logger = logging.getLogger("collectors.policy")
 
 # —— 行业关键词种子(命中打标 + 生成检索词共用):sector -> 触发词 ——
-# key 与 stock_pool.Stock.sector 对齐,便于把政策映射回票池板块。
+# key 是**概念名**,与 stock_pool.Stock.sector 是两套独立演进的自由文本词表,二者**不要求
+# 字面一致**——需要对应时一律经 industry_map.to_sw 归申万一级后比对(见 default_keywords)。
+# 改动本表 key 时不必迁就票池措辞,但要确保 to_sw 认得(不认得则该行业不参与池交集)。
 _INDUSTRY_TERMS: dict[str, list[str]] = {
     "半导体": ["半导体", "芯片", "集成电路", "晶圆", "存储", "光刻", "先进制程"],
     "电子元件": ["电子元件", "PCB", "MLCC", "被动元件", "覆铜板"],
@@ -72,11 +74,21 @@ def default_keywords() -> list[str]:
     = 行业词 × 通用政策词(如「半导体 出口管制」「机器人 补贴」)
       + 宏观独立词(美联储/关税/央行…)。去重后返回。
     行业词只取每个板块的首个代表词,避免关键词爆炸(每词一次网络请求)。
+
+    **池过滤经申万一级归一(不做字符串直等)**:`_INDUSTRY_TERMS` 的 key 与
+    `stock_pool.Stock.sector` 是**两套各自演进的自由文本词表**(前者是概念名,
+    后者是建池时人工填的细分行业),字符串直等会在任一侧改名时**静默失配**——
+    行业词被整组丢弃而不报错,表现为该板块的政策/产业消息永远检索不到。
+    故统一经 `industry_map.to_sw` 归到申万一级再取交集(与 focus/sentiment_judge
+    消费 industries 时的口径一致,单一真源)。归不到申万一级的(to_sw → None)不参与
+    交集,宁可漏一个行业也不硬凑错映射。
     """
-    pool_sectors = {s.sector for s in stock_pool.get_pool()}
+    from tools.analysis.industry_map import to_sw   # 延迟导入(与 code_industry 同惯例)
+
+    pool_sw = {to_sw(s.sector) for s in stock_pool.get_pool()} - {None}
     combos: list[str] = []
     for sector, terms in _INDUSTRY_TERMS.items():
-        if sector not in pool_sectors or not terms:
+        if not terms or to_sw(sector) not in pool_sw:
             continue
         head = terms[0]                       # 代表词,如「半导体」「机器人」
         for pol in _POLICY_TERMS:

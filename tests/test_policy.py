@@ -93,6 +93,66 @@ def test_default_keywords_covers_pool_industries(monkeypatch):
     assert len(kws) == len(set(kws))
 
 
+def _pool(*sectors):
+    """按给定 sector 造一个假票池(只用于 default_keywords 的派生逻辑测试)。"""
+    from tools.config.stock_pool import Stock
+    return [Stock(f"00000{i}", "n", "x", sec) for i, sec in enumerate(sectors)]
+
+
+def test_default_keywords_survives_sector_vocab_drift(monkeypatch):
+    """语义锁:票池 sector 与 _INDUSTRY_TERMS key 用**不同措辞**指同一行业时,仍须派生出该行业检索词。
+
+    二者是两套各自演进的自由文本词表。若池过滤退化成字符串直等,行业词会被**整组静默丢弃**
+    (不报错、不告警),表现为该板块的政策/产业消息永远检索不到。此处的池措辞与表 key **无一字面
+    相同**,只有经 industry_map.to_sw 归申万一级才对得上——直等实现必然跑挂本用例。
+    """
+    monkeypatch.setattr(pol.stock_pool, "get_pool",
+                        lambda: _pool("光模块", "光学元件", "光伏"))
+    kws = pol.default_keywords()
+    joined = " ".join(kws)
+    # 光模块→通信 ⇒ 光通信组;光学元件→电子 ⇒ 半导体/电子元件/消费电子组;光伏→电力设备 ⇒ 新能源材料组
+    for term in ("光通信", "半导体", "新能源"):
+        assert term in joined, f"{term} 未派生(池过滤疑似退回字符串直等)"
+
+
+def test_default_keywords_excludes_sectors_outside_pool(monkeypatch):
+    """语义锁:归一后取交集 ≠ 全都要——池外行业不得混进检索词。
+
+    防「修漂移」时矫枉过正改成不过滤,导致关键词爆炸(每词一次网络请求 + 每条一次 LLM 打分)。
+    """
+    monkeypatch.setattr(pol.stock_pool, "get_pool", lambda: _pool("光模块"))
+    kws = pol.default_keywords()
+    joined = " ".join(kw for kw in kws if kw not in pol._MACRO_TERMS)
+    assert "光通信" in joined                       # 池内(光模块→通信)
+    for term in ("机器人", "电价", "锂电"):          # 池外:机械设备 / 公用事业 / 电力设备
+        assert term not in joined, f"{term} 属池外行业,不应出现"
+
+
+def test_default_keywords_tolerates_unmappable_sector(monkeypatch):
+    """语义锁:归不到申万一级的 sector(to_sw → None)只被跳过,不得崩、不得污染交集。
+
+    票池里存在「大模型」「新材料」这类自由文本,to_sw 认不得。宁可漏一个行业也不硬凑错映射。
+    """
+    monkeypatch.setattr(pol.stock_pool, "get_pool", lambda: _pool("大模型", "新材料", "光模块"))
+    kws = pol.default_keywords()                    # 不抛异常
+    assert "光通信 政策" in kws                      # 可归一的那个仍生效
+    assert len(kws) == len(set(kws))
+
+
+def test_default_keywords_emits_no_bare_industry_terms(monkeypatch):
+    """语义锁:检索词只有「行业词 × 政策词」组合 + 宏观独立词,**不含裸行业词**。
+
+    裸行业词曾作为「组合词接不住无政策词的产业/盘面快讯」的对策被提出,但实测证伪:
+    东财关键词检索是模糊匹配,组合词并不排斥无政策词的条目,裸词边际贡献极低。
+    保留一个设计理由已被证伪的改动会误导后来者,故砍掉。日后若要扩召回,应基于关键词
+    产出率数据决策,而不是重新凭这条直觉加回来。
+    """
+    monkeypatch.setattr(pol.stock_pool, "get_pool", lambda: _pool("光模块", "光学元件"))
+    kws = pol.default_keywords()
+    bare = [kw for kw in kws if " " not in kw and kw not in pol._MACRO_TERMS]
+    assert bare == [], f"出现裸行业词 {bare}"
+
+
 # ---------- 打标:region / 行业 ----------
 
 def test_region_and_industry_tagging(store_dir):
