@@ -68,11 +68,13 @@ def 子分_策略共识(sp_labels: list) -> float:
 _财报档_扣 = {"高危": 100, "中": 30, "低": 15, "无嫌疑": 0, "missing": 0}
 # 解禁嫌疑档 → 扣分（高危走 veto 不在此重复扣；此处对中/低降分）
 _解禁档_扣 = {"高危": 100, "中": 25, "低": 10, "无嫌疑": 0, "missing": 0}
+# 减持嫌疑档 → 扣分（高走 veto「清仓式减持」不在此重复扣；此处对中/低降分）
+_减持档_扣 = {"高": 100, "中": 25, "低": 12, "无嫌疑": 0, "missing": 0}
 
 
 def 子分_排雷(fake: dict, exp: dict, fin: Optional[dict] = None,
-            unlock: Optional[dict] = None) -> float:
-    """④ 负向：clean=满分，假利好+经验硬排雷+财报嫌疑+解禁嫌疑降分。硬否决在 veto_reason 里处理。"""
+            unlock: Optional[dict] = None, reduce: Optional[dict] = None) -> float:
+    """④ 负向：clean=满分，假利好+经验硬排雷+财报嫌疑+解禁嫌疑+减持嫌疑降分。硬否决在 veto_reason 里处理。"""
     s = _假利好档_分.get(fake.get("嫌疑档"), 100)
     # 经验硬排雷命中（现行·排雷环节）每条再减 15
     hits = exp.get("命中规则") or []
@@ -85,6 +87,9 @@ def 子分_排雷(fake: dict, exp: dict, fin: Optional[dict] = None,
     # 解禁嫌疑降分（高危会被 veto，这里对中/低也降）
     if unlock:
         s -= _解禁档_扣.get(unlock.get("解禁嫌疑档"), 0)
+    # 减持嫌疑降分（高会被 veto，这里对中/低也降）
+    if reduce:
+        s -= _减持档_扣.get(reduce.get("减持嫌疑档"), 0)
     return _clip100(s)
 
 
@@ -94,14 +99,16 @@ def 子分_宏观催化(sec: dict) -> float:
 
 
 def veto_reason(fake: dict, gate: dict, fin: Optional[dict] = None,
-                unlock: Optional[dict] = None) -> Optional[str]:
-    """一票否决（拍板：涨停不可买）：假利好高 / 财报高危 / 大额解禁临近 / 涨停 / 极高位 → 踢出池，不进排序。"""
+                unlock: Optional[dict] = None, reduce: Optional[dict] = None) -> Optional[str]:
+    """一票否决（拍板：涨停不可买）：假利好高 / 财报高危 / 大额解禁临近 / 清仓式减持 / 涨停 / 极高位 → 踢出池，不进排序。"""
     if fake.get("嫌疑档") == "高":
         return "假利好高嫌疑"
     if fin and fin.get("嫌疑档") == "高危":
         return "财报高危红旗"
     if unlock and unlock.get("解禁嫌疑档") == "高危":
         return "大额解禁临近"
+    if reduce and reduce.get("减持嫌疑档") == "高":
+        return "清仓式减持"
     if gate.get("涨停"):
         return "涨停不可买"
     if gate.get("极高位"):
@@ -121,17 +128,17 @@ class 骨架票:
 
 def compose_one(code: str, sp_labels: list, pv: dict, gate: dict, sec: dict,
                 fake: dict, exp: dict, fin: Optional[dict] = None,
-                unlock: Optional[dict] = None) -> 骨架票:
+                unlock: Optional[dict] = None, reduce: Optional[dict] = None) -> 骨架票:
     """对一票算五子分 + 加权骨架分 + 否决判定。"""
     subs = {
         "量价自证": 子分_量价自证(pv, gate),
         "板块角色": 子分_板块角色(sec),
         "策略共识": 子分_策略共识(sp_labels),
-        "排雷": 子分_排雷(fake, exp, fin, unlock),
+        "排雷": 子分_排雷(fake, exp, fin, unlock, reduce),
         "宏观催化": 子分_宏观催化(sec),
     }
     total = sum(subs[k] * WEIGHTS[k] for k in WEIGHTS)
-    v = veto_reason(fake, gate, fin, unlock)
+    v = veto_reason(fake, gate, fin, unlock, reduce)
     return 骨架票(
         code=code,
         骨架分=round(total, 2),
@@ -147,6 +154,8 @@ def compose_one(code: str, sp_labels: list, pv: dict, gate: dict, sec: dict,
             "财报": (fin or {}).get("嫌疑档"), "财报评级": (fin or {}).get("评级"),
             "解禁": (unlock or {}).get("解禁嫌疑档"),
             "解禁剩余天数": (unlock or {}).get("剩余天数"),
+            "减持": (reduce or {}).get("减持嫌疑档"),
+            "减持命中条数": (reduce or {}).get("命中条数"),
         },
     )
 
@@ -174,6 +183,7 @@ def build_skeleton(as_of: str, root: Optional[str] = None,
     exp_t = registry.get("experience_rules")
     fin_t = registry.get("financial_redflag")
     unlock_t = registry.get("unlock_risk")
+    reduce_t = registry.get("insider_reduction")
 
     ranked: list[骨架票] = []
     vetoed: list[骨架票] = []
@@ -186,9 +196,10 @@ def build_skeleton(as_of: str, root: Optional[str] = None,
             exp = exp_t.run(as_of, c, root=root).fields
             fin = fin_t.run(as_of, c, root=root).fields
             unlock = unlock_t.run(as_of, c, root=root).fields
+            reduce = reduce_t.run(as_of, c, root=root).fields
         except Exception:
             continue
-        row = compose_one(c, members[c], pv, gate, sec, fake, exp, fin, unlock)
+        row = compose_one(c, members[c], pv, gate, sec, fake, exp, fin, unlock, reduce)
         (vetoed if row.否决 else ranked).append(row)
 
     ranked.sort(key=lambda r: -r.骨架分)
