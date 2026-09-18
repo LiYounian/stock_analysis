@@ -77,7 +77,7 @@ def build_package(as_of: str, root: Optional[str] = None, top_n: int = 15,
 
     # shared_pool 不逐票重扫（每次 scan_kline 要 14s）；用骨架已存的来源标签直接渲染。
     tool_names = ["price_volume", "gate", "sector_context",
-                  "experience_rules", "fake_good_news", "entry_price"]
+                  "experience_rules", "fake_good_news", "unlock_risk", "entry_price"]
     tools = {t: registry.get(t) for t in tool_names}
 
     top = skel["排序"][:top_n]
