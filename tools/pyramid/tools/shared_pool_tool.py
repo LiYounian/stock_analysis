@@ -213,6 +213,30 @@ def build_result(name: str, 塔层: str, source: str, as_of: str, code: Optional
     )
 
 
+def build_raw(as_of: str, root: Optional[str] = None, scan_kline: bool = True) -> dict:
+    """构建 5 来源原始 set（present=set[code] / missing=None）。SSOT：run 与 D2 骨架共用。"""
+    adir = _analysis_dir(root, as_of)
+    return {
+        "多策略并集": _load_multi_strategy(adir),
+        "council": _load_council(adir),
+        "板块roster": _load_roster(root, adir),
+        "agent主线": _load_agent(adir, as_of),
+        "K线过闸": _scan_kline(root, as_of) if scan_kline else None,
+    }
+
+
+def pool_with_labels(
+    as_of: str, root: Optional[str] = None, scan_kline: bool = True
+) -> dict[str, list]:
+    """召回池成员 → {code: [命中来源标签...]}。供 D2 骨架遍历池；缺来源不计入分母。"""
+    raw = build_raw(as_of, root=root, scan_kline=scan_kline)
+    present = {k: raw[k] for k in _SOURCE_ORDER if raw.get(k) is not None}
+    union: set = set().union(*present.values()) if present else set()
+    return {
+        str(c): [k for k, v in present.items() if c in v] for c in union
+    }
+
+
 class SharedPoolTool:
     name = "shared_pool"
     塔层 = "①塔基"
@@ -226,14 +250,7 @@ class SharedPoolTool:
         scan_kline: bool = True,
         **kw,
     ) -> ToolResult:
-        adir = _analysis_dir(root, as_of)
-        raw = {
-            "多策略并集": _load_multi_strategy(adir),
-            "council": _load_council(adir),
-            "板块roster": _load_roster(root, adir),
-            "agent主线": _load_agent(adir, as_of),
-            "K线过闸": _scan_kline(root, as_of) if scan_kline else None,
-        }
+        raw = build_raw(as_of, root=root, scan_kline=scan_kline)
         return build_result(self.name, self.塔层, self.source, as_of, code, raw)
 
 
