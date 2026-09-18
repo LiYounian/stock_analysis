@@ -9,7 +9,6 @@ import pytest
 from tools.pyramid.tools.shared_pool_tool import (
     build_result,
     _extract_codes,
-    _load_agent,
     _load_multi_strategy,
     _strategy_view_picks,
     _is_st,
@@ -30,19 +29,18 @@ def _br(raw, code=None):
     return build_result(_NAME, _层, _SRC, AS_OF, code, raw)
 
 
-# ── 平权并集口径锁 ──
+# ── 平权并集口径锁（四来源）──
 def test_平权并集与共识():
     raw = {
         "多策略并集": {"A", "B"},
         "council": {"B", "C"},
         "板块roster": {"C", "D"},
-        "agent主线": {"A", "E"},
         "K线过闸": {"A", "F"},
     }
     r = _br(raw)
-    # 并集 = A B C D E F = 6
-    assert r.fields["池规模"] == 6
-    # A(3次) B(2次) C(2次) 命中≥2来源 = 3 票
+    # 并集 = A B C D F = 5
+    assert r.fields["池规模"] == 5
+    # A(多策略/K线=2) B(多策略/council=2) C(council/板块=2) 命中≥2来源 = 3 票
     assert r.fields["共识数"] == 3
     assert r.fields["缺来源"] == []
     assert r.freshness == "fresh"
@@ -52,7 +50,7 @@ def test_缺来源标missing不编():
     raw = {k: None for k in _SOURCE_ORDER}
     raw["K线过闸"] = {"X", "Y"}
     r = _br(raw)
-    assert set(r.fields["缺来源"]) == {"多策略并集", "council", "板块roster", "agent主线"}
+    assert set(r.fields["缺来源"]) == {"多策略并集", "council", "板块roster"}
     assert r.fields["池规模"] == 2
     assert "missing" in r.浓缩块
 
@@ -68,17 +66,16 @@ def test_来源标签_命中多来源():
         "多策略并集": {"300308"},
         "council": None,
         "板块roster": {"300308", "600995"},
-        "agent主线": {"300308"},
         "K线过闸": {"600995"},
     }
     r = _br(raw, code="300308")
-    assert set(r.fields["命中来源"]) == {"多策略并集", "板块roster", "agent主线"}
+    assert set(r.fields["命中来源"]) == {"多策略并集", "板块roster"}
     assert "300308" in r.浓缩块
 
 
 def test_来源标签_未命中():
     raw = {"K线过闸": {"600995"}, "多策略并集": None, "council": None,
-           "板块roster": None, "agent主线": None}
+           "板块roster": None}
     r = _br(raw, code="999999")
     assert r.fields["命中来源"] == []
     assert "命中来源=无" in r.浓缩块
@@ -92,42 +89,29 @@ def test_extract_codes():
     assert {"300308", "600995", "000001", "002415"} <= codes
 
 
-# ── _load_agent 键兼容锁（Bug2）──
-def _write_agent(adir, fname, payload):
-    with open(os.path.join(adir, fname), "w", encoding="utf-8") as f:
-        json.dump(payload, f, ensure_ascii=False)
+# ── agent主线 彻底移除锁：召回层不再消费他人成品选股票（防未来回加）──
+def test_agent主线_不再是召回来源():
+    """金字塔独立性回归锁：agent主线 从 shared_pool 召回四路里彻底移除。
 
-
-def test_load_agent_兼容选股键(tmp_path):
-    """回归锁（Bug2）：DeepSeek 收盘格式顶层键是「选股」而非 selections。
-
-    两者结构一致（list[dict{code}]）；只读 selections 会整块漏掉 DeepSeek 收盘推荐票。
+    历史上 shared_pool 有第五路「agent主线」（读 <date>_agent收盘_*.json 成品选股）。
+    用户拍板召回层不消费他人成品——此路已删。锁三点，任一被回加即红：
+      ① 固定来源顺序里没有 agent主线（决定分母与展示，回加必在这里）
+      ② build_raw 产出的四来源 dict 无 agent主线 键
+      ③ _load_agent 加载器已删除（导入即失败 → 用属性存在性断言）
     """
-    adir = tmp_path
-    _write_agent(str(adir), "2026-09-17_agent收盘_deepseek.json",
-                 {"date": AS_OF, "选股": [{"code": "600995"}, {"code": "300308"}]})
-    codes = _load_agent(str(adir), AS_OF)
-    assert codes == {"600995", "300308"}
+    import tools.pyramid.tools.shared_pool_tool as sp
+    assert "agent主线" not in _SOURCE_ORDER
+    assert len(_SOURCE_ORDER) == 4
+    assert set(_SOURCE_ORDER) == {"多策略并集", "council", "板块roster", "K线过闸"}
+    raw = build_raw(AS_OF, root=tmp_no_data(), scan_kline=False)
+    assert "agent主线" not in raw
+    assert set(raw.keys()) == {"多策略并集", "council", "板块roster", "K线过闸"}
+    assert not hasattr(sp, "_load_agent")  # 加载器随该路一并删除
 
 
-def test_load_agent_selections仍照常(tmp_path):
-    """回归锁（Bug2 兼容）：英文 selections 键行为不变。"""
-    adir = tmp_path
-    _write_agent(str(adir), "2026-09-17_agent收盘_x.json",
-                 {"selections": [{"code": "000001"}, {"code": 600000}]})
-    codes = _load_agent(str(adir), AS_OF)
-    assert codes == {"000001", "600000"}
-
-
-def test_load_agent_两键并存取并集(tmp_path):
-    """selections 优先取真值；两文件分别用不同键都应被纳入。"""
-    adir = tmp_path
-    _write_agent(str(adir), "2026-09-17_agent收盘_a.json",
-                 {"selections": [{"code": "000001"}]})
-    _write_agent(str(adir), "2026-09-17_agent收盘_deepseek.json",
-                 {"选股": [{"code": "600995"}]})
-    codes = _load_agent(str(adir), AS_OF)
-    assert codes == {"000001", "600995"}
+def tmp_no_data():
+    """指一个必然无 analysis 数据的目录——build_raw 各加载器返回 None，只验键集不验内容。"""
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)), "__nonexistent_data_root__")
 
 
 # ── A5 多策略 ≥2 命中：直接读策略 view json（修退化）──
