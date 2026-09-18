@@ -5,9 +5,11 @@ P1a 仅落 entry_price（样板）；窗1/2/3 落其余 6 个后在此登记 imp
 from tools.pyramid.tools import entry_price_tool  # noqa: F401
 from tools.pyramid.tools import price_volume_tool  # noqa: F401
 from tools.pyramid.tools import gate_tool  # noqa: F401
+from tools.pyramid.tools import shared_pool_tool  # noqa: F401
 
 __all__ = [
     "entry_price_tool",
     "price_volume_tool",
     "gate_tool",
+    "shared_pool_tool",
 ]

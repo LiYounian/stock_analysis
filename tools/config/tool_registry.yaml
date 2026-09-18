@@ -24,12 +24,15 @@ tools:
     tests: tests/pyramid/test_framework.py
   - name: shared_pool
     塔层: "①塔基"
-    status: todo
+    status: done
     window: 窗1-量价工具族
-    inputs: [as_of]
-    outputs: [池, 来源标签, 各来源命中数, 交并集]
+    inputs: [as_of, "code?"]
+    outputs: [池规模, 各来源命中数, 缺来源, 共识数, 命中来源]
     reuse: tools/experimental/pyramid_select_v1.py
-    note: "≥2策略并集∪council top∪板块roster∪Agent主线∪全A K线过闸；K线复核不给特权"
+    freshness: 主档K线口径日期 + data/analysis/<date> 来源文件
+    防未来: true
+    tests: tests/pyramid/test_shared_pool_tool.py
+    note: "≥2策略并集∪council top∪板块roster∪Agent主线∪全A K线过闸；K线复核不给特权；缺来源标missing"
   - name: gate
     塔层: "①塔基"
     status: done
