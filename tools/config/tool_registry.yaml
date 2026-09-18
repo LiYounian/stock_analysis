@@ -46,12 +46,15 @@ tools:
     note: "session午盘/收盘；688 volume 修复(H2)；单位统一"
   - name: sector_context
     塔层: "④宏观"
-    status: todo
+    status: done
     window: 窗2-板块
     inputs: [as_of, code]
-    outputs: [板块, 冷热拥挤档, RS分位, 角色, 板块内排名, 净催化]
-    reuse: [data/analysis/<date>/sector_focus.json, sector_regime.json, roster]
-    note: "每票6字段；focus_score档位"
+    outputs: [板块, 重点标, focus_score, focus_score档, 冷热标签, 拥挤档, RS_pos60, RS档, 角色, 选级, 板块内排名, 新闻净催化, 净催化档, 环境命中日]
+    freshness: sector_focus/regime ≤as_of 最近一日(as_of无当日→stale)
+    防未来: true
+    reuse: [config/code_industry.json, data/analysis/<date>/sector_focus.json, sector_regime.json, data/sector_roster(_table)/<板块>.json]
+    tests: tests/pyramid/test_sector_context.py
+    note: "每票6字段(板块/冷热拥挤/RS分位pos60/角色/板块内排名/净催化)；focus_score档；缺字段标missing不编；档位语义锁_FS档/_RS档/_净催化档/_拥挤含义/_冷热含义"
   - name: experience_rules
     塔层: "经验"
     status: todo
