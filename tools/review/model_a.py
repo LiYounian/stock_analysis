@@ -72,6 +72,7 @@ def compute_labels(pick: Pick, cache: dict, ew: dict) -> ModelALabels:
     entry, labels = base["entry"], base["labels"]
 
     lab = ModelALabels(
+        entry_rule="limit",   # A8：与 tools.pyramid.entry_rule "limit"、d3_score(entry_rule="limit") 同撮合口径
         filled=entry["filled"],
         limit=entry["limit"],
         entry_price=entry["price"],

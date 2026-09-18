@@ -44,6 +44,7 @@ class ModelALabels:
     r_d1=成交价→D+1 收盘%；r_exit=按卖出规则实际了结（D+1 收盘为正且未破 MA5→持到 D+2；否则 D+1 离场）。
     """
 
+    entry_rule: str = "limit"        # A8 撮合口径标识（= tools.pyramid.entry_rule 的 "limit"）：与 d3_score 记分共用
     filled: Optional[bool] = None    # True=成交 | False=未触发(高开未回踩,final) | None=D+1 未到期(pending)
     limit: Optional[float] = None    # 限价 = D 收盘
     entry_price: Optional[float] = None   # 成交价 = min(限价, D+1 open)
