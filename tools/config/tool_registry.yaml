@@ -1,0 +1,70 @@
+# 金字塔选股工具清单（SSOT）· Agent 开工先读它知道"有哪些工具"。
+# 契约见 tools/pyramid/registry.py（统筹冻结）。P1a 落 entry_price（●已实现）；
+# 其余 6 个由窗1/2/3 填实现后把 status 改 done、补 outputs/tests。
+version: "P1-2026-09-18"
+契约: tools/pyramid/registry.py
+调用:
+  api: "tools.pyramid.registry.get(name).run(as_of, code)"
+  cli: "python -m tools.pyramid tool <name> --as-of D --code X"
+铁律:
+  - 产出浓缩块 ≤8 行；禁裸 json 进 prompt（G3）
+  - 只信主档 K 线；688/689 量能 amount/close 自校（H2）
+  - as_of 防未来（assert_no_future）
+  - 每数值带【口径】【档位】【一句解释】；档位语义锁测试
+tools:
+  - name: entry_price
+    塔层: "①塔基"
+    status: done
+    window: 统筹(样板)
+    inputs: [as_of, code, "method?"]
+    outputs: [挂单价, 止损价, 不追高上限, 现价, 止损幅pct, 单调性ok]
+    freshness: 主档K线口径日期
+    防未来: true
+    reuse: tools.analysis.selection_synth.fill_entry_exit
+    tests: tests/pyramid/test_framework.py
+  - name: shared_pool
+    塔层: "①塔基"
+    status: todo
+    window: 窗1-量价工具族
+    inputs: [as_of]
+    outputs: [池, 来源标签, 各来源命中数, 交并集]
+    reuse: tools/experimental/pyramid_select_v1.py
+    note: "≥2策略并集∪council top∪板块roster∪Agent主线∪全A K线过闸；K线复核不给特权"
+  - name: gate
+    塔层: "①塔基"
+    status: todo
+    window: 窗1-量价工具族
+    inputs: [as_of, code]
+    outputs: [层级T1T2T3, 触发原因]
+    note: "阈值写死+档位锁；688校正；放量收阳/站上MA5·前高/量比/未近涨停"
+  - name: price_volume
+    塔层: "①塔基"
+    status: todo
+    window: 窗1-量价工具族
+    inputs: [as_of, code]
+    outputs: [现价, 涨幅, 量比, 位置, session标记]
+    note: "session午盘/收盘；688 volume 修复(H2)；单位统一"
+  - name: sector_context
+    塔层: "④宏观"
+    status: todo
+    window: 窗2-板块
+    inputs: [as_of, code]
+    outputs: [板块, 冷热拥挤档, RS分位, 角色, 板块内排名, 净催化]
+    reuse: [data/analysis/<date>/sector_focus.json, sector_regime.json, roster]
+    note: "每票6字段；focus_score档位"
+  - name: experience_rules
+    塔层: "经验"
+    status: todo
+    window: 窗3-经验与假利好
+    inputs: [as_of, "code?", "环节?"]
+    outputs: [命中规则条, 出处]
+    reuse: docs/每日分析/经验沉淀/*.md
+    note: "拆712K散文为结构化规则库(规则/环节/状态/证据)；消除每日43K输入"
+  - name: fake_good_news
+    塔层: "②消息"
+    status: todo
+    window: 窗3-经验与假利好
+    inputs: [as_of, code]
+    outputs: [假利好嫌疑档, 判据命中]
+    reuse: [per-stock events, 主档K线 D-1/D 价格行为]
+    note: "利好兑现日高开走弱 + D-1结果回看(程序无记忆补丁)"
