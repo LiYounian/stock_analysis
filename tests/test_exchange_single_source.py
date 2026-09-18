@@ -285,6 +285,28 @@ _ALLOWED: dict[str, str] = {
     "tools/collectors/fundflow_intraday.py":
         "_secid 输出东财市场编号(1./0.)不是交易所前缀;刻意与 fundflow.py._secid 行为一致"
         "(其为模块私有,跨模块引私有函数违反宪法边界),同 fundflow.py 条目同因无法实证不据猜改",
+    # —— 涨跌停幅度档:输出是涨停线百分比,不是交易所 ——
+    "tools/analysis/selection_synth.py":
+        "limit_pct 判 300/688 取涨跌停幅(创业/科创 20% vs 主板 10%),是涨跌停口径不是交易所,"
+        "与 backtest_midday_q/factor_nextday.board_limit 同构;真源无 board-limit 助手可委托(is_star_market 只覆盖 688/689 不含 300)",
+    "tools/pyramid/tools/gate_tool.py":
+        "_is_20cm 判 20cm 涨跌幅板(300/301/688/689),是涨跌停口径不是交易所,与 backtest_newhigh._is_20cm 同构",
+    # —— 召回池 universe 范围过滤:输出是"这段进不进池"的布尔,故意排除北交所/B股,不是判交易所 ——
+    "tools/pyramid/tools/shared_pool_tool.py":
+        "只留 00/30/60/68 段进召回池的范围裁剪(故意排除北交所/B股/200 深B),不是代码→交易所;"
+        "is_a_code 语义更宽(含北交所/B股)不同构,与 pyramid_select_v1 universe 过滤同口径",
+    # —— experimental/ 自包含实验快照:判据全是涨跌停/科创volume/universe 口径,无委托目标 ——
+    "tools/experimental/pyramid_select_v1.py":
+        "is_20pct_board 判 20%板(300/301/688/689)+fix_volume 判 68 段科创 volume 校正+universe 只留 00/30/60/68;"
+        "均是涨跌停/科创volume/universe 口径不是交易所,自包含实验快照整文件入白名单",
+    "tools/experimental/agent_select_ds.py":
+        "_limit_pct 判 30/68 取 20%、8/4/92 取 30% 板块涨停幅,是涨跌停口径不是交易所;实验脚本",
+    "tools/experimental/agent_select_ds_close.py":
+        "_limit_pct 同 agent_select_ds(收盘版),涨跌停口径不是交易所;实验脚本",
+    "tools/experimental/agent_select_qwen.py":
+        "_limit_pct 判 300/301/688/689 取 20%、8/4/920 取 30% 板块涨停幅,是涨跌停口径不是交易所;实验脚本",
+    "tools/experimental/agent_select_qwen_close.py":
+        "_limit_pct 同 agent_select_qwen(收盘版),涨跌停口径不是交易所;实验脚本",
 }
 
 
