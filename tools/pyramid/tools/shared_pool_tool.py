@@ -1,11 +1,15 @@
 """shared_pool_tool（①塔基·统一召回池 + 来源标签）· P1 窗1。
 
-构建统一召回池并给**来源标签**。五来源**平权并集**（K线复核不给特权）：
+构建统一召回池并给**来源标签**。四来源**平权并集**（K线复核不给特权）：
   ① ≥2 策略命中并集（多策略命中闸门.json；缺则由 每日选股.json picks 的 ≥2 strategies 派生）
   ② council top（council/投票 json）
   ③ 板块 roster（sector_focus.json 重点板块池 → data/sector_roster/<板块>.json 成分）
-  ④ Agent 主线（<date>_agent收盘_*.json 的 selections 推荐票）
-  ⑤ 全A K线过闸（复用 tools/experimental/pyramid_select_v1 池扫描·in_pool 口径）
+  ④ 全A K线过闸（复用 tools/experimental/pyramid_select_v1 池扫描·in_pool 口径）
+
+金字塔选股是独立流程，召回层不消费他人成品选股票——原「Agent 主线」一路
+（<date>_agent收盘_*.json）已移除：其产出方在 tools/experimental/、非定时任务、覆盖
+极稀疏，且与「全A K线过闸」coverage 重叠。experimental/ 的 agent 脚本照常产文件，
+只是金字塔不再消费。
 
 数据缺来源时标 missing 不编。给 code 时输出该票命中的来源标签。
 """
@@ -20,8 +24,8 @@ from typing import Optional
 from tools.pyramid.registry import ToolResult, register
 from tools.pyramid._common import data_root, 浓缩块
 
-# 来源固定顺序（决定 5 来源分母与展示序）
-_SOURCE_ORDER = ["多策略并集", "council", "板块roster", "agent主线", "K线过闸"]
+# 来源固定顺序（决定四来源分母与展示序）
+_SOURCE_ORDER = ["多策略并集", "council", "板块roster", "K线过闸"]
 
 
 # ── 各来源加载器：返回 set[code]（present）或 None（missing）──
@@ -141,22 +145,6 @@ def _load_roster(root: Optional[str], adir: str) -> Optional[set]:
     return codes or None
 
 
-def _load_agent(adir: str, as_of: str) -> Optional[set]:
-    """④ Agent 主线：<date>_agent收盘_*.json 的 selections 推荐票。"""
-    files = sorted(glob.glob(os.path.join(adir, "*agent收盘*.json")))
-    if not files:
-        return None
-    codes: set = set()
-    for f in files:
-        d = _load_json(f)
-        # 兼容两种顶层键：selections（英文格式）/ 选股（DeepSeek 收盘格式）。
-        # 二者结构一致（list[dict{code}]）；漏读 选股 会整块丢掉 DeepSeek 收盘推荐票。
-        sels = (d.get("selections") or d.get("选股")) if isinstance(d, dict) else None
-        if isinstance(sels, list):
-            codes |= {str(x["code"]) for x in sels if isinstance(x, dict) and x.get("code")}
-    return codes or None
-
-
 def _is_st(name: Optional[str]) -> bool:
     """名称判据：含 'ST'（含 *ST）或 '退' → ST/退市。与 pyramid_select_v1.hard_veto 同口径。"""
     return "ST" in (name or "").upper() or "退" in (name or "")
@@ -169,7 +157,7 @@ def _load_name_map(root: Optional[str]) -> dict:
 
 
 def _scan_kline(root: Optional[str], as_of: str) -> Optional[set]:
-    """⑤ 全A K线过闸：复用 pyramid_select_v1 的 metrics/in_pool 口径（in_pool=召回池）。
+    """④ 全A K线过闸：复用 pyramid_select_v1 的 metrics/in_pool 口径（in_pool=召回池）。
 
     A2 修：召回层按名称判据剔除 ST/*ST/退市（复用 config/code_name.json + _is_st），
     不让 ST 进池最干净——避免 D2 骨架/Agent 在池内买到 ST 票。
@@ -243,7 +231,7 @@ def build_result(name: str, 塔层: str, source: str, as_of: str, code: Optional
     freshness = "fresh" if present else "missing"
     hit_line = " ".join(f"{k}={len(v)}" for k, v in present.items()) or "无present来源"
     lines = [
-        f"池规模: {len(union)}票（{len(present)}/5来源平权并集·K线复核不给特权）",
+        f"池规模: {len(union)}票（{len(present)}/{len(_SOURCE_ORDER)}来源平权并集·K线复核不给特权）",
         f"来源命中: {hit_line}【各来源去重后计数】",
         f"缺来源: {'/'.join(missing) if missing else '无'}【标missing不编】",
         f"≥2来源共识: {len(共识)}票【多来源交叉·可信度更高】",
@@ -278,13 +266,12 @@ def build_result(name: str, 塔层: str, source: str, as_of: str, code: Optional
 
 
 def build_raw(as_of: str, root: Optional[str] = None, scan_kline: bool = True) -> dict:
-    """构建 5 来源原始 set（present=set[code] / missing=None）。SSOT：run 与 D2 骨架共用。"""
+    """构建四来源原始 set（present=set[code] / missing=None）。SSOT：run 与 D2 骨架共用。"""
     adir = _analysis_dir(root, as_of)
     return {
         "多策略并集": _load_multi_strategy(adir),
         "council": _load_council(adir),
         "板块roster": _load_roster(root, adir),
-        "agent主线": _load_agent(adir, as_of),
         "K线过闸": _scan_kline(root, as_of) if scan_kline else None,
     }
 
@@ -304,7 +291,7 @@ def pool_with_labels(
 class SharedPoolTool:
     name = "shared_pool"
     塔层 = "①塔基"
-    source = "5来源平权并集: 多策略∪council∪板块roster∪Agent主线∪全A K线过闸"
+    source = "4来源平权并集: 多策略∪council∪板块roster∪全A K线过闸"
 
     def run(
         self,

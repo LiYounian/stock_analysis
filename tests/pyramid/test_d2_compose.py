@@ -101,7 +101,7 @@ def test_veto_涨停与高嫌疑():
 # ── compose_one 加权 ──
 def test_compose_one_加权与否决():
     row = C.compose_one(
-        "300308", ["agent主线"],
+        "300308", ["多策略并集"],
         pv={"量比档": "平量", "pos60档": "低", "现价": 896.0},
         gate={"层级": "未入层"},
         sec={"角色": None, "RS档": "弱", "净催化档": "强正", "focus_score": 0.88, "板块": "电子"},
