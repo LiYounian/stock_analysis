@@ -1,10 +1,18 @@
 """数据契约单测:枚举/校验器 + 真实记录合规性。"""
 import glob
+import os
+import re
 
 import pytest
 
 from tools.config import settings
 from tools.contracts import record as rc
+
+# 中心记录按代码命名 data/analysis/{code}.json(A股6位/港股5位,见 record.py CONVENTIONS)。
+# 用正向匹配纳入,自动排除同目录下的非记录工件(经验规则库.json / 数据字典_*.json /
+# panel.json / screen.json 等聚合·参考类产物)——它们本就不是 per-stock 中心记录,
+# 不该被 record 契约校验;正向匹配也对未来新增的非记录工件天然免疫,无需逐个补黑名单。
+_CENTRAL_RECORD_RE = re.compile(r"^\d{5,6}\.json$")
 
 
 def _good_record():
@@ -103,7 +111,7 @@ def test_dump_schema(tmp_path, monkeypatch):
 def test_all_real_records_valid():
     """全池已产出的真实记录都应通过契约(回归:抓 serialize 产出漂移)。"""
     files = [f for f in glob.glob(str(settings.PROJECT_ROOT / "data/analysis/*.json"))
-             if not f.endswith(("panel.json", "screen.json"))]
+             if _CENTRAL_RECORD_RE.match(os.path.basename(f))]
     if not files:
         pytest.skip("无 data/analysis 记录")
     import json
