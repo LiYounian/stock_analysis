@@ -71,6 +71,16 @@ _CHANGELOG_VER_RE = re.compile(r"\*\*v(\d{4}-\d{2}-\d{2})\*\*")
 
 EXPERIENCE_MARKER = "经验沉淀"
 
+# 经验沉淀 inbox：eod-review SKILL **每日消费**的待并入清单，是本护栏告警的「有人读」末端
+# （运维告警写这里，下一次盘尾 eod-review 就会看到）。相对经验沉淀目录的文件名。
+INBOX_NAME = "_待并入.md"
+INBOX_ALARM_TAG = "自动提交内容回退护栏"
+# `_` 前缀 = 设计上会被清空/重写的 transient 工作文件（如 _待并入.md 由 eod-review 消费清空、
+# output_guard 的 _GAP_ALARM.json）——它们**不是**累积记录，纯删除是其正常语义，豁免回退检查，
+# 否则会把 eod-review 的合法清空误判成回退而回滚，破坏 inbox 消费工作流。
+def _is_transient(path: str) -> bool:
+    return Path(path).name.startswith("_")
+
 
 def _git(repo: str, *args: str, check: bool = True) -> subprocess.CompletedProcess:
     return subprocess.run(
@@ -141,6 +151,7 @@ class Finding:
 class Report:
     findings: list[Finding] = field(default_factory=list)
     restored: list[str] = field(default_factory=list)
+    inbox_alarmed: list[str] = field(default_factory=list)  # 已写进 _待并入.md 告警的文件
     error: Optional[str] = None
 
     @property
@@ -171,7 +182,52 @@ def _staged_changes(repo: str, paths: list[str]) -> list[tuple[str, str]]:
     return changes
 
 
-def guard(repo: str, paths: list[str], restore: bool = True) -> Report:
+def _append_inbox_alarm(repo: str, report: Report, inbox_path: Optional[str]) -> None:
+    """把回退告警追加进经验沉淀 inbox `_待并入.md` 并 stage——让每日 eod-review 看得到。
+    去重:同一文件的告警(按路径 + TAG)已在 inbox 里就不重复追加,避免每小时跑重复刷屏。"""
+    if not report.findings:
+        return
+    inbox = Path(inbox_path) if inbox_path else (
+        Path(repo) / "docs" / "每日分析" / "经验沉淀" / INBOX_NAME
+    )
+    try:
+        existing = inbox.read_text(encoding="utf-8") if inbox.exists() else ""
+    except OSError:
+        existing = ""
+    # 去重:inbox 里已存在本护栏告警(TAG),且已列出该文件(路径以反引号包裹,精确匹配)→ 不重复追加。
+    has_tag = INBOX_ALARM_TAG in existing
+    new = [
+        f for f in report.findings
+        if not (has_tag and f"`{f.path}`" in existing)
+    ]
+    if not new:
+        return
+    stamp = datetime.now().strftime("%Y-%m-%d %H:%M")
+    lines = [
+        f"- ⚠️【{INBOX_ALARM_TAG} {stamp}】以下白名单文档的磁盘副本会丢失 origin/main 已提交内容，"
+        f"已跳过并还原为已提交好版本（内容未丢）；请把磁盘副本同步到最新后再让其入库。"
+        f"本行为运维告警、非待并入结论，处理后可删除："
+    ]
+    for f in new:
+        lines.append(f"  - `{f.path}`：{'; '.join(f.reasons)}")
+    block = ("" if existing.endswith("\n") or not existing else "\n") + "\n".join(lines) + "\n"
+    try:
+        inbox.parent.mkdir(parents=True, exist_ok=True)
+        with inbox.open("a", encoding="utf-8") as fh:
+            fh.write(block)
+        # stage 进暂存区,使这条告警随本轮自动提交入库、被下次 eod-review 消费到
+        _git(repo, "add", "--", str(inbox.relative_to(Path(repo))))
+        report.inbox_alarmed.extend(f.path for f in new)
+    except (OSError, ValueError, subprocess.CalledProcessError):
+        pass  # best-effort,inbox 写/stage 失败不阻断(marker + log 仍在)
+
+
+def guard(
+    repo: str,
+    paths: list[str],
+    restore: bool = True,
+    inbox_path: Optional[str] = None,
+) -> Report:
     """核心：扫暂存区，找出内容回退的白名单文档；restore=True 时还原成 HEAD 好版本。"""
     report = Report()
     try:
@@ -183,6 +239,8 @@ def guard(repo: str, paths: list[str], restore: bool = True) -> Report:
     for status, path in changes:
         if not path:
             continue
+        if _is_transient(path):
+            continue  # transient 工作文件（_待并入.md 等）纯删除是正常语义，豁免
         if status == "A":
             continue  # 新增文件无已提交基线，不可能回退
         committed_bytes = _git_bytes(repo, "show", f"HEAD:{path}")
@@ -209,6 +267,9 @@ def guard(repo: str, paths: list[str], restore: bool = True) -> Report:
                     report.restored.append(path)
                 except subprocess.CalledProcessError as e:
                     report.error = f"还原 {path} 失败: {e.stderr or e}"
+
+    if restore and report.findings:
+        _append_inbox_alarm(repo, report, inbox_path)
 
     return report
 
@@ -242,12 +303,17 @@ def main(argv: Optional[list[str]] = None) -> int:
     ap.add_argument("--paths", nargs="+", required=True, help="白名单目录/文件")
     ap.add_argument("--marker", help="命中回退时写入的 marker JSON 路径")
     ap.add_argument(
-        "--dry-run", action="store_true", help="只诊断不还原(仍打印告警、写 marker)"
+        "--inbox", help="经验沉淀 _待并入.md 路径(默认据 --repo 推导);告警追加于此供 eod-review 消费"
+    )
+    ap.add_argument(
+        "--dry-run", action="store_true", help="只诊断不还原(仍打印告警、写 marker;不动 inbox)"
     )
     args = ap.parse_args(argv)
 
     try:
-        report = guard(args.repo, args.paths, restore=not args.dry_run)
+        report = guard(
+            args.repo, args.paths, restore=not args.dry_run, inbox_path=args.inbox
+        )
     except Exception as e:  # noqa: BLE001 —— best-effort，任何异常都不外溢阻断自动提交
         print(f"!! 护栏内部异常(放行，best-effort): {e}", file=sys.stderr)
         return 1
@@ -267,6 +333,10 @@ def main(argv: Optional[list[str]] = None) -> int:
             "仅诊断(dry-run)" if args.dry_run else "还原失败(见上)"
         )
         print(f"  · [{f.status}] {f.path} —— {'; '.join(f.reasons)} → {action}")
+
+    if report.inbox_alarmed:
+        print(f"  → 已追加告警到经验沉淀 _待并入.md(下次 eod-review 会看到): "
+              f"{', '.join(report.inbox_alarmed)}")
 
     if args.marker:
         _write_marker(Path(args.marker), report)
