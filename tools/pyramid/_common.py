@@ -8,6 +8,8 @@ from typing import Optional, Sequence, Any
 import os
 import pandas as pd
 
+from tools.config import exchange
+
 # 主档 K 线列（date/open/high/low/close/volume/amount/turnover/pct_chg）
 _KL_DATE = "date"
 
@@ -34,9 +36,12 @@ def assert_no_future(df: pd.DataFrame, as_of: str, date_col: str = _KL_DATE) -> 
 
 
 def is_star_code(code: str) -> bool:
-    """科创板/创业板注册制中腾讯源曾把成交量再 ×100 的板块（688/689）。"""
-    c = str(code)
-    return c.startswith("688") or c.startswith("689")
+    """科创板/创业板注册制中腾讯源曾把成交量再 ×100 的板块（688/689）。
+
+    委托单一真源 `tools.config.exchange.is_star_market`——"哪段是科创板"的判据只写一份，
+    腾讯 volume 单位归一的采集层与本底座共用同一处（见 exchange.py is_star_market docstring）。
+    """
+    return exchange.is_star_market(code)
 
 
 def load_kline(
