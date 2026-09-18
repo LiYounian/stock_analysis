@@ -1,6 +1,8 @@
 """chart.py 单测 + web 只读视图 + serialize 契约合规回归。"""
 import glob
 import json
+import os
+import re
 
 import pandas as pd
 import pytest
@@ -73,8 +75,12 @@ def test_web_get_kline_reads_view_not_compute():
     assert not bad, f"展示层只允许读 equal_weight_index 视图,不得 import 其它分析器: {bad}"
 
 
+# 中心记录按代码命名 data/analysis/{code}.json(A股6位/港股5位)。正向匹配纳入,
+# 自动排除同目录非记录工件(经验规则库.json / 数据字典_*.json / panel / screen 等聚合·参考产物)——
+# 它们不是 per-stock 中心记录,不该被 record 契约校验;正向匹配对未来新增工件也免疫。
+_CENTRAL_RECORD_RE = re.compile(r"^\d{5,6}\.json$")
 _RECS = [f for f in glob.glob(str(settings.PROJECT_ROOT / "data/analysis/*.json"))
-         if not f.endswith(("panel.json", "screen.json"))]
+         if _CENTRAL_RECORD_RE.match(os.path.basename(f))]
 
 
 @pytest.mark.skipif(not _RECS, reason="无 data/analysis 记录")
