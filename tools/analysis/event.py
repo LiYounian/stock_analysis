@@ -399,15 +399,29 @@ def load_policy_scores() -> list[dict]:
 
 
 def _stock_policy_items(code: str) -> list[dict]:
-    """命中本票所属行业的政策打分条目(按 industries 或 LLM 受影响行业)。"""
+    """命中本票所属行业的政策打分条目(按 industries 或 LLM 受影响行业)。
+
+    **比对经申万一级归一,不做字符串直等**:票池 `Stock.sector` 是建池时人工填的
+    概念/大类名(如「光模块」),政策条目的 `industries`/`受影响行业` 是采集/LLM 各自
+    产出的自由文本(如「光通信」)——两套词表各自演进,字符串直等会在任一侧措辞不同时
+    **静默失配**(个股维度取政策条目这条链路基本空转)。故两边统一经
+    `industry_map.to_sw` 归到申万一级再比对(与 policy.default_keywords / focus /
+    sentiment_judge 消费 industries 时同口径,单一真源)。归不到申万一级的(to_sw→None)
+    不参与比对,宁可漏也不硬凑错映射。
+    """
+    from tools.analysis.industry_map import to_sw   # 延迟导入(与 policy.default_keywords 同惯例)
+
     s = stock_pool.get(code)
     if not s:
         return []
+    sw = to_sw(s.sector)
+    if sw is None:                                  # 票池 sector 归不到申万一级 → 弃权
+        return []
     out = []
     for it in load_policy_scores():
-        hit = s.sector in (it.get("industries") or []) or \
-            s.sector in (it.get("受影响行业") or [])
-        if hit:
+        cand = list(it.get("industries") or []) + list(it.get("受影响行业") or [])
+        it_sw = {to_sw(x) for x in cand} - {None}   # 条目行业归申万一级集合
+        if sw in it_sw:
             out.append(it)
     return out
 
