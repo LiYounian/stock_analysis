@@ -85,3 +85,14 @@ tools:
     防未来: true
     reuse: [per-stock events, 主档K线 D0/D0+1 价格行为]
     note: "档位:无嫌疑/低/中/高(写死);判据①近期利好②兑现日高开走弱/放量长上影③利好后回吐(程序无记忆补丁);无events标missing不编"
+  - name: financial_redflag
+    塔层: "③塔身"
+    status: done
+    window: P2(统筹)
+    inputs: [as_of, code]
+    outputs: [嫌疑档, 判据, 评级, quality_score, quality档, five_dims, 弱项维度, flags, 报告期]
+    freshness: 有financial=fresh；无=missing
+    防未来: true
+    reuse: data/analysis/<date>/<code>.json 的 financial
+    tests: tests/pyramid/test_financial_redflag.py
+    note: "填9-17三方分歧缺口(002025财报差被DeepSeek买);档位:高危/中/低/无嫌疑(写死);quality档80/65/50/35(D1§4);接入d2_compose排雷子分"

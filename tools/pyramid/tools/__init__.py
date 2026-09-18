@@ -9,6 +9,7 @@ from tools.pyramid.tools import shared_pool_tool  # noqa: F401  窗1
 from tools.pyramid.tools import sector_context_tool  # noqa: F401  窗2
 from tools.pyramid.tools import experience_rules_tool  # noqa: F401  窗3
 from tools.pyramid.tools import fake_good_news_tool  # noqa: F401  窗3
+from tools.pyramid.tools import financial_redflag_tool  # noqa: F401  P2
 
 __all__ = [
     "entry_price_tool",
@@ -18,4 +19,5 @@ __all__ = [
     "sector_context_tool",
     "experience_rules_tool",
     "fake_good_news_tool",
+    "financial_redflag_tool",
 ]
