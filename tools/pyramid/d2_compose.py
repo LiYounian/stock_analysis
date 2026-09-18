@@ -187,6 +187,7 @@ def build_skeleton(as_of: str, root: Optional[str] = None,
 
     ranked: list[骨架票] = []
     vetoed: list[骨架票] = []
+    数据缺失 = 0
     for c in codes:
         try:
             pv = pv_t.run(as_of, c, root=root).fields
@@ -198,16 +199,46 @@ def build_skeleton(as_of: str, root: Optional[str] = None,
             unlock = unlock_t.run(as_of, c, root=root).fields
             reduce = reduce_t.run(as_of, c, root=root).fields
         except Exception:
+            数据缺失 += 1  # 工具取数失败/字段缺 → 未计分（A11：与池规模自洽）
             continue
         row = compose_one(c, members[c], pv, gate, sec, fake, exp, fin, unlock, reduce)
         (vetoed if row.否决 else ranked).append(row)
 
-    ranked.sort(key=lambda r: -r.骨架分)
+    # A10 稳定 tie-break：骨架分↓ → 量价自证子分↓（最决定性基石）→ 代码↑（终极可复现）。
+    # 消除"同分靠原始 code 序偶然进出"——排序完全确定、可复现。
+    ranked.sort(key=_排序键)
+
+    计分票数 = len(ranked) + len(vetoed)  # A11：实际算出骨架分的票（含被否决）
     return {
         "as_of": as_of,
         "权重": WEIGHTS,
+        # A11 计分票数口径三分拆·自洽：
+        #   参与票数 = 计分票数 + 数据缺失票数 ；计分票数 = 排序票数 + 否决票数
         "池规模": len(members),
-        "计分票数": len(codes),
+        "参与票数": len(codes),        # 本次实际遍历的票（limit 时 < 池规模）
+        "计分票数": 计分票数,          # 算出骨架分的票（排序 + 否决）
+        "排序票数": len(ranked),       # 进入排序表的票
+        "否决票数": len(vetoed),       # 一票否决踢出的票
+        "数据缺失票数": 数据缺失,      # 取数失败未计分的票
+        "排序键": "骨架分↓, 量价自证子分↓, 代码↑",
         "排序": ranked,
         "排雷否决": vetoed,
     }
+
+
+def _排序键(r: "骨架票"):
+    """A10 排序键：骨架分↓、量价自证子分↓、代码↑（稳定可复现，无同分偶然进出）。"""
+    return (-r.骨架分, -(r.子分.get("量价自证") or 0.0), r.code)
+
+
+def select_top(ranked: list, top_n: int) -> list:
+    """A10 topN 分桶：取 top_n，但若边界正好切在同骨架分处，整桶纳入（避免同分硬切）。
+
+    ranked 须为已按 _排序键 降序排好的排序表。返回长度 ≥ top_n，多出的部分
+    与第 top_n 名同骨架分（同分票要么全进要么全不进，不跨界劈开）。
+    """
+    if top_n is None or top_n <= 0 or top_n >= len(ranked):
+        return list(ranked)
+    cutoff = ranked[top_n - 1].骨架分
+    # ranked 降序：所有 骨架分 >= cutoff 的票连续位于表首，含边界同分整桶
+    return [r for r in ranked if r.骨架分 >= cutoff]

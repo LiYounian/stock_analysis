@@ -1,0 +1,111 @@
+"""A6 决策包禁裸 dict + ★重点口径(focus_score·排除过热A/拐点A)、A12 过程文件落盘 的锁。
+
+D4：render_package 文本内无 `{'`（裸 dict/json）。
+D5：save_package 落 data/analysis/<as_of>/金字塔决策包_*.md，断言文件存在。
+数据无关：market_overview 用 monkeypatch 假 _load；render/save 用合成 pkg。
+"""
+import os
+
+import pytest
+
+from tools.pyramid import d2_compose as C
+from tools.pyramid import d2_package as P
+
+
+# ── A6 ★重点：focus_score 降序，排除 过热A/拐点A ──────
+def _fake_load(focus, regime):
+    def _l(root, as_of, fname):
+        return focus if "focus" in fname else regime
+    return _l
+
+
+def test_市场定调_重点按focus排除过热A拐点A(monkeypatch):
+    focus = {
+        "风险偏好": {"风险偏好": "中性", "广度档": "中性", "净广度": -0.04},  # dict！
+        "宏观情景": "中性", "宏观净方向": "中性",
+        "规避板块池": [],
+        "重点板块池": [
+            {"板块": "电子", "focus_score": 0.88},
+            {"板块": "电力设备", "focus_score": 0.76},
+            {"板块": "公用事业", "focus_score": 0.69},   # 拐点A → 排除
+            {"板块": "农林牧渔", "focus_score": 0.49},   # 过热A → 排除
+            {"板块": "计算机", "focus_score": 0.73},
+        ],
+    }
+    regime = {"板块": [
+        {"板块": "电子", "冷热标签": "正常活跃", "拥挤档": "B", "动量_截面分位": 0.5},
+        {"板块": "电力设备", "冷热标签": "过冷", "拥挤档": "B", "动量_截面分位": 0.3},
+        {"板块": "公用事业", "冷热标签": "拐点", "拥挤档": "A", "动量_截面分位": 0.9},
+        {"板块": "农林牧渔", "冷热标签": "过热", "拥挤档": "A", "动量_截面分位": 0.95},
+        {"板块": "计算机", "冷热标签": "正常活跃", "拥挤档": "B", "动量_截面分位": 0.4},
+    ]}
+    monkeypatch.setattr(P, "_load", _fake_load(focus, regime))
+    ov = P.market_overview("2026-09-17", root=None, n_focus=5)
+    # ★按 focus_score 降序：电子0.88 > 计算机0.73... 且排除拐点A/过热A
+    assert ov["重点板块"] == ["电子", "电力设备", "计算机"]
+    assert "公用事业" not in ov["重点板块"]  # 拐点A 排除
+    assert "农林牧渔" not in ov["重点板块"]  # 过热A 排除
+    assert ov["风险偏好"] == "中性"          # dict 已取内层标量
+    # 电子(focus 最高)必被标 ★（旧 bug：动量口径漏标电子）
+    assert "电子" == ov["重点板块"][0]
+
+
+# ── A6 / D4 决策包禁裸 dict ───────────────────────────
+def _synth_pkg():
+    ov = {
+        "as_of": "2026-09-17",
+        "风险偏好": {"风险偏好": "中性", "广度档": "中性"},  # 故意塞裸 dict，验证 _txt 兜底
+        "宏观情景": "中性", "宏观净方向": "中性",
+        "规避板块池": [], "重点板块": ["电子", "电力设备"],
+        "重点口径": "focus_score↓·排除规避与过热A/拐点A",
+        "全板块": [
+            {"板块": "电子", "冷热标签": "正常活跃", "拥挤档": "B", "板块均涨幅": 1.2,
+             "涨停数": 6, "上涨家数占比": 0.6, "动量_截面分位": 0.5},
+        ],
+    }
+    skel = {"池规模": 575, "参与票数": 575, "计分票数": 556, "排序票数": 540,
+            "否决票数": 16, "数据缺失票数": 19, "权重": C.WEIGHTS,  # 权重是 dict
+            "排序键": "骨架分↓, 量价自证子分↓, 代码↑", "排序": [], "排雷否决": []}
+    cards = [{"code": "600000", "骨架分": 62.7,
+              "子分": {"量价自证": 80.0, "板块角色": 55.0, "策略共识": 50.0,
+                      "排雷": 100.0, "宏观催化": 40.0},  # 子分是 dict
+              "来源标签": ["agent主线", "多策略"], "浓缩块": "【price_volume】现价 10.0"}]
+    return {"as_of": "2026-09-17", "市场定调": ov, "骨架": skel,
+            "候选卡片": cards, "top_n": 8}
+
+
+def test_render_package_无裸dict():
+    txt = P.render_package(_synth_pkg())
+    assert "{'" not in txt          # D4：无裸 dict/json
+    assert '{"' not in txt
+    # 关键字段确实文字化进去了
+    assert "风险偏好=风险偏好=中性" in txt or "风险偏好=中性" in txt
+    assert "量价自证 80.0" in txt   # 子分文字化
+    assert "量价自证=0.3" in txt    # 权重文字化
+
+
+def test_render_package_计分口径自洽出现():
+    txt = P.render_package(_synth_pkg())
+    # A11：三口径都印出且可核对（参与=计分+数据缺；计分=排序+否决）
+    assert "参与575=计分556+数据缺19" in txt
+    assert "计分556=排序540+否决16" in txt
+
+
+# ── A12 / D5 过程文件落盘 ─────────────────────────────
+def test_save_package_落盘存在(tmp_path):
+    pkg = _synth_pkg()
+    path = P.save_package(pkg, root=str(tmp_path), label="top8")
+    assert os.path.exists(path)
+    expect = tmp_path / "data" / "analysis" / "2026-09-17" / "金字塔决策包_top8.md"
+    assert os.path.abspath(path) == os.path.abspath(str(expect))
+    with open(path, encoding="utf-8") as f:
+        body = f.read()
+    assert body.startswith("# 金字塔决策包")
+    assert "{'" not in body  # 落盘内容同样无裸 dict
+
+
+def test_save_package_默认label用topn(tmp_path):
+    pkg = _synth_pkg()
+    path = P.save_package(pkg, root=str(tmp_path))  # 不给 label → top{top_n}
+    assert path.endswith("金字塔决策包_top8.md")
+    assert os.path.exists(path)
