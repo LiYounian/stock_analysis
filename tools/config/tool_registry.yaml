@@ -39,11 +39,14 @@ tools:
     note: "阈值写死+档位锁；688校正；放量收阳/站上MA5·前高/量比/未近涨停"
   - name: price_volume
     塔层: "①塔基"
-    status: todo
+    status: done
     window: 窗1-量价工具族
     inputs: [as_of, code]
-    outputs: [现价, 涨幅, 量比, 位置, session标记]
-    note: "session午盘/收盘；688 volume 修复(H2)；单位统一"
+    outputs: [现价, 涨幅pct, 量比, 量比档, pos60, pos60档, 距60高pct, vsMA5pct, vsMA20pct, session]
+    freshness: 主档K线口径日期
+    防未来: true
+    tests: tests/pyramid/test_price_volume_tool.py
+    note: "session=收盘(走K线)；688 volume 修复(H2)；量比档/pos60档写死+语义锁"
   - name: sector_context
     塔层: "④宏观"
     status: todo
