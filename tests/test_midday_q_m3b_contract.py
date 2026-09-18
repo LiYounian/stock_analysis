@@ -460,6 +460,29 @@ def test_bootstrap_ci_small_sample_returns_none():
     assert M.bootstrap_ci([0.01, 0.02]) is None
 
 
+def test_ci_three_state_distinguishes_significantly_negative():
+    """CI 判读必须是**三态**,不能把"显著为负"误标成"不显著"。
+
+    实测踩过:Q3b 的 CI = [-1.02%, -0.13%](整段 <0)= **有证据地亏钱**,
+    但只判 `ci[0] > 0` 的两态逻辑会把它标成 ❌"不显著",
+    与"跨 0 → 样本不足以定论"混为一谈 —— 掩盖了最该看见的结论。
+    """
+    # 稳定为负 → CI 应整段 <0
+    ci_neg = M.bootstrap_ci([-0.02] * 40 + [-0.018] * 40)
+    assert ci_neg is not None and ci_neg[1] < 0, "稳定亏损应得出 CI 上界 <0"
+    # 稳定为正 → 整段 >0
+    ci_pos = M.bootstrap_ci([0.02] * 40 + [0.018] * 40)
+    assert ci_pos is not None and ci_pos[0] > 0
+    # 高方差 → 跨 0
+    ci_mix = M.bootstrap_ci([+0.5, -0.45, +0.48, -0.44, +0.46, -0.42,
+                              +0.02, -0.01, +0.03, -0.02])
+    assert ci_mix is not None and ci_mix[0] < 0 < ci_mix[1]
+    # 三者必须落进三个不同的判读桶
+    def bucket(ci):
+        return "pos" if ci[0] > 0 else ("neg" if ci[1] < 0 else "mixed")
+    assert {bucket(ci_pos), bucket(ci_neg), bucket(ci_mix)} == {"pos", "neg", "mixed"}
+
+
 # ────────────────────────────── Q3 诚实性 ──────────────────────────────
 
 def test_q3_not_backtestable():

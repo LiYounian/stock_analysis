@@ -921,10 +921,22 @@ def render_markdown(res: dict, bars, daily) -> str:
         al = [t["ret"] - bench.get(t["date"], 0.0) for t in tr if t["date"] in bench]
         a = statistics.mean(al) if al else float("nan")
         ci_s = f"[{ci[0]*100:+.2f}%, {ci[1]*100:+.2f}%]" if ci else "样本不足"
-        sig = ("✅" if ci and ci[0] > 0 else "❌") if ci else "—"
+        # 三态,不是两态:CI 整段 <0 是"**显著为负**"(有证据地亏钱),
+        # 与"跨 0 → 无结论"是完全不同的信息。只判 ci[0]>0 会把前者误标成
+        # "不显著",掩盖掉最该看见的结论。
+        if not ci:
+            sig = "—"
+        elif ci[0] > 0:
+            sig = "✅ 显著为正"
+        elif ci[1] < 0:
+            sig = "❌ **显著为负**"
+        else:
+            sig = "⚪ 跨0·无结论"
         L.append(f"| **{s}** | {statistics.mean(rets)*100:+.2f}% | {ci_s} | {sig} | "
                  f"{a*100:+.3f}% | {'✅' if a > 0 else '❌'} |")
     L.append("")
+    L.append("> **三态判读**:CI 整段 >0 = 收益显著为正;整段 <0 = **显著为负**"
+             "(不是「没证据」,是**有证据地亏钱**);跨 0 = 样本不足以定论。")
     L.append("> CI 下界 >0 才说明均值收益**不是少数极端交易的偶然结果**。"
              "α ≤ 0 意味着不如等权持有整个焦点池 —— 选股没创造价值。")
     L.append("")
