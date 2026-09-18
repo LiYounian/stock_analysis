@@ -106,6 +106,12 @@ def load_bars(min_coverage: float = 0.8,
             continue
         if df.empty:
             continue
+        # 零价行防御:停牌日 baostock 返 open=close=0,采集侧(新版)已拦,
+        # 但已落盘的旧文件里仍有 → 这里兜底。任何 price/buy-1 遇 0 会变 inf,
+        # 污染均值/夏普(实证 7/937386 行就足以把整列均值变成 inf)。
+        df = df[(df[["open", "high", "low", "close"]] > 0).all(axis=1)]
+        if df.empty:
+            continue
         raw[p.stem] = df
     if not raw:
         return out
@@ -300,11 +306,13 @@ def compute_gate(bars: dict[str, pd.DataFrame], daily: dict[str, pd.DataFrame],
     elif weak >= 4: state = "弱势"
     else: state = "震荡"
 
-    # 与 M3.a 同一张 STATE_ALLOW(v3 口径),便于两版结果直接对比
+    # 与 M3.a 同一张 STATE_ALLOW(v3 口径),便于两版结果直接对比。
+    # Q3b 占用原 Q3 的闸门位置 —— 它是 Q3 的日线口径替代(定位同为"资金面确认"),
+    # 不放进来的话 Q3b 永不触发。
     STATE_ALLOW = {
-        "强势": (["Q3"], 1.0),
-        "弱势": (["Q2", "Q3"], 0.7),
-        "震荡": (["Q1", "Q2", "Q3"], 0.5),
+        "强势": (["Q3", "Q3b"], 1.0),
+        "弱势": (["Q2", "Q3", "Q3b"], 0.7),
+        "震荡": (["Q1", "Q2", "Q3", "Q3b"], 0.5),
         "崩盘": ([], 0.0),
         "未知": ([], 0.0),
     }
@@ -415,9 +423,128 @@ def q2_hits(bars, daily, date: str, as_of: str) -> list[dict]:
     return hits[:TOP_N_PER_STRATEGY]
 
 
+# ────────────────────────────── Q3b 资金面确认(日线资金流) ──────────────────────────────
+#
+# ⚠️ **Q3b 不是 Q3**,是另一条策略。
+#
+# 原 Q3 的核心信号是"当日 13:00→14:50 的分时主力净流入"(方案 §核心假设:
+# 「分时主力净流入在午后**仍持续为正**,反映主力**当日已在建仓**」),
+# 那个数据拿不到历史(东财 fflow/kline 只返当天)。
+#
+# Q3b 改用**日线**资金流,信号变成"主力**过去几天**的累积流向":
+#     原 Q3 :盘中捕捉"主力今天正在动手"的即时信号 → 前瞻次日
+#     Q3b   :看主力前几日的流向趋势 → 慢速的资金面确认
+# 交易逻辑不同,故独立命名/回测/判定。**不得把 Q3b 的结论当作 Q3 的结论。**
+#
+# ## 两个数据限制(决定了 Q3b 只能做单信号)
+#
+# 数据源是新浪 MoneyFlow(东财日线资金流 2026-09-18 实测被墙):
+#   1. **只有"主力净流入"一列**,五档(小单/中单/大单/超大单)全是 NaN
+#      → 原 Q3 的第二个信号 `LargeOrderPct` **算不出来**;
+#   2. 新浪"主力"口径与东财**不可比**(fundflow.py 标 tier=main_only)
+#      → 阈值**不能照搬** Q3 的 `MainNetPM ≥ 0`。
+#
+# ## 阈值为什么用分位数而不是"≥0"
+#
+# 实测全样本(25 万个票×日):主力净流入 >0 的比例只有 **43.9%**,中位数 -0.023 亿。
+# 照搬"≥0"会选中 44% 的票 —— 几乎不起筛选作用。
+# 故 Q3b 用**相对该票自身历史的分位**:近 5 日净流入之和 > 过去 60 日同窗口的
+# 70 分位,即"主力最近的流入强度处于该票自身的历史高位"。
+#
+# ## 防未来红线
+#
+# 只用 **T-1 及以前**的日线资金流。当日(T)的日线值含 14:50→15:00 那段,
+# 14:50 决策时尚未发生,用它就是未来函数。
+
+Q3B_DIR = settings.PROJECT_ROOT / "data" / "analysis" / "midday_q" / "q3b_fundflow"
+Q3B_SUM_WIN = 5          # 近 N 日净流入求和
+Q3B_HIST_WIN = 60        # 对比的历史窗口
+Q3B_PCTILE = 0.70        # 分位门槛
+
+
+def load_q3b_flow() -> dict[str, pd.DataFrame]:
+    """读 q3b_fundflow/*.parquet → {code: DataFrame(date, 主力净流入)}。"""
+    out: dict[str, pd.DataFrame] = {}
+    if not Q3B_DIR.exists():
+        return out
+    for p in sorted(Q3B_DIR.glob("*.parquet")):
+        try:
+            df = pd.read_parquet(p)
+        except Exception:
+            continue
+        if df.empty or "主力净流入" not in df.columns:
+            continue
+        out[p.stem] = df.sort_values("date").reset_index(drop=True)
+    logger.info("加载 Q3b 日线资金流 %d 只", len(out))
+    return out
+
+
+def _q3b_signal(flow: pd.DataFrame, date: str) -> tuple[bool, float] | None:
+    """近 5 日净流入之和是否处于自身历史 70 分位以上。
+
+    只取 `date` **之前**的行(防未来:当日日线资金流含 14:50 后的部分)。
+    返回 (是否命中, 当前 5 日和/亿)。样本不足 → None。
+    """
+    hist = flow[flow["date"] < date]
+    if len(hist) < Q3B_HIST_WIN + Q3B_SUM_WIN:
+        return None
+    v = hist["主力净流入"].astype(float)
+    cur = float(v.tail(Q3B_SUM_WIN).sum())
+    # 历史上同样"连续5日和"的分布(滚动窗口)
+    roll = v.rolling(Q3B_SUM_WIN).sum().dropna().tail(Q3B_HIST_WIN)
+    if roll.empty:
+        return None
+    thr = float(roll.quantile(Q3B_PCTILE))
+    return (cur > thr), cur / 1e8
+
+
+def q3b_hits(bars, daily, date: str, as_of: str,
+              flows: dict[str, pd.DataFrame] | None = None) -> list[dict]:
+    """Q3b 资金面确认:主力近期流入处自身历史高位 + 价格温和 + 流动性。
+
+    价格侧条件刻意**比 Q1/Q2 宽松**(不要求强势或超跌),因为 Q3b 的主张是
+    "资金面先行" —— 若还叠加严格价格形态,就分不清 alpha 来自资金还是价量。
+    """
+    flows = flows or {}
+    hits = []
+    for c, bdf in bars.items():
+        flow = flows.get(c)
+        if flow is None:
+            continue
+        sig = _q3b_signal(flow, date)
+        if sig is None or not sig[0]:
+            continue
+        ctx = _daily_ctx(daily.get(c, pd.DataFrame()), date) if c in daily else None
+        if not ctx:
+            continue
+        b_open = _bar_at(bdf, date, "0935")
+        b_now = _bar_at(bdf, date, as_of)
+        if b_open is None or b_now is None:
+            continue
+        opn = float(b_open["open"]); now = float(b_now["close"])
+        if opn <= 0:
+            continue
+        cr = now / opn - 1
+        if not (-0.02 <= cr <= 0.05):          # 温和区间(同 Q3 原设计)
+            continue
+        _v, amt_cum, _hi, _lo = _cum_to(bdf, date, as_of)
+        if amt_cum < 8000 * 10000:             # Q3 加强的流动性门(8000万)
+            continue
+        lu = ctx["prev_close"] * (1 + _limit_pct(c))
+        if now >= lu * 0.985:                  # 涨停不可买
+            continue
+        hits.append({"code": c, "rank": sig[1],
+                      "signals": {"flow5d_yi": round(sig[1], 3),
+                                   "cr": round(cr, 4)}})
+    hits.sort(key=lambda h: h["rank"], reverse=True)
+    return hits[:TOP_N_PER_STRATEGY]
+
+
 # Q3 需要分时资金流历史 —— 东财 fflow/kline 只返当天(lmt 给多大都拿不到历史),
 # 故 M3.b 无法回测 Q3。Q3 仍须靠定时任务未来采样攒够 60 交易日。
+# Q3b(日线口径)是独立策略,由 --with-q3b 开启。
 STRATEGIES = {"Q1": q1_hits, "Q2": q2_hits}
+
 
 
 # ────────────────────────────── 成交可行性 + 收益 ──────────────────────────────
@@ -450,9 +577,65 @@ def _is_one_word_limit(bdf: pd.DataFrame, daily_df: pd.DataFrame,
     return None
 
 
+# 止损检查时点(次日,按时间顺序)。用真分时采样点判触发,不用日线 low
+# —— 日线 low 会高估止损效果(那是全天最低,实盘未必在该价位成交得掉)。
+_STOP_CHECK_TIMES = ("0935", "1030", "1425", "1430", "1445", "1450")
+
+
+def _sell_with_stop(bars, daily, code: str, buy_date: str, buy_price: float,
+                     dates: list[str], stop_pct: float | None
+                     ) -> tuple[float, int, str] | None:
+    """带止损的卖出。`stop_pct=None` → 退化为原逻辑(无止损)。
+
+    ## 口径(诚实标注)
+
+    · **触发判据用采样点收盘价**,不是日线 low。日线 low 是全天最低点,
+      按它成交等于假设"总能在最低价止损掉",会**系统性高估止损效果**。
+      用采样点收盘 = "在这几个时刻检查一次,跌破就出" —— 更接近实盘的
+      定时检查行为,且偏保守(采样点之间的瞬时击穿会漏掉,少触发几笔)。
+    · 触发后按**该采样点收盘价**成交,不按 stop 价 —— 实盘跌破时挂单
+      通常成交在更差的价位,按采样价成交比按 stop 价更贴近现实。
+    · 止损优先于"一字/跌停顺延":跌停日本来就卖不掉,止损同样卖不掉,
+      故先判可成交性,不可成交就顺延到下一日继续检查。
+    """
+    bdf = bars[code]
+    ddf = daily[code]
+    try:
+        i = dates.index(buy_date)
+    except ValueError:
+        return None
+    if buy_price <= 0:
+        return None
+
+    for k in range(1, 4):
+        if i + k >= len(dates):
+            return None
+        d = dates[i + k]
+        if _is_one_word_limit(bdf, ddf, code, d):
+            continue                      # 一字/跌停:卖不掉 → 顺延
+
+        if stop_pct is not None:
+            # 按时间顺序扫采样点,首个跌破 stop 的时刻即出场
+            for t in _STOP_CHECK_TIMES:
+                bar = _bar_at(bdf, d, t)
+                if bar is None:
+                    continue
+                px = float(bar["close"])
+                if px <= 0:
+                    continue
+                if px / buy_price - 1 <= stop_pct:
+                    return px, k, f"止损@D{k} {t[:2]}:{t[2:]}"
+
+        bar = _bar_at(bdf, d, AS_OF_1450)
+        if bar is None:
+            continue
+        return float(bar["close"]), k, ("顺延%d日" % k if k > 1 else "")
+    return None
+
+
 def _sell_with_feasibility(bars, daily, code: str, buy_date: str,
                             dates: list[str]) -> tuple[float, int, str] | None:
-    """从 buy_date 的次日起找**可成交**的卖出价(真 14:50 bar)。
+    """从 buy_date 的次日起找**可成交**的卖出价(真 14:50 bar)。无止损。
 
     按 `_回测与评估口径.md` §八.2:T+1 卖出日触及跌停/一字涨停 → 强制持有到下一日,
     **累计双边成本**。最多顺延 3 个交易日(再不行视为无法退出,丢弃该笔)。
@@ -478,14 +661,32 @@ def _sell_with_feasibility(bars, daily, code: str, buy_date: str,
 
 
 def backtest(bars: dict[str, pd.DataFrame], daily: dict[str, pd.DataFrame],
-              start: str | None = None, end: str | None = None) -> dict:
-    """逐日:14:30 首判 → 14:50 复核 → 两次都命中才买 → T+1 14:50 卖。"""
+              start: str | None = None, end: str | None = None,
+              stop_pcts: tuple[float | None, ...] = (None,),
+              flows: dict[str, pd.DataFrame] | None = None) -> dict:
+    """逐日:14:30 首判 → 14:50 复核 → 两次都命中才买 → T+1 14:50 卖。
+
+    `stop_pcts`:要对比的止损档位(小数,如 -0.03)。`None` = 无止损。
+    **信号只算一次,各档位复用同一批入选** —— 信号计算是耗时大头
+    (5169 只 × 167 日约 12 分钟),每档重跑一遍要一小时。
+    止损只影响"怎么卖",不影响"选哪些票",故可安全复用。
+
+    `flows`:Q3b 的日线资金流。传入即把 Q3b 加进策略集(Q1/Q2 不需要它)。
+    """
+    flows = flows or {}
+    strategies = dict(STRATEGIES)
+    if flows:
+        strategies["Q3b"] = q3b_hits
+
     dates = trading_dates(bars)
     if start: dates = [d for d in dates if d >= start]
     if end: dates = [d for d in dates if d <= end]
     trade_dates = dates[:-1] if len(dates) > 1 else []
 
-    log = {s: [] for s in STRATEGIES}
+    # log[stop_pct][strat] = [...]
+    log = {sp: {s: [] for s in strategies} for sp in stop_pcts}
+
+
     gate_log = []
     skipped = {"买入涨停": 0, "无法退出": 0}
 
@@ -499,14 +700,16 @@ def backtest(bars: dict[str, pd.DataFrame], daily: dict[str, pd.DataFrame],
         gate_log.append({"date": date, "s1": g1["state"], "s2": g2["state"],
                           "flipped": flipped, "allowed": allowed})
 
-        for strat, fn in STRATEGIES.items():
+        for strat, fn in strategies.items():
             if strat not in allowed:
                 continue
+            # Q3b 需要额外的日线资金流(Q1/Q2 不需要)
+            kw = {"flows": flows} if strat == "Q3b" else {}
             # 双点确认:首判命中 ∩ 复核命中
-            h1 = {h["code"] for h in fn(bars, daily, date, AS_OF_1430)}
+            h1 = {h["code"] for h in fn(bars, daily, date, AS_OF_1430, **kw)}
             if not h1:
                 continue
-            for h in fn(bars, daily, date, AS_OF_1450):
+            for h in fn(bars, daily, date, AS_OF_1450, **kw):
                 if h["code"] not in h1:
                     continue
                 code = h["code"]
@@ -521,25 +724,48 @@ def backtest(bars: dict[str, pd.DataFrame], daily: dict[str, pd.DataFrame],
                 if _is_one_word_limit(bars[code], daily[code], code, date) == "涨停一字":
                     skipped["买入涨停"] += 1
                     continue
-                sold = _sell_with_feasibility(bars, daily, code, date, dates)
-                if sold is None:
+                # 各止损档位共用同一笔入选,只是卖法不同
+                any_ok = False
+                for sp in stop_pcts:
+                    sold = _sell_with_stop(bars, daily, code, date, buy, dates, sp)
+                    if sold is None:
+                        continue
+                    sell, hold_days, note = sold
+                    # 顺延持有 → 累计双边成本(每多持一日多一次双边)
+                    cost = TOTAL_COST_BPS / 10000 * hold_days
+                    log[sp][strat].append({
+                        "date": date, "code": code, "rank": h["rank"],
+                        "ret": sell / buy - 1 - cost,
+                        "hold_days": hold_days, "note": note,
+                        "gate": g2["state"], "signals": h["signals"]})
+                    any_ok = True
+                if not any_ok:
                     skipped["无法退出"] += 1
-                    continue
-                sell, hold_days, note = sold
-                # 顺延持有 → 累计双边成本(每多持一日多一次双边)
-                cost = TOTAL_COST_BPS / 10000 * hold_days
-                log[strat].append({"date": date, "code": code, "rank": h["rank"],
-                                    "ret": sell / buy - 1 - cost,
-                                    "hold_days": hold_days, "note": note,
-                                    "gate": g2["state"], "signals": h["signals"]})
 
-    return {"trades": log, "gate_log": gate_log, "skipped": skipped,
+    # 向后兼容:`trades` 仍是"无止损"那份(下游 render/摘要按老结构读);
+    # 各止损档位放 `trades_by_stop`,由止损对比表单独消费。
+    baseline_key = None if None in log else stop_pcts[0]
+    return {"trades": log[baseline_key],
+             "trades_by_stop": log,
+             "stop_pcts": list(stop_pcts),
+             "gate_log": gate_log, "skipped": skipped,
              "n_dates": len(trade_dates),
              "dates": {"start": trade_dates[0] if trade_dates else None,
                         "end": trade_dates[-1] if trade_dates else None}}
 
 
 # ────────────────────────────── 指标(组合口径回撤) ──────────────────────────────
+
+def _ran_strategies(res: dict) -> list[str]:
+    """本次实际跑了哪些策略(按 STRATEGIES 顺序,末尾追加 Q3b 等动态加入的)。
+
+    不能直接遍历 `STRATEGIES` 常量 —— Q3b 是运行时按 `flows` 是否传入动态
+    加进策略集的,写死常量会让它在报告里不显示。
+    """
+    ran = list(res.get("trades") or {})
+    order = list(STRATEGIES) + [s for s in ran if s not in STRATEGIES]
+    return [s for s in order if s in ran]
+
 
 def portfolio_metrics(trades: list[dict]) -> dict:
     """按**组合日口径**算指标(修 M3.a 的逐笔累加回撤 bug)。
@@ -666,7 +892,7 @@ def render_markdown(res: dict, bars, daily) -> str:
     L.append("| 策略 | 笔数 | 交易日 | 胜率 | 均值/笔 | 中位/笔 | 组合累计 | **最大回撤** | 夏普 | 最长连亏 | 判定 |")
     L.append("|---|--:|--:|--:|--:|--:|--:|--:|--:|--:|:-:|")
     metrics = {}
-    for s in STRATEGIES:
+    for s in _ran_strategies(res):
         m = portfolio_metrics(res["trades"][s])
         metrics[s] = m
         if not m["n"]:
@@ -685,7 +911,7 @@ def render_markdown(res: dict, bars, daily) -> str:
     L.append("")
     L.append("| 策略 | 均值/笔 | bootstrap 95% CI | 显著? | 日均α(扣基准) | 有α? |")
     L.append("|---|--:|:-:|:-:|--:|:-:|")
-    for s in STRATEGIES:
+    for s in _ran_strategies(res):
         tr = res["trades"][s]
         if not tr:
             L.append(f"| {s} | — | — | — | — | — |")
@@ -707,7 +933,7 @@ def render_markdown(res: dict, bars, daily) -> str:
     L.append("")
     L.append("| 策略 | 闸门 | 笔数 | 胜率 | 均值/笔 |")
     L.append("|---|---|--:|--:|--:|")
-    for s in STRATEGIES:
+    for s in _ran_strategies(res):
         by: dict[str, list[float]] = {}
         for t in res["trades"][s]:
             by.setdefault(t["gate"], []).append(t["ret"])
@@ -716,6 +942,45 @@ def render_markdown(res: dict, bars, daily) -> str:
             L.append(f"| {s} | {g} | {len(rr)} | {w*100:.1f}% | "
                      f"{statistics.mean(rr)*100:+.2f}% |")
     L.append("")
+
+    # ── 止损档位对比(评估口径 §八.3 预留的决策点) ──
+    tbs = res.get("trades_by_stop") or {}
+    if len(tbs) > 1:
+        L.append("## 三·补、止损档位对比")
+        L.append("")
+        L.append("> 评估口径 §八.3 预注册:「首版无止损,观察 60 日样本回测里"
+                 "『次日开盘 -3% 以上』事件的比例和成本,再决定是否加」。本节即该实验。")
+        L.append("")
+        L.append("**触发口径(诚实标注)**:用**次日采样时刻的收盘价**判触发,"
+                 "**不用日线 low** —— 日线 low 是全天最低点,按它成交等于假设"
+                 "「总能在最低价止损掉」,会系统性高估止损效果。"
+                 f"检查时点:{'/'.join(_STOP_CHECK_TIMES)}(共 {len(_STOP_CHECK_TIMES)} 次)。"
+                 "触发后按该时刻收盘价成交(而非 stop 价),更贴近实盘滑价。")
+        L.append("")
+        for s in _ran_strategies(res):
+            base = portfolio_metrics(tbs.get(None, {}).get(s, []))
+            if not base["n"]:
+                continue
+            L.append(f"### {s}")
+            L.append("")
+            L.append("| 止损 | 笔数 | 胜率 | 均值/笔 | 组合累计 | **最大回撤** | 夏普 | 触发率 | 判定 |")
+            L.append("|---|--:|--:|--:|--:|--:|--:|--:|:-:|")
+            for sp in res.get("stop_pcts", []):
+                tr = tbs.get(sp, {}).get(s, [])
+                m = portfolio_metrics(tr)
+                if not m["n"]:
+                    continue
+                fired = sum(1 for t in tr if "止损" in (t.get("note") or ""))
+                label = "无(基准)" if sp is None else f"{sp*100:.0f}%"
+                L.append(f"| {label} | {m['n']} | {m['win_rate']*100:.1f}% | "
+                         f"{m['mean_ret']*100:+.2f}% | {m['total_ret']*100:+.1f}% | "
+                         f"{m['max_dd']*100:.1f}% | {m['sharpe']:.2f} | "
+                         f"{fired/m['n']*100:.0f}% | {verdict(m)} |")
+            L.append("")
+        L.append("**怎么读这张表**:止损的核心价值是**压回撤**,不一定提均值"
+                 "(它会把「本来能扛回来」的票也砍掉 → 胜率通常下降)。"
+                 "重点看**回撤能否压进 -10% 红线内**,以及均值的代价有多大。")
+        L.append("")
 
     L.append("## 四、口径与已知限制(诚实标注)")
     L.append("")
@@ -756,6 +1021,12 @@ def main() -> int:
     ap.add_argument("--daily-source", choices=("bars", "master"), default="bars",
                     help="日线上下文(MA/昨收/均量)来源。bars=从分时聚合(全A可用,默认);"
                          "master=读主档(只有焦点池126只,全A会静默跳过5000+只)")
+    ap.add_argument("--with-q3b", action="store_true",
+                    help="加跑 Q3b(日线资金流口径的资金面确认)。⚠️ Q3b 不是 Q3,"
+                         "是另一条策略,结论不可互推(见 q3b_hits docstring)")
+    ap.add_argument("--stops", default=None,
+                    help="止损档位对比,逗号分隔的百分数(负数),如 \"-3,-5,-8\";"
+                         "留空=只跑无止损基准。信号只算一次,各档共用入选")
     ap.add_argument("--min-coverage", type=float, default=0.8,
                     help="票的交易日覆盖率下限(剔采集截断的残缺票,见 load_bars)")
     a = ap.parse_args()
@@ -772,7 +1043,18 @@ def main() -> int:
                            "将被静默跳过;全A 请用默认 bars", missing)
 
     logger.info("跑 M3.b 回测 %s → %s ...", a.start or "最早", a.end or "最新")
-    res = backtest(bars, daily, a.start, a.end)
+    stop_pcts: tuple[float | None, ...] = (None,)
+    if a.stops:
+        # None(基准) + 各档位;信号只算一次,各档共用入选
+        parsed = tuple(float(x) / 100.0 for x in a.stops.split(","))
+        stop_pcts = (None,) + parsed
+        logger.info("止损档位对比:基准 + %s",
+                    ", ".join(f"{p*100:.0f}%" for p in parsed))
+    flows = load_q3b_flow() if a.with_q3b else None
+    if a.with_q3b and not flows:
+        logger.error("--with-q3b 但无资金流数据,先跑 fetch_q3b_fundflow")
+        return 1
+    res = backtest(bars, daily, a.start, a.end, stop_pcts=stop_pcts, flows=flows)
 
     md = render_markdown(res, bars, daily)
     out = Path(a.out) if a.out else (
@@ -792,7 +1074,7 @@ def main() -> int:
     print(f'{"策略":<5}{"笔数":>6}{"胜率":>9}{"均值/笔":>10}{"组合累计":>11}'
           f'{"最大回撤":>10}{"夏普":>8}{"判定":>9}')
     print("-" * 92)
-    for s in STRATEGIES:
+    for s in _ran_strategies(res):
         m = portfolio_metrics(res["trades"][s])
         if not m["n"]:
             print(f"{s:<5}{0:>6}{'—':>9}{'—':>10}{'—':>11}{'—':>10}{'—':>8}{'—':>9}")

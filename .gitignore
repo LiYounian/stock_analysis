@@ -57,6 +57,10 @@ data/analysis/backtest/grand_review_scorecard.csv
 # 随 data/master/ 惯例:可再生的行情数据不入库。
 data/analysis/midday_q/m3b_bars/
 
+# 午盘Q Q3b 日线资金流缓存(新浪 MoneyFlow)。同上:可用
+# `python -m tools.backtest.fetch_q3b_fundflow` 幂等重拉,不入库。
+data/analysis/midday_q/q3b_fundflow/
+
 # 定时任务运行期产物（护栏锁 / OS级盘中快照），纯滚存不入库
 data/task_locks/
 data/intraday/

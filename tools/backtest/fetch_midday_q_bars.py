@@ -121,7 +121,13 @@ def resolve_codes(universe: str, limit: int | None = None) -> list[str]:
 
 
 def _parse_rows(rs) -> list[dict]:
-    """baostock 结果集 → 只含 KEEP_TIMES 的行。"""
+    """baostock 结果集 → 只含 KEEP_TIMES 的行(剔零价行)。
+
+    ⚠️ 零价行必须在这里拦掉:停牌日 baostock 会返 `open=close=0, volume=0`,
+    `float("0")` 不抛异常 → 光靠 try/except 拦不住,会静默落盘。
+    下游任何 `price/buy - 1` 都会变成 **inf**,污染均值/夏普等聚合指标
+    (实证:全样本 7/937386 行,虽少但足以把整列均值变成 inf)。
+    """
     rows: list[dict] = []
     while rs.next():
         d, t, o, h, l, c, v, a = rs.get_row_data()
@@ -129,13 +135,15 @@ def _parse_rows(rs) -> list[dict]:
         if hhmm not in KEEP_TIMES:
             continue
         try:
-            rows.append({"date": d, "time": hhmm,
-                          "open": float(o), "high": float(h), "low": float(l),
-                          "close": float(c),
-                          "volume": float(v) if v else 0.0,
-                          "amount": float(a) if a else 0.0})
+            o_f, h_f, l_f, c_f = float(o), float(h), float(l), float(c)
         except (TypeError, ValueError):
-            continue                        # 停牌等异常行:跳过,不填 0 伪装
+            continue                        # 非数:跳过,不填 0 伪装
+        if min(o_f, h_f, l_f, c_f) <= 0:
+            continue                        # 停牌日零价:跳过(见上方说明)
+        rows.append({"date": d, "time": hhmm,
+                      "open": o_f, "high": h_f, "low": l_f, "close": c_f,
+                      "volume": float(v) if v else 0.0,
+                      "amount": float(a) if a else 0.0})
     return rows
 
 
