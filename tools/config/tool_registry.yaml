@@ -107,3 +107,14 @@ tools:
     reuse: data/analysis/<date>/<code>.json 的 financing.解禁
     tests: tests/pyramid/test_unlock_risk.py
     note: "临近限售解禁抛压(负向·消息面);档位:高危/中/低/无嫌疑(写死·占流通3%/10%×剩余30/90日);剩余天数=下一次.解禁日-as_of自算(防未来·不信采集相对距今日);披露日>as_of或已过则不可见;占比用未来90日占流通_pct(已剔不可采信)→退下一次占比;接d2_compose排雷子分(中-25/低-10)+高危veto大额解禁临近"
+  - name: insider_reduction
+    塔层: "②消息"
+    status: done
+    window: 四因子#2(减持)
+    inputs: [as_of, code]
+    outputs: [减持嫌疑档, 命中条数, 最近减持日, 方式标签, 主体标签, 窗内候选数]
+    freshness: 有events=fresh；无events=missing
+    防未来: true
+    reuse: data/analysis/<date>/<code>.json 的 events(type∈{减持,权益变动})
+    tests: tests/pyramid/test_insider_reduction.py
+    note: "大股东减持抛压(负向·消息面·镜像fake_good_news);v1标题级粗判;候选=type∈{减持,权益变动}且as_of前30日内且date≤as_of(防未来);逐条严重度:中性(协议转让/引入战投/业务协同/增持/未减持 或impact利好)不计/高(清仓式或控股股东+大额)/中单条(大额/预披露)/常规;档位(写死)无嫌疑/低/中/高;高走veto清仓式减持;接d2_compose排雷子分(中-25/低-12);只走events不碰holder(股东户数)/fundflow(主力);减持低频多数票窗内0条属正常;v2需新采occ量化占流通%×主体×方式"
