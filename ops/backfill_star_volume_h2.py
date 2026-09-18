@@ -44,12 +44,15 @@ from pathlib import Path
 
 import pandas as pd
 
-# 复核口径:volume / (amount/close) = close/VWAP,单位正确("股")时应≈1。
-# 为什么用 [0.7,1.4] 而不是 [0.9,1.1]:该比值本质是 close/当日 VWAP,在高波动/涨跌停日
-# 会合理偏离 ±15~30%(实测 688802 09-17 = 1.113,是真值不是错);而 100× 单位错的比值
-# 是 ~100 或 ~0.01,与 1 相差两个数量级。宽到 [0.7,1.4] 能干净区分"单位对但当日波动大"
-# 与"单位错 100×",不误伤波动票。落在此区间外的按"疑异常"列出、不强改。
-_RATIO_LO, _RATIO_HI = 0.7, 1.4
+# 复核口径:r = volume / (amount/close)。单位正确("股")时 r = close/VWAP ≈ 1,
+# 但**主档是前复权(qfq)**:历史行 close 被向后复权缩小、而 amount/volume 是实际值,
+# 故老行 r 会**合理地小于 1**(股价累计上涨越多、越早的行 r 越小),这不是错。
+# 而本次要抓的 H2 缺陷是 volume 被 ×100 **高估** → r ≈ 100(高出两个数量级)。
+# 因此判据是**单侧上界**:r > _RATIO_OVER 视为"volume 100× 高估"疑点;不设下界(下侧
+# 是 qfq 造成的正常缩小,不是本缺陷)。_RATIO_OVER=3 远高于 VWAP 噪声(~1.4)、远低于
+# 100× 错(~100),干净区分。amount 缺失(NaN)单独计数。
+_RATIO_OVER = 3.0
+_RELOGIN_EVERY = 100          # 每处理 N 只主动重登 baostock,防会话过期
 _BLOCKED_WINDOW = (dt.time(15, 40), dt.time(17, 0))   # 收盘闭环运行窗,回补须避开
 
 
@@ -108,13 +111,18 @@ def _ratio(df: pd.DataFrame) -> pd.Series:
 
 
 def scan_code(store, code: str) -> dict:
-    """读一票主档,统计 volume 单位自洽情况(不写盘)。"""
+    """读一票主档,统计 volume 100× 高估情况(不写盘)。
+
+    bad = r>_RATIO_OVER 的行(volume 被 ×100 高估);qfq 造成的 r<1 老行**不算异常**
+    (见 _RATIO_OVER 处的口径说明)。
+    """
     df = store.get_master_kline(code)
     r = _ratio(df)
     judged = int(r.notna().sum())
-    ok = int(r.between(_RATIO_LO, _RATIO_HI).sum())
-    bad = judged - ok
-    bad_dates = pd.to_datetime(df.loc[r.notna() & ~r.between(_RATIO_LO, _RATIO_HI), "date"])
+    over = r > _RATIO_OVER
+    bad = int(over.sum())
+    ok = judged - bad
+    bad_dates = pd.to_datetime(df.loc[over.fillna(False), "date"])
     return {
         "code": code, "rows": len(df), "judged": judged, "ok": ok, "bad": bad,
         "bad_dates": [d.strftime("%Y-%m-%d") for d in bad_dates],
@@ -222,18 +230,33 @@ def main(argv=None) -> int:
     n_files = backup(store, codes, backup_dir)
     print(f"[H2·backup] 已备份 {n_files} 个文件 → {backup_dir}")
 
-    # ——— baostock 全量重算 ———
+    # ——— baostock 全量重算(会话自愈:过期/断连即重登重试) ———
     from tools.collectors import baostock_src
     ok, failed = 0, []
-    with baostock_src.session():
+    baostock_src.logout()             # 先清可能残留的旧会话(避免 "logout failed" 空转)
+    baostock_src.login()
+    try:
         for i, c in enumerate(codes, 1):
+            if i > 1 and (i - 1) % _RELOGIN_EVERY == 0:      # 主动定期重登,防长跑中途会话过期
+                baostock_src.logout(); baostock_src.login()
             try:
                 r = backfill_one(store, c, adjust)
                 ok += 1
-                if i % 100 == 0 or i == len(codes):
-                    print(f"[H2·backfill] {i}/{len(codes)} 最新 {c}: {r['rows_old']}→{r['rows_new']} 行 (start={r['start']})")
             except Exception as ex:  # noqa: BLE001
-                failed.append((c, f"{type(ex).__name__}: {ex}"))
+                # 会话级错误(如"用户未登录"/断连)→ 重登一次再试;仍失败或数据级错 → 记failed
+                if baostock_src.is_session_error(ex) or "未登录" in str(ex) or "10001001" in str(ex):
+                    try:
+                        baostock_src.logout(); baostock_src.login()
+                        r = backfill_one(store, c, adjust)
+                        ok += 1
+                    except Exception as ex2:  # noqa: BLE001
+                        failed.append((c, f"{type(ex2).__name__}: {ex2}"))
+                else:
+                    failed.append((c, f"{type(ex).__name__}: {ex}"))
+            if i % 100 == 0 or i == len(codes):
+                print(f"[H2·backfill] {i}/{len(codes)} 最新 {c} (ok={ok} failed={len(failed)})")
+    finally:
+        baostock_src.logout()
     print(f"[H2·backfill] 完成 ok={ok} failed={len(failed)}")
     if failed:
         print("[H2·backfill] 失败票(原始值保留,未改):")
