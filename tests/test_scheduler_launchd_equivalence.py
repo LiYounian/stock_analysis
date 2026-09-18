@@ -80,12 +80,8 @@ def plist_slots(plist_path: Path) -> set[Slot]:
     return slots
 
 
-def cron_slots(cron: str) -> set[Slot]:
-    """用 APScheduler CronTrigger 枚举一整周的触发时刻 → 归一集合(与 runtime 同引擎)。
-
-    锁的是"注册表实际会被调度成什么时刻",绕开 cron 字面/周字段编码坑
-    (tasks.yaml 已用 mon-fri 名字规避 APScheduler 数字周 0=周一 的歧义)。
-    """
+def _one_cron_slots(cron: str) -> set[Slot]:
+    """单条 crontab → 一整周触发时刻集合(与 runtime 同引擎 CronTrigger)。"""
     trig = CronTrigger.from_crontab(cron)
     tz = trig.timezone
     try:
@@ -102,6 +98,21 @@ def cron_slots(cron: str) -> set[Slot]:
             break
         slots.add((nxt.weekday(), nxt.hour, nxt.minute))
         prev = nxt
+    return slots
+
+
+def cron_slots(cron: "str | list[str]") -> set[Slot]:
+    """枚举注册表 cron 的一整周触发时刻 → 归一集合。
+
+    锁的是"注册表实际会被调度成什么时刻",绕开 cron 字面/周字段编码坑
+    (tasks.yaml 已用 mon-fri 名字规避 APScheduler 数字周 0=周一 的歧义)。
+    cron 为列表(一天多个不规则时刻,如 commitdocs 13:30+22:40)时取各子 cron 的**并集**
+    ——与 runtime build_trigger 的 OrTrigger 语义一致。
+    """
+    crons = [cron] if isinstance(cron, str) else list(cron)
+    slots: set[Slot] = set()
+    for c in crons:
+        slots |= _one_cron_slots(c)
     return slots
 
 
@@ -141,12 +152,49 @@ def test_schedule_equivalence(plist_id: str, plist_path: Path):
     assert spec is not None, f"launchd job {plist_id} 在 tasks.yaml 中无对应任务"
 
     want = plist_slots(plist_path)                      # 实盘 launchd 触发时刻
-    got = cron_slots(spec.cron)                         # 注册表 cron 枚举触发时刻
+    got = cron_slots(spec.cron)                         # 注册表 cron 枚举触发时刻(支持多 cron 并集)
     assert got == want, (
         f"[{plist_id}] 排期不等价:\n"
         f"  tasks.yaml cron={spec.cron!r} → {sorted(got)}\n"
         f"  launchd plist          → {sorted(want)}\n"
         f"  仅注册表有={sorted(got - want)} 仅launchd有={sorted(want - got)}")
+
+
+def test_multi_cron_list_trigger_union_equals_slots():
+    """正向锁:cron 为列表(一天多个不规则时刻)→ build_trigger 的 OrTrigger 实际触发时刻
+    == 各子 cron slots 的并集 == 手工列举的多 SCI 条目集合。锁死"多 cron→多 trigger→
+    多 SCI 并集相等"的等价语义(commitdocs 13:30+22:40 依赖此能力)。"""
+    from tools.scheduling.models import TaskSpec
+
+    crons = ["30 13 * * mon-fri", "40 22 * * mon-fri"]
+    spec = TaskSpec(id="_t", cmd=["echo", "x"], cron=crons)
+
+    # ① cron_slots 并集 == 手工列举(周一~五 × {13:30, 22:40} = 10 条)
+    expect = {(wd, 13, 30) for wd in range(5)} | {(wd, 22, 40) for wd in range(5)}
+    assert cron_slots(crons) == expect
+    # ② build_trigger 返回 OrTrigger,枚举其实际触发时刻也等于并集(与 runtime 同引擎)
+    from apscheduler.triggers.combining import OrTrigger
+    trig = spec.build_trigger()
+    assert isinstance(trig, OrTrigger)
+    tz = trig.triggers[0].timezone            # OrTrigger 无 timezone,取子 CronTrigger 的(同 Asia/Shanghai)
+    try:
+        start = tz.localize(_WEEK_START)
+    except AttributeError:
+        start = _WEEK_START.replace(tzinfo=tz)
+    end = start + dt.timedelta(days=_WEEK_DAYS)
+    got: set[Slot] = set()
+    prev = start - dt.timedelta(minutes=1)
+    for _ in range(7 * 24 * 60 + 10):
+        nxt = trig.get_next_fire_time(None, prev + dt.timedelta(minutes=1))
+        if nxt is None or nxt >= end:
+            break
+        got.add((nxt.weekday(), nxt.hour, nxt.minute))
+        prev = nxt
+    assert got == expect
+    # ③ 单 cron 向后兼容:build_trigger 仍返回单个 CronTrigger(非 OrTrigger)
+    single = TaskSpec(id="_s", cmd=["echo", "x"], cron="0 18 * * sat")
+    assert isinstance(single.build_trigger(), CronTrigger)
+    assert single.crons == ["0 18 * * sat"]
 
 
 def test_weekday_mapping_sanity():

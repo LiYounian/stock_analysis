@@ -35,7 +35,7 @@ def cmd_validate(args) -> int:
     print(f"    共 {len(reg.tasks)} 条,启用 {len(reg.enabled())} 条")
     for t in reg.tasks:
         flag = "on " if t.enabled else "off"
-        print(f"    [{flag}] {t.id:16s} {t.cron:18s} {' '.join(t.cmd)}")
+        print(f"    [{flag}] {t.id:16s} {t.cron_display:18s} {' '.join(t.cmd)}")
     return 0
 
 
@@ -61,7 +61,7 @@ def cmd_next(args) -> int:
                 break
             fires.append(nxt.strftime("%Y-%m-%d %H:%M %a"))
             prev = nxt
-        print(f"{t.id:16s} {t.cron:18s} -> {', '.join(fires)}")
+        print(f"{t.id:16s} {t.cron_display:18s} -> {', '.join(fires)}")
     return 0
 
 

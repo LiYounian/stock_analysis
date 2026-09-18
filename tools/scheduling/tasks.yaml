@@ -256,10 +256,14 @@ tasks:
     notify_on: [failure, misfire]
     tags: [local, eod]
 
+  # commitdocs 每工作日两固定时刻 13:30(午盘后)+ 22:40(夜间收尾):两时刻分钟不同,单条 cron
+  # 无法表达 → 用 cron 列表(多 trigger 并集,见 TaskSpec.build_trigger 的 OrTrigger)。
+  # 2026-09 由"11:20-22:20 每小时"精简为两时刻:以 LIVE 现值为准,plist SCI 与本 cron 列表并集严格等价
+  # (test_scheduler_launchd_equivalence 锁)。⚠️ 用 mon-fri(周一~五),对齐 LIVE Weekday 1-5。
   - id: commitdocs
-    description: 分析文档定时提交(每工作日 11:20-22:20 每小时)
+    description: 分析文档定时提交(每工作日 13:30 + 22:40 两次)
     cmd: ["bash", "ops/launchd/commit_analysis_docs.sh"]
-    cron: "20 11-22 * * mon-fri"
+    cron: ["30 13 * * mon-fri", "40 22 * * mon-fri"]
     timeout_sec: 300
     retries: 0
     notify_on: [failure]

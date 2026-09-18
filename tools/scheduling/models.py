@@ -28,7 +28,10 @@ class TaskSpec:
     字段:
         id                任务唯一标识(对应 launchd Label 尾段,如 intraday_screen)
         cmd               命令 argv 列表(如 ["python","-m","tools.run","screenall"])
-        cron              标准 5 段 crontab 表达式:分 时 日 月 周(周 0=周日,1-5=周一到五)
+        cron              标准 5 段 crontab 表达式:分 时 日 月 周(周 0=周日,1-5=周一到五)。
+                          也可为 **crontab 字符串列表**表达"一天多个不规则时刻"(如 commitdocs
+                          每工作日 13:30 + 22:40——两时刻分钟不同,单条 cron 无法表达);
+                          列表时每条各注册一个 trigger,合起来即该任务的全部触发时刻。
         timeout_sec       单次执行超时秒;None=不限
         retries           失败后额外重试次数(0=不重试)
         retry_backoff_sec 重试指数退避基数秒(第 i 次退避 = base * 2**(i-1))
@@ -41,7 +44,7 @@ class TaskSpec:
 
     id: str
     cmd: list[str]
-    cron: str
+    cron: str | list[str]
     timeout_sec: int | None = None
     retries: int = 0
     retry_backoff_sec: float = 5.0
@@ -58,8 +61,17 @@ class TaskSpec:
             isinstance(x, str) and x for x in self.cmd
         ):
             raise SpecError(f"[{self.id}] cmd 需为非空字符串列表:{self.cmd!r}")
-        if not isinstance(self.cron, str) or len(self.cron.split()) != 5:
-            raise SpecError(f"[{self.id}] cron 需为标准 5 段 crontab 字符串:{self.cron!r}")
+        # cron 允许单 str 或 str 列表(多时刻);逐条按标准 5 段校验(fail-loud)
+        if isinstance(self.cron, list):
+            if not self.cron or not all(isinstance(c, str) for c in self.cron):
+                raise SpecError(f"[{self.id}] cron 列表需为非空字符串列表:{self.cron!r}")
+        elif not isinstance(self.cron, str):
+            raise SpecError(f"[{self.id}] cron 需为 5 段 crontab 字符串或其列表:{self.cron!r}")
+        for c in self.crons:
+            if len(c.split()) != 5:
+                raise SpecError(
+                    f"[{self.id}] cron 需为标准 5 段 crontab 字符串:{c!r}"
+                    + (f"(在 {self.cron!r} 中)" if isinstance(self.cron, list) else ""))
         if self.timeout_sec is not None and (
             not isinstance(self.timeout_sec, int) or self.timeout_sec <= 0
         ):
@@ -74,14 +86,34 @@ class TaskSpec:
         # cron 可解析性在此校验(fail-loud):坏表达式 build_trigger 会抛
         self.build_trigger()
 
+    @property
+    def crons(self) -> list[str]:
+        """cron 归一为列表:单 str→[str],list→原样。多条=该任务的多个触发时刻。"""
+        return [self.cron] if isinstance(self.cron, str) else list(self.cron)
+
+    @property
+    def cron_display(self) -> str:
+        """人读单行字符串(list 用 ' | ' 连接);供 CLI 表格/日志,避免对 list 套用 :Ns 格式。"""
+        return self.cron if isinstance(self.cron, str) else " | ".join(self.cron)
+
     def build_trigger(self):
-        """把 cron 字符串编译成 APScheduler CronTrigger(坏表达式即抛,供校验复用)。"""
+        """把 cron 编译成 APScheduler 触发器(坏表达式即抛,供校验复用)。
+
+        单 cron → CronTrigger(与历史行为完全一致,单 cron 任务零变化);
+        多 cron → OrTrigger(取各子 cron 的最早下次触发,合起来即全部触发时刻)。
+        """
         from apscheduler.triggers.cron import CronTrigger
 
-        try:
-            return CronTrigger.from_crontab(self.cron)
-        except Exception as e:  # noqa: BLE001
-            raise SpecError(f"[{self.id}] cron 表达式无法解析:{self.cron!r} ({e})") from e
+        trigs = []
+        for c in self.crons:
+            try:
+                trigs.append(CronTrigger.from_crontab(c))
+            except Exception as e:  # noqa: BLE001
+                raise SpecError(f"[{self.id}] cron 表达式无法解析:{c!r} ({e})") from e
+        if len(trigs) == 1:
+            return trigs[0]
+        from apscheduler.triggers.combining import OrTrigger
+        return OrTrigger(trigs)
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> "TaskSpec":
