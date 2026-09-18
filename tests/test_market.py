@@ -211,10 +211,11 @@ def test_北交所920段路由到bj_而900段沪B仍归sh():
 
 # ———————————— P1-1/P3-1:腾讯批量 spot 源 + 量额归一断言 ————————————
 def _fake_quotes(codes):
-    """gtimg_quote.fetch_quotes 形态:close=10 元、volume=1000 手、amount=100 万元
-    → 归一后 amount/(close×volume股)=1e6/(10×1e5)=1.0(量额自洽)。"""
+    """gtimg_quote.fetch_quotes 形态(**已归一**):close=10 元、volume=1e5 股、amount=100 万元
+    → amount/(close×volume股)=1e6/(10×1e5)=1.0(量额自洽)。gtimg_quote 层已把"手→股"、
+    科创板保持"股",故此处 fetch_spot_all_tencent 不再 ×100。"""
     return {c: {"name": "T" + c, "price": 10.0, "prev_close": 9.5, "open": 9.6,
-                "high": 10.8, "low": 9.4, "volume": 1000.0, "amount_wan": 100.0,
+                "high": 10.8, "low": 9.4, "volume": 100000.0, "amount_wan": 100.0,
                 "pct_chg": 5.0, "change": 0.5, "vol_ratio": 1.2, "turnover": 3.5,
                 "amplitude": 2.0, "quote_time": "20260909150000"} for c in codes}
 
@@ -228,7 +229,7 @@ def test_fetch_spot_all_tencent_单位归一(monkeypatch):
                 "turnover", "pct_chg"]).issubset(df.columns)
     row = df.set_index("code").loc["600000"]
     assert row["close"] == 10.0                 # 收盘后现价=收盘价
-    assert row["volume"] == 1000.0 * 100        # 手 → 股
+    assert row["volume"] == 100000.0            # gtimg_quote 已归一「股」,spot 不再 ×100
     assert row["amount"] == 100.0 * 1e4         # 万元 → 元
     assert row["turnover"] == 3.5               # 百分数原样(gtimg_quote 登记 PERCENT)
 
@@ -249,3 +250,96 @@ def test_spot_量额断言_捕获volume未归股(monkeypatch):
     good = bad.copy(); good["volume"] = 1e5
     market._assert_spot_amount_volume(good, "test", hard=True)
     market._assert_spot_amount_volume(bad, "test", hard=False)   # 仅告警,不抛
+
+
+# ————————————————————————————————————————————————
+# H2:科创板 688/689 成交量 100× 高估修复
+#   - gtimg 采集层量额自证归一(手/股按板块与 amount 反推)
+#   - fqkline 端点按板块条件化 ×100
+#   - 量额断言分板块,少数派(688 占 ~11%)不再被全帧中位数掩盖
+# ————————————————————————————————————————————————
+def _gtimg_line(code, price, vol_raw, amt_wan, *, name="测试"):
+    """构造一条 gtimg `v_xxx="..."` 原始行(≥88 段,字段下标同 parse_line)。"""
+    parts = ["0"] * 88
+    parts[1] = name
+    parts[2] = code
+    parts[3] = str(price)          # 现价
+    parts[4] = str(price)          # 昨收
+    parts[5] = str(price)          # 今开
+    parts[6] = str(vol_raw)        # 成交量(源方:688/689=股、其余=手)
+    parts[30] = "20260917150000"   # 行情时刻
+    parts[31] = "0"; parts[32] = "1.0"
+    parts[33] = str(price); parts[34] = str(price)
+    parts[37] = str(amt_wan)       # 成交额(万元)
+    parts[38] = "2.0"; parts[43] = "1.0"; parts[49] = "1.0"
+    return f'v_x{code}="' + "~".join(parts) + '";'
+
+
+def test_gtimg_parse_line_量额自证_非科创板手转股():
+    """非科创板:源方 volume 是"手",amount 自证比值≈0.01 → ×100 归一到"股"。"""
+    from tools.collectors import gtimg_quote
+    # 600519:price 1266.98,原始 volume 17554 手,amount 221734 万元
+    line = _gtimg_line("600519", 1266.98, 17554, 221734.0)
+    code, q = gtimg_quote.parse_line(line)
+    assert code == "600519"
+    assert q["volume_raw"] == 17554                          # 源方原值留痕
+    assert q["volume"] == pytest.approx(17554 * 100)         # 手→股
+    # 归一后量额自洽:amount/(close×volume) ≈ 1
+    assert q["volume"] * q["price"] / (q["amount_wan"] * 1e4) == pytest.approx(1.0, abs=0.05)
+
+
+def test_gtimg_parse_line_量额自证_科创板保持股():
+    """科创板 688:源方 volume 已是"股",amount 自证比值≈1 → 不再 ×100(H2 修复核心)。"""
+    from tools.collectors import gtimg_quote
+    # 688981:price 115.53,原始 volume 10696563 股,amount 123867 万元
+    line = _gtimg_line("688981", 115.53, 10696563, 123867.0)
+    code, q = gtimg_quote.parse_line(line)
+    assert code == "688981"
+    assert q["volume_raw"] == 10696563
+    assert q["volume"] == pytest.approx(10696563)            # 保持"股",不 ×100
+    assert q["volume"] * q["price"] / (q["amount_wan"] * 1e4) == pytest.approx(1.0, abs=0.05)
+
+
+def test_gtimg_parse_line_自证不了回落代码段():
+    """amount 缺失(fqkline 回退行常态)→ 自证失败,回落代码段规则:688 保持股、非688 ×100。"""
+    from tools.collectors import gtimg_quote
+    _, q_star = gtimg_quote.parse_line(_gtimg_line("688795", 395.58, 1199251, ""))
+    _, q_main = gtimg_quote.parse_line(_gtimg_line("600519", 1266.98, 17554, ""))
+    # amount_wan 为 "" → _num→None → 无法自证 → 代码段兜底
+    assert q_star["volume"] == pytest.approx(1199251)        # 科创板:股,不 ×100
+    assert q_main["volume"] == pytest.approx(17554 * 100)    # 非科创板:手→股
+
+
+def test_fetch_tencent_star_不再scale成交量(monkeypatch):
+    """fqkline 端点:科创板 688/689 源方已是"股",不再 ×100(对照非科创板仍 ×100)。"""
+    rows = [["2026-09-16", "110.0", "115.53", "116.0", "109.0", "10696563"]]
+    monkeypatch.setattr("requests.get", lambda *a, **k: _FakeResp(_fq_payload("sh688981", rows)))
+    df = market._fetch_tencent("688981", "20260901", "20260916", "qfq")
+    assert float(df.iloc[-1]["volume"]) == pytest.approx(10696563)    # 科创板:股,×1
+    # 对照:非科创板仍 ×100
+    monkeypatch.setattr("requests.get", lambda *a, **k: _FakeResp(_fq_payload("sh600519", rows)))
+    df2 = market._fetch_tencent("600519", "20260901", "20260916", "qfq")
+    assert float(df2.iloc[-1]["volume"]) == pytest.approx(10696563 * 100)
+
+
+def test_量额断言_分板块_捕获科创板少数派100倍(monkeypatch):
+    """H2 盲区回归:688 只占约 11%,若只看全帧中位数,这组 100× 错会被多数派中位数(≈1)掩盖。
+    分板块断言后,科创板组自己的中位数偏离 → 必被捕获(hard 抛)。"""
+    n_main, n_star = 200, 25          # 星占 ~11%,且每组 ≥20 满足样本下限
+    codes = [f"{600000 + i:06d}" for i in range(n_main)] + [f"{688000 + i:06d}" for i in range(n_star)]
+    close = [10.0] * (n_main + n_star)
+    # 非科创板正确(volume 股,ratio≈1);科创板 volume 少 100×(误留"手"→ ratio≈100)
+    volume = [1e5] * n_main + [1000.0] * n_star
+    amount = [1e6] * (n_main + n_star)
+    df = pd.DataFrame({"code": codes, "open": close, "high": close, "low": close,
+                       "close": close, "volume": volume, "amount": amount,
+                       "turnover": [2.0] * (n_main + n_star), "pct_chg": [1.0] * (n_main + n_star)})
+    # 全帧中位数(旧判据)在这份数据上 ≈1(多数派主导)→ 不会报;新判据分板块 → 科创板组必报
+    import statistics
+    ratio_all = [a / (c * v) for a, c, v in zip(amount, close, volume)]
+    assert 0.5 <= statistics.median(ratio_all) <= 2.0, "构造前提:全帧中位数正常(旧判据会漏)"
+    with pytest.raises(ValueError, match="科创板"):
+        market._assert_spot_amount_volume(df, "test_star", hard=True)
+    # 全部正确(科创板也归股)→ 不抛
+    df_ok = df.copy(); df_ok.loc[df_ok["code"].str.startswith("688"), "volume"] = 1e5
+    market._assert_spot_amount_volume(df_ok, "test_star", hard=True)

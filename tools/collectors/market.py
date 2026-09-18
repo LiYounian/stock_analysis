@@ -2,7 +2,7 @@
 
 多源 fallback:腾讯 → 新浪 → 东财。
   - 主源腾讯 fqkline 端点(web.ifzq.gtimg.cn):当日盘后即含当天 bar(比 akshare stock_zh_a_hist_tx 新鲜~1交易日);
-    volume 单位手→×100 股;该端点不给成交额/换手率(缺列由 _normalize 补 NA)。
+    volume 归一到股(科创板 688/689 源方已是股不×100、其余手→×100,判据 exchange.is_star_market);该端点不给成交额/换手率(缺列由 _normalize 补 NA)。
   - 东财 `stock_zh_a_hist`:本机被其 TLS 指纹反爬(python-requests 被 RST),留作其他环境备选。
     详见 docs/问题/问题台账.md R4。
 落盘:走 store 层(kind="kline",parquet),旁记 meta.source=实际命中源。
@@ -100,9 +100,12 @@ def _fetch_tencent(code, start, end, adjust) -> pd.DataFrame:
     午休/收盘同日选股拿不到当天,故改直连此端点)。
 
     用"取最近 N 根"形式(空区间);实测**区间参数形式反而滞后一天**,固定拉最近 _TX_COUNT 根再按 start 裁剪。
-    volume 端点单位为"手",×100 归一到"股"(与原 akshare-tx 口径一致,防主档拼接处成交量单位跳变)。
+    volume 归一到"股":该端点对**科创板 688/689 段返回"股"**、其余板块返回"手"
+    (判据 `exchange.is_star_market`,单一真源;历史上一律 ×100 → 618 只科创板 volume
+    被高估 100 倍,见 H2)。非科创板 ×100(手→股)、科创板 ×1(本就是股),与
+    baostock/gtimg 快照口径一致,防主档拼接处成交量单位跳变。
     该端点不给 成交额/换手率 → 缺列,由 _normalize 补 NA(screener 用 volume/OHLC,不受影响)。
-    每行:[date, open, close, high, low, volume(手)]。
+    每行:[date, open, close, high, low, volume(688/689=股、其余=手)]。
     """
     sym = market_prefix(code)
     fq = "qfq" if adjust == "qfq" else ("hfq" if adjust == "hfq" else "")
@@ -110,8 +113,9 @@ def _fetch_tencent(code, start, end, adjust) -> pd.DataFrame:
     param = f"{sym},day,,,{_TX_COUNT},{fq}"
     node = (_tencent_get_json(param).get("data") or {}).get(sym) or {}
     rows = node.get(key) or node.get("day") or []
+    vol_scale = 1.0 if exchange.is_star_market(code) else 100.0   # 科创板源方已是股,不再 ×100
     recs = [{"date": x[0], "open": x[1], "close": x[2], "high": x[3],
-             "low": x[4], "volume": float(x[5]) * 100} for x in rows if len(x) >= 6]
+             "low": x[4], "volume": float(x[5]) * vol_scale} for x in rows if len(x) >= 6]
     df = pd.DataFrame(recs)
     if len(df) and start:
         s = f"{start[:4]}-{start[4:6]}-{start[6:8]}" if (len(start) == 8 and start.isdigit()) else start
@@ -395,24 +399,44 @@ def _assert_spot_amount_volume(df, source: str, *, hard: bool) -> None:
     (= VWAP/close)。若 volume 误留"手"(小 100×)或 amount 误留"万元"(小 1e4×),中位比值
     会偏离 1 两个数量级,据此**决定性**捕获单位错配(区别于"值小就可疑"的脆弱判据)。
 
+    **分板块断言(H2)**:科创板 688/689 在源方是"股"、其余是"手",两组单位不同。
+    若只看**全帧中位数**,618 只科创板仅占约 11% → 即便这组 100× 错,中位数仍≈1、
+    静默漏过(H2 的盲区正是如此)。故这里按 `exchange.is_star_market` 拆两组各验中位数,
+    并对每组逐行统计离群率(比值不在 [0.5,2] 的行占比):少数派再也不被多数派的中位数掩盖。
+    有 `code` 列才能分组;无 `code`(如测试直接构造的规整帧)则退回全帧单组断言。
+
     hard=True:严重偏离直接抛(采集源产出自检,挡住换源引入的 100×/1e4× 错);
     hard=False:仅告警(下游防御,不阻断兜底路径——如 akshare spot 疑似 volume 留"手")。
-    样本 < 20 不判(宁漏报不误报)。
+    每组样本 < 20 不判该组(宁漏报不误报);逐行离群率 > 1% 即使中位数正常也告警。
     """
     try:
         import pandas as pd
         m = df.loc[:, ["close", "volume", "amount"]].apply(pd.to_numeric, errors="coerce")
         mask = (m["close"] > 0) & (m["volume"] > 0) & (m["amount"] > 0)
-        if int(mask.sum()) < 20:
-            return
-        ratio = float((m["amount"][mask] / (m["close"][mask] * m["volume"][mask])).median())
+        ratio_all = (m["amount"] / (m["close"] * m["volume"]))[mask]
+        if "code" in getattr(df, "columns", []):
+            is_star = df["code"].astype(str).str.zfill(6).map(exchange.is_star_market)
+            groups = [("非科创板", ratio_all[~is_star.reindex(ratio_all.index).fillna(False)]),
+                      ("科创板688/689", ratio_all[is_star.reindex(ratio_all.index).fillna(False)])]
+        else:
+            groups = [("全帧", ratio_all)]
     except Exception:
         return                       # 缺列/异常帧不阻断,交由既有流程处理
-    if 0.5 <= ratio <= 2.0:
+    problems: list[str] = []
+    for label, r in groups:
+        n = int(r.notna().sum())
+        if n < 20:
+            continue
+        med = float(r.median())
+        outlier = float((~r.between(0.5, 2.0)).sum()) / n     # 逐行离群率
+        if not (0.5 <= med <= 2.0):
+            problems.append(f"[{label}]中位={med:.4g}(n={n})疑单位错配(volume 未归股/amount 未归元)")
+        elif outlier > 0.01:
+            problems.append(f"[{label}]中位正常但逐行离群率={outlier:.1%}(n={n})疑少数票单位混错")
+    if not problems:
         return
-    msg = (f"spot 量额口径异常(源 {source}):amount/(close×volume) 中位={ratio:.4g},应≈1;"
-           f"疑似 volume 未归股(×100)或 amount 未归元(×1e4)")
-    if hard:
+    msg = f"spot 量额口径异常(源 {source}):" + "; ".join(problems) + ";应 amount/(close×volume)≈1"
+    if hard and any("中位=" in p for p in problems):     # 只有中位错配才硬阻断;纯离群率仅告警
         raise ValueError(msg)
     logger.warning(msg)
 
@@ -422,10 +446,11 @@ def fetch_spot_all_tencent(codes: list[str]) -> pd.DataFrame:
 
     本机东财 spot 有 TLS 指纹墙(akshare spot 必败 → 逐只慢回退),腾讯批量快照是当日增量的
     稳定主源:~50 只/请求、约 0.2s/请求、不封 IP。字段**归一到主档口径**:
-      · volume 手 → ×100 股(与 backfill 的 baostock/腾讯K线口径一致,防主档拼接量级跳变)
+      · volume 已由 `gtimg_quote._to_shares` 归一到"股"(科创板 688/689 源方为股、其余为手,
+        采集层量额自证+代码段归一;此处**不再 ×100**,否则科创板被高估 100 倍,见 H2)
       · amount 万元 → ×1e4 元
       · turnover 已是百分数(source="gtimg_quote" 在 units 登记为 PERCENT,不二次缩放)
-    落盘前经 `_assert_spot_amount_volume` 硬断言把住 100×/1e4× 错配(P3-1)。
+    落盘前经 `_assert_spot_amount_volume` 硬断言把住 100×/1e4× 错配(P3-1,分板块)。
     codes:本轮 A 股票池(腾讯需显式代码);停牌/异常票不在返回里,由上层按缺失跳过。
     """
     from tools.collectors import gtimg_quote
@@ -437,13 +462,13 @@ def fetch_spot_all_tencent(codes: list[str]) -> pd.DataFrame:
         raise ConnectionError("腾讯 spot 全A当日行情为空")
     rows = []
     for code, q in quotes.items():
-        vol_shou = q.get("volume")
+        vol_shares = q.get("volume")               # gtimg_quote 已归一到「股」
         amt_wan = q.get("amount_wan")
         rows.append({
             "code": str(code).zfill(6),
             "open": q.get("open"), "high": q.get("high"), "low": q.get("low"),
             "close": q.get("price"),                                     # 收盘后现价=收盘价
-            "volume": None if vol_shou is None else vol_shou * 100.0,    # 手 → 股
+            "volume": vol_shares,                                        # 已「股」,不再 ×100
             "amount": None if amt_wan is None else amt_wan * 1e4,        # 万元 → 元
             "turnover": q.get("turnover"),                              # 已百分数
             "pct_chg": q.get("pct_chg"),

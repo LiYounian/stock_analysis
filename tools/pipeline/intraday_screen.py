@@ -246,7 +246,8 @@ def midday_bar_row(code: str, quote: dict, as_of: str) -> pd.DataFrame | None:
     """把一只票的 gtimg 午盘快照 → 一行「今日午盘 bar」DataFrame(对齐 master 主档 schema)。
 
     close = 11:30 冻结价(quote['price'],午休即当日最新价);open/high/low 取当日区间,
-    缺失回落 close。volume 手→股(×100)、amount 万元→元(×10000)。price 缺失 → None(不注入)。
+    缺失回落 close。volume 已由 gtimg_quote 归一到"股"(科创板 688/689 不再 ×100,见 H2),
+    此处直取;amount 万元→元(×10000)。price 缺失 → None(不注入)。
     """
     price = quote.get("price")
     if price is None:
@@ -260,7 +261,7 @@ def midday_bar_row(code: str, quote: dict, as_of: str) -> pd.DataFrame | None:
         high = max(price, open_)
     if low is None:
         low = min(price, open_)
-    vol_hand = quote.get("volume")
+    vol_shares = quote.get("volume")                           # gtimg_quote 已归一到「股」
     amt_wan = quote.get("amount_wan")
     row = {
         "date": pd.Timestamp(as_of),
@@ -268,7 +269,7 @@ def midday_bar_row(code: str, quote: dict, as_of: str) -> pd.DataFrame | None:
         "high": float(high),
         "low": float(low),
         "close": float(price),                                  # 午休冻结价当临时收盘
-        "volume": float(vol_hand) * 100 if vol_hand is not None else None,   # 手→股
+        "volume": float(vol_shares) if vol_shares is not None else None,     # 已「股」,不再 ×100
         "amount": float(amt_wan) * 10000 if amt_wan is not None else None,   # 万元→元
         "turnover": quote.get("turnover"),                      # 百分数,同口径
         "pct_chg": quote.get("pct_chg"),                        # 百分数,同口径
