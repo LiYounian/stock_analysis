@@ -13,7 +13,10 @@
   ④ 合法前进编辑(保留全部旧条目、只新增) → **放行**,绝不误伤;
   ⑤ 新增文件(HEAD 无基线) → 放行;
   ⑥ 暂存删除已提交白名单文档 → 判回退、还原;
-  ⑦ 端到端:护栏 run 后暂存区里回退文件已回到 origin/main 好版本、好文件仍在。
+  ⑦ 端到端:护栏 run 后暂存区里回退文件已回到 origin/main 好版本、好文件仍在;
+  ⑧ 告警末端有人读:命中回退时追加到经验沉淀 _待并入.md(eod-review 每日消费)并 stage,
+     且同文件告警去重(每小时重跑不刷屏);
+  ⑨ transient 豁免:_待并入.md 被 eod-review 合法清空(纯删除)不判回退(否则会回滚 inbox 消费)。
 ⚠️ 研究模拟,非投资建议。
 """
 import json
@@ -83,7 +86,7 @@ def repo(tmp_path):
     _run(r, "init", "-q")
     _run(r, "config", "core.quotepath", "false")
     (r / EXP_DIR / "v2026-09-14.md").write_text(GOOD_EXPERIENCE, encoding="utf-8")
-    (r / SEL_DIR / "2026-09-14.md").write_text("买入候选:601061\n", encoding="utf-8")
+    (r / SEL_DIR / "2026-09-14.md").write_text("买入候选:示例票TEST-A\n", encoding="utf-8")
     _commit_all(r, "good baseline (= origin/main)")
     return r
 
@@ -146,7 +149,7 @@ def test_guard_restores_regressed_experience(repo, tmp_path):
     """①⑦ 旧副本覆盖富化版经验文件 → guard 还原成 HEAD 好版本、好文件不受影响。"""
     _write_and_stage(repo, f"{EXP_DIR}/v2026-09-14.md", STALE_EXPERIENCE)
     # 同批一个合法新增文件,必须不受牵连、仍留在暂存区
-    _write_and_stage(repo, f"{SEL_DIR}/2026-09-15.md", "新一日选股:002913\n")
+    _write_and_stage(repo, f"{SEL_DIR}/2026-09-15.md", "新一日选股:示例票TEST-B\n")
 
     report = g.guard(str(repo), PATHS, restore=True)
 
@@ -203,3 +206,42 @@ def test_cli_clean_exit_zero(repo):
     _write_and_stage(repo, f"{SEL_DIR}/2026-09-20.md", "全新一日\n")
     rc = g.main(["--repo", str(repo), "--paths", *PATHS])
     assert rc == 0
+
+
+def test_inbox_alarm_written_and_staged(repo):
+    """⑧ 命中回退 → 告警追加到经验沉淀 _待并入.md 并 stage(下次 eod-review 能看到)。"""
+    _write_and_stage(repo, f"{EXP_DIR}/v2026-09-14.md", STALE_EXPERIENCE)
+    report = g.guard(str(repo), PATHS, restore=True)
+    assert f"{EXP_DIR}/v2026-09-14.md" in report.inbox_alarmed
+    inbox_rel = f"{EXP_DIR}/{g.INBOX_NAME}"
+    inbox_txt = (repo / inbox_rel).read_text(encoding="utf-8")
+    assert g.INBOX_ALARM_TAG in inbox_txt
+    assert "v2026-09-14.md" in inbox_txt
+    # 告警必须已 stage(随本轮自动提交入库),否则 eod-review 读不到
+    names = _run(repo, "diff", "--cached", "--name-only").stdout
+    assert g.INBOX_NAME in names
+
+
+def test_inbox_alarm_deduped_across_reruns(repo):
+    """⑧ 每小时重跑同一现场 → _待并入.md 里同文件告警不重复堆叠。"""
+    _write_and_stage(repo, f"{EXP_DIR}/v2026-09-14.md", STALE_EXPERIENCE)
+    g.guard(str(repo), PATHS, restore=True)
+    # 模拟下一轮:worktree 又 reset(经验文件回好版本)、磁盘旧副本再次 cp 覆盖
+    _write_and_stage(repo, f"{EXP_DIR}/v2026-09-14.md", STALE_EXPERIENCE)
+    report2 = g.guard(str(repo), PATHS, restore=True)
+    inbox_txt = (repo / f"{EXP_DIR}/{g.INBOX_NAME}").read_text(encoding="utf-8")
+    assert inbox_txt.count("v2026-09-14.md") == 1, "同文件告警被重复追加(每小时刷屏)"
+    assert report2.inbox_alarmed == []  # 第二轮无新告警可写
+
+
+def test_transient_inbox_clearing_not_flagged(repo):
+    """⑨ _待并入.md 被 eod-review 合法清空(纯删除)→ 豁免、不判回退、不回滚。"""
+    inbox_rel = f"{EXP_DIR}/{g.INBOX_NAME}"
+    (repo / inbox_rel).write_text("- 待并入结论A\n- 待并入结论B\n", encoding="utf-8")
+    _run(repo, "add", "-A")
+    _commit_all(repo, "inbox has pending items")
+    # eod-review 消费后清空(纯删除,无新增)
+    _write_and_stage(repo, inbox_rel, "")
+    report = g.guard(str(repo), PATHS, restore=True)
+    assert not report.has_regression, "inbox 合法清空被误判为回退"
+    assert _staged_content(repo, inbox_rel) == "", "inbox 清空被错误回滚"
