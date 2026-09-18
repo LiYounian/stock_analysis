@@ -120,7 +120,9 @@ class FakeGoodNewsTool:
             hit_shadow, shadow_desc = self._long_upper_shadow(df, len(df) - 1)
             gap_fade, gf_desc = self._gap_fade(df, len(df) - 1)
             命中 = int(gap_fade) + int(hit_shadow)
-            档 = "中" if 命中 >= 2 else ("低" if 命中 == 1 else "低")
+            # 无 events 锚点时仅凭当日 K 线：0 信号=无嫌疑（不扣分），1=低，≥2=中。
+            # 绝不因"数据缺失"默认判低——池内多数票无 per-stock json，命中0误判低会系统性扭曲排雷。
+            档 = "中" if 命中 >= 2 else ("低" if 命中 == 1 else "无嫌疑")
             lines = [
                 f"假利好嫌疑: {档}（events 缺失·仅凭 as_of 当日 K 线·不编造利好）",
                 f"当日高开走弱: {'命中' if gap_fade else '未命中'}（{gf_desc}）",
