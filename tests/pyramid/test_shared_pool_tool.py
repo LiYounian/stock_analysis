@@ -10,12 +10,18 @@ from tools.pyramid.tools.shared_pool_tool import (
     build_result,
     _extract_codes,
     _load_agent,
+    _load_multi_strategy,
+    _strategy_view_picks,
+    _is_st,
     _SOURCE_ORDER,
+    build_raw,
 )
 from tools.pyramid.registry import get
 import tools.pyramid.tools  # noqa: F401
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+# 主仓数据根（worktree 里 data/master/kline gitignored；照 unlock/insider 先例用 env 指回主仓）。
+DATA_ROOT = os.environ.get("SHARED_POOL_TEST_DATA_ROOT") or ROOT
 AS_OF = "2026-09-17"
 _NAME, _层, _SRC = "shared_pool", "①塔基", "test"
 
@@ -124,11 +130,84 @@ def test_load_agent_两键并存取并集(tmp_path):
     assert codes == {"000001", "600995"}
 
 
+# ── A5 多策略 ≥2 命中：直接读策略 view json（修退化）──
+def _write(adir, fname, payload):
+    with open(os.path.join(adir, fname), "w", encoding="utf-8") as f:
+        json.dump(payload, f, ensure_ascii=False)
+
+
+def test_strategy_view_picks_三种落法():
+    assert _strategy_view_picks({"入选清单": [{"code": "000001"}, {"code": 600000}]}) == {"000001", "600000"}
+    assert _strategy_view_picks({"top": [{"code": "300308"}]}) == {"300308"}
+    assert _strategy_view_picks({"排行": {"维A": [{"code": "002415"}], "维B": ["600995"]}}) == {"002415", "600995"}
+    assert _strategy_view_picks({}) == set()
+
+
+def test_multi_strategy_ge2命中并集(tmp_path):
+    """A5 语义锁：≥2 个策略命中的票才进多策略并集；单策略命中不进。"""
+    adir = str(tmp_path)
+    _write(adir, "最大范围选股.json", {"入选清单": [{"code": "A"}, {"code": "B"}, {"code": "C"}]})
+    _write(adir, "量价放量.json", {"入选清单": [{"code": "B"}, {"code": "C"}]})
+    _write(adir, "最强选股.json", {"top": [{"code": "C"}]})
+    got = _load_multi_strategy(adir)
+    # B(2次) C(3次) 命中≥2；A(1次) 不进
+    assert got == {"B", "C"}
+
+
+def test_multi_strategy_单策略内去重(tmp_path):
+    """单个策略里同一票出现多次只计一次——不因单策略重复凑满 ≥2。"""
+    adir = str(tmp_path)
+    _write(adir, "最大范围选股.json", {"入选清单": [{"code": "A"}, {"code": "A"}]})
+    _write(adir, "量价放量.json", {"入选清单": [{"code": "B"}]})
+    assert _load_multi_strategy(adir) is None  # A 只被 1 个策略命中
+
+
+def test_multi_strategy_回退每日选股(tmp_path):
+    """策略 view 不足 2 个时回退：每日选股 picks 的 ≥2 strategies。"""
+    adir = str(tmp_path)
+    _write(adir, "每日选股.json", {"picks": [
+        {"code": "X", "strategies": [{"name": "s1"}, {"name": "s2"}]},
+        {"code": "Y", "strategies": [{"name": "s1"}]},
+    ]})
+    assert _load_multi_strategy(adir) == {"X"}
+
+
+def test_multi_strategy_真数据71(tmp_path):
+    """真数据回归：9-17 九个策略 json 的 ≥2 命中应为 71（修前退化只 4）。"""
+    adir = os.path.join(DATA_ROOT, "data", "analysis", AS_OF)
+    if not os.path.isdir(adir):
+        pytest.skip("无 analysis 数据")
+    got = _load_multi_strategy(adir)
+    if got is None:
+        pytest.skip("当日无策略 view json")
+    assert len(got) == 71
+
+
+# ── A2 召回未剔 ST：ST/*ST/退市 不入 K 线召回池 ──
+def test_is_st_名称判据():
+    assert _is_st("*ST天喻") and _is_st("ST雪莱") and _is_st("退市") and _is_st("XX退")
+    assert not _is_st("平安银行") and not _is_st(None) and not _is_st("300308")
+
+
+def test_ST不入召回池_真数据():
+    import glob as _g
+    if not os.path.isdir(os.path.join(DATA_ROOT, "data", "master", "kline")):
+        pytest.skip("无 K 线数据")
+    name_path = os.path.join(DATA_ROOT, "config", "code_name.json")
+    if not os.path.exists(name_path):
+        pytest.skip("无 code_name.json")
+    names = json.load(open(name_path, encoding="utf-8"))
+    st_codes = {c for c, n in names.items() if _is_st(n)}
+    raw = build_raw(AS_OF, root=DATA_ROOT)
+    kpool = raw["K线过闸"] or set()
+    assert kpool & st_codes == set(), sorted(kpool & st_codes)
+
+
 # ── 真数据冒烟（跑真实全A扫描，~15s；无数据则跳过）──
 def test_shared_pool_真数据():
-    if not os.path.isdir(os.path.join(ROOT, "data", "master", "kline")):
+    if not os.path.isdir(os.path.join(DATA_ROOT, "data", "master", "kline")):
         pytest.skip("无 K 线数据")
-    res = get("shared_pool").run(AS_OF, "300308", root=ROOT)
+    res = get("shared_pool").run(AS_OF, "300308", root=DATA_ROOT)
     assert res.防未来 is True
     assert res.fields["池规模"] >= 0
     assert isinstance(res.fields["各来源命中数"], dict)

@@ -49,8 +49,14 @@ def _redflag_verdict(评级: Optional[str], quality: Optional[float], flags: lis
     for f in 中危flag:
         reasons.append(f"中危:{f.get('code')}")
     q_low = isinstance(quality, (int, float)) and quality < 50
+    # A4 语义锁：财报评级"风险"严重度 ≥ "差"（实测 quality 0~61），一律高危——
+    #    修此前"风险"仅落"中/低"、比"差"还轻的严重度倒挂。
+    if 评级 == "风险":
+        reasons.append(f"评级风险(quality={quality})")
     # 分档
-    if 评级 == "差" and (q_low or 高危flag or 扣非为负):
+    if 评级 == "风险":
+        level = "高危"
+    elif 评级 == "差" and (q_low or 高危flag or 扣非为负):
         level = "高危"
     elif 高危flag or (评级 == "差") or 扣非为负:
         level = "中"

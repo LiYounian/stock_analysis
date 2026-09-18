@@ -45,14 +45,58 @@ def _first_glob(adir: str, patterns) -> Optional[str]:
     return None
 
 
+# 各策略 view json 文件名（SSOT：run._screener_view 的落盘名）。当日缺某策略 → glob/exists 自然略过。
+_STRATEGY_VIEWS = [
+    "策略0合议", "放量后缩量回踩", "动量组合", "半导体多因子",
+    "最大范围选股", "量价放量", "最强选股", "反转低换手组合",
+    "指标条件化状态排序", "扣非质量",
+]
+
+
+def _strategy_view_picks(d) -> set:
+    """从单个策略 view json 抽选出票 code（兼容 入选清单/top/排行 三种落法，与 run._picks_from_view 同口径）。"""
+    if not isinstance(d, dict):
+        return set()
+    items = d.get("入选清单") or d.get("top")
+    if items:
+        return {str(x["code"]) for x in items if isinstance(x, dict) and x.get("code")}
+    rank = d.get("排行")
+    if isinstance(rank, dict):
+        out: set = set()
+        for lst in rank.values():
+            if isinstance(lst, list):
+                for x in lst:
+                    c = x.get("code") if isinstance(x, dict) else x
+                    if isinstance(c, str) and c:
+                        out.add(str(c))
+        return out
+    return set()
+
+
 def _load_multi_strategy(adir: str) -> Optional[set]:
-    """① ≥2 策略命中并集。优先专用闸门文件；缺则由 每日选股.json picks 的 ≥2 strategies 派生。"""
+    """① ≥2 策略命中并集。
+
+    A5 修退化：直接读各策略 view json（策略0合议/最大范围选股/量价放量/最强选股/…）计每票被
+    ≥2 个策略命中的并集——这才是"多策略交叉"真口径。此前退回只读 每日选股.json picks 的
+    ≥2 strategies（当日仅 4 只，漏掉 67 只），严重收缩池。
+    仅当当日策略 view 文件不足 2 个（老日期/精简产物）时才回退：多策略命中闸门文件 → 每日选股 派生。
+    """
+    cnt: Counter = Counter()
+    found = 0
+    for name in _STRATEGY_VIEWS:
+        picks = _strategy_view_picks(_load_json(os.path.join(adir, f"{name}.json")))
+        if picks:
+            found += 1
+            cnt.update(picks)  # picks 已按策略内去重（单策略一票只计一次）
+    if found >= 2:
+        ge2 = {c for c, n in cnt.items() if n >= 2}
+        return ge2 or None
+    # 回退①：专用闸门文件
     p = _first_glob(adir, ["*多策略命中闸门*.json", "*多策略命中*.json"])
     if p:
-        d = _load_json(p)
-        codes = _extract_codes(d)
+        codes = _extract_codes(_load_json(p))
         return codes if codes else None
-    # 派生兜底：每日选股 picks 中被 ≥2 策略命中的票
+    # 回退②：每日选股 picks 中被 ≥2 策略命中的票
     p2 = os.path.join(adir, "每日选股.json")
     d2 = _load_json(p2)
     if isinstance(d2, dict) and isinstance(d2.get("picks"), list):
@@ -113,8 +157,23 @@ def _load_agent(adir: str, as_of: str) -> Optional[set]:
     return codes or None
 
 
+def _is_st(name: Optional[str]) -> bool:
+    """名称判据：含 'ST'（含 *ST）或 '退' → ST/退市。与 pyramid_select_v1.hard_veto 同口径。"""
+    return "ST" in (name or "").upper() or "退" in (name or "")
+
+
+def _load_name_map(root: Optional[str]) -> dict:
+    """code→name（config/code_name.json）。供召回层剔 ST/退市；缺则空 dict（宁可不剔也不误剔）。"""
+    d = _load_json(os.path.join(data_root(root), "config", "code_name.json"))
+    return d if isinstance(d, dict) else {}
+
+
 def _scan_kline(root: Optional[str], as_of: str) -> Optional[set]:
-    """⑤ 全A K线过闸：复用 pyramid_select_v1 的 metrics/in_pool 口径（in_pool=召回池）。"""
+    """⑤ 全A K线过闸：复用 pyramid_select_v1 的 metrics/in_pool 口径（in_pool=召回池）。
+
+    A2 修：召回层按名称判据剔除 ST/*ST/退市（复用 config/code_name.json + _is_st），
+    不让 ST 进池最干净——避免 D2 骨架/Agent 在池内买到 ST 票。
+    """
     try:
         import pandas as pd
         from tools.experimental.pyramid_select_v1 import metrics, in_pool, THRESH
@@ -123,12 +182,15 @@ def _scan_kline(root: Optional[str], as_of: str) -> Optional[set]:
     kdir = os.path.join(data_root(root), "data", "master", "kline")
     if not os.path.isdir(kdir):
         return None
+    names = _load_name_map(root)
     asof = pd.Timestamp(as_of)
     th = dict(THRESH)
     pool: set = set()
     for f in glob.glob(os.path.join(kdir, "*.parquet")):
         code = os.path.basename(f)[:6]
         if not code.startswith(("00", "30", "60", "68")):
+            continue
+        if _is_st(names.get(code)):  # A2：ST/退市不入召回池
             continue
         try:
             df = pd.read_parquet(
