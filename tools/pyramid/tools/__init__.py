@@ -10,6 +10,7 @@ from tools.pyramid.tools import sector_context_tool  # noqa: F401  窗2
 from tools.pyramid.tools import experience_rules_tool  # noqa: F401  窗3
 from tools.pyramid.tools import fake_good_news_tool  # noqa: F401  窗3
 from tools.pyramid.tools import financial_redflag_tool  # noqa: F401  P2
+from tools.pyramid.tools import unlock_risk_tool  # noqa: F401  四因子#1 解禁
 
 __all__ = [
     "entry_price_tool",
@@ -20,4 +21,5 @@ __all__ = [
     "experience_rules_tool",
     "fake_good_news_tool",
     "financial_redflag_tool",
+    "unlock_risk_tool",
 ]

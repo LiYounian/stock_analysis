@@ -96,3 +96,14 @@ tools:
     reuse: data/analysis/<date>/<code>.json 的 financial
     tests: tests/pyramid/test_financial_redflag.py
     note: "填9-17三方分歧缺口(002025财报差被DeepSeek买);档位:高危/中/低/无嫌疑(写死);quality档80/65/50/35(D1§4);接入d2_compose排雷子分"
+  - name: unlock_risk
+    塔层: "②消息"
+    status: done
+    window: 四因子#1(解禁)
+    inputs: [as_of, code]
+    outputs: [解禁嫌疑档, 剩余天数, 占流通pct, 下一次日期, 不可采信, 未来90日次数, 占比口径]
+    freshness: 有financing.解禁=fresh；无=missing
+    防未来: true
+    reuse: data/analysis/<date>/<code>.json 的 financing.解禁
+    tests: tests/pyramid/test_unlock_risk.py
+    note: "临近限售解禁抛压(负向·消息面);档位:高危/中/低/无嫌疑(写死·占流通3%/10%×剩余30/90日);剩余天数=下一次.解禁日-as_of自算(防未来·不信采集相对距今日);披露日>as_of或已过则不可见;占比用未来90日占流通_pct(已剔不可采信)→退下一次占比;接d2_compose排雷子分(中-25/低-10)+高危veto大额解禁临近"
