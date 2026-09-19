@@ -481,7 +481,7 @@ def test_analyzer_routes_to_expert(monkeypatch):
         extra_flags=lambda derived, structured: [
             {"code": "行业专属红旗", "命中": True, "严重度": "中", "值": {}}],
     )
-    monkeypatch.setattr(analyzer, "_industry_key", lambda code, industry=None: "测试业")
+    monkeypatch.setattr(analyzer, "_industry_key", lambda code, industry=None, as_of=None: "测试业")
     monkeypatch.setattr(analyzer, "get_expert", lambda key: fake if key == "测试业" else None)
     res = analyzer.analyze("000001", as_of="2026-05-01", persist=False)
     assert res["行业专家"] == "测试业" and res["口径说明"] == "测试口径说明"

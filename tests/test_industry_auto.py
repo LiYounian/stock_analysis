@@ -111,13 +111,15 @@ def test_flag_cfo_deterioration_hit_and_miss():
 
 
 def test_flag_rd_capitalization_hit_and_miss():
-    # 命中:开发支出 / 研发费用 > 1.0
+    # 命中:开发支出 / 研发费用 > 阈值(汽车 p90=4.7)
     hit = auto.extra_flags({}, {"利润表": {"研发费用": 1e8},
-                                "资产负债表": {"开发支出": 1.5e8}})
+                                "资产负债表": {"开发支出": 5e8}})  # 比值 5.0 > 4.7
     assert "研发资本化激进" in _codes(hit)
-    # 不命中:资本化占比低
+    hit_flag = [f for f in hit if f["code"] == "研发资本化激进"][0]
+    assert hit_flag["严重度"] == "中"            # 汽车(非医药)定"中":粗代理·注水嫌疑非确认
+    # 不命中:资本化占比低于阈值(近边界,4.0 < 4.7)
     miss = auto.extra_flags({}, {"利润表": {"研发费用": 1e8},
-                                 "资产负债表": {"开发支出": 2e7}})
+                                 "资产负债表": {"开发支出": 4e8}})  # 比值 4.0 < 4.7
     assert "研发资本化激进" not in _codes(miss)
 
 

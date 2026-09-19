@@ -168,29 +168,55 @@ class GrowthQualityTool:
         回报维 = dims.get("回报")
         roe报告期 = val.get("报告期") or fin.get("报告期")
         roe类型 = _报告类型(roe报告期) or "报告期"
+        # 行业评分档(缺口二):analyzer 已算的"本行业 dimension_specs 评分区间"定位,纯透传不重算。
+        # 口径诚实:是**本行业评分档**(优/良/中/弱),非同行业经验百分位。缺则回退跨行业粗档。
+        行业档 = fin.get("行业评分档") or {}
+        毛利用行业, 净利率用行业 = False, False
         vals = []
         if isinstance(roe, (int, float)):
             vals.append(f"ROE{roe:.2f}")
         if isinstance(gm, (int, float)):
-            gm档, _ = 格档(float(gm), _毛利率档)
-            vals.append(f"毛利{gm:.2f}[{gm档}]")
+            b = 行业档.get("毛利率")
+            if b and isinstance(b.get("score"), (int, float)):
+                档, _ = 格档(float(b["score"]), _QUALITY档)
+                vals.append(f"毛利{gm:.2f}[本行业{b.get('行业')}评分档{档}]")
+                毛利用行业 = True
+            else:
+                gm档, _ = 格档(float(gm), _毛利率档)
+                vals.append(f"毛利{gm:.2f}[{gm档}·跨行业]")
         if isinstance(nm, (int, float)):
-            nm档, _ = 格档(float(nm), _净利率档)
-            vals.append(f"净利率{nm:.2f}[{nm档}]")
+            b = 行业档.get("净利率")
+            if b and isinstance(b.get("score"), (int, float)):
+                档, _ = 格档(float(b["score"]), _QUALITY档)
+                vals.append(f"净利率{nm:.2f}[本行业{b.get('行业')}评分档{档}]")
+                净利率用行业 = True
+            else:
+                nm档, _ = 格档(float(nm), _净利率档)
+                vals.append(f"净利率{nm:.2f}[{nm档}·跨行业]")
         回报文 = f"回报维{回报维}/百" if isinstance(回报维, (int, float)) else "回报维NA"
+        _毛净口径 = ("毛利/净利率=本行业评分档(引擎已算行业区间,非经验百分位)"
+                  if (毛利用行业 or 净利率用行业) else "毛利/净利率跨行业粗参考(无行业专家)")
         items.append(字段(
             "盈利能力", "/".join(vals) if vals else None,
-            f"ROE={roe类型}未年化·不可比年化15%; 毛利/净利率跨行业粗参考",
+            f"ROE={roe类型}未年化·不可比年化15%; {_毛净口径}",
             f"影响：当前口径盈利效率一般、强弱以下方'回报'维为准（{回报文}）",
         ))
 
         # ── 负债率（金融/地产例外）──
         负债 = fund.get("负债率")
         金融口径 = bool(fin.get("金融业口径"))
-        if isinstance(负债, (int, float)):
+        b负债 = 行业档.get("资产负债率")
+        if isinstance(负债, (int, float)) and b负债 and isinstance(b负债.get("score"), (int, float)) and not 金融口径:
+            # 本行业评分档(缺口二透传):资产负债率是反向指标,dimension_specs 已按行业反向映射,
+            # 高分=本行业内杠杆更轻。跨行业粗档 → 本行业评分档(优/良/中/弱,非经验百分位)。
+            档, _ = 格档(float(b负债["score"]), _QUALITY档)
+            items.append(字段("负债率", 负债, f"本行业{b负债.get('行业')}评分档{档}",
+                             f"影响：本行业内杠杆位置见评分档({档}=越优越轻);跨行业粗档已由行业区间取代"))
+        elif isinstance(负债, (int, float)):
             d档, _ = 格档(float(负债), _负债率档)
-            例外 = "·金融业口径" if 金融口径 else ""
-            影响 = _负债影响.get(d档, "") + ("（金融业高杠杆属常态、勿套档）" if 金融口径 else "")
+            例外 = "·金融业口径" if 金融口径 else "·跨行业粗档"
+            影响 = _负债影响.get(d档, "") + ("（金融业高杠杆属常态、勿套档）" if 金融口径
+                                          else "（无行业专家、跨行业粗参考）")
             items.append(字段("负债率", 负债, f"{d档}{例外}", f"影响：{影响}"))
         else:
             items.append(字段("负债率", None, "负债率缺失", "影响：无负债率数据、该维缺席"))
@@ -210,12 +236,18 @@ class GrowthQualityTool:
         报告期 = fin.get("报告期")
         报告类型 = fin.get("报告类型") or _报告类型(报告期)
         披露日 = fin.get("披露日")
+        # 缺口三①:行业专家=null → 通用兜底(五维/quality 为通用测算,非行业专属阈值)。
+        # 明确打标,避免"通用兜底"被误读成"数据缺失/显糙"(如综合类 000504)。改展示不改模型。
+        行业专家 = fin.get("行业专家")
+        通用兜底 = bool((isinstance(quality, (int, float)) or 评级) and not 行业专家)
+        兜底档注 = "·通用口径(无行业专属专家)" if 通用兜底 else ""
+        兜底意味 = "；五维/quality 为**通用测算**,非本行业专属阈值(该行业暂无专家,非数据缺失)" if 通用兜底 else ""
         if isinstance(quality, (int, float)) or 评级:
             q档, _ = 格档(quality, _QUALITY档) if isinstance(quality, (int, float)) else ("NA", "")
             items.append(字段(
                 "财报质量汇总", f"{评级}·quality{quality}",
-                f"{q档}·{报告类型}{报告期}·披露{披露日}",
-                f"影响：{_五维综合(dims, q档)}",
+                f"{q档}·{报告类型}{报告期}·披露{披露日}{兜底档注}",
+                f"影响：{_五维综合(dims, q档)}{兜底意味}",
             ))
         else:
             items.append(字段("财报质量汇总", None, "无 financial 评级/quality",
@@ -258,6 +290,8 @@ class GrowthQualityTool:
                 "评级": 评级, "quality_score": quality, "报告期": 报告期,
                 "报告类型": 报告类型, "披露日": 披露日,
                 "five_dims": dims, "利润表摘要": 摘要, "回报维": 回报维,
+                "行业专家": 行业专家, "通用兜底": 通用兜底,   # 缺口三①:通用兜底口径标记(展示层据此提示)
+                "行业评分档": 行业档 or None,                # 缺口二:透传源(便于 web/下游复用)
             },
             freshness="fresh", 防未来=True, source=self.source, 面=self.面,
         )
