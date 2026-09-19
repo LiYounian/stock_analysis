@@ -149,7 +149,7 @@ class GrowthQualityTool:
                 name=self.name, 塔层=self.塔层, as_of=as_of, code=code,
                 浓缩块="成长盈利: 数据缺失（无 fundamental 字段·不编造）",
                 fields={"数据缺": True}, freshness="missing", 防未来=True,
-                source=self.source, 面=self.面,
+                source=self.source, 面=self.面, max_浓缩块_行=13,  # G3 例外恒声明·契约一致
             )
         fin = (doc or {}).get("financial") or {}
         val = (doc or {}).get("valuation") or {}
@@ -221,25 +221,35 @@ class GrowthQualityTool:
             items.append(字段("财报质量汇总", None, "无 financial 评级/quality",
                              "影响：该票未进深度财报采集"))
 
-        # ── 财报明细（five_dims 五维 + 利润表摘要增速，保字段明细）──
+        # ── 财报五维逐维（v2：各维 值+档+一句描述；共性"五维分别是什么"进统一词表）──
+        if dims:
+            for 维 in ("成长", "质量", "健康", "运营", "回报"):
+                s = dims.get(维)
+                if isinstance(s, (int, float)):
+                    d档, _ = 格档(float(s), _QUALITY档)
+                    句 = _五维强弱句[维][_维bucket(d档)]
+                    items.append(字段(维, round(float(s), 1), d档, f"影响：{句}"))
+                else:
+                    items.append(字段(维, None, "缺", f"影响：{维}维缺数据"))
+        else:
+            items.append(字段("财报五维", None, "无 five_dims",
+                             "影响：该票未进深度财报采集、五维缺"))
+        # ── 财报增速明细（利润表摘要归母/扣非/营收增速·保字段明细）──
         摘要 = fin.get("利润表摘要") or {}
-        if dims or 摘要:
-            五维 = (f"成长{dims.get('成长')}/质量{dims.get('质量')}/健康{dims.get('健康')}"
-                   f"/运营{dims.get('运营')}/回报{dims.get('回报')}") if dims else "五维NA"
+        if 摘要:
             增速文 = (f"归母{摘要.get('归母净利增速')}/扣非{摘要.get('扣非净利增速')}"
-                    f"/营收{摘要.get('营收增速')}") if 摘要 else "增速NA"
+                    f"/营收{摘要.get('营收增速')}")
             items.append(字段(
-                "财报明细", f"五维[{五维}]",
-                "five_dims 五维(0-100)+利润表增速%(报告期口径)",
-                f"利润表增速 {增速文}",
+                "财报增速明细", 增速文, "利润表增速%(报告期口径)",
+                "影响：扣非增速验成长真实性、剔非经常损益",
             ))
         else:
-            items.append(字段("财报明细", None, "无 five_dims/利润表摘要",
-                             "该票未进深度财报采集"))
+            items.append(字段("财报增速明细", None, "无利润表摘要", "影响：无增速明细、成长细节缺"))
 
         return ToolResult(
             name=self.name, 塔层=self.塔层, as_of=as_of, code=code,
             浓缩块="", 字段解读=items,
+            max_浓缩块_行=13,  # G3 例外·统筹裁定(2026-09-19)：财报五维逐维各一句需 >8 行
             fields={
                 "营收": fund.get("营收"), "净利": fund.get("净利"),
                 "营收增速": fund.get("营收增速"), "净利增速": fund.get("净利增速"),

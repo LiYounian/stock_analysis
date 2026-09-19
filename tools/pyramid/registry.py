@@ -20,7 +20,11 @@ FRESHNESS = ("fresh", "stale", "missing")
 四面枚举 = ("基本面", "技术面", "资金面", "消息情绪面")
 面枚举 = 四面枚举 + ("卡头", "经验")
 
-_MAX_浓缩块_行 = 8  # 公理 G3：每工具每票 ≤ 8 行文字
+_MAX_浓缩块_行 = 8  # 公理 G3：每工具每票默认 ≤ 8 行文字（统筹冻结）
+# G3 例外登记（统筹批准的按工具更高上限）：默认 8 是安全栏（防工具随意膨胀），
+# 个别工具经统筹裁定可声明更高上限——ToolResult(max_浓缩块_行=N) 覆盖。
+#   · growth_quality=13（2026-09-19·体检卡 v2 财报五维逐维各一句，统筹裁定 A 精细版）。
+# 新增例外须统筹批准并在此登记 + 加锁测试（防别的工具偷抬上限、防回退）。
 
 
 @dataclass
@@ -36,6 +40,9 @@ class ToolResult:
         口径须来自工具自己的档位表，拼装层永不现编；四段（名/值/口径/意味）禁止空编。
     freshness：fresh/stale/missing，口径新鲜度。
     防未来：True 表示已断言只用了 as_of 当日及之前的数据。
+    max_浓缩块_行：G3 行数上限（默认 8·统筹冻结安全栏）。经统筹批准个别工具可声明更高
+        （2026-09-19：growth_quality=13，因体检卡 v2 财报五维逐维各一句，统筹裁定 A 精细版）。
+        新增例外须统筹批准 + 在 _MAX_浓缩块_行 处登记 + 加锁测试（见 test_framework G3 锁）。
     """
 
     name: str
@@ -49,6 +56,7 @@ class ToolResult:
     source: str = ""
     面: Optional[str] = None
     字段解读: list = field(default_factory=list)
+    max_浓缩块_行: int = _MAX_浓缩块_行
 
     def __post_init__(self) -> None:
         if self.塔层 not in 塔层枚举:
@@ -65,15 +73,15 @@ class ToolResult:
                 raise ValueError(
                     f"工具 {self.name} 字段解读项非法（名/口径/意味 禁空编）: {it!r}"
                 )
-        # 字段解读非空 且 浓缩块为空 → 自动派生（同源：展示由字段解读渲染）
+        # 字段解读非空 且 浓缩块为空 → 自动派生（同源：展示由字段解读渲染·按本工具上限）
         if self.字段解读 and not str(self.浓缩块).strip():
             from tools.pyramid._common import render_字段
-            self.浓缩块 = render_字段(self.字段解读)
-        # 浓缩块行数硬约束（G3）——超限即契约违规，早失败
+            self.浓缩块 = render_字段(self.字段解读, max_lines=self.max_浓缩块_行)
+        # 浓缩块行数硬约束（G3）——按工具上限（默认 8·统筹冻结；经批准个别更高）；超限即契约违规，早失败
         n = len([ln for ln in str(self.浓缩块).splitlines() if ln.strip()])
-        if n > _MAX_浓缩块_行:
+        if n > self.max_浓缩块_行:
             raise ValueError(
-                f"工具 {self.name} 浓缩块 {n} 行 > 上限 {_MAX_浓缩块_行}（G3）"
+                f"工具 {self.name} 浓缩块 {n} 行 > 上限 {self.max_浓缩块_行}（G3·默认{_MAX_浓缩块_行}）"
             )
 
     def to_prompt(self) -> str:

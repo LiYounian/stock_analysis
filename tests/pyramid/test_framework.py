@@ -30,6 +30,34 @@ def test_浓缩块_超8行即违规():
         ToolResult(name="x", 塔层="①塔基", as_of=AS_OF, 浓缩块="\n".join(str(i) for i in range(9)))
 
 
+# ── G3 按工具可配上限（2026-09-19 统筹裁定·A 精细版）──
+def test_G3默认上限仍8_防随意膨胀():
+    """默认工具（未声明 max_浓缩块_行）仍 8 行安全栏：9 行即 raise。"""
+    ToolResult(name="x", 塔层="①塔基", as_of=AS_OF, 浓缩块="\n".join(str(i) for i in range(8)))  # 8 行 ok
+    with pytest.raises(ValueError):
+        ToolResult(name="x", 塔层="①塔基", as_of=AS_OF, 浓缩块="\n".join(str(i) for i in range(9)))
+
+
+def test_G3工具可声明更高上限_13行例外():
+    """经统筹批准的工具可声明更高上限：13 行 ok、第 14 行才 raise。"""
+    ToolResult(name="x", 塔层="①塔基", as_of=AS_OF, max_浓缩块_行=13,
+               浓缩块="\n".join(str(i) for i in range(13)))  # 13 行 ok
+    with pytest.raises(ValueError):
+        ToolResult(name="x", 塔层="①塔基", as_of=AS_OF, max_浓缩块_行=13,
+                   浓缩块="\n".join(str(i) for i in range(14)))
+
+
+def test_G3例外登记_仅growth_quality声明13():
+    """防别的工具偷偷抬上限：跑全工具（合成缺数据也行），非 growth_quality 的 ToolResult 上限须=8。"""
+    import tools.pyramid.tools as _t  # noqa
+    for name in all_names():
+        r = get(name).run(AS_OF, code="999999", root=ROOT)  # 缺数据票·各工具走 missing/NA 分支
+        if name == "growth_quality":
+            assert r.max_浓缩块_行 == 13
+        else:
+            assert r.max_浓缩块_行 == 8, f"{name} 未经批准声明了 {r.max_浓缩块_行} 行上限"
+
+
 def test_to_prompt_不吐裸json():
     r = ToolResult(name="t", 塔层="①塔基", as_of=AS_OF, 浓缩块="现价 10 元 [中]", fields={"x": 1})
     s = r.to_prompt()
