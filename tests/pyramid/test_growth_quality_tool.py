@@ -216,3 +216,55 @@ def test_run_真实票():
     assert "财报质量汇总" in txt                 # 汇总行
     assert "回报维" in txt                       # ROE 强弱挂回报维
     assert len([l for l in r.浓缩块.splitlines() if l.strip()]) <= 13  # G3 例外上限
+
+
+# ── 缺口二:行业评分档透传(非重算)语义锁 ──
+def test_行业评分档_透传毛利率负债率(tmp_path):
+    """financial 块带 analyzer 已算的 行业评分档 → 盈利能力/负债率 透传"本行业评分档",
+    档=格档(score,_QUALITY档)(与 five_dims 同口径),不是跨行业粗档;口径标"非经验百分位"。"""
+    root = _write_fake(
+        tmp_path, "600020",
+        fundamental={"营收": 1e9, "净利": 1e8, "营收增速": 10.0, "净利增速": 10.0,
+                     "ROE": 8.0, "毛利率": 32.5, "净利率": None, "负债率": 45.0, "每股股利": None},
+        financial={"金融业口径": False, "five_dims": {"回报": 50.0},
+                   "行业评分档": {
+                       "毛利率": {"值": 32.5, "行业": "电子", "区间": [10, 55], "score": 50.0},
+                       "资产负债率": {"值": 45.0, "行业": "电子", "区间": [75, 30], "score": 66.67}}},
+    )
+    r = GrowthQualityTool().run(AS_OF, "600020", root=root)
+    盈利 = next(it for it in r.字段解读 if it["名"] == "盈利能力")
+    assert f"本行业电子评分档{格档(50.0, _QUALITY档)[0]}" in 盈利["值"]   # 透传 score→_QUALITY档,非跨行业_毛利率档
+    assert "非经验百分位" in 盈利["口径"] and "本行业评分档" in 盈利["口径"]
+    负债 = next(it for it in r.字段解读 if it["名"] == "负债率")
+    assert f"本行业电子评分档{格档(66.67, _QUALITY档)[0]}" in 负债["口径"]  # 反向指标:低负债→高分→更优
+
+
+def test_无行业评分档_回退跨行业粗档(tmp_path):
+    """无 行业评分档(通用兜底票)→ 毛利率/负债率 回退跨行业粗档,并明标'跨行业'(行为不变)。"""
+    root = _write_fake(
+        tmp_path, "600021",
+        fundamental={"营收": 1e9, "净利": 1e8, "营收增速": 10.0, "净利增速": 10.0,
+                     "ROE": 8.0, "毛利率": 32.5, "净利率": 9.0, "负债率": 45.0, "每股股利": None},
+        financial={"金融业口径": False, "five_dims": {"回报": 50.0}},   # 无 行业评分档
+    )
+    r = GrowthQualityTool().run(AS_OF, "600021", root=root)
+    盈利 = next(it for it in r.字段解读 if it["名"] == "盈利能力")
+    assert "跨行业" in 盈利["值"] and "跨行业粗参考" in 盈利["口径"]
+    assert "本行业" not in 盈利["值"]
+    负债 = next(it for it in r.字段解读 if it["名"] == "负债率")
+    assert "跨行业粗档" in 负债["口径"]
+
+
+def test_金融业负债率不透行业档(tmp_path):
+    """金融业口径票即便偶带 行业评分档.资产负债率,负债率仍走金融例外(勿套档),不透行业评分档。"""
+    root = _write_fake(
+        tmp_path, "600022",
+        fundamental={"营收": 1e9, "净利": 1e8, "营收增速": 5.0, "净利增速": 5.0,
+                     "ROE": 2.0, "毛利率": None, "净利率": None, "负债率": 92.0},
+        financial={"金融业口径": True, "five_dims": {"回报": 50.0},
+                   "行业评分档": {"资产负债率": {"值": 92.0, "行业": "银行", "区间": [75, 30], "score": 0.0}}},
+    )
+    r = GrowthQualityTool().run(AS_OF, "600022", root=root)
+    负债 = next(it for it in r.字段解读 if it["名"] == "负债率")
+    assert "金融业口径" in 负债["口径"] and "勿套档" in 负债["意味"]
+    assert "本行业" not in 负债["口径"]

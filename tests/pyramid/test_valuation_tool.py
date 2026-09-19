@@ -211,3 +211,21 @@ def test_run_真实票():
     assert len(r.字段解读) == 5
     for it in r.字段解读:
         assert it["名"] and it["口径"] and it["意味"] and it["值"]
+
+
+# ── 缺口二:PE/PB 行业分位口径注(B期横截面管线,本轮只加口径注不做)──
+def test_PE_PB_行业分位口径注为B期(tmp_path):
+    """PE/PB 明标'跨市场粗档',影响里明确'行业分位属 B 期横截面管线,暂未接入'——
+    诚实标注未接入,不夸大成已有行业分位。"""
+    root = _write_fake(
+        tmp_path, "600030",
+        valuation={"pe_ttm": 25.0, "pb": 3.0, "mktcap_yi": 100.0,
+                   "pe_valid": True, "mode": "PE适用", "basis": "b", "口径提示": "t"},
+        fundamental={"净利增速": 20.0},
+        financial={"利润表摘要": {"归母净利增速": 20.0}, "报告期": "2026-06-30"},
+    )
+    r = ValuationTool().run(AS_OF, "600030", root=root)
+    pe = next(it for it in r.字段解读 if it["名"] == "PE(TTM)")
+    pb = next(it for it in r.字段解读 if it["名"] == "PB")
+    assert "跨市场粗档" in pe["口径"] and "B期" in pe["意味"].replace(" ", "") and "暂未接入" in pe["意味"]
+    assert "跨市场粗档" in pb["口径"] and "B 期" in pb["意味"] and "暂未接入" in pb["意味"]

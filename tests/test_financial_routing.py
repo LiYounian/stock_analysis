@@ -154,3 +154,19 @@ def test_sector_rotation_gating_unchanged():
     assert "板块轮动" in c["默认专家组"]              # 仍在组(结构未动)
     assert c["默认权重"].get("板块轮动") == 1.0        # 权重未动
     # 弃权时净贡献=强度×置信度×权重=0(置信度0),不因权重非0而污染合议——由 ④ 上例锁定。
+
+
+# ——— 缺口二:行业评分档(_industry_score_band)——引擎已算区间定位,非经验百分位 ———
+def test_industry_score_band_电子():
+    """电子专家 dimension_specs 毛利率区间[10,55]、资产负债率反向[75,30]:
+    毛利率32.5→score50;资产负债率45→score66.67(反向);无专家→None;缺值→不产出。"""
+    import pytest as _pt
+    band = az._industry_score_band("电子", {"毛利率": 32.5, "资产负债率": 45.0})
+    assert band["毛利率"]["score"] == _pt.approx(50.0, abs=0.1)
+    assert band["毛利率"]["区间"] == [10, 55] and band["毛利率"]["行业"] == "电子"
+    assert band["资产负债率"]["score"] == _pt.approx(66.67, abs=0.1)  # 反向:低负债→高分
+    # 无专家(综合)→ None(展示层回退跨行业粗档)
+    assert az._industry_score_band("综合", {"毛利率": 32.5}) is None
+    assert az._industry_score_band(None, {"毛利率": 32.5}) is None
+    # 缺值 → 不产出该项(整体空→None)
+    assert az._industry_score_band("电子", {}) is None

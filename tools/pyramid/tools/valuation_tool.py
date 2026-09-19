@@ -150,8 +150,9 @@ class ValuationTool:
         if pe适用 and isinstance(pe, (int, float)):
             档, _ = 格档(pe, _PE参考档)
             items.append(字段(
-                "PE(TTM)", pe, 档,
-                "影响：" + _PE影响.get(档, "结合 PEG/行业分位看"),
+                "PE(TTM)", pe, f"{档}·跨市场粗档",
+                "影响：" + _PE影响.get(档, "结合 PEG/行业分位看")
+                + "（PE/PB 仍跨市场粗档;行业分位需当日全行业横截面管线=B期,暂未接入）",
             ))
         else:
             items.append(字段(
@@ -163,7 +164,9 @@ class ValuationTool:
         # ── PB ──
         if isinstance(pb, (int, float)):
             档, _ = 格档(pb, _PB档)
-            items.append(字段("PB", pb, 档, "影响：" + _PB影响.get(档, "参考净资产溢价")))
+            items.append(字段("PB", pb, f"{档}·跨市场粗档",
+                             "影响：" + _PB影响.get(档, "参考净资产溢价")
+                             + "（跨市场粗档;行业分位属 B 期横截面管线,暂未接入）"))
         else:
             items.append(字段("PB", None, "PB 缺失", "影响：无 PB 数据、该维缺席"))
 

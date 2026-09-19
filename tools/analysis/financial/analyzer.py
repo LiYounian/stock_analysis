@@ -218,6 +218,42 @@ def _struct_summary(rec: dict) -> dict:
     return out
 
 
+# 塔身工具展示会用到、且值得"行业化"的子指标(derived 键):跨行业粗档 → 本行业评分区间定位。
+# 只覆盖 dimension_specs 里确实有的子指标(毛利率/资产负债率几乎所有行业都有;净利率仅计算机/非银)。
+_行业档_关注键 = ("毛利率", "资产负债率", "净利率")
+
+
+def _industry_score_band(key: str | None, derived: dict) -> dict | None:
+    """把塔身工具展示的 毛利率/资产负债率(/净利率)在**本行业 dimension_specs 评分区间**中的位置
+    固化下来,供 growth_quality **纯透传**(不重算)。
+
+    口径诚实(统筹 2026-09-20):这是引擎已算的**行业化评分区间**定位(_score_linear 到 [0分端,100分端]),
+    **不是同行业经验百分位**——展示层据 score 用统一 _QUALITY档 给"本行业评分档:优/良/中/弱",不写"百分位"。
+    无行业专家 / 无该子指标 / 缺值 → 该项不产出(None → 展示层回退跨行业粗档,行为不变)。
+    """
+    exp = get_expert(key)
+    if exp is None:
+        return None
+    try:
+        specs = exp.dimension_specs() or {}
+    except Exception:                                       # noqa: BLE001
+        return None
+    out: dict[str, dict] = {}
+    for _dim, subs in specs.items():
+        for sub in subs:
+            if len(sub) != 4:
+                continue
+            _name, dkey, lo, hi = sub
+            if dkey not in _行业档_关注键 or dkey in out:
+                continue
+            val = (derived or {}).get(dkey)
+            sc = scoring_mod._score_linear(val, lo, hi)
+            if sc is None:
+                continue
+            out[dkey] = {"值": val, "行业": key, "区间": [lo, hi], "score": sc}
+    return out or None
+
+
 def _profit_digest(rec: dict, derived: dict) -> dict:
     """浅度输出:利润表摘要(服务情绪/短期,方案 §0.5 C 浅度层)。"""
     prof = rec.get("利润表", {})
@@ -439,6 +475,7 @@ def _compute_financial_block(code: str, as_of: str | None = None,
         "口径注解": res.get("口径注解"),           # 模糊时口径说明;非模糊=None
         "行业模糊": bool((res.get("消歧") or {}).get("ambiguous")),  # 页面一眼可见的模糊标记
         "derived": latest.get("derived"),
+        "行业评分档": _industry_score_band(res.get("行业专家"), latest.get("derived")),  # 缺口二:塔身透传源(非经验百分位)
         "verdict": None,   # LLM 层留口
     }
     # 审计意见闸门(闸门2)传导:取最新已披露"年报"的审计意见,即使 latest 是季报也生效。
