@@ -178,3 +178,27 @@ tools:
     reuse: data/analysis/<date>/<code>.json 的 fundflow/tick/holder/lhb_veto/financing + 主档K线turnover + config/code_industry.json + data/sector_roster/<板块>.json
     tests: tests/pyramid/test_fund_flow.py
     note: "体检卡四面·资金面填充(设计2026-09-19§2c/2d/4b);字段解读走_common.字段()四段不空编·档位写死语义锁;净占比缺(实测~57%)按同定义折算(净流入/口径日成交额)口径明标折算+新鲜度;换手率单表(创业/科创偏高见意味);龙虎榜只读surface不重算veto;两融financing无margin字段→标待补落盘(不动collectors·另chip补);竞品=板块内相对(用户拍板)复用code_industry→sector_roster按换手降序rank(龙头级≤20%/前排/中游/尾部)+vs龙头均值+vs板均,仅10个申万一级有roster·无roster/未含→NA;档位阈值:净占比强流出≤-5/流出/中性(-1,1]/流入/强流入>5,主买弱≤.45/均衡/偏强(.52,.56]/强,户数环比明显集中≤-10/集中/平稳(-3,3]/分散/明显分散>10(负=集中),换手过低≤1/正常/活跃(3,7]/过热炒作>7"
+  - name: news_raw
+    塔层: "②消息"
+    面: 消息情绪面
+    status: done
+    window: W1(辩证查证·个股新闻原文下钻)
+    inputs: [as_of, code]
+    outputs: [浓缩块(header近N条利好/利空/中性计数+最近5条标签·标题·来源·时间), fields(条数/source_used/利好/利空/中性/未标注/news全量条目)]
+    freshness: 两源文件皆缺=missing；文件在(含0条)=fresh
+    防未来: true
+    reuse: data/raw/<date>/baidu_news/<code>.json(主) + data/raw/<date>/news/<code>.json(兜底)
+    tests: tests/pyramid/test_news_raw.py
+    note: "辩证查证只读下钻接口·把当日个股新闻原文原样surface(不打分/不改标签/不编造);分层输出:浓缩块=紧凑摘要(≤8行·header计数+最近5条`[标签]标题｜来源·时间`,url与长摘要不进浓缩块)、fields[news]=全量条目(title/source/url/publish_time/benefit_label/abstract)供agent下钻;CLI `--json` dump全量fields(下钻拿url/source靠它·有测试锁);主源baidu_news含benefit_label(利好/利空/中性)原样透传,兜底news源无标签标'未标注'摘要用content;防未来按publish日期≤as_of滤(防post-date);三态诚实:两源皆缺missing/文件在但0条fresh(样本无≠缺失)/有条fresh;非体检卡自动渲染工具(不在d2_package.tool_names),纯下钻不撑爆决策包"
+  - name: market_forecast
+    塔层: "④宏观"
+    面: null
+    status: done
+    window: W1(辩证查证·大盘定调查询)
+    inputs: [as_of, code忽略]
+    outputs: [浓缩块(β基准proxy1日+5日/hs300背景/分歧标记/广度/情绪/两融kill-switch/维度贡献1日+5日/notes效力caveat原样), fields(targets/breadth/sentiment/fundflow/分歧标记/notes原样全量)]
+    freshness: 当日有=fresh；回退最近≤as_of一日=stale；全无=missing
+    防未来: true
+    reuse: data/analysis/<date>/market_forecast.json(schema market_forecast/v1)
+    tests: tests/pyramid/test_market_forecast.py
+    note: "辩证查证只读接口·把当日大盘定调原样surface(不新算档,prob_bucket/factor_contrib均自json原样);市场级背景面=None(不挂个股四面卡·统筹裁定);个股β基准默认proxy(全A等权≈中小盘)hs300仅权重股背景,分歧看'分歧标记';factor_contrib标清horizon(1日+5日两档都surface);两融维kill-switch权重=0标清不参与判别;⚠️notes效力caveat**原样**透传(整体命中~55%但多空收益价差≈0无经济alpha·勿把高概率读成能赚钱),绝不洗白;缺当日回退最近≤as_of标stale·全无missing·绝不编;防未来断言文件内部as_of≤查询as_of;非体检卡自动渲染工具(不在d2_package.tool_names)"

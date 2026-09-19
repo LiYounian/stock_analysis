@@ -17,6 +17,8 @@ from tools.pyramid.tools import valuation_tool  # noqa: F401  Wave2 基本面·�
 from tools.pyramid.tools import growth_quality_tool  # noqa: F401  Wave2 基本面·成长盈利
 from tools.pyramid.tools import technical_detail_tool  # noqa: F401  Wave2 技术面·指标明细
 from tools.pyramid.tools import fund_flow_tool  # noqa: F401  Wave2 资金面
+from tools.pyramid.tools import news_raw_tool  # noqa: F401  W1 辩证查证·个股新闻原文下钻
+from tools.pyramid.tools import market_forecast_tool  # noqa: F401  W1 辩证查证·大盘定调查询
 
 __all__ = [
     "entry_price_tool",
@@ -34,4 +36,6 @@ __all__ = [
     "growth_quality_tool",
     "technical_detail_tool",
     "fund_flow_tool",
+    "news_raw_tool",
+    "market_forecast_tool",
 ]
