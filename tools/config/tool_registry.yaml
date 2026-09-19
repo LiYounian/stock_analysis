@@ -118,3 +118,15 @@ tools:
     reuse: data/analysis/<date>/<code>.json 的 events(type∈{减持,权益变动})
     tests: tests/pyramid/test_insider_reduction.py
     note: "大股东减持抛压(负向·消息面·镜像fake_good_news);v1标题级粗判;候选=type∈{减持,权益变动}且as_of前30日内且date≤as_of(防未来);逐条严重度:中性(协议转让/引入战投/业务协同/增持/未减持 或impact利好)不计/高(清仓式或控股股东+大额)/中单条(大额/预披露)/常规;档位(写死)无嫌疑/低/中/高;高走veto清仓式减持;接d2_compose排雷子分(中-25/低-12);只走events不碰holder(股东户数)/fundflow(主力);减持低频多数票窗内0条属正常;v2需新采occ量化占流通%×主体×方式"
+  - name: technical_detail
+    塔层: "①塔基"
+    面: 技术面
+    status: done
+    window: Wave2(技术面·指标明细)
+    inputs: [as_of, code]
+    outputs: [排列, MACD状态, KDJ状态, RSI12, RSI12档, 获利比例, 集中度90, 筹码降级, 距支撑pct, 距压力pct, 趋势, BOLL落盘]
+    freshness: 有snapshot=fresh(snapshot.新鲜度≠新鲜则stale)；无=missing
+    防未来: true
+    reuse: data/analysis/<date>/<code>.json 的 snapshot(ma/macd/kdj/rsi)/chip/prediction.结构位
+    tests: tests/pyramid/test_technical_detail.py
+    note: "补price_volume未上全的技术指标明细·不重复量价(现价/量比/pos60/vsMA归price_volume,入场/止损止盈/持有期归entry_price);状态类(MA排列/MACD状态/KDJ状态)原样用technical.py序列化器,RSI12档阈值=strategy.THRESHOLDS.超买超卖.RSI12 canonical单一真源(测试锁死20/30/70/80);chip获利比例&集中度90按全A分位标定;BOLL snapshot未落盘恒标待补(不动序列化器);字段解读→浓缩块自动派生≤8行(实取7条)"
