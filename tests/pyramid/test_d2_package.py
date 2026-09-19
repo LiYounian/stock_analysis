@@ -462,3 +462,118 @@ def test_render_package_缺market_forecast兜底薄读数():
     assert "缺 market_forecast" in txt and "降级中性" in txt
     assert "当前市场风险偏好" in txt  # 兜底薄读数保留
     assert "定调依据：" in txt
+
+
+# ── 决策包 canonical 钉死：多快照漂移消症状（钉死同一份 + 指纹检测底层漂移）──────
+class _Row:
+    """仿骨架 row 对象：消费方只用 len；内部字段仅证明序列化会把它替成 None。"""
+
+    def __init__(self, code, 骨架分):
+        self.code = code
+        self.骨架分 = 骨架分
+        self.子分 = {"量价自证": 1.0}
+        self.来源标签 = ["K线过闸"]
+
+
+def _make_build(counter):
+    """假 build_package：每调一次骨架分 +10（模拟底层重跑漂移），skel 带 row 对象验序列化。"""
+    def _build(as_of, root=None, top_n=15, **kw):
+        counter["n"] += 1
+        base = 60.0 + 10 * counter["n"]
+        ov = {"as_of": as_of, "风险偏好": "中性", "重点板块": [], "规避板块池": [],
+              "全板块": [], "market_forecast": None}
+        skel = {"池规模": 4, "参与票数": 4, "计分票数": 3, "排序票数": 2,
+                "否决票数": 1, "数据缺失票数": 1, "权重": {},
+                "排序键": "x",
+                "排序": [_Row("600000", base), _Row("600001", base - 1)],
+                "排雷否决": [_Row("600002", 0.0)]}
+        cards = [{"code": "600000", "名称": "浦发银行", "as_of": as_of,
+                  "骨架分": base, "子分": {"量价自证": 80.0}, "来源标签": ["K线过闸"],
+                  "面块": {"基本面": ["【x】blk"]}, "新闻digest_lines": ["【digest】x"]}]
+        return {"as_of": as_of, "市场定调": ov, "骨架": skel,
+                "候选卡片": cards, "top_n": top_n}
+    return _build
+
+
+def _canon_path(tmp_path, as_of="2026-09-17"):
+    return tmp_path / "data" / "analysis" / as_of / P._CANONICAL_NAME
+
+
+def test_canonical_钉死同一份跨调用(tmp_path, monkeypatch):
+    """① 底层每算一次都漂，但连续两次 get_canonical_package 返回同一份、build 只跑一次、文件落盘。"""
+    counter = {"n": 0}
+    monkeypatch.setattr(P, "build_package", _make_build(counter))
+    p1 = P.get_canonical_package("2026-09-17", root=str(tmp_path), top_n=8, log=lambda *_: None)
+    p2 = P.get_canonical_package("2026-09-17", root=str(tmp_path), top_n=8, log=lambda *_: None)
+    assert p1["候选卡片"][0]["骨架分"] == p2["候选卡片"][0]["骨架分"]  # 钉死
+    assert counter["n"] == 1                                          # build 只跑一次
+    assert _canon_path(tmp_path).exists()
+
+
+def test_canonical_rebuild覆盖出新分(tmp_path, monkeypatch):
+    """② rebuild=True 强制重算并覆盖（骨架分推进）。"""
+    counter = {"n": 0}
+    monkeypatch.setattr(P, "build_package", _make_build(counter))
+    p1 = P.get_canonical_package("2026-09-17", root=str(tmp_path), top_n=8, log=lambda *_: None)
+    p2 = P.get_canonical_package("2026-09-17", root=str(tmp_path), top_n=8, rebuild=True, log=lambda *_: None)
+    assert p2["候选卡片"][0]["骨架分"] > p1["候选卡片"][0]["骨架分"]
+    assert counter["n"] == 2
+
+
+def test_canonical_topn不符触发重算(tmp_path, monkeypatch):
+    """③ 已存 top_n=8，请求 top_n=15 → 触发重算并按新 top_n 落盘。"""
+    counter = {"n": 0}
+    monkeypatch.setattr(P, "build_package", _make_build(counter))
+    P.get_canonical_package("2026-09-17", root=str(tmp_path), top_n=8, log=lambda *_: None)
+    p2 = P.get_canonical_package("2026-09-17", root=str(tmp_path), top_n=15, log=lambda *_: None)
+    assert p2["top_n"] == 15
+    assert counter["n"] == 2
+
+
+def test_inputs_fingerprint_随内容变且排除canonical自身(tmp_path):
+    """④ 指纹随底层 json 内容变化；canonical 自身文件不参与指纹。"""
+    d = tmp_path / "data" / "analysis" / "2026-09-17"
+    d.mkdir(parents=True)
+    (d / "sector_focus.json").write_text('{"a":1}', encoding="utf-8")
+    fp1 = P._inputs_fingerprint(str(tmp_path), "2026-09-17")
+    assert fp1
+    (d / "sector_focus.json").write_text('{"a":2}', encoding="utf-8")
+    fp2 = P._inputs_fingerprint(str(tmp_path), "2026-09-17")
+    assert fp1 != fp2
+    # canonical 自身写进同目录也不改变指纹
+    (d / P._CANONICAL_NAME).write_text('{"top_n":8}', encoding="utf-8")
+    assert P._inputs_fingerprint(str(tmp_path), "2026-09-17") == fp2
+
+
+def test_canonical_底层漂移不rebuild仍返钉死且告警(tmp_path, monkeypatch):
+    """⑤ 生成后改底层输入、不 rebuild → 仍返钉死包（骨架分不变、不重算）且 log 漂移告警。"""
+    counter = {"n": 0}
+    monkeypatch.setattr(P, "build_package", _make_build(counter))
+    d = tmp_path / "data" / "analysis" / "2026-09-17"
+    d.mkdir(parents=True)
+    (d / "sector_focus.json").write_text('{"a":1}', encoding="utf-8")
+    p1 = P.get_canonical_package("2026-09-17", root=str(tmp_path), top_n=8, log=lambda *_: None)
+    s1 = p1["候选卡片"][0]["骨架分"]
+    (d / "sector_focus.json").write_text('{"a":999,"more":true}', encoding="utf-8")  # 底层漂
+    logs = []
+    p2 = P.get_canonical_package("2026-09-17", root=str(tmp_path), top_n=8, log=logs.append)
+    assert p2["候选卡片"][0]["骨架分"] == s1     # 仍返钉死包
+    assert counter["n"] == 1                     # 没重算
+    assert any("底层输入已漂" in m for m in logs)  # 漂移告警
+
+
+def test_canonical_row对象落盘reload后render不抛(tmp_path, monkeypatch):
+    """⑥ skel 含 row 对象 → 序列化替 [None]*n；reload 后 render_package 不抛、张数用标量键正确。"""
+    counter = {"n": 0}
+    monkeypatch.setattr(P, "build_package", _make_build(counter))
+    pkg = P.get_canonical_package("2026-09-17", root=str(tmp_path), top_n=8, log=lambda *_: None)
+    assert pkg["骨架"]["排序"] == [None, None]   # row 对象已替成可 json 的 None
+    assert pkg["骨架"]["排雷否决"] == [None]
+    txt = P.render_package(pkg)                   # 不抛
+    assert txt.startswith("# 金字塔决策包")
+    assert "计分3=排序2+否决1" in txt             # 计数走标量键，非误读 None 列表
+    # 从磁盘 reload 同样可渲染
+    import json
+    with open(_canon_path(tmp_path), encoding="utf-8") as f:
+        reloaded = json.load(f)
+    assert P.render_package(reloaded).startswith("# 金字塔决策包")
