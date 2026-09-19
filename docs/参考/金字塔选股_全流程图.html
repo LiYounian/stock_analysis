@@ -184,6 +184,14 @@
   .trow .tl .cap{display:block;color:var(--ink-3);font-size:11px;margin-top:2px}
   .trow .tr{font-size:12.5px;color:var(--ink-2)}
   .trow .tr .imp{color:var(--green)}
+  .trow .tr .neg{color:var(--news)}
+  .trow .tr .warn{color:var(--gold)}
+  .trow .tr .pos{color:var(--green)}
+  /* 大盘市场体检卡：蓝色 accent 区分于个股绿卡 */
+  .target.market{border-color:rgba(78,168,255,.34);background:linear-gradient(180deg,rgba(78,168,255,.05),transparent)}
+  .target.market .t-head .tt{color:var(--accent)}
+  .target.market .tface .fh .fi{background:var(--accent)}
+  .target.market .t-meta b{color:var(--accent)}
   .stag{font-family:var(--mono);font-size:9.5px;padding:0 6px;border-radius:4px;border:1px solid;margin-left:7px;white-space:nowrap;vertical-align:middle}
   .stag.now{color:var(--ink-2);border-color:#39466a}
   .stag.add{color:var(--accent);border-color:var(--accent-soft);background:rgba(78,168,255,.06)}
@@ -218,7 +226,7 @@
   .nf-foot{border-top:1px solid var(--news-soft);padding:14px 22px;font-size:12.5px;color:var(--ink-3)}
   .nf-foot b{color:var(--news);font-weight:500}
 
-  /* 市场·国际·板块消息面 真实产出 */
+  /* 板块消息催化 + 国际面 真实产出 */
   .msgface{max-width:1040px;margin:14px auto 0;padding:0 28px}
   .mf-card{border:1px solid var(--news-soft);border-radius:18px;background:linear-gradient(180deg,rgba(255,155,176,.035),transparent);overflow:hidden}
   .mf-lex{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:4px 22px;padding:16px 22px;border-bottom:1px solid var(--news-soft);background:rgba(255,155,176,.02)}
@@ -424,7 +432,7 @@
     <div class="layer">
       <div class="lh"><div class="lidx">2</div>
         <div><div class="ltitle">逐票浓缩<span class="lid">十项分析工具</span></div>
-          <div class="ldesc">对候选池里的<b>每一只股票</b>，运行一组分析工具，把它散落在 K 线、财务、估值、资金、板块、消息里的原始数据，压成一张<b>按四个面组织</b>、每个数字都带口径与解读的“体检卡”。后续打分和 AI 都只读这张卡，不再碰原始数据。下面先看重构前的旧卡（薄）与缺口，再看重构后（A 期已上线）的真实四面卡。</div></div></div>
+          <div class="ldesc">对候选池里的<b>每一只股票</b>，运行一组分析工具，把它散落在 K 线、财务、估值、资金、板块、消息里的原始数据，压成一张<b>按四个面组织</b>、每个数字都带口径与解读的“体检卡”。后续打分和 AI 都只读这张卡，不再碰原始数据。</div></div></div>
       <div class="io">
         <div class="cell"><div class="k"><span class="arw">▸</span>输入</div>
           <div class="v">一只候选股 + 它的 K 线、财务、公告、资金流、筹码、解禁、减持、板块、消息等原始数据。</div></div>
@@ -433,57 +441,12 @@
         <div class="cell"><div class="k"><span class="arw">▸</span>产出</div>
           <div class="v">每只一张体检卡，每项结论都标明依据、口径与档位。<span class="from">供给：第 3 层打分、第 5 层 AI</span></div></div>
       </div>
-      <div class="example">
-        <div class="ex-h">重构前 · A 期上线前的旧卡（逐字摘自 <b>金字塔决策包_top8.md</b> · 代码 301551 · 仅十块，财报/解禁/减持/假利好当日数据缺失）</div>
-        <div class="ex-b"><span class="hl">### 301551　骨架分=74.9　子分[量价93 板块60 策略50 排雷100 宏观70]　来源=板块roster、K线过闸</span>
-<span class="dim">【shared_pool】</span>命中来源: 板块roster/K线过闸（2/4来源·≥2=交叉共识）
-<span class="dim">【price_volume】</span>现价 21.69　涨幅 +3.48%【口径:收盘·较前收】
-量比 1.72【当日量/前5日均量·放量】放量·资金关注度升
-位置pos60 0.65【近60日[低,高]分位·中】中枢区·多空相对均衡
-距60高 -6.9%　vsMA5 +2.4%(站上)　vsMA20 +2.5%(站上)
-<span class="dim">【gate】</span>层级 T1【T1/T2/T3分层闸门·阈值写死】量比1.72≥1.5∧收阳∧站上MA5∧破前高∧未近涨停
-排雷: 涨停未触 近涨停未触 极高位pos60=0.65(≥0.95踢出)
-<span class="dim">【sector_context】</span>板块 通信（申万一级·重点池）focus0.60[中]
-冷热拥挤 过热·拥挤B　角色 龙头·主选　板块内排名 第1/20(按5日涨幅)
-净催化 正[net17·利好5/利空0]（偏利好）　<span class="dim">← 板块级，非个股消息</span>
-<span class="dim">【experience_rules】</span>命中 0 条（总库64·可用0）无适用规则
-<span class="miss">【fake_good_news】[数据缺失] 假利好嫌疑 无嫌疑（events 缺失·不编造）</span>
-<span class="miss">【financial_redflag】[数据缺失]（无 financial 字段·不编造）</span>
-<span class="miss">【unlock_risk】[数据缺失]（无 financing.解禁 字段·不编造）</span>
-<span class="miss">【insider_reduction】[数据缺失]（无 events 字段·不编造）</span>
-<span class="dim">【entry_price】</span>回踩MA5　首入场限价 21.18　加仓 21.18=MA5　止损 21.158(-0.1%)</div>
-      </div>
-      <div class="coverage">
-        <div class="cov has">
-          <h5><i></i>重构前 · 卡里已有</h5>
-          <ul>
-            <li><b>走势（单日）</b>：涨幅、量比放量/缩量、位置分位、是否站上均线</li>
-            <li><b>分层闸门</b>：按走势强弱分 T1/T2/T3</li>
-            <li><b>板块</b>：所属板块冷热、个股角色、板块内 5 日涨幅排名、板块级净催化</li>
-            <li><b>风险排查</b>：假利好、财报、解禁、减持（有数据时）</li>
-            <li><b>入场价位</b>、<b>经验规则</b></li>
-          </ul>
-        </div>
-        <div class="cov has">
-          <h5><i></i>重构后 · A 期已补齐（原缺失项）</h5>
-          <ul>
-            <li><b>PE / PB / PEG</b>：估值维度已接入（PEG 现价×一致预期现算）</li>
-            <li><b>ROE / 毛利 / 净利率 / 营收净利增速明细</b>：已接入基本面</li>
-            <li><b>个股资金流入 / 龙虎榜 / 股东户数 / 换手率</b>：已接入资金面</li>
-            <li><b>个股消息面情绪 / 一致预期</b>：已接入消息面</li>
-            <li><b>竞品</b>＝板块内相对；<b>MACD/KDJ/RSI/筹码/支撑压力/BOLL/PE历史分位/两融</b>均已落盘接入</li>
-            <li><span style="color:var(--green)">A 期已全部转真值</span>；仅 <span style="color:#7d8aa8">后置</span>：PS / 价格形态 / 社媒（需新采新建）</li>
-          </ul>
-        </div>
-      </div>
-      <div class="cov-note"><b>本轮（A 期）已解决：</b>① 上面旧卡里 4 块“数据缺失”反映的深数据只对入选并集采集问题仍在，但<b>“缺数据＝满分”的评分隐患已修</b>（缺数据降中性、不再虚高）。② 四面工具全部接入、缺数据一律诚实报“数据缺失·不编造”、<b>卡片已带股票名称</b>。下面即重构后的真实四面卡。</div>
-
       <div class="target">
         <div class="t-head">
-          <div class="tt">重构后 · 四面结构化体检卡（A 期已上线 · 真实产出）</div>
-          <div class="td">按「基本面 / 技术面 / 资金面 / 消息情绪面」分区，每条＝真实数值 +【真实口径/档位（从模块原样传上来，不新编）】+ → 这意味着什么。真实样例票 <b>000504 · as_of 2026-09-17</b>（主仓实跑核验）。</div>
+          <div class="tt">个股体检卡 · 四面结构化 · 真实产出</div>
+          <div class="td">按「基本面 / 技术面 / 资金面 / 消息情绪面」四区 + 经验纪律排列，每条＝真实数值 +【口径 / 档位（从各分析模块原样传上来，不新编）】+ → 这意味着什么。真实样例票 <b>000504 · as_of 2026-09-17</b>（主仓实跑核验）。</div>
         </div>
-        <div class="t-meta">A 期已上线：估值 / 成长 / 技术指标 / 资金面(含竞品) / 个股消息情绪 五组工具全部接入四面卡。缺数据一律诚实报「数据缺失·不编造」，且<b>缺数据不再给满分（#6 已修）</b>。</div>
+        <div class="t-meta">估值 / 成长 / 技术指标 / 资金面（含竞品板块内相对）/ 个股消息情绪 五组工具全部接入。缺数据一律诚实报「数据缺失 · 不编造」，且<b>不因缺数据给满分</b>——降中性档处理、不虚高。</div>
 
         <div class="tface">
           <div class="fh"><span class="fi"></span>一、基本面</div>
@@ -539,9 +502,9 @@
         </div>
 
         <div class="t-legend">
-          <span>无标签＝A 期已上线·真实值</span>
+          <span>无标签＝真实数值</span>
           <span><span class="stag defer">后置</span> 社媒(源未接入) / PS / 价格形态(需新采新建)</span>
-          <span>NA ＝ 该票无数据（能力已上线，此票无覆盖，诚实不编）；两融 NA ＝ 非融资融券标的·天然缺席</span>
+          <span>NA ＝ 该票无数据（此票无覆盖，诚实不编）；两融 NA ＝ 非融资融券标的·天然缺席</span>
         </div>
       </div>
     </div>
@@ -579,23 +542,50 @@
     <div class="layer">
       <div class="lh"><div class="lidx">4</div>
         <div><div class="ltitle">决策包<span class="lid">d2_package</span></div>
-          <div class="ldesc">取排名最靠前的约 15 只，连同<b>市场定调</b>（当天整体氛围）、<b>全板块概览</b>（每个板块的冷热）、每只股票的完整体检卡，打包成一份供人和 AI 阅读的决策材料。市场定调与板块概览取自当天的板块研判与市场宽度，不是这一层临时算的。</div></div></div>
-      <div class="example">
-        <div class="ex-h">市场定调 · 真实样例（<b>2026-09-17</b>）</div>
-        <div class="ex-b">广度中性震荡：净广度 −0.04、涨停 58 / 跌停 6、沪深300 震荡、
-风格背离（权重搭台、中小盘偏弱）。外围美联储加息偏空。
-全板块 29 个已扫，主线不集中：<span class="hl">通信</span>（过热·龙头强）、
-<span class="hl">电子</span>（涨停最多但均涨为负 = 分化）、<span class="hl">汽车</span>（过冷但涨停 9 · 异动）。</div>
+          <div class="ldesc">把排名最靠前的约 15 只，连同一张<b>大盘·市场体检卡</b>（整个 A 股当天的方向、广度、情绪、资金、板块强弱）、每只候选的<b>四面体检卡</b>（见第 2 层）、以及<b>板块消息催化</b>（见 §04），打包成供人和 AI 阅读的决策材料。市场层与个股层<b>同构</b>：都是「数值 +【口径/档位】+ 这意味着什么」，喂给终选 AI 的都是显式变量。</div></div></div>
+
+      <div class="target market">
+        <div class="t-head">
+          <div class="tt">大盘 · 市场体检卡 · 真实产出</div>
+          <div class="td">和个股体检卡同构，用四个面刻画整个 A 股的当日状态。真实样例 <b>as_of 2026-09-17</b>（market_forecast v1 + 全板块研判 + 广度/情绪/两融快照，主仓实跑）。档位＝<b>上行概率分位（方向口径）</b>，不是涨跌幅预测。</div>
+        </div>
+        <div class="t-meta">这张卡先回答三个问题：当天该<b>进攻还是防守</b>、<b>偏大盘还是偏中小盘</b>、<b>哪些板块偏强偏弱</b>——是终选 AI 读候选之前先建立的大盘背景。</div>
+
+        <div class="tface">
+          <div class="fh"><span class="fi"></span>一、大盘方向与分歧 <span class="stag tbd">研判已产出·正接入决策包</span></div>
+          <div class="trow"><div class="tl"><span class="nm">个股β基准 proxy（全A等权）</span><span class="cap">中小盘方向锚 · 上行概率分位</span></div><div class="tr">1日 p_up 0.53【方向中性】 · 5日 p_up 0.50【方向中性】<span class="imp"> → 中小盘无系统性顺风，个股要靠自身 α</span></div></div>
+          <div class="trow"><div class="tl"><span class="nm">权重股背景 hs300</span><span class="cap">仅作权重β背景 · 不代表个股中位数</span></div><div class="tr">1日 p_up 0.51【方向中性】 · 5日 p_up 0.59 <span class="warn">【上行概率偏高·偏多】</span></div></div>
+          <div class="trow"><div class="tl"><span class="nm">分歧标记 触发</span><span class="cap">二八分化/风格背离 · 阈值0.1</span></div><div class="tr"><span class="neg">5日「权重搭台、中小盘偏弱」</span>（hs300 0.59 偏多 vs proxy 0.50 震荡 · 差 0.084 · 方向档背离）<span class="imp"> → 指数偏多≠个股普涨，选股按 proxy 口径、别被权重带偏</span></div></div>
+          <div class="trow"><div class="tl"><span class="nm">因子贡献 proxy·1日</span><span class="cap">composite 模型</span></div><div class="tr">技术 −0.22 / 广度 −0.17 / 消息面 −0.03 / 资金流 0.00<span class="neg"> → 技术+广度双负、拖累方向</span></div></div>
+          <div class="trow"><div class="tl"><span class="nm">效力诚实标注</span><span class="cap">2026-09-10 维度贡献研究</span></div><div class="tr">方向命中约 55%·较惯性 +4.8pp 统计边际（显著），<span class="neg">但多空收益价差≈0（无经济 alpha）</span>；每天真正起作用仅技术+广度两维（资金流 kill、消息面降权）。<span class="warn"> → 只当方向参考，勿把高概率读成能赚钱</span></div></div>
+        </div>
+
+        <div class="tface">
+          <div class="fh"><span class="fi"></span>二、市场广度 · 情绪 · 资金 <span class="stag tbd">研判已产出·正接入决策包</span></div>
+          <div class="trow"><div class="tl"><span class="nm">涨跌广度 净 −0.044</span><span class="cap">全市场 5563 只</span></div><div class="tr">涨 2575 / 跌 2819<span class="neg"> → 跌家略多、广度中性偏弱</span></div></div>
+          <div class="trow"><div class="tl"><span class="nm">涨跌停 58 / 6</span><span class="cap">涨停 / 跌停家数</span></div><div class="tr">涨停 58、跌停 6<span class="pos"> → 赚钱效应尚可、未见恐慌</span></div></div>
+          <div class="trow"><div class="tl"><span class="nm">均线宽度 站上MA20 28%</span><span class="cap">破 MA20 占 72% · 中位涨幅 −0.07%</span></div><div class="tr">逾七成个股在 MA20 之下<span class="neg"> → 中期结构偏弱、普涨基础不牢</span></div></div>
+          <div class="trow"><div class="tl"><span class="nm">情绪 多空 58 : 2</span><span class="cap">股吧/舆情 · 样本69 · 多空比0.92</span></div><div class="tr">看多显著多于看空<span class="warn"> → 情绪面偏热、需防一致预期反噬</span></div></div>
+          <div class="trow"><div class="tl"><span class="nm">两融 1.35 万亿</span><span class="cap">SSE市场级 · 口径09-16 · 滞后一日防未来</span></div><div class="tr">融资余额 1.333 万亿 · 当日融资买入 894.5 亿<span class="pos"> → 杠杆资金活跃、增量尚在</span></div></div>
+        </div>
+
+        <div class="tface">
+          <div class="fh"><span class="fi"></span>三、板块强弱全景 <span class="stag now">已在决策包内</span> <span style="font-family:var(--mono);font-size:10px;color:var(--ink-3);font-weight:400">全 29 个申万一级 · 截面动量分位</span></div>
+          <div class="trow"><div class="tl"><span class="nm">动量最强（近期主线）</span><span class="cap">截面动量分位居前</span></div><div class="tr"><span class="pos">通信 1.00</span>（过热·上涨占比81%）、国防军工 0.97、银行 0.93（拐点）、农林牧渔 0.90（过热·均涨+2.33%·涨停3）</div></div>
+          <div class="trow"><div class="tl"><span class="nm">涨停最多（资金聚焦）</span><span class="cap">当日涨停家数</span></div><div class="tr"><span class="warn">汽车 9</span>（过冷却异动·均涨+1.83%）、电子 6、电力设备 5、机械设备 4、基础化工 4</div></div>
+          <div class="trow"><div class="tl"><span class="nm">偏弱（过冷/领跌）</span><span class="cap">均涨为负 · 资金流出</span></div><div class="tr"><span class="neg">有色金属 −1.90%（过冷）、公用事业 −1.08%（拐点）、非银金融 −0.91%（过冷·上涨占比仅5%）、钢铁 −0.90%（过冷）</span><span class="imp"> → 回避</span></div></div>
+          <div class="trow"><div class="tl"><span class="nm">重点板块（打分加权倾斜）</span><span class="cap">focus_score↓ · 已排除过热A/拐点A</span></div><div class="tr">电子 · 电力设备 · 计算机 · 机械设备 · 建筑材料</div></div>
+          <div class="trow"><div class="tl"><span class="nm">冷热怎么用</span><span class="cap">风险上下文 · 不据此挑票</span></div><div class="tr">冷热/拥挤只作风险背景：有真催化的强势票不因超买规避，无催化的纯动量才防追高回落。</div></div>
+        </div>
+
+        <div class="t-legend">
+          <span>档位＝上行概率分位（方向，非涨跌幅）</span>
+          <span><span class="pos">■</span> 偏强/利好　<span class="warn">■</span> 需留意　<span class="neg">■</span> 偏弱/利空</span>
+          <span><span class="stag now">已在决策包内</span> 当前已喂给 AI　<span class="stag tbd">正接入</span> 研判每日已产出、贯通接入中</span>
+        </div>
       </div>
-      <div class="example" style="border-color:var(--news-soft)">
-        <div class="ex-h" style="border-color:var(--news-soft)">紧接市场定调之后 · <b style="color:var(--news);font-weight:500">市场·国际·板块消息面</b>段</div>
-        <div class="ex-b" style="white-space:normal;color:var(--ink-2)">决策材料里还夹着一段<b style="color:var(--news)">逐板块消息研判</b>：当天哪些板块有实质利好/利空、每条事件的方向/可信/影响/执行/来源、以及龙头与跟涨候选个股——它和逐票四面卡并列，都是喂给终选 AI 的显式变量。<span class="dim">真实产出见 §04 末尾「市场·国际·板块消息面」。</span></div>
-      </div>
-      <div class="example">
-        <div class="ex-h">全板块概览 · 每行一个板块（★=重点板块，摘取两行）</div>
-        <div class="ex-b"><span class="hl">★电子</span>: 正常/拥挤中 　涨停 6 　动量截面 0.6 <span class="dim">〔当日主线：净催化强正〕</span>
-<span class="dim">·电力设备</span>: 过冷/拥挤中 　均涨 −0.09% 　动量截面 0.03</div>
-      </div>
+
+      <div class="cov-note" style="margin-top:16px"><b>诚实边界：</b>决策包<b>当前已含</b>板块强弱全景（面三）+ 板块消息催化（§04）+ 每只候选四面卡（第 2 层）+ 骨架排序。<b>大盘方向与分歧（面一）、广度/情绪/资金（面二）</b>由 <b>market_forecast</b> 每日已产出、但暂未读进决策包，正贯通接入中——接入后终选 AI 即可直接读到这份大盘背景。四份材料喂给 AI 后，AI 只挑选、排序、给纪律，<b>不改任何数字</b>。</div>
     </div>
 
     <!-- 层5 AI -->
@@ -644,10 +634,10 @@
     </div>
   </div>
 
-  <div class="subhead" style="margin-top:30px">这条链最终喂给选股 AI 的样子 · <b style="color:var(--news);font-weight:600">市场·国际·板块消息面</b>（2026-09-18 收盘实跑）</div>
+  <div class="subhead" style="margin-top:30px">这条链最终喂给选股 AI 的样子 · <b style="color:var(--news);font-weight:600">板块消息催化 + 国际面对全 A 的影响</b>（2026-09-17 收盘实跑）</div>
   <div class="msgface">
     <div class="mf-card">
-      <div class="ex-h" style="padding:11px 22px;font-family:var(--mono);font-size:11.5px;letter-spacing:.5px;color:var(--ink-3);border-bottom:1px solid var(--news-soft);background:var(--card)">决策包 · <b style="color:var(--news);font-weight:500">render_消息面(ov, as_of)</b> · 位于「市场定调」之后、「候选四面卡」之前，与逐票体检卡并列，都是喂给终选 AI 的<b style="color:var(--ink-2);font-weight:400">显式变量</b></div>
+      <div class="ex-h" style="padding:11px 22px;font-family:var(--mono);font-size:11.5px;letter-spacing:.5px;color:var(--ink-3);border-bottom:1px solid var(--news-soft);background:var(--card)">决策包组件三 · <b style="color:var(--news);font-weight:500">板块消息催化</b> · 与「大盘市场体检卡」「逐票四面卡」并列喂给终选 AI —— 回答<b style="color:var(--ink-2);font-weight:400">哪些板块正被什么新闻驱动、龙头动了没、谁在跟涨</b></div>
 
       <!-- 词表：先读研判档定义 -->
       <div class="mf-lex">
@@ -661,74 +651,76 @@
         <div class="lx" style="color:var(--ink-3)">口径贯通不许编：以上 6 档均<b style="color:var(--ink-3)">原样取自消息驱动块</b>；含义/持续性/影响/可靠性用上游现成研判句，本层只排版</div>
       </div>
 
-      <!-- 板块消息卡：3 个展开示范（强×2 + 中×1），其余 5 板块下方汇总 -->
+      <!-- 板块消息卡：3 个展开示范（强×2 + 中×1），其余 2 板块下方汇总 -->
       <div class="mboards">
 
         <div class="mboard">
-          <div class="mb-h"><span class="bn">电子</span><span class="bt">利好</span><span class="mb-badge s">强</span><span class="cnt">关键事件 33 · 取 8 · 余 25 略</span></div>
+          <div class="mb-h"><span class="bn">电子</span><span class="bt">利好</span><span class="mb-badge s">强</span><span class="cnt">关键事件 34 · 取 8 · 余 26 略</span></div>
           <div class="mb-ev"><span class="dt">09-09</span>长飞光纤涨停，通信设备、CPO 概念股开盘拉升 <span class="jd">〔利好·可信·影响大·执行高·一手〕</span></div>
           <div class="mb-ev"><span class="dt">09-09</span>工信部正式印发信息通信行业十五五规划，部署 400G 及以上高速传输，推动 100G 光网下沉，3.8 万亿投资助力算网升级 <span class="jd">〔利好·可信·影响大·执行高·一手〕</span></div>
-          <div class="mb-ev"><span class="dt">09-09</span>康宁继 Meta、亚马逊后再与 Verizon 签数十亿美元光纤长单，AI 算力催生光纤景气周期 <span class="jd intl">〔利好·可信·影响大·执行高·一手·🌐国际〕</span></div>
+          <div class="mb-ev"><span class="dt">09-09</span>康宁再签数十亿美元光纤长单，AI 算力催生光纤景气周期 <span class="jd intl">〔利好·可信·影响大·执行高·一手·🌐国际〕</span></div>
           <div class="mb-ev"><span class="dt">09-08</span>沪电股份获机构席位净买入 8.88 亿元，32 层及以上 PCB 收入同比 +190.83% <span class="jd">〔利好·可信·影响大·执行高·一手〕</span></div>
-          <div class="mb-ev"><span class="dt">09-08</span>工信部首提适时启动 6G 商用，新一代通信网规划锚定 3.8 万亿投资 <span class="jd">〔利好·可信·影响大·执行中·一手〕</span></div>
+          <div class="mb-ev"><span class="dt">09-08</span>沪电股份：应用于 1.6T 交换机的产品已批量出货 <span class="jd">〔利好·可信·影响大·执行高·一手〕</span></div>
           <div class="mb-ev"><span class="dt">09-07</span>中国移动普通光缆集采顶格落槌，总额 70.998 亿元、涨价 1.15 倍、18 家中标 <span class="jd">〔利好·可信·影响大·执行高·一手〕</span></div>
-          <div class="mb-more">…及沪电股份 1.6T 交换机批量出货等，实跑取前 8 条、余 25 条略。</div>
+          <div class="mb-ev"><span class="dt">09-07</span>威尔高（摩尔线程）面临大规模限售股解禁，20cm 跌停、市值跌破 2000 亿 <span class="jd" style="color:var(--news)">〔<b style="color:var(--news);font-weight:400">利空</b>·可信·影响大·执行高·一手〕</span></div>
+          <div class="mb-more">利好为主但含一条个股级利空（龙头解禁），实跑取前 8 条、余 26 条略。</div>
           <div class="mb-syn">
-            <div class="sk">含义</div><div class="sv">康宁数十亿美元光纤长单 + 工信部 3.8 万亿 6G 规划构成顶层与国际双重催化，AI 算力驱动 PCB / 存储 / 光模块全链景气上行。</div>
-            <div class="sk">持续性</div><div class="sv">持续利好 · 近两周政策、国际订单、AI 算力需求、龙头业绩与产品突破多条同向叠加，景气度持续强化。</div>
-            <div class="sk">影响</div><div class="sv"><span class="lead">龙头候选</span> 有研硅 688432(已动)、威尔高 301251、致尚科技 301486、依顿电子 603328、奥士康 002913；<span class="fol">跟涨候选</span> 远望谷 002161 <span class="moved">[龙头已动·同板块补涨待接力·位置低 pos60=0.86]</span>、惠科股份 001399 <span class="moved">[pos60=0.45]</span>、国博电子 688375 <span class="moved">[pos60=0.60]</span>。</div>
-            <div class="sk">可靠性</div><div class="sv">一手为主 · 康宁订单、工信部政策、公司公告均权威来源；PCB / 存储景气判断为机构观点需核实。</div>
+            <div class="sk">含义</div><div class="sv">工信部 3.8 万亿规划与康宁数十亿美元长单构成顶层 + 国际双重催化，龙头 1.6T 产品批量出货，板块利好明确且持续。</div>
+            <div class="sk">持续性</div><div class="sv">持续利好 · 近两周政策、国际订单、龙头业绩与产品突破多条同向叠加，景气度持续强化。</div>
+            <div class="sk">影响</div><div class="sv"><span class="lead">龙头候选</span> 有研硅 688432、威尔高 301251、致尚科技 301486、依顿电子 603328、奥士康 002913；<span class="fol">跟涨候选</span> 昂瑞微 688790 <span class="moved">[龙头已动·同板块补涨待接力·位置低 pos60=0.65]</span>、佰维存储 688525 <span class="moved">[pos60=0.40]</span>、国博电子 688375 <span class="moved">[pos60=0.58]</span>。</div>
+            <div class="sk">可靠性</div><div class="sv">一手为主 · 政策、公司公告、国际巨头订单均权威来源；部分机构调研与 ETF 行情解读为二手，需结合基本面判断。</div>
           </div>
         </div>
 
         <div class="mboard">
-          <div class="mb-h"><span class="bn">医药生物</span><span class="bt">利好</span><span class="mb-badge s">强</span><span class="cnt">关键事件 26 · 取 8 · 余 18 略</span></div>
-          <div class="mb-ev"><span class="dt">09-18</span>十部门联合发布《医药工业发展"十五五"规划》，创新药、疫苗、AI 制药列为重点方向 <span class="jd">〔利好·可信·影响大·执行高·一手〕</span></div>
-          <div class="mb-ev"><span class="dt">09-18</span>疫苗单列为医药"十五五"规划重点方向，mRNA 疫苗获明确支持 <span class="jd">〔利好·可信·影响大·执行高·一手〕</span></div>
-          <div class="mb-ev"><span class="dt">09-17</span>全球科技巨头携巨资入局 AI 制药，Anthropic、Google、字节、百度、英伟达均在列 <span class="jd">〔利好·可信·影响大·执行中·一手〕</span></div>
+          <div class="mb-h"><span class="bn">综合</span><span class="bt">利好</span><span class="mb-badge s">强</span><span class="cnt">关键事件 12 · 取 8 · 余 4 略</span></div>
+          <div class="mb-ev"><span class="dt">09-17</span>诺和诺德与 Anthropic 达成 AI 制药合作、礼来合作落地，AI 赋能引发 CRO 板块强劲反弹 <span class="jd intl">〔利好·可信·影响大·执行高·一手·🌐国际〕</span></div>
+          <div class="mb-ev"><span class="dt">09-17</span>全球 CXO 上半年投融资同比增近 60%，新一轮扩产周期或已开启 <span class="jd">〔利好·<b style="color:#e0b15a;font-weight:400">存疑</b>·影响大·执行中·二手〕</span></div>
+          <div class="mb-ev"><span class="dt">09-07</span>国内首款 AI 辅助研发原创药正式获批上市，A 股 AI 医疗赛道受关注 <span class="jd">〔利好·可信·影响大·执行高·一手〕</span></div>
+          <div class="mb-ev"><span class="dt">09-17</span>A 股 CRO 概念板块大涨，近岸蛋白、金石亚药涨停，万邦医药涨超 10% <span class="jd">〔利好·可信·影响中·执行高·一手〕</span></div>
+          <div class="mb-ev"><span class="dt">09-17</span>我国将首次制定全国统一医保医疗服务项目目录 <span class="jd">〔利好·可信·影响中·执行中·一手〕</span></div>
+          <div class="mb-ev"><span class="dt">09-07</span>药明康德订单增速下降，CXO 行业上半年分化明显 <span class="jd" style="color:var(--news)">〔<b style="color:var(--news);font-weight:400">利空</b>·存疑·影响中·执行中·二手〕</span></div>
+          <div class="mb-more">…及成都先导 4 亿中期票据注册等，实跑取前 8 条、余 4 条略。</div>
+          <div class="mb-syn">
+            <div class="sk">含义</div><div class="sv">AI 制药巨头合作落地 + 全球 CXO 投融资大增 + 创新药出海加速，多重实质利好叠加引爆板块。</div>
+            <div class="sk">持续性</div><div class="sv">持续利好 · 今日多条同向叠加：AI 制药合作 + CXO 投融资 + 创新药出海 + 医保政策，形成多重催化。</div>
+            <div class="sk">影响</div><div class="sv"><span class="lead">龙头候选</span> 万邦医药 301520(已动)、近岸蛋白 688137(已动)、成都先导 688222、药明康德 603259、华金资本 000532；<span class="fol">跟涨候选</span> —。</div>
+            <div class="sk">可靠性</div><div class="sv">一手为主 · 诺和诺德 / 礼来合作公告、医保政策官方发布可信度高；投融资数据及出海预期为二手解读需核实。</div>
+          </div>
+        </div>
+
+        <div class="mboard">
+          <div class="mb-h"><span class="bn">医药生物</span><span class="bt">利好</span><span class="mb-badge m">中</span><span class="cnt">关键事件 19 · 中板块仅取影响大/中 13 · 取 8 · 余 5 略</span></div>
+          <div class="mb-ev"><span class="dt">09-17</span>全球科技巨头携巨资入局 AI 制药，Anthropic、Google、字节、百度、英伟达均在列 <span class="jd intl">〔利好·可信·影响大·执行中·一手·🌐国际〕</span></div>
           <div class="mb-ev"><span class="dt">09-17</span>全球 CXO 上半年投融资同比增近 60%，新一轮扩产周期或已开启 <span class="jd">〔利好·<b style="color:#e0b15a;font-weight:400">存疑</b>·影响大·执行中·二手〕</span></div>
           <div class="mb-ev"><span class="dt">09-16</span>翰宇药业替尔泊肽仿制药申请获受理，参与全球首仿竞争 <span class="jd">〔利好·可信·影响大·执行中·一手〕</span></div>
-          <div class="mb-more">…及国家医保谈判密集竞价、GLP-1 三靶点临床受理等，实跑取前 8 条、余 18 条略。</div>
+          <div class="mb-ev"><span class="dt">09-10</span>翰宇药业 GLP-1 三靶点创新药 HY3003 注射液临床试验申请获药监局受理 <span class="jd">〔利好·可信·影响大·执行中·一手〕</span></div>
+          <div class="mb-ev"><span class="dt">09-08</span>2026 年国家医保谈判第四日，科伦药业、天士力等入场密集谈判 <span class="jd">〔利好·可信·影响大·执行中·一手〕</span></div>
+          <div class="mb-ev"><span class="dt">09-07</span>我国首款 AI 辅助创新药获批上市，机构扎堆关注概念股 <span class="jd">〔利好·可信·影响大·执行高·一手〕</span></div>
+          <div class="mb-more">中档板块口径：只渲「影响大/中」事件（19 条筛到 13 条），弱事件不进卡；实跑取前 8 条、余 5 条略。</div>
           <div class="mb-syn">
-            <div class="sk">含义</div><div class="sv">十五五规划重磅落地，创新药 / 疫苗 / AI 制药获顶层设计加持，叠加 CXO 景气数据，板块迎强催化。</div>
-            <div class="sk">持续性</div><div class="sv">持续利好 · 近两日多条重磅政策叠加产业数据同向，十五五规划落地与 CXO 景气回暖形成强共振。</div>
-            <div class="sk">影响</div><div class="sv"><span class="lead">龙头候选</span> 国邦医药 605507(已动)、三力制药 603439(已动)、津药药业 600488、东亚药业 605177、凯莱英 002821；<span class="fol">跟涨候选</span> 南卫股份 603880 <span class="moved">[pos60=0.85]</span>、康惠股份 603139 <span class="moved">[pos60=0.85]</span>、美年健康 002044 <span class="moved">[pos60=0.83]</span>。</div>
-            <div class="sk">可靠性</div><div class="sv">一手政策文件为主，产业数据多为二手转载需核实口径；凯莱英 2500 亿在手订单构成与统计时点待核。</div>
-          </div>
-        </div>
-
-        <div class="mboard">
-          <div class="mb-h"><span class="bn">房地产</span><span class="bt">利好</span><span class="mb-badge m">中</span><span class="cnt">关键事件 14 · 中板块仅取影响大/中 7 · 取 7</span></div>
-          <div class="mb-ev"><span class="dt">09-18</span>十五五规划推动公积金扩容，叠加二手房交易占比破 50%，存量房时代来临，世联行三连板 <span class="jd">〔利好·可信·影响大·执行中·一手〕</span></div>
-          <div class="mb-ev"><span class="dt">09-18</span>我国房地产进入存量时代，绿地控股涨停、世联行回封涨停走出 3 连板 <span class="jd">〔利好·可信·影响大·执行高·一手〕</span></div>
-          <div class="mb-ev"><span class="dt">09-08</span>多地印发住建"十五五"规划提振板块，房地产 ETF 上涨 <span class="jd">〔利好·<b style="color:#e0b15a;font-weight:400">存疑</b>·影响大·执行中·二手〕</span></div>
-          <div class="mb-more">中档板块口径：只渲「影响大/中」事件（14 条筛到 7 条），弱事件不进卡，控制噪声。</div>
-          <div class="mb-syn">
-            <div class="sk">含义</div><div class="sv">十五五公积金扩容与存量房时代确立构成实质性政策利好，板块短期走强。</div>
-            <div class="sk">持续性</div><div class="sv">持续利好 · 近两日多条同向政策与市场数据叠加，推动板块走强。</div>
-            <div class="sk">影响</div><div class="sv"><span class="lead">龙头候选</span> 世联行 002285(已动)、万通发展 600246(已动)、先导基电 600641、*ST 数源 000909、盈新发展 000620；<span class="fol">跟涨候选</span> —。</div>
-            <div class="sk">可靠性</div><div class="sv">一手为主，政策与市场数据来源权威；先导基电氮化镓订单传闻为二手解读需核实。</div>
+            <div class="sk">含义</div><div class="sv">CXO 投融资回暖叠加 AI 制药国际热潮，板块获双重催化，部分数据需核实。</div>
+            <div class="sk">持续性</div><div class="sv">持续利好 · 近两日多条同向叠加，CXO 投融资回暖与 AI 制药国际对标形成共振。</div>
+            <div class="sk">影响</div><div class="sv"><span class="lead">龙头候选</span> 国邦医药 605507、三力制药 603439、津药药业 600488、东亚药业 605177(已动)、凯莱英 002821；<span class="fol">跟涨候选</span> 万泽股份 000534 <span class="moved">[pos60=0.68]</span>、艾力斯 688578 <span class="moved">[pos60=0.71]</span>、美年健康 002044 <span class="moved">[pos60=0.82]</span>。</div>
+            <div class="sk">可靠性</div><div class="sv">一手与二手混杂 · CXO 投融资数据为盘中雷达解读需核实原始报告，AI 制药巨头入局为权威媒体报道可信度高。</div>
           </div>
         </div>
 
       </div>
 
-      <!-- 其余 5 个利好板块（同结构，此处压成一行/板块，龙头候选原样） -->
+      <!-- 其余 2 个利好板块（同结构，此处压成一行/板块，龙头候选原样） -->
       <div class="mf-rest">
-        <div class="rh">当日另有 5 个利好板块（同为逐事件研判 + 含义/持续性/影响/可靠性四段，此处压缩为一行 · 龙头候选原样）：</div>
-        <div class="rrow"><span class="rn">非银金融</span><span class="rb s">强</span>29 条 · 取 8 —— 3570 亿注资落地、7 家券商净利翻倍；龙头 瑞达期货 002961、国泰海通 601211、方正证券 601901…</div>
-        <div class="rrow"><span class="rn">交通运输</span><span class="rb s">强</span>20 条 · 取 8 —— 油运运价逼近百万美元/天、招商轮船涨停（🌐 地缘溢价）；龙头 招商轮船 601872、招商公路 001965、XD 圆通速 600233(已动)…</div>
-        <div class="rrow"><span class="rn">综合</span><span class="rb s">强</span>18 条 · 取 8 —— 十部门创新药政策、首款 AI 原创药获批；龙头 药明康德 603259、近岸蛋白 688137、成都先导 688222(已动)…</div>
-        <div class="rrow"><span class="rn">国防军工</span><span class="rb m">中</span>19 条 · 仅取影响大/中 11 · 取 8 —— 商业航天星座组网、中船防务订单排至 2030；龙头 中船防务 600685、航天电子 600879(已动)、航发科技 600391…</div>
-        <div class="rrow"><span class="rn">传媒</span><span class="rb m">中</span>16 条 · 仅取影响大/中 11 · 取 8 —— 文旅五年规划、AI 影视商业化落地；龙头 中视传媒 600088、内蒙新华 603230(已动)、风语筑 603466…</div>
+        <div class="rh">当日另有 2 个利好板块（同为逐事件研判 + 含义/持续性/影响/可靠性四段，此处压缩为一行 · 龙头候选原样）：</div>
+        <div class="rrow"><span class="rn">交通运输</span><span class="rb m">中</span>14 条 · 仅取影响大/中 9 · 取 8 —— 油运成本与运价双创新高（🌐 地缘溢价）驱动龙头涨停，港口吞吐下降为局部利空；龙头 XD 圆通速 600233(已动)、招商公路 001965、招商轮船 601872(已动)…</div>
+        <div class="rrow"><span class="rn">传媒</span><span class="rb m">中</span>12 条 · 仅取影响大/中 8 · 取 8 —— 文旅五年规划落地、AI 影视商业化持续活跃；龙头 内蒙新华 603230(已动)、中视传媒 600088(已动)、中信出版 300788…</div>
       </div>
 
       <!-- 国际/宏观事件汇总 -->
       <div class="mf-intl">
-        <div class="ih"><span>🌐</span>国际/宏观事件汇总 · 让 AI 一眼看到当日国际面系统性利好/利空哪些板块</div>
-        <div class="irow"><span class="rn">电子（利好·强）</span>康宁再签数十亿美元光纤长单，AI 算力催生光纤景气周期 · 继 Meta / 亚马逊后再与 Verizon 签长单 · PCB 龙头拟砸 2500 万美元认购 H 股</div>
-        <div class="irow"><span class="rn">交通运输（利好·强）</span>TD3C 航线油运运价逼近百万美元/天、招商轮船涨停 · 中东"战争溢价"持续推升海运景气 · 招商轮船 26Q2 归母净利 +233% · 中远海能 +104% · VLCC 运价刷新高位</div>
-        <div class="ifoot">抽取口径：对事件文本启发式识别国际/宏观关键词（运价/地缘/长单/关税/加息…），命中即汇入；非精确分类，供 AI 快速定位系统性催化。</div>
+        <div class="ih"><span>🌐</span>国际 / 宏观事件 → 对全 A 的系统性影响 · 让 AI 一眼看到当日国际面利好/利空了哪些板块</div>
+        <div class="irow"><span class="rn">电子（利好·强）</span>康宁再签数十亿美元光纤长单，AI 算力催生光纤景气周期 · PCB 龙头拟砸 2500 万美元认购 H 股、广合科技拟投资超 120 亿元</div>
+        <div class="irow"><span class="rn">交通运输（利好·中）</span>招商轮船 26Q2 归母净利 +233%、油散盈利弹性延续 · 中远海能 +104%、主力资金连续 7 日净流入 · VLCC 运价持续刷新高位 · 美国原油运往亚洲成本创历史新高</div>
+        <div class="ifoot">抽取口径：对事件文本启发式识别国际/宏观关键词（运价/地缘/长单/关税/加息…），命中即汇入；非精确分类，供 AI 快速定位当天从海外/宏观传导进 A 股的系统性催化。</div>
       </div>
 
     </div>
@@ -827,7 +819,7 @@
 
 <footer>
   <div>金字塔选股 · 全流程说明</div>
-  <div class="mono">更新于 2026-09-19 · 四面卡真实产出(000504@09-17) · 市场消息面(09-18实跑)</div>
+  <div class="mono">更新于 2026-09-19 · 决策包全真实产出 @ 2026-09-17（大盘市场卡 + 000504 四面卡 + 板块消息催化）</div>
 </footer>
 
 </body>
