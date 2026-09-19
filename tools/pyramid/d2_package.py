@@ -12,7 +12,7 @@ from typing import Optional
 import json
 import os
 
-from tools.pyramid.指标词表 import render_词表, render_消息面词表  # v2：统一指标词表·喂 prompt 开头一次
+from tools.pyramid.指标词表 import render_词表, render_消息面词表, render_大盘词表  # v2：统一指标词表·喂 prompt 开头一次
 
 
 def _load(root: Optional[str], as_of: str, fname: str):
@@ -235,6 +235,174 @@ def _候选文本(候选: list, 带联动: bool = False) -> str:
     return "、".join(parts)
 
 
+# ── 大盘定调段（读 market_forecast.json·结构化大盘卡）────────────────────
+_大盘horizons显示 = [("1", "1日"), ("5", "5日")]
+
+
+def _mf_有效(mf, as_of) -> bool:
+    """market_forecast 是否可用作结构化大盘卡主读数。
+    需为 dict、含 targets，且 mf.as_of ≤ 包 as_of（防未来：晚于 as_of 的整份预测丢弃）。"""
+    if not isinstance(mf, dict) or not isinstance(mf.get("targets"), dict) or not mf.get("targets"):
+        return False
+    mfa = mf.get("as_of")
+    if as_of and mfa and str(mfa) > str(as_of):
+        return False
+    return True
+
+
+def _num3(x) -> str:
+    """概率/比例类保留三位小数（0.5029→'0.503'）；非数字回退文字化。"""
+    return f"{x:.3f}" if isinstance(x, (int, float)) else _txt(x)
+
+
+def _int文(x) -> str:
+    """计数类去 .0（2575.0→'2575'）；非数字回退文字化。"""
+    return str(int(x)) if isinstance(x, (int, float)) else _txt(x)
+
+
+def _pct1文(x) -> str:
+    """0~1 比例 → 一位小数百分数（0.2804→'28.0%'）；非数字回退文字化。"""
+    return f"{x*100:.1f}%" if isinstance(x, (int, float)) else _txt(x)
+
+
+def _亿(x) -> str:
+    """大额金额 → 亿元整数（1333197305694→'13332亿'）；非数字回退文字化。"""
+    return f"{x/1e8:.0f}亿" if isinstance(x, (int, float)) else _txt(x)
+
+
+def _多空(net) -> str:
+    """净广度→多空描述（阈值 ±0.1，与现有市场定调薄读数口径一致）。"""
+    if not isinstance(net, (int, float)):
+        return ""
+    return "多头占优" if net > 0.1 else ("空头占优" if net < -0.1 else "多空均衡")
+
+
+def _方向行(key: str, tgt: dict, 角色: str, as_of) -> Optional[str]:
+    """单基准方向行：各 horizon 的 p_up + 方向档 + direction（数据直取·render 不编）。
+    防未来：target.as_of 晚于包 as_of → 返回该基准丢弃标注行（逐 target 各自守卫）。"""
+    name = _txt(tgt.get("name"))
+    t_asof = tgt.get("as_of")
+    if as_of and t_asof and str(t_asof) > str(as_of):
+        return f"- {角色} {key}({name})：as_of={_txt(t_asof)} 晚于 {_txt(as_of)}·防未来丢弃"
+    hs = tgt.get("horizons") or {}
+    segs = []
+    for h, disp in _大盘horizons显示:
+        hz = hs.get(h) or {}
+        if not hz:
+            continue
+        bucket = _txt(hz.get("prob_bucket") or hz.get("bucket"))
+        segs.append(f"{disp} p_up={_num3(hz.get('p_up'))}·{bucket}({_txt(hz.get('direction'))})")
+    if not segs:
+        return None
+    适用 = _txt(tgt.get("适用范围"))
+    return f"- {角色} {key}({name}·{适用})：" + "；".join(segs)
+
+
+def render_大盘定调(mf, as_of: Optional[str] = None) -> str:
+    """结构化大盘定调卡（读 market_forecast.json）：方向面/广度情绪资金面/板块强弱衔接，
+    段尾**原样 surface mf.notes 效力诚实标注**（render 不编研判·勿精简）。
+
+    口径贯通不许编：方向 p_up/方向档/direction、分歧标记类型、广度/情绪/两融快照
+    全数据直取；含义/口径句用上游现成说明(选股用β基准.说明/分歧标记.说明/notes)原样。
+    缺 market_forecast 或防未来失效 → 降级中性提示（回退 sector_focus 薄读数由 render_package 兜底）。
+    """
+    as_of = as_of or (mf.get("as_of") if isinstance(mf, dict) else None)
+    if not _mf_有效(mf, as_of):
+        why = "缺 market_forecast"
+        if isinstance(mf, dict) and mf.get("as_of") and as_of and str(mf.get("as_of")) > str(as_of):
+            why = f"market_forecast.as_of={_txt(mf.get('as_of'))} 晚于 {_txt(as_of)}·防未来丢弃"
+        return f"（{why}·降级中性：无结构化大盘方向/广度读数，回退 sector_focus 薄读数）"
+
+    out = [f"\n### 大盘定调 (as_of={_txt(as_of)}·{_txt(mf.get('schema'))})"]
+    out.append(render_大盘词表())
+
+    # 方向面：proxy(个股β基准·默认) 在前、hs300(权重β背景) 在后
+    tgts = mf.get("targets") or {}
+    β = mf.get("选股用β基准") or {}
+    默认, 背景 = β.get("默认"), β.get("背景")
+    out.append("\n#### 方向面(上行概率分位·方向口径非涨跌幅·勿读成涨跌幅/大幅)")
+    序: list[tuple] = []
+    if 默认 and 默认 in tgts:
+        序.append((默认, "个股β基准"))
+    if 背景 and 背景 in tgts:
+        序.append((背景, "权重β背景"))
+    for k in tgts:  # 兜底：β基准未声明的 target 也渲（不静默漏）
+        if k not in [x[0] for x in 序]:
+            序.append((k, ""))
+    for k, 角色 in 序:
+        行 = _方向行(k, tgts.get(k) or {}, 角色, as_of)
+        if 行:
+            out.append(行)
+    if β.get("说明"):
+        out.append(f"  β基准口径：{_txt(β.get('说明'))}")
+
+    # 分歧标记（触发维度逐条·hs300 vs proxy 方向背离）
+    div = mf.get("分歧标记") or {}
+    if div.get("触发"):
+        for h, d in (div.get("维度") or {}).items():
+            if not isinstance(d, dict) or not d.get("触发"):
+                continue
+            out.append(
+                f"- ⚑分歧标记[触发·{_txt(d.get('类型'))}]：{h}日 "
+                f"hs300 {_txt(d.get('hs300_direction'))}(p{_num3(d.get('hs300_p_up'))}) vs "
+                f"proxy {_txt(d.get('proxy_direction'))}(p{_num3(d.get('proxy_p_up'))})·"
+                f"方向档背离={_txt(d.get('方向档背离'))}"
+            )
+        if div.get("说明"):
+            out.append(f"  分歧口径：{_txt(div.get('说明'))}")
+
+    # 维度贡献（默认基准·5日·数据直取，佐证效力标注：资金流权重=0、消息面≈0）
+    默认tgt = tgts.get(默认) or {}
+    fc = ((默认tgt.get("horizons") or {}).get("5") or {}).get("factor_contrib")
+    if isinstance(fc, dict):
+        out.append(
+            f"- 维度贡献(数据直取·{_txt(默认)}·5日)："
+            + "/".join(f"{k}{_num3(v)}" for k, v in fc.items())
+            + "（佐证效力标注：资金流权重≈0、消息面≈0，真正起作用只技术+广度）"
+        )
+
+    # 广度情绪资金面
+    out.append("\n#### 广度情绪资金面")
+    bs = mf.get("breadth_snapshot") or {}
+    if bs:
+        na = bs.get("net_adv")
+        多空 = _多空(na)
+        out.append(
+            f"- 广度 breadth：涨{_int文(bs.get('adv'))}/跌{_int文(bs.get('dec'))}·"
+            f"涨停{_int文(bs.get('limit_up'))}/跌停{_int文(bs.get('limit_down'))}·"
+            f"净广度{_num3(na)}{('('+多空+')') if 多空 else ''}·"
+            f"站上MA20 {_pct1文(bs.get('above_ma20_ratio'))}(破MA20 {_pct1文(bs.get('below_ma20_ratio'))})·"
+            f"中位涨幅{_txt(bs.get('median_pct'))}%"
+        )
+    ss = mf.get("sentiment_snapshot") or {}
+    if ss:
+        out.append(
+            f"- 情绪 sentiment：多空net{_int文(ss.get('se_net'))}·多空比{_txt(ss.get('se_ratio'))}·"
+            f"看多{_int文(ss.get('se_bull'))}/看空{_int文(ss.get('se_bear'))}(样本{_int文(ss.get('se_n'))})"
+        )
+    ff = mf.get("fundflow_snapshot") or {}
+    if ff:
+        out.append(
+            f"- 资金 fundflow(两融·盘后滞后)：融资余额{_亿(ff.get('融资余额'))}·"
+            f"融资买入{_亿(ff.get('融资买入额'))}·融资融券余额{_亿(ff.get('融资融券余额'))}·"
+            f"截至{_txt(ff.get('margin_date'))}"
+        )
+        if ff.get("note"):
+            out.append(f"  资金口径：{_txt(ff.get('note'))}")
+
+    # 板块强弱衔接（复用全板块概览 + 消息面·不重复）
+    out.append("\n#### 板块强弱(衔接·不重复)")
+    out.append(
+        "- 板块冷热/拥挤/动量分位见下方「全板块概览」；"
+        "消息驱动龙头/催化/谁受什么新闻震动见「市场·国际·板块消息面」段。"
+    )
+
+    # 效力诚实标注（原样 surface notes·render 绝不编/勿精简）
+    out.append("\n#### ⚠️效力诚实标注(上游 market_forecast.notes 原句·必读·勿精简/勿删)")
+    out.append(_txt(mf.get("notes")))
+    return "\n".join(out)
+
+
 def render_消息面(ov: dict, as_of: Optional[str] = None, 上限: int = _事件上限默认) -> str:
     """市场·国际·板块消息面段：消息面词表 + 板块消息卡 + 国际/宏观汇总。
 
@@ -323,6 +491,8 @@ def build_package(as_of: str, root: Optional[str] = None, top_n: int = 15,
 
     skel = C.build_skeleton(as_of, root=root, scan_kline=scan_kline)
     ov = market_overview(as_of, root=root, n_focus=n_focus)
+    # 贯通 market_forecast：结构化大盘卡的真实数据源（缺/防未来失效时降级中性，见 render_大盘定调）
+    ov["market_forecast"] = _load(root, as_of, "market_forecast.json")
 
     # shared_pool 不逐票重扫（每次 scan_kline 要 14s）；卡头用骨架已存的来源标签直接渲染。
     # 四面重排：各工具块按其 .面 分组，d2_package 只按面板顺序排版（拼装层不写口径）。
@@ -388,24 +558,30 @@ def render_package(pkg: dict) -> str:
     out.append(f"# 金字塔决策包 · as_of={pkg.get('as_of')}")
     # v2：统一指标词表——共性定义/全档位区间喂一次，下方个股卡只给「值+档+本股影响」不重复
     out.append("\n" + render_词表())
-    # §8 市场定调改描述性输入：主句 + 上游依据整句(原样·不编) + 板块轮动一句
+    # §8 市场定调：market_forecast 可用→结构化大盘卡为主读数（降级中性风险偏好句让位）；
+    # 缺/防未来失效→回退 sector_focus 薄读数兜底（不静默）。板块轮动(sector_focus)始终保留。
     out.append("\n## 市场定调")
-    广度 = ov.get("广度档")
-    净广度 = ov.get("净广度")
-    s = f"当前市场风险偏好{_txt(ov.get('风险偏好'))}"
-    if 广度:
-        s += f"（广度档{_txt(广度)}"
-        if isinstance(净广度, (int, float)):
-            方向 = "多头占优" if 净广度 > 0.1 else ("空头占优" if 净广度 < -0.1 else "多空均衡")
-            s += f"·净广度{净广度:+.3f}→{方向}"
-        zt, dt = ov.get("涨停"), ov.get("跌停")
-        if zt is not None or dt is not None:
-            s += f"·涨停{_txt(zt)}/跌停{_txt(dt)}"
-        s += "）"
-    s += f"；宏观情景{_txt(ov.get('宏观情景'))}、宏观净方向{_txt(ov.get('宏观净方向'))}。"
-    out.append(s)
-    if ov.get("依据"):
-        out.append(f"定调依据：{_txt(ov.get('依据'))}")  # 上游产出整句·拼装层原样 surface
+    _asof = ov.get("as_of") or pkg.get("as_of")
+    mf = ov.get("market_forecast")
+    out.append(render_大盘定调(mf, as_of=_asof))
+    if not _mf_有效(mf, _asof):
+        # 兜底：market_forecast 缺失/防未来失效 → 保留现有 sector_focus 薄读数（原描述性主句）
+        广度 = ov.get("广度档")
+        净广度 = ov.get("净广度")
+        s = f"当前市场风险偏好{_txt(ov.get('风险偏好'))}"
+        if 广度:
+            s += f"（广度档{_txt(广度)}"
+            if isinstance(净广度, (int, float)):
+                方向 = "多头占优" if 净广度 > 0.1 else ("空头占优" if 净广度 < -0.1 else "多空均衡")
+                s += f"·净广度{净广度:+.3f}→{方向}"
+            zt, dt = ov.get("涨停"), ov.get("跌停")
+            if zt is not None or dt is not None:
+                s += f"·涨停{_txt(zt)}/跌停{_txt(dt)}"
+            s += "）"
+        s += f"；宏观情景{_txt(ov.get('宏观情景'))}、宏观净方向{_txt(ov.get('宏观净方向'))}。"
+        out.append(s)
+        if ov.get("依据"):
+            out.append(f"定调依据：{_txt(ov.get('依据'))}")  # 上游产出整句·拼装层原样 surface
     out.append(
         f"板块轮动：重点主线★ {_txt(ov.get('重点板块'))}；规避 {_txt(ov.get('规避板块池'))}"
         + (f"（{ov.get('重点口径')}）" if ov.get("重点口径") else "")
