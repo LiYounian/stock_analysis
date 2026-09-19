@@ -135,7 +135,10 @@ def test_子字段缺_值NA不编(tmp_path):
     names = {it["名"]: it for it in r.字段解读}
     assert names["主力资金"]["值"].startswith("净占比NA")
     assert names["主买盘"]["值"] == "主买占比NA"
-    assert names["竞品·板块内相对"]["值"] == "NA"
+    # 命名对齐全流程图HTML：字段名用"同板块换手相对"、不再是旧名"竞品·板块内相对"
+    assert names["同板块换手相对"]["值"] == "NA"
+    assert "竞品·板块内相对" not in names
+    assert all("竞品" not in n for n in names), "字段名(用户可见)不得再出现'竞品'"
     # 缺数据也不空编：四段仍齐（__post_init__ 会校验，能构造即证不空）
     for it in r.字段解读:
         assert it["口径"] and it["意味"] and it["名"]

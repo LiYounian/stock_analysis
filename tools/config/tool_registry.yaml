@@ -63,7 +63,7 @@ tools:
     防未来: true
     reuse: [config/code_industry.json, data/analysis/<date>/sector_focus.json, sector_regime.json, data/sector_roster(_table)/<板块>.json]
     tests: tests/pyramid/test_sector_context.py
-    note: "每票6字段(板块/冷热拥挤/RS分位pos60/角色/板块内排名/净催化)；focus_score档；缺字段标missing不编；档位语义锁_FS档/_RS档/_净催化档/_拥挤含义/_冷热含义"
+    note: "每票6字段(板块/冷热拥挤/RS分位pos60/角色/板块内排名/净催化)；RS分位+板块内排名(5日涨幅)显式标为「同类走势(板块内peer)」维度(对齐全流程图HTML命名·不动内部字段名)；focus_score档；缺字段标missing不编；档位语义锁_FS档/_RS档/_净催化档/_拥挤含义/_冷热含义"
   - name: experience_rules
     塔层: "经验"
     status: done
@@ -172,12 +172,12 @@ tools:
     status: done
     window: Wave2·资金面
     inputs: [as_of, code]
-    outputs: [字段解读(主力资金/主买盘/股东户数/换手率/龙虎榜/竞品·板块内相对/两融), fields(净占比/净流入/近5合计/连续天数/主买占比/户数环比/连减期数/换手率/龙虎榜/板块)]
+    outputs: [字段解读(主力资金/主买盘/股东户数/换手率/龙虎榜/同板块换手相对/两融), fields(净占比/净流入/近5合计/连续天数/主买占比/户数环比/连减期数/换手率/龙虎榜/板块)]
     freshness: 有per-stock json=fresh(fundflow陈旧→stale)；无=missing
     防未来: true
     reuse: data/analysis/<date>/<code>.json 的 fundflow/tick/holder/lhb_veto/financing + 主档K线turnover + config/code_industry.json + data/sector_roster/<板块>.json
     tests: tests/pyramid/test_fund_flow.py
-    note: "体检卡四面·资金面填充(设计2026-09-19§2c/2d/4b);字段解读走_common.字段()四段不空编·档位写死语义锁;净占比缺(实测~57%)按同定义折算(净流入/口径日成交额)口径明标折算+新鲜度;换手率单表(创业/科创偏高见意味);龙虎榜只读surface不重算veto;两融financing无margin字段→标待补落盘(不动collectors·另chip补);竞品=板块内相对(用户拍板)复用code_industry→sector_roster按换手降序rank(龙头级≤20%/前排/中游/尾部)+vs龙头均值+vs板均,仅10个申万一级有roster·无roster/未含→NA;档位阈值:净占比强流出≤-5/流出/中性(-1,1]/流入/强流入>5,主买弱≤.45/均衡/偏强(.52,.56]/强,户数环比明显集中≤-10/集中/平稳(-3,3]/分散/明显分散>10(负=集中),换手过低≤1/正常/活跃(3,7]/过热炒作>7"
+    note: "体检卡四面·资金面填充(设计2026-09-19§2c/2d/4b);字段解读走_common.字段()四段不空编·档位写死语义锁;净占比缺(实测~57%)按同定义折算(净流入/口径日成交额)口径明标折算+新鲜度;换手率单表(创业/科创偏高见意味);龙虎榜只读surface不重算veto(个股汇总净买方向·非席位对手拆解);对手盘(席位级)=未接维度·缺口后置(谁接盘谁出货/游资机构对手未分析,仅龙虎榜净买方向+主买盘口比);两融financing无margin字段→标待补落盘(不动collectors·另chip补);同板块换手相对(原'竞品'·用户拍板)复用code_industry→sector_roster按换手降序rank(龙头级≤20%/前排/中游/尾部)+vs龙头均值+vs板均,仅10个申万一级有roster·无roster/未含→NA;同类走势(板块内peer=5日涨幅排名+RS分位)在sector_context工具输出;档位阈值:净占比强流出≤-5/流出/中性(-1,1]/流入/强流入>5,主买弱≤.45/均衡/偏强(.52,.56]/强,户数环比明显集中≤-10/集中/平稳(-3,3]/分散/明显分散>10(负=集中),换手过低≤1/正常/活跃(3,7]/过热炒作>7"
   - name: news_raw
     塔层: "②消息"
     面: 消息情绪面

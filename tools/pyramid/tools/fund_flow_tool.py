@@ -1,7 +1,7 @@
 """fund_flow（①塔基·资金面）· 体检卡四面重构 Wave2 · 资金面填充工具。
 
 金字塔缺"资金面"整面：主力资金进出、主买盘强弱、股东户数(筹码集中/涣散)、换手率
-(过低关注不足/过热炒作)、龙虎榜席位方向，以及**竞品=板块内相对**(同板块换手排名 + vs
+(过低关注不足/过热炒作)、龙虎榜席位方向，以及**同板块换手相对**(原"竞品"·同板块换手排名 + vs
 龙头/板块均值)。本工具读现成 per-stock json + 主档 K 线，按"口径三段"(名/值/口径/意味)产出
 资金面 字段解读，供 d2_package 四面重排与选股 LLM 消费。设计依据：docs/计划/
 2026-09-19_体检卡四面重构_口径贯通设计.md §2c/§2d/§3b/§4b（竞品=板块内相对·用户已拍板）。
@@ -301,23 +301,23 @@ def _f_竞品(code: str, sector: Optional[str], turnover: Optional[float],
            root: Optional[str], as_of: str) -> dict:
     """竞品=板块内相对（按换手降序）：板块内排名 + vs龙头均值 + vs板块均值。"""
     if not sector:
-        return 字段(名="竞品·板块内相对", 值="NA",
+        return 字段(名="同板块换手相对", 值="NA",
                    口径="code_industry.json 未含该票·无法解析申万一级",
-                   意味="影响：板块归属缺、竞品相对不可算")
+                   意味="影响：板块归属缺、同板块换手相对不可算")
     pool, lead, 更新日 = _roster_pool(sector, root)
     if not pool:
-        return 字段(名="竞品·板块内相对", 值="NA",
+        return 字段(名="同板块换手相对", 值="NA",
                    口径=f"{sector} 无 sector_roster（仅10个申万一级有roster）",
-                   意味="影响：该板块无roster、竞品相对不可算(能力已上线、仅此票缺底料)")
+                   意味="影响：该板块无roster、同板块换手相对不可算(能力已上线、仅此票缺底料)")
     tt = pool.get(code)
     源注 = "roster快照"
     if tt is None:
         tt = turnover
         源注 = "as_of当日K线"
     if tt is None:
-        return 字段(名="竞品·板块内相对", 值="NA",
+        return 字段(名="同板块换手相对", 值="NA",
                    口径=f"{sector} roster成分{len(pool)}名·目标换手缺",
-                   意味="影响：目标换手缺、板块内相对不可算")
+                   意味="影响：目标换手缺、同板块换手相对不可算")
     vals = list(pool.values())
     if code not in pool:
         vals = vals + [tt]
@@ -331,7 +331,7 @@ def _f_竞品(code: str, sector: Optional[str], turnover: Optional[float],
     avg_txt = f"·{tt / 板均:.2f}x板均" if 板均 else ""
     鲜注 = f"·roster{str(更新日)[:10]}" if 更新日 else ""
     return 字段(
-        名="竞品·板块内相对",
+        名="同板块换手相对",
         值=f"第{rank}/{n}【{档}】{lead_txt}{avg_txt}",
         口径=f"按换手降序rank·板块内=roster精选{len(pool)}名非全行业·换手{源注}{鲜注}",
         意味=f"影响：{_竞品影响.get(档, 释)}",

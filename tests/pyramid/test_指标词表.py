@@ -83,6 +83,13 @@ def test_词表四面齐全():
     assert "换手率" in txt and "过热炒作>7%" in txt
     assert "财报质量五维 & quality" in txt and "成长" in txt and "回报" in txt
     assert "消息覆盖与可信度" in txt
+    # 命名对齐全流程图HTML：资金面段用"同板块换手相对"、不再是旧名"竞品"
+    assert "同板块换手相对" in txt and "竞品" not in txt
+    # 对手盘(席位级) 缺口诚实标注在位；同类走势映射注在位
+    assert "对手盘(席位级)" in txt and "缺口后置" in txt
+    assert "同类走势(板块内peer)" in txt
+    # 龙虎榜措辞对齐 HTML：个股汇总净买方向·非席位对手拆解
+    assert "非席位对手拆解" in txt
     # ROE 无区间（未年化·不设绝对档）——只有定义，无 "档位(全A横截面)"
     roe行 = next(l for l in txt.splitlines() if l.startswith("- ROE"))
     assert "档位(全A横截面)" not in roe行
