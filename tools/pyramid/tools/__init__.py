@@ -13,6 +13,8 @@ from tools.pyramid.tools import financial_redflag_tool  # noqa: F401  P2
 from tools.pyramid.tools import unlock_risk_tool  # noqa: F401  四因子#1 解禁
 from tools.pyramid.tools import insider_reduction_tool  # noqa: F401  四因子#2 减持
 from tools.pyramid.tools import stock_sentiment_tool  # noqa: F401  Wave2 消息情绪面(个股级)
+from tools.pyramid.tools import valuation_tool  # noqa: F401  Wave2 基本面·估值
+from tools.pyramid.tools import growth_quality_tool  # noqa: F401  Wave2 基本面·成长盈利
 
 __all__ = [
     "entry_price_tool",
@@ -26,4 +28,6 @@ __all__ = [
     "unlock_risk_tool",
     "insider_reduction_tool",
     "stock_sentiment_tool",
+    "valuation_tool",
+    "growth_quality_tool",
 ]

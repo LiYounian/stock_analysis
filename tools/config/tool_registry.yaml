@@ -130,3 +130,27 @@ tools:
     reuse: data/analysis/<date>/<code>.json 的 sentiment/events/consensus/ugc
     tests: tests/pyramid/test_stock_sentiment.py
     note: "个股级消息情绪面(Wave2首个字段解读工具·口径三段);6条:个股净情绪/情绪三层/情绪样本质量/公司公告事件/一致预期/社媒热度;三档位表写死语义锁(净情绪档强正/正/中性/负/强负·on净情绪分[-0.3/-0.05/0.05/0.3];覆盖率档全/部分/低覆盖·on覆盖率;研报覆盖档高关注/一般/冷门/无覆盖·on覆盖机构数[0/2/9]);净情绪分口径用sentiment原口径原样;不重复sector_context(板块催化)/fake_good_news(假利好price);公告tally剔除{减持,权益变动,解禁}(见insider_reduction基本面治理/unlock_risk资金面筹码)避免双计·增持保留;events近60日窗+防未来drop date>as_of;consensus None→无覆盖待补;ugc源未接入恒NA;不碰d2_package(统筹集成期统一接)"
+  - name: valuation
+    塔层: "③塔身"
+    status: done
+    window: Wave2-估值成长(基本面)
+    面: 基本面
+    inputs: [as_of, code]
+    outputs: [PE(TTM)档, PB档, PEG现算档, PE历史分位(待补落盘), 市值/估值口径]
+    freshness: 有valuation=fresh；无=missing
+    防未来: true
+    reuse: data/analysis/<date>/<code>.json 的 valuation + fundamental/financial(PEG增速)
+    tests: tests/pyramid/test_valuation_tool.py
+    note: "四面契约·基本面·估值;字段解读=口径三段(名/值/口径/意味);PE跨市场粗档(亏损/低≤15/中≤30/偏高≤60/高)且pe_valid=False或mode≠PE适用不套档原样传basis;PB(破净≤1/低≤2/中≤4/偏高≤8/高);PEG现算=pe_ttm÷净利增速%(优先financial.利润表摘要.归母净利增速→fallback fundamental.净利增速,增速≤0失效不套档,Lynch基准1:低估≤0.8/合理≤1.2/偏高≤2/高估);PE历史分位json未落盘标待补;档位语义锁_PE参考档/_PB档/_PEG档"
+  - name: growth_quality
+    塔层: "③塔身"
+    status: done
+    window: Wave2-估值成长(基本面)
+    面: 基本面
+    inputs: [as_of, code]
+    outputs: [营收+增速档, 净利+增速档, 盈利能力(ROE/毛利/净利率), 负债率档, 每股股利, 财报质量, 财报明细(five_dims+利润表摘要)]
+    freshness: 有fundamental=fresh；无=missing
+    防未来: true
+    reuse: data/analysis/<date>/<code>.json 的 fundamental + financial(评级/quality/five_dims/利润表摘要)
+    tests: tests/pyramid/test_growth_quality_tool.py
+    note: "四面契约·基本面·成长盈利+财报明细;字段解读=口径三段;增速档营收/净利共用(衰退≤-20/下滑≤0/平稳≤15/增长≤30/高增长);负债率(低≤30/中≤50/偏高≤70/高,金融业口径标例外不套档);毛利/净利率跨行业粗参考;ROE报告期未年化不设年化绝对档→原始值+未年化口径+强弱挂financial.five_dims.回报(方案a统筹拍板);quality复用financial_redflag._QUALITY档单一口径源;five_dims/利润表摘要保明细不重出排雷嫌疑(避免与financial_redflag双读);档位语义锁_增速档/_负债率档/_毛利率档/_净利率档"
