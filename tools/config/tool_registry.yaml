@@ -166,3 +166,15 @@ tools:
     reuse: data/analysis/<date>/<code>.json 的 snapshot(ma/macd/kdj/rsi)/chip/prediction.结构位
     tests: tests/pyramid/test_technical_detail.py
     note: "补price_volume未上全的技术指标明细·不重复量价(现价/量比/pos60/vsMA归price_volume,入场/止损止盈/持有期归entry_price);状态类(MA排列/MACD状态/KDJ状态)原样用technical.py序列化器,RSI12档阈值=strategy.THRESHOLDS.超买超卖.RSI12 canonical单一真源(测试锁死20/30/70/80);chip获利比例&集中度90按全A分位标定;BOLL snapshot未落盘恒标待补(不动序列化器);字段解读→浓缩块自动派生≤8行(实取7条)"
+  - name: fund_flow
+    塔层: "①塔基"
+    面: "资金面"
+    status: done
+    window: Wave2·资金面
+    inputs: [as_of, code]
+    outputs: [字段解读(主力资金/主买盘/股东户数/换手率/龙虎榜/竞品·板块内相对/两融), fields(净占比/净流入/近5合计/连续天数/主买占比/户数环比/连减期数/换手率/龙虎榜/板块)]
+    freshness: 有per-stock json=fresh(fundflow陈旧→stale)；无=missing
+    防未来: true
+    reuse: data/analysis/<date>/<code>.json 的 fundflow/tick/holder/lhb_veto/financing + 主档K线turnover + config/code_industry.json + data/sector_roster/<板块>.json
+    tests: tests/pyramid/test_fund_flow.py
+    note: "体检卡四面·资金面填充(设计2026-09-19§2c/2d/4b);字段解读走_common.字段()四段不空编·档位写死语义锁;净占比缺(实测~57%)按同定义折算(净流入/口径日成交额)口径明标折算+新鲜度;换手率单表(创业/科创偏高见意味);龙虎榜只读surface不重算veto;两融financing无margin字段→标待补落盘(不动collectors·另chip补);竞品=板块内相对(用户拍板)复用code_industry→sector_roster按换手降序rank(龙头级≤20%/前排/中游/尾部)+vs龙头均值+vs板均,仅10个申万一级有roster·无roster/未含→NA;档位阈值:净占比强流出≤-5/流出/中性(-1,1]/流入/强流入>5,主买弱≤.45/均衡/偏强(.52,.56]/强,户数环比明显集中≤-10/集中/平稳(-3,3]/分散/明显分散>10(负=集中),换手过低≤1/正常/活跃(3,7]/过热炒作>7"
