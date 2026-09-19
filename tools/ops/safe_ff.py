@@ -50,10 +50,17 @@ REMOTE_REF = "origin/main"
 
 
 def _git(repo: str, *args: str, check: bool = False) -> subprocess.CompletedProcess:
-    """跑一条 git 子命令,返回 CompletedProcess(text 模式,bytes 用 _git_bytes)。"""
+    """跑一条 git 子命令,返回 CompletedProcess(text 模式,bytes 用 _git_bytes)。
+
+    用 errors="surrogateescape" 解码:git 在 core.quotepath=false 下会吐原始文件名字节,
+    仓里若有 GBK/非法 utf-8 命名的文件(如含 0xa2),严格 utf-8 解码会当场抛 UnicodeDecodeError
+    ——即便 ff 本身已成功。surrogateescape 把非法字节可逆映射成孤代理,路径可 round-trip
+    (open / os.remove / git show / checkout 都能还原原字节,伪/真冲突判定与 ff 对非 utf-8
+    命名仍正确);打印时须走 _disp 转义,避免打到严格 stdout 二次抛 UnicodeEncodeError。
+    """
     return subprocess.run(
         ["git", "-C", repo, *args],
-        capture_output=True, text=True, check=check,
+        capture_output=True, text=True, errors="surrogateescape", check=check,
     )
 
 
@@ -63,6 +70,15 @@ def _git_bytes(repo: str, *args: str) -> Optional[bytes]:
     if p.returncode != 0:
         return None
     return p.stdout
+
+
+def _disp(s: str) -> str:
+    """把可能含孤代理(surrogateescape 还原的非法 utf-8 字节)的字符串转成可安全打印形式。
+
+    直接把带孤代理的字符串打到严格编码的 stdout 会二次抛 UnicodeEncodeError;这里先按
+    surrogateescape 编回原字节再以 replace 解码,非法字节显示为 �,合法 utf-8 保持恒等。
+    仅用于日志展示;res.refused / res.cleaned 仍存可 round-trip 的真实路径。"""
+    return s.encode("utf-8", "surrogateescape").decode("utf-8", "replace")
 
 
 def origin_blob(repo: str, path: str) -> Optional[bytes]:
@@ -228,12 +244,12 @@ def safe_ff(repo: str, apply: bool = False, log: Callable[[str], None] = print) 
     pseudo = [b for b in blockers if b.verdict == "pseudo"]
 
     for b in blockers:
-        log(f"  撞车[{b.wt_state}] {b.path} → {b.verdict}({b.reason})")
+        log(_disp(f"  撞车[{b.wt_state}] {b.path} → {b.verdict}({b.reason})"))
 
     if genuine:
         res.refused = [b.path for b in genuine]
         res.reason = "refused"
-        log(f"!! 检出 {len(genuine)} 个真改动撞车,整体拒绝清理与 ff(留人工核查):{res.refused}")
+        log(_disp(f"!! 检出 {len(genuine)} 个真改动撞车,整体拒绝清理与 ff(留人工核查):{res.refused}"))
         return res
 
     if not apply:
@@ -251,13 +267,13 @@ def safe_ff(repo: str, apply: bool = False, log: Callable[[str], None] = print) 
             except OSError as e:
                 res.ok = False
                 res.reason = f"清未跟踪副本失败:{b.path}:{e}"
-                log(f"!! {res.reason}")
+                log(_disp(f"!! {res.reason}"))
                 return res
         else:  # modified:恢复到 HEAD,让 ff 能推进
             if _git(repo, "checkout", "HEAD", "--", b.path).returncode != 0:
                 res.ok = False
                 res.reason = f"checkout 恢复失败:{b.path}"
-                log(f"!! {res.reason}")
+                log(_disp(f"!! {res.reason}"))
                 return res
             res.cleaned.append(b.path)
 
@@ -269,7 +285,7 @@ def safe_ff(repo: str, apply: bool = False, log: Callable[[str], None] = print) 
     else:
         res.ok = False
         res.reason = "ff-failed"
-        log(f"!! 清理后 ff 仍失败(可能有本模块未覆盖的阻挡):{ff.stderr.strip()}")
+        log(_disp(f"!! 清理后 ff 仍失败(可能有本模块未覆盖的阻挡):{ff.stderr.strip()}"))
     return res
 
 

@@ -204,3 +204,63 @@ def test_unique_lines_helper():
     assert safe_ff.is_pseudo_conflict(b"a\nb\n", b"a\nb\n") is True
     assert safe_ff.is_pseudo_conflict(b"a\nb\n", b"a\nb\nc\n") is True
     assert safe_ff.is_pseudo_conflict(b"a\nX\n", b"a\nb\nc\n") is False
+
+
+def test_git_decodes_with_surrogateescape(monkeypatch):
+    """① _git 必须以 text=True + errors="surrogateescape" 解码,
+    这样 git 吐出的非法 utf-8 文件名字节不会当场抛 UnicodeDecodeError。"""
+    captured = {}
+
+    class _FakeCP:
+        returncode = 0
+        stdout = ""
+        stderr = ""
+
+    def _fake_run(cmd, **kwargs):
+        captured.update(kwargs)
+        return _FakeCP()
+
+    monkeypatch.setattr(safe_ff.subprocess, "run", _fake_run)
+    safe_ff._git("/tmp/whatever", "status")
+    assert captured.get("text") is True
+    assert captured.get("errors") == "surrogateescape"
+
+
+def test_disp_survives_lone_surrogates():
+    """③ _disp 对含孤代理的串返回可安全编码的字符串,绝不抛。"""
+    # 非法 utf-8 字节 0xa2 经 surrogateescape 解码成孤代理 \udca2
+    raw = b"docs/\xa2name.md".decode("utf-8", "surrogateescape")
+    out = safe_ff._disp(raw)
+    # 关键:结果能在严格编码下打印(模拟打到严格 stdout)而不抛
+    out.encode("utf-8")  # 不抛即通过
+    assert "docs/" in out
+
+
+def test_non_utf8_untracked_name_does_not_crash_ff(world):
+    """② 仓里存在含非法 utf-8 字节(0xa2)命名的未跟踪文件时,
+    safe_ff 解析 git 输出不应抛 UnicodeDecodeError,ff 照常成功、该文件不被触碰。
+    (OS/文件系统若拒绝该文件名则跳过。)"""
+    main, origin_head, _ = world
+    # 造一个含 0xa2 字节的未跟踪文件名(GBK 残留场景);文件系统拒绝则 skip
+    bad_name = b"docs/\xa2gbk_name.md"
+    bad_path = os.path.join(main.encode("utf-8"), b"docs", b"\xa2gbk_name.md")
+    try:
+        with open(bad_path, "wb") as f:
+            f.write(b"whatever bytes \xa2\xff\n")
+    except OSError:
+        pytest.skip("文件系统拒绝非法 utf-8 文件名,跳过 E2E")
+    # 让本该 ff 引入的 origin docs 以一致副本存在(伪冲突),确保 ff 真能跑
+    with open(os.path.join(main, "docs/每日分析/选股/2026-09-16.md"), "w", encoding="utf-8") as f:
+        f.write("line-a\nline-b\nline-c\n")
+    _rv = os.path.join(main, "docs/每日分析/复盘/2026-09-16.md")
+    os.makedirs(os.path.dirname(_rv), exist_ok=True)
+    with open(_rv, "w", encoding="utf-8") as f:
+        f.write("review-x\nreview-y\n")
+    # 不应抛任何解码异常
+    res = safe_ff.safe_ff(main, apply=True, log=lambda *_: None)
+    assert res.ffd is True
+    assert _head(main) == origin_head
+    assert os.path.exists(bad_path)                       # 非撞车,永不触碰
+    with open(bad_path, "rb") as f:
+        assert f.read() == b"whatever bytes \xa2\xff\n"    # 内容零丢失
+    assert bad_name.decode("utf-8", "surrogateescape") not in res.cleaned
