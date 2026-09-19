@@ -35,6 +35,14 @@ DROP_NEXT = -2.0        # 利好后回吐：次日收盘涨幅(%) ≤
 # 嫌疑档位（命中判据数 → 档）——语义锁死这张表
 嫌疑档枚举 = ("无嫌疑", "低", "中", "高")
 
+# ── v2 影响模板（假利好嫌疑档→对选股影响；共性"假利好是什么"已进统一词表）──
+_假利好影响 = {
+    "高": "假利好嫌疑高、利好或不真、减分",
+    "中": "假利好嫌疑、需警惕",
+    "低": "利好价格行为尚健康",
+    "无嫌疑": "无假利好信号",
+}
+
 
 def _load_events(code: str, as_of: str, root: Optional[str]) -> Optional[list]:
     """读 per-stock events；文件缺或 events 非列表→None（missing，不编）。"""
@@ -125,7 +133,7 @@ class FakeGoodNewsTool:
             # 绝不因"数据缺失"默认判低——池内多数票无 per-stock json，命中0误判低会系统性扭曲排雷。
             档 = "中" if 命中 >= 2 else ("低" if 命中 == 1 else "无嫌疑")
             lines = [
-                f"假利好嫌疑: {档}（events 缺失·仅凭 as_of 当日 K 线·不编造利好）",
+                f"假利好嫌疑: {档}（events 缺失·仅凭 as_of 当日 K 线·不编造利好）影响：{_假利好影响.get(档, '')}",
                 f"当日高开走弱: {'命中' if gap_fade else '未命中'}（{gf_desc}）",
                 f"当日放量长上影: {'命中' if hit_shadow else '未命中'}（{shadow_desc}）",
                 "利好后回看: 不可判（无 events 锚点）",
@@ -142,7 +150,7 @@ class FakeGoodNewsTool:
         if good is None:
             n利好 = sum(1 for e in events if isinstance(e, dict) and e.get("impact") == "利好")
             lines = [
-                f"假利好嫌疑: 无嫌疑（近 {RECENT_CAL_DAYS} 日无利好事件锚点）",
+                f"假利好嫌疑: 无嫌疑（近 {RECENT_CAL_DAYS} 日无利好事件锚点）影响：{_假利好影响['无嫌疑']}",
                 f"events 总 {len(events)} 条·其中利好 {n利好} 条（均早于窗口或无）",
             ]
             return ToolResult(
@@ -156,7 +164,7 @@ class FakeGoodNewsTool:
         loc = _bar_on_or_after(df, good.get("date"))
         if loc is None:
             lines = [
-                f"假利好嫌疑: 低（利好 {good.get('date')} 后无 ≤as_of 交易日可核价格行为）",
+                f"假利好嫌疑: 低（利好 {good.get('date')} 后无 ≤as_of 交易日可核价格行为）影响：{_假利好影响['低']}",
                 f"利好: {str(good.get('title'))[:36]}",
             ]
             return ToolResult(
@@ -185,7 +193,7 @@ class FakeGoodNewsTool:
         档 = "高" if 命中 >= 2 else ("中" if 命中 == 1 else "低")
         d0 = str(df.iloc[pos]["date"])[:10]
         lines = [
-            f"假利好嫌疑: {档}（近期利好 {good.get('date')} · 兑现日 {d0} · 命中 {命中}/2）",
+            f"假利好嫌疑: {档}（近期利好 {good.get('date')} · 兑现日 {d0} · 命中 {命中}/2）影响：{_假利好影响.get(档, '')}",
             f"利好: {str(good.get('title'))[:34]}（impact=利好）",
             f"①高开走弱: {'命中' if gap_fade else '未命中'}（{gf_desc}）",
             f"②放量长上影: {'命中' if hit_shadow else '未命中'}（{shadow_desc}）",

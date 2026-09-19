@@ -1,4 +1,5 @@
 """financial_redflag 语义锁 + 集成。锁死财报排雷档位与 d2_compose 接入（P2 缺口修复）。"""
+import json
 import os
 import pytest
 
@@ -103,3 +104,19 @@ def test_风险票_真数据高危():
             checked += 1
     if checked == 0:
         pytest.skip("当日无'风险'评级票")
+
+
+# ── v2 语义锁：quality 共性定义(q解)移词表、口径只留档名 + 意味影响化（合成 json·不依赖主仓）──
+def test_v2_口径剔共性_意味影响化(tmp_path):
+    d = os.path.join(str(tmp_path), "data", "analysis", AS_OF)
+    os.makedirs(d, exist_ok=True)
+    with open(os.path.join(d, "600888.json"), "w", encoding="utf-8") as f:
+        json.dump({"financial": {"评级": "中", "quality_score": 56.6, "报告期": "2026-06-30",
+                                 "five_dims": {"成长": 100, "质量": 30, "健康": 77,
+                                               "运营": 81, "回报": 18},
+                                 "derived": {}, "flags": [], "flags_detail": []}}, f, ensure_ascii=False)
+    r = get("financial_redflag").run(AS_OF, "600888", root=str(tmp_path))
+    # quality 的共性档解释(如"财报质量中等")已移词表，口径不重复
+    assert "财报质量中等" not in r.浓缩块
+    # 每条影响化 + 排雷嫌疑档在位
+    assert "影响：" in r.浓缩块 and r.fields["嫌疑档"] in ("无嫌疑", "低", "中", "高")

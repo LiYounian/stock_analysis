@@ -228,17 +228,17 @@ class SectorContextTool:
             拥释 = _拥挤含义.get(拥挤, "")
             line_冷热 = (
                 f"冷热拥挤: {冷热 or 'missing'}·拥挤{拥挤 or 'missing'}"
-                f"（{'/'.join(x for x in (冷释, 拥释) if x) or '无档说明'}）"
+                f"影响：{'/'.join(x for x in (冷释, 拥释) if x) or '无档说明'}"
             )
         else:
             line_冷热 = "冷热拥挤: missing（regime/focus 无该板块）"
 
-        # 3 RS分位（个股 pos60，主档 K 线实测）
+        # 3 RS分位（个股 pos60，主档 K 线实测）——共性"pos60是什么"进词表，此处只讲板块内相对位
         df = load_kline(code, as_of, root=root, min_bars=2)
         rs = pos60(df) if df is not None else None
         if rs is not None:
-            rs档, rs释 = 格档(rs, _RS档)
-            line_rs = f"RS分位: pos60={rs:.2f}[{rs档}]（个股近60日区间分位·{rs释}）"
+            rs档, _ = 格档(rs, _RS档)
+            line_rs = f"RS分位: pos60={rs:.2f}【{rs档}】影响：板块内近60日相对位置{rs档}"
         else:
             line_rs = "RS分位: missing（主档K线不足/缺失）"
 
@@ -267,7 +267,7 @@ class SectorContextTool:
             证据.append(f"利好{利好条}/利空{利空条}")
         if msg:
             证据.append(f"消息驱动{msg[0]}{msg[1] or ''}")
-        line_净催化 = f"净催化: {净档}[{'·'.join(证据) or 净释}]（{净释}）"
+        line_净催化 = f"净催化: {净档}[{'·'.join(证据) or 净释}]影响：{净释}"
 
         lines = [line_板块, line_冷热, line_rs, line_角色, line_排名, line_净催化]
         fields: dict[str, Any] = {

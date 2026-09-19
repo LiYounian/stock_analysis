@@ -27,6 +27,12 @@ _QUALITY档 = [
 # five_dims 单维弱项阈值（<该值算弱项，写死）
 _DIM弱线 = 40.0
 
+# ── v2 影响模板（排雷嫌疑档→对选股影响；共性"quality/五维是什么"已进统一词表）──
+_排雷影响 = {
+    "高危": "财报面重大减分、优先排雷", "中": "财报面减分、需警惕",
+    "低": "财报面轻度关注", "无嫌疑": "财报面友好、无红旗",
+}
+
 
 def _pstock_path(root: Optional[str], as_of: str, code: str) -> str:
     return os.path.join(data_root(root), "data", "analysis", as_of, f"{code}.json")
@@ -105,10 +111,13 @@ class FinancialRedflagTool:
         is_forecast = fin.get("is_forecast")
 
         lines = [
-            f"财报排雷嫌疑: {level}" + (f"（{'; '.join(reasons)}）" if reasons else "（无红旗判据）"),
-            f"评级: {评级}　quality={quality}[{q档}·{q解}]"
-            + ("（预告口径）" if is_forecast else f"（{报告期}）"),
-            f"five_dims 弱项(<{int(_DIM弱线)}): {'/'.join(弱项) if 弱项 else '无'}"
+            f"财报排雷嫌疑: {level}【{level}】影响："
+            + (f"{'; '.join(reasons)}·{_排雷影响.get(level, '')}" if reasons
+               else _排雷影响.get(level, "无红旗判据")),
+            f"评级/quality: {评级}·quality{quality}【{q档}】"
+            + ("（预告口径）" if is_forecast else f"（{报告期}）")
+            + f" 影响：财报质量{q档}",
+            f"five_dims弱项(<{int(_DIM弱线)}): {'/'.join(弱项) if 弱项 else '无'}"
             + f"　[成长{dims.get('成长')}/质量{dims.get('质量')}/健康{dims.get('健康')}/运营{dims.get('运营')}/回报{dims.get('回报')}]",
             f"flags: {'/'.join(flags) if flags else '无'}",
         ]
