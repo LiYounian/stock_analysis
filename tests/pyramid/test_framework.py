@@ -6,7 +6,7 @@ import os
 import pandas as pd
 import pytest
 
-from tools.pyramid.registry import ToolResult, register, get, all_names, list_tools
+from tools.pyramid.registry import ToolResult, register, get, all_names, list_tools, 面枚举, 四面枚举
 from tools.pyramid import _common
 import tools.pyramid.tools  # noqa: F401  触发注册
 
@@ -39,6 +39,71 @@ def test_to_prompt_不吐裸json():
 def test_to_prompt_stale带旗标():
     r = ToolResult(name="t", 塔层="②消息", as_of=AS_OF, 浓缩块="a", freshness="stale")
     assert "[stale]" in r.to_prompt()
+
+
+# ── Wave1 四面契约：面枚举 / 字段解读 三段 / 同源派生 ──
+def test_toolresult_面枚举校验():
+    # 合法面通过
+    r = ToolResult(name="x", 塔层="①塔基", as_of=AS_OF, 浓缩块="a", 面="技术面")
+    assert r.面 == "技术面"
+    # 非法面 raise
+    with pytest.raises(ValueError):
+        ToolResult(name="x", 塔层="①塔基", as_of=AS_OF, 浓缩块="a", 面="乱面")
+    # None（未标）合法，向后兼容
+    assert ToolResult(name="x", 塔层="①塔基", as_of=AS_OF, 浓缩块="a").面 is None
+
+
+def test_面枚举含四面加卡头经验():
+    assert 四面枚举 == ("基本面", "技术面", "资金面", "消息情绪面")
+    for m in 四面枚举 + ("卡头", "经验"):
+        assert m in 面枚举
+
+
+def test_字段_四段不空编():
+    d = _common.字段("PE", 12.3, "PE-TTM·行业中位对比", "估值中性偏低")
+    assert d == {"名": "PE", "值": "12.30", "口径": "PE-TTM·行业中位对比", "意味": "估值中性偏低"}
+    # 值 None → NA（合法缺数据标记，不算空编）
+    assert _common.字段("PE", None, "口径", "意味")["值"] == "NA"
+    # 口径 / 意味 空 → raise（禁空编）
+    with pytest.raises(ValueError):
+        _common.字段("PE", 12.3, "", "意味")
+    with pytest.raises(ValueError):
+        _common.字段("PE", 12.3, "口径", "  ")
+
+
+def test_render_字段_三段格式():
+    items = [_common.字段("量比", 1.72, "当日量/前5日均量·放量", "资金关注度升")]
+    assert _common.render_字段(items) == "量比: 1.72【当日量/前5日均量·放量】资金关注度升"
+
+
+def test_toolresult_字段解读派生浓缩块同源():
+    # 浓缩块留空 + 字段解读非空 → 自动派生（展示=传输同源）
+    items = [_common.字段("量比", 1.72, "口径A", "解读A"),
+             _common.字段("pos60", 0.65, "口径B", "解读B")]
+    r = ToolResult(name="t", 塔层="①塔基", as_of=AS_OF, 浓缩块="", 面="技术面", 字段解读=items)
+    assert "量比: 1.72【口径A】解读A" in r.浓缩块
+    assert "pos60: 0.65【口径B】解读B" in r.浓缩块
+    # to_prompt 吐派生后的浓缩块、无裸 dict
+    assert "{" not in r.to_prompt()
+
+
+def test_toolresult_字段解读拒空编():
+    # 绕过 字段() 直接塞空口径的项 → __post_init__ 拦下
+    with pytest.raises(ValueError):
+        ToolResult(name="t", 塔层="①塔基", as_of=AS_OF, 浓缩块="",
+                   字段解读=[{"名": "PE", "值": "12", "口径": "", "意味": "x"}])
+
+
+def test_现有9工具都已标面():
+    # Wave1：现有工具全部归面，且都落在 面枚举 内
+    for n in ["price_volume", "gate", "entry_price", "financial_redflag",
+              "insider_reduction", "unlock_risk", "sector_context",
+              "fake_good_news", "experience_rules", "shared_pool"]:
+        面 = getattr(get(n), "面", None)
+        assert 面 in 面枚举, f"{n} 面={面!r} 不在枚举"
+    # 统筹裁决：减持→基本面·治理；解禁→资金面·筹码供给
+    assert get("insider_reduction").面 == "基本面"
+    assert get("unlock_risk").面 == "资金面"
 
 
 # ── 防未来 ──

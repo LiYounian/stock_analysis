@@ -84,6 +84,7 @@ def _stop_floor_frac(现价: float, atr: Optional[float]) -> float:
 class EntryPriceTool:
     name = "entry_price"
     塔层 = "①塔基"
+    面 = "技术面"  # 入场价位·价位
     source = "主档 K 线（首入场=开盘附近限价·加仓=回踩MA5·止损带下限）"
 
     def run(

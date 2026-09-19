@@ -108,3 +108,34 @@ def 浓缩块(lines: Sequence[str], max_lines: int = 8) -> str:
     """把若干行拼成浓缩块，超出上限截断并标注（G3：≤8 行）。"""
     kept = [ln for ln in lines if str(ln).strip()][:max_lines]
     return "\n".join(kept)
+
+
+def _值文(v: Any) -> str:
+    """字段"值"段文本化：None→NA；float 保留 2 位；其余 str。空串在 字段() 里再拦。"""
+    if v is None:
+        return "NA"
+    if isinstance(v, float):
+        return f"{v:.2f}"
+    return str(v)
+
+
+def 字段(名: str, 值: Any, 口径: str, 意味: str) -> dict:
+    """构造一条"口径三段"字段：名(字段名) + 值(数值) + 口径(档位/口径定义) + 意味(「这意味着什么」解读)。
+
+    Wave2 新工具统一用它产出 ToolResult.字段解读，保证：
+    - **口径不空编**：名/口径/意味 任一为空即 raise（值 None→"NA" 视为合法缺数据标记）。
+    - **口径贯通**：口径 须由调用工具从自己的档位表常量传入，绝不由拼装层现编。
+    """
+    d = {"名": str(名).strip(), "值": _值文(值),
+         "口径": str(口径).strip(), "意味": str(意味).strip()}
+    for k in ("名", "值", "口径", "意味"):
+        if not d[k]:
+            raise ValueError(f"字段 {名!r} 的「{k}」为空——口径三段禁止空编")
+    return d
+
+
+def render_字段(items: Sequence[dict], max_lines: int = 8) -> str:
+    """字段解读 → 浓缩块文本（同源）：每条渲染为 `{名}: {值}【{口径}】{意味}`。"""
+    lines = [f"{d['名']}: {d['值']}【{d['口径']}】{d['意味']}"
+             for d in items if isinstance(d, dict) and d]
+    return 浓缩块(lines, max_lines=max_lines)

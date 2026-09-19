@@ -70,6 +70,7 @@ def _redflag_verdict(评级: Optional[str], quality: Optional[float], flags: lis
 class FinancialRedflagTool:
     name = "financial_redflag"
     塔层 = "③塔身"
+    面 = "基本面"  # 财报盈利质量/评级
     source = "per-stock json financial（quality_score/评级/five_dims/flags/derived）"
 
     def run(self, as_of: str, code: Optional[str] = None,

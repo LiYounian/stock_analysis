@@ -48,6 +48,45 @@ def _scalar(v, key: Optional[str] = None):
 
 _排除冷热 = {"过热", "拐点"}  # A6：★ 排除 过热A / 拐点A
 
+# ── 四面板渲染顺序（面attr → 序号/显示名）；卡头/经验单列，不在四面板内 ──
+# 面attr 与 registry.四面枚举 对齐（消息情绪面 显示简称"消息面"）。
+_面板序 = [
+    ("一", "基本面", "基本面"),
+    ("二", "技术面", "技术面"),
+    ("三", "资金面", "资金面"),
+    ("四", "消息情绪面", "消息面"),
+]
+
+
+def _load_names(root: Optional[str] = None) -> dict:
+    """code→股票名 映射（config/code_name.json 随代码走·非 data-root）。缺失回退空表。"""
+    base = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    for d in (base, root):
+        if not d:
+            continue
+        p = os.path.join(d, "config", "code_name.json")
+        try:
+            with open(p, "r", encoding="utf-8") as f:
+                m = json.load(f)
+            if isinstance(m, dict) and m:
+                return m
+        except Exception:
+            continue
+    return {}
+
+
+def _stock_name(code: str, names: dict, root: Optional[str], as_of: str) -> str:
+    """取股票名：code_name.json 优先 → per-stock meta.name（非 code 占位时）→ code 兜底。"""
+    nm = names.get(code)
+    if nm and str(nm).strip() and str(nm).strip() != str(code):
+        return str(nm).strip()
+    j = _load(root, as_of, f"{code}.json")
+    if isinstance(j, dict) and isinstance(j.get("meta"), dict):
+        mn = j["meta"].get("name")
+        if mn and str(mn).strip() and str(mn).strip() != str(code):
+            return str(mn).strip()
+    return str(code)
+
 
 def market_overview(as_of: str, root: Optional[str] = None, n_focus: int = 5) -> dict:
     """市场定调 + 全板块概览（全分析·重点 n_focus·浓缩不遗漏）。
@@ -80,11 +119,18 @@ def market_overview(as_of: str, root: Optional[str] = None, n_focus: int = 5) ->
         重点 = [b.get("板块") for b in boards_sorted
                 if b.get("板块") not in avoid and not _过热拥挤(b.get("板块"))][:n_focus]
 
+    # 描述性输入侧：风险偏好 dict 里已带上游产出的描述句「依据」+ 净广度/涨停跌停（§8 用户明说）
+    _rp = focus.get("风险偏好") if isinstance(focus.get("风险偏好"), dict) else {}
     return {
         "as_of": as_of,
         # A6 文字化：风险偏好在 focus.json 里是 dict，取内层标量避免裸 dict 进 prompt
         "风险偏好": _scalar(focus.get("风险偏好"), "风险偏好"),
         "广度档": _scalar(focus.get("风险偏好"), "广度档") if isinstance(focus.get("风险偏好"), dict) else None,
+        # 描述性源：依据=上游产出的整句（拼装层原样 surface·不编）；净广度/涨停跌停供多空描述
+        "净广度": _rp.get("净广度"),
+        "依据": _rp.get("依据"),
+        "涨停": _rp.get("涨停"),
+        "跌停": _rp.get("跌停"),
         "宏观情景": _scalar(focus.get("宏观情景"), "宏观情景"),
         "宏观净方向": _scalar(focus.get("宏观净方向"), "宏观净方向"),
         "消息驱动": focus.get("消息驱动"),  # 原始保留（render 不直接印，需要时经 _txt）
@@ -122,31 +168,37 @@ def build_package(as_of: str, root: Optional[str] = None, top_n: int = 15,
     skel = C.build_skeleton(as_of, root=root, scan_kline=scan_kline)
     ov = market_overview(as_of, root=root, n_focus=n_focus)
 
-    # shared_pool 不逐票重扫（每次 scan_kline 要 14s）；用骨架已存的来源标签直接渲染。
-    tool_names = ["price_volume", "gate", "sector_context",
-                  "experience_rules", "fake_good_news", "financial_redflag",
-                  "unlock_risk", "insider_reduction", "entry_price"]
+    # shared_pool 不逐票重扫（每次 scan_kline 要 14s）；卡头用骨架已存的来源标签直接渲染。
+    # 四面重排：各工具块按其 .面 分组，d2_package 只按面板顺序排版（拼装层不写口径）。
+    tool_names = ["price_volume", "gate", "entry_price",
+                  "financial_redflag", "insider_reduction",
+                  "unlock_risk", "sector_context",
+                  "fake_good_news", "experience_rules"]
     tools = {t: registry.get(t) for t in tool_names}
+    names = _load_names(root)
 
     top = C.select_top(skel["排序"], top_n)  # A10：同分不硬切，整桶纳入
     cards = []
     for row in top:
-        labels = row.来源标签 or []
-        blocks = [
-            f"【shared_pool·①塔基】as_of={as_of}\n"
-            f"命中来源: {'/'.join(labels) if labels else '无'}（{len(labels)}/4来源·≥2=交叉共识）"
-        ]
+        code = row.code
+        面块: dict[str, list] = {}  # 面attr → [工具浓缩块, ...]
         for t in tool_names:
             try:
-                blocks.append(tools[t].run(as_of, row.code, root=root).to_prompt())
+                r = tools[t].run(as_of, code, root=root)
+                面 = getattr(r, "面", None) or getattr(tools[t], "面", None) or "基本面"
+                面块.setdefault(面, []).append(r.to_prompt())
             except Exception as e:
-                blocks.append(f"【{t}】ERR {e}")
+                # 工具异常也归其声明面，保证面板不整块消失、可诊断
+                面 = getattr(tools[t], "面", None) or "基本面"
+                面块.setdefault(面, []).append(f"【{t}】ERR {e}")
         cards.append({
-            "code": row.code,
+            "code": code,
+            "名称": _stock_name(code, names, root, as_of),
+            "as_of": as_of,
             "骨架分": row.骨架分,
             "子分": row.子分,
             "来源标签": row.来源标签,
-            "浓缩块": "\n".join(blocks),
+            "面块": 面块,
         })
     return {
         "as_of": as_of,
@@ -169,16 +221,27 @@ def render_package(pkg: dict) -> str:
     ov = pkg.get("市场定调") or {}
     out = []
     out.append(f"# 金字塔决策包 · as_of={pkg.get('as_of')}")
+    # §8 市场定调改描述性输入：主句 + 上游依据整句(原样·不编) + 板块轮动一句
     out.append("\n## 市场定调")
     广度 = ov.get("广度档")
+    净广度 = ov.get("净广度")
+    s = f"当前市场风险偏好{_txt(ov.get('风险偏好'))}"
+    if 广度:
+        s += f"（广度档{_txt(广度)}"
+        if isinstance(净广度, (int, float)):
+            方向 = "多头占优" if 净广度 > 0.1 else ("空头占优" if 净广度 < -0.1 else "多空均衡")
+            s += f"·净广度{净广度:+.3f}→{方向}"
+        zt, dt = ov.get("涨停"), ov.get("跌停")
+        if zt is not None or dt is not None:
+            s += f"·涨停{_txt(zt)}/跌停{_txt(dt)}"
+        s += "）"
+    s += f"；宏观情景{_txt(ov.get('宏观情景'))}、宏观净方向{_txt(ov.get('宏观净方向'))}。"
+    out.append(s)
+    if ov.get("依据"):
+        out.append(f"定调依据：{_txt(ov.get('依据'))}")  # 上游产出整句·拼装层原样 surface
     out.append(
-        f"风险偏好={_txt(ov.get('风险偏好'))}"
-        + (f"（广度档={_txt(广度)}）" if 广度 else "")
-        + f" 宏观情景={_txt(ov.get('宏观情景'))} 宏观净方向={_txt(ov.get('宏观净方向'))}"
-    )
-    out.append(
-        f"重点板块(★)={_txt(ov.get('重点板块'))}　规避板块={_txt(ov.get('规避板块池'))}"
-        + (f"　[{ov.get('重点口径')}]" if ov.get("重点口径") else "")
+        f"板块轮动：重点主线★ {_txt(ov.get('重点板块'))}；规避 {_txt(ov.get('规避板块池'))}"
+        + (f"（{ov.get('重点口径')}）" if ov.get("重点口径") else "")
     )
     out.append("\n## 全板块概览(全分析·★重点·浓缩不遗漏)")
     out.append(render_boards(ov))
@@ -197,13 +260,32 @@ def render_package(pkg: dict) -> str:
     if skel.get("排序键"):
         out.append(f"排序键：{skel['排序键']}（同分不跨界硬切）")
     cards = pkg.get("候选卡片") or []
-    out.append(f"\n## 候选 top{pkg.get('top_n')}(实入{len(cards)}张·每票骨架分+子分+全工具浓缩块)")
+    out.append(f"\n## 候选 top{pkg.get('top_n')}(实入{len(cards)}张·四面结构·每票 卡头+基本面/技术面/资金面/消息面+经验)")
     for c in cards:
+        面块 = c.get("面块") or {}
+        # 卡头·元信息（股票名 + code + as_of + 骨架分/子分/来源）
         out.append(
-            f"\n### {c.get('code')} 骨架分={c.get('骨架分')} "
-            f"子分[{_sub_txt(c.get('子分'))}] 来源={_txt(c.get('来源标签'))}"
+            f"\n### {_txt(c.get('名称'))}（{c.get('code')}） as_of={c.get('as_of')} "
+            f"骨架分={c.get('骨架分')} 子分[{_sub_txt(c.get('子分'))}] 来源={_txt(c.get('来源标签'))}"
         )
-        out.append(c.get("浓缩块") or "")
+        labels = c.get("来源标签") or []
+        out.append(
+            f"【卡头·元信息】命中来源: {'/'.join(labels) if labels else '无'}"
+            f"（{len(labels)}/4来源·≥2=交叉共识）"
+        )
+        # 四面板固定顺序·全展开（空面板显式标待填充，不静默消失）
+        for 序, 面attr, 显示 in _面板序:
+            out.append(f"【{序}·{显示}】")
+            blocks = 面块.get(面attr) or []
+            if blocks:
+                out.extend(blocks)
+            else:
+                out.append("（本面暂无工具·待 Wave2 填充）")
+        # 经验纪律尾块（跨面）
+        exp = 面块.get("经验") or []
+        if exp:
+            out.append("【经验纪律·跨面】")
+            out.extend(exp)
     return "\n".join(out)
 
 

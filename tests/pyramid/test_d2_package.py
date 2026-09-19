@@ -50,11 +50,13 @@ def test_市场定调_重点按focus排除过热A拐点A(monkeypatch):
     assert "电子" == ov["重点板块"][0]
 
 
-# ── A6 / D4 决策包禁裸 dict ───────────────────────────
+# ── A6 / D4 决策包禁裸 dict + 四面结构锁 ──────────────
 def _synth_pkg():
     ov = {
         "as_of": "2026-09-17",
         "风险偏好": {"风险偏好": "中性", "广度档": "中性"},  # 故意塞裸 dict，验证 _txt 兜底
+        "广度档": "中性", "净广度": -0.0439, "涨停": 58, "跌停": 6,
+        "依据": "广度档=中性(净广度=-0.0439、涨停58/跌停6、权重搭台中小盘偏弱);宏观净方向=中性→最终中性",
         "宏观情景": "中性", "宏观净方向": "中性",
         "规避板块池": [], "重点板块": ["电子", "电力设备"],
         "重点口径": "focus_score↓·排除规避与过热A/拐点A",
@@ -66,10 +68,18 @@ def _synth_pkg():
     skel = {"池规模": 575, "参与票数": 575, "计分票数": 556, "排序票数": 540,
             "否决票数": 16, "数据缺失票数": 19, "权重": C.WEIGHTS,  # 权重是 dict
             "排序键": "骨架分↓, 量价自证子分↓, 代码↑", "排序": [], "排雷否决": []}
-    cards = [{"code": "600000", "骨架分": 62.7,
+    # 四面重排后卡片形状：卡头元信息 + 面块(面attr→[工具浓缩块])
+    cards = [{"code": "600000", "名称": "浦发银行", "as_of": "2026-09-17", "骨架分": 62.7,
               "子分": {"量价自证": 80.0, "板块角色": 55.0, "策略共识": 50.0,
                       "排雷": 100.0, "宏观催化": 40.0},  # 子分是 dict
-              "来源标签": ["K线过闸", "多策略"], "浓缩块": "【price_volume】现价 10.0"}]
+              "来源标签": ["K线过闸", "多策略"],
+              "面块": {
+                  "基本面": ["【financial_redflag·③塔身】as_of=2026-09-17\n财报评级 良"],
+                  "技术面": ["【price_volume·①塔基】as_of=2026-09-17\n现价: 10.0【口径:主档K线】"],
+                  "资金面": ["【unlock_risk·②消息】as_of=2026-09-17\n解禁嫌疑 低"],
+                  "消息情绪面": ["【sector_context·④宏观】as_of=2026-09-17\n净催化 正"],
+                  "经验": ["【experience_rules·经验】as_of=2026-09-17\n命中0条"],
+              }}]
     return {"as_of": "2026-09-17", "市场定调": ov, "骨架": skel,
             "候选卡片": cards, "top_n": 8}
 
@@ -79,9 +89,45 @@ def test_render_package_无裸dict():
     assert "{'" not in txt          # D4：无裸 dict/json
     assert '{"' not in txt
     # 关键字段确实文字化进去了
-    assert "风险偏好=风险偏好=中性" in txt or "风险偏好=中性" in txt
     assert "量价自证 80.0" in txt   # 子分文字化
     assert "量价自证=0.3" in txt    # 权重文字化
+
+
+def test_render_package_四面板齐全带名():
+    """四面结构锁：卡头带股票名 + 四面板头齐全 + 经验尾块。"""
+    txt = P.render_package(_synth_pkg())
+    # 卡头带股票名 + code + as_of
+    assert "浦发银行（600000）" in txt
+    assert "as_of=2026-09-17" in txt
+    assert "【卡头·元信息】" in txt
+    # 四面板头齐全（固定顺序·全展开）
+    for h in ["【一·基本面】", "【二·技术面】", "【三·资金面】", "【四·消息面】"]:
+        assert h in txt, f"缺面板 {h}"
+    # 经验纪律尾块
+    assert "【经验纪律·跨面】" in txt
+    # 各面工具浓缩块原样入面板（口径随值·拼装层不改）
+    assert "现价: 10.0【口径:主档K线】" in txt
+    assert "解禁嫌疑 低" in txt
+
+
+def test_render_package_空面板显式标待填充():
+    """Wave1 某面无工具时，面板不静默消失，显式标待 Wave2 填充。"""
+    pkg = _synth_pkg()
+    pkg["候选卡片"][0]["面块"].pop("资金面")  # 模拟资金面暂无工具
+    txt = P.render_package(pkg)
+    assert "【三·资金面】" in txt
+    assert "待 Wave2 填充" in txt
+
+
+def test_render_package_市场定调描述性():
+    """§8 市场定调输入侧描述性：主句 + 上游依据整句 + 净广度→多空描述。"""
+    txt = P.render_package(_synth_pkg())
+    # 主句为描述句（synth 的风险偏好留 dict 验证 _txt 兜底；真实数据经 market_overview 取标量）
+    assert "当前市场风险偏好" in txt
+    assert "净广度-0.044→多空均衡" in txt   # 净广度∈[-0.1,0.1]→均衡
+    assert "定调依据：" in txt               # 上游依据整句原样 surface
+    assert "涨停58/跌停6" in txt
+    assert "板块轮动：" in txt
 
 
 def test_render_package_计分口径自洽出现():

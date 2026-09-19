@@ -291,6 +291,7 @@ def pool_with_labels(
 class SharedPoolTool:
     name = "shared_pool"
     塔层 = "①塔基"
+    面 = "卡头"  # 召回来源/骨架元信息→卡头
     source = "4来源平权并集: 多策略∪council∪板块roster∪全A K线过闸"
 
     def run(

@@ -253,6 +253,7 @@ def load_rule_db(root: Optional[str] = None) -> dict:
 class ExperienceRulesTool:
     name = "experience_rules"
     塔层 = "经验"
+    面 = "经验"  # 跨面经验纪律·单独尾块
     source = "docs/每日分析/经验沉淀/v*.md → 经验规则库.json"
 
     def run(

@@ -15,6 +15,10 @@ import os
 FRESHNESS = ("fresh", "stale", "missing")
 # ── 塔层枚举（金字塔三层 + 横切）──
 塔层枚举 = ("①塔基", "②消息", "③塔身", "④宏观", "经验", "评估", "基础")
+# ── 四面枚举（体检卡组织轴：基本面/技术面/资金面/消息情绪面）+ 卡头/经验 两个非四面槽 ──
+# 与 塔层 正交：塔层=金字塔机制分层；面=喂选股 LLM 的个股分析组织面（设计 2026-09-19 §1b/§2c）。
+四面枚举 = ("基本面", "技术面", "资金面", "消息情绪面")
+面枚举 = 四面枚举 + ("卡头", "经验")
 
 _MAX_浓缩块_行 = 8  # 公理 G3：每工具每票 ≤ 8 行文字
 
@@ -25,6 +29,11 @@ class ToolResult:
 
     fields：机读结构字段（数值/枚举）。
     浓缩块：人读文字，≤8 行，每个数值须带【口径】【档位】【一句解释】；进 prompt 用它。
+    面：归属四面之一（基本面/技术面/资金面/消息情绪面）或 卡头/经验；None=未标（旧工具兼容）。
+        d2_package 按 面 把各工具块重排进四面板（拼装层不写口径，只排版）。
+    字段解读：结构化"口径三段" [{名,值,口径,意味}, ...]，Wave2 新工具的规范载体。
+        非空且 浓缩块 为空时 __post_init__ 自动派生 浓缩块=render_字段(字段解读)（展示=传输同源）。
+        口径须来自工具自己的档位表，拼装层永不现编；四段（名/值/口径/意味）禁止空编。
     freshness：fresh/stale/missing，口径新鲜度。
     防未来：True 表示已断言只用了 as_of 当日及之前的数据。
     """
@@ -38,12 +47,28 @@ class ToolResult:
     freshness: str = "fresh"
     防未来: bool = True
     source: str = ""
+    面: Optional[str] = None
+    字段解读: list = field(default_factory=list)
 
     def __post_init__(self) -> None:
         if self.塔层 not in 塔层枚举:
             raise ValueError(f"塔层 非法: {self.塔层!r}，应属 {塔层枚举}")
         if self.freshness not in FRESHNESS:
             raise ValueError(f"freshness 非法: {self.freshness!r}，应属 {FRESHNESS}")
+        if self.面 is not None and self.面 not in 面枚举:
+            raise ValueError(f"面 非法: {self.面!r}，应属 {面枚举}")
+        # 字段解读结构校验（口径三段不空编）——名/口径/意味 非空，值须有键
+        for it in self.字段解读:
+            if not isinstance(it, dict) or "值" not in it or not all(
+                str(it.get(k, "")).strip() for k in ("名", "口径", "意味")
+            ):
+                raise ValueError(
+                    f"工具 {self.name} 字段解读项非法（名/口径/意味 禁空编）: {it!r}"
+                )
+        # 字段解读非空 且 浓缩块为空 → 自动派生（同源：展示由字段解读渲染）
+        if self.字段解读 and not str(self.浓缩块).strip():
+            from tools.pyramid._common import render_字段
+            self.浓缩块 = render_字段(self.字段解读)
         # 浓缩块行数硬约束（G3）——超限即契约违规，早失败
         n = len([ln for ln in str(self.浓缩块).splitlines() if ln.strip()])
         if n > _MAX_浓缩块_行:
