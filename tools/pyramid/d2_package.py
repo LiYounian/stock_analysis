@@ -12,7 +12,7 @@ from typing import Optional
 import json
 import os
 
-from tools.pyramid.指标词表 import render_词表  # v2：统一指标词表·喂 prompt 开头一次
+from tools.pyramid.指标词表 import render_词表, render_消息面词表  # v2：统一指标词表·喂 prompt 开头一次
 
 
 def _load(root: Optional[str], as_of: str, fname: str):
@@ -58,6 +58,18 @@ _面板序 = [
     ("三", "资金面", "资金面"),
     ("四", "消息情绪面", "消息面"),
 ]
+
+# ── 消息面段常量 ──────────────────────────────────────────────
+# 国际/宏观 启发式关键词：数据无 per-event 国际 flag，对『事件』文本命中即归国际/宏观。
+# 策展词表·聚焦 运价/地缘/汇率/关税/货币/贸易/海外订单；**刻意不含裸『国际』二字**
+# （实测『APEC国际研讨会』这类社交活动会误命中）。诚实标注启发式、非精确分类。
+_宏观国际关键词 = (
+    "BDI", "欧线", "集运", "干散货", "油运", "航线", "运价", "运费", "VLCC", "TD3C",
+    "原油", "石油", "OPEC", "天然气", "关税", "加息", "降息", "美联储", "美债",
+    "汇率", "人民币", "美元", "地缘", "战争", "中东", "出口", "进口", "长单", "海外订单",
+)
+_影响程度序 = {"大": 0, "中": 1, "小": 2}  # 事件排序：影响大者靠前
+_事件上限默认 = 8  # 统筹裁定：与体检卡 G3 默认一致，逐事件渲染上限（照 G3 可配）
 
 
 def _load_names(root: Optional[str] = None) -> dict:
@@ -160,6 +172,148 @@ def render_boards(ov: dict) -> str:
     return "\n".join(lines)
 
 
+def _is_国际(事件: str) -> bool:
+    """启发式：事件文本命中宏观/国际关键词即归国际/宏观（非精确分类）。"""
+    if not isinstance(事件, str):
+        return False
+    return any(kw in 事件 for kw in _宏观国际关键词)
+
+
+def _事件在窗(e: dict, as_of: Optional[str]) -> bool:
+    """防未来 as_of 守卫：丢弃 时间 > as_of 的事件（ISO 日期串直接可比）。
+    时间缺失或 as_of 缺失时保守保留（不因缺元数据静默丢真实事件）。"""
+    if not as_of:
+        return True
+    t = e.get("时间") if isinstance(e, dict) else None
+    if not t:
+        return True
+    return str(t) <= str(as_of)
+
+
+def _事件排序键(e: dict):
+    """排序：影响大>中>小，非中性优先，时间新在前（时间倒序用负字典序不便，改元组）。"""
+    影响 = _影响程度序.get(e.get("影响程度"), 3)
+    非中性 = 0 if e.get("方向") in ("利好", "利空") else 1
+    return (影响, 非中性, _neg_date(e.get("时间")))
+
+
+def _neg_date(t) -> str:
+    """让时间倒序参与升序排序：新日期应排前，用『取反』字符串。
+    ISO 日期逐字符对 9 取补，得到新→旧的升序键。"""
+    s = str(t or "")
+    return "".join(chr(ord("9") - (ord(c) - ord("0"))) if c.isdigit() else c for c in s)
+
+
+def _事件行(e: dict) -> str:
+    """逐事件行：只 surface 原样字段（方向/可信度/影响程度/执行度/来源），render 不编研判。"""
+    时间 = _txt(e.get("时间"))
+    事件 = _txt(e.get("事件"))
+    tags = [
+        f"方向{_txt(e.get('方向'))}", _txt(e.get("可信度")),
+        f"影响{_txt(e.get('影响程度'))}", f"执行{_txt(e.get('执行度'))}",
+        _txt(e.get("来源")),
+    ]
+    if _is_国际(e.get("事件") or ""):
+        tags.append("🌐国际/宏观")
+    return f"- {时间}｜{事件}〔{'·'.join(tags)}〕"
+
+
+def _候选文本(候选: list, 带联动: bool = False) -> str:
+    """龙头/跟涨候选 → 人读文本（A6：禁裸 dict 进 prompt）。"""
+    if not isinstance(候选, list) or not 候选:
+        return "—"
+    parts = []
+    for x in 候选:
+        if not isinstance(x, dict):
+            parts.append(_txt(x)); continue
+        seg = f"{_txt(x.get('name'))}{_txt(x.get('code'))}"
+        if x.get("已动"):
+            seg += "(已动)"
+        if 带联动 and x.get("联动依据"):
+            seg += f"[{_txt(x.get('联动依据'))}]"
+        parts.append(seg)
+    return "、".join(parts)
+
+
+def render_消息面(ov: dict, as_of: Optional[str] = None, 上限: int = _事件上限默认) -> str:
+    """市场·国际·板块消息面段：消息面词表 + 板块消息卡 + 国际/宏观汇总。
+
+    口径贯通不许编：方向/可信度/影响程度/执行度/来源 原样取自消息驱动块；
+    含义/影响用上游现成研判句（依据/持续性/可靠性综述）+ 龙头/跟涨候选个股 原样组装。
+    强弱=强 板块按上限深挖全事件；强弱=中 板块只渲 影响大/中 事件（精简）。
+    防未来：丢弃 时间 > as_of 的事件。
+    """
+    md = ov.get("消息驱动") if isinstance(ov, dict) else None
+    as_of = as_of or (md.get("as_of") if isinstance(md, dict) else None) or ov.get("as_of")
+    out = [f"\n## 市场·国际·板块消息面 (as_of={_txt(as_of)})"]
+    out.append(render_消息面词表())
+
+    if not isinstance(md, dict) or not md.get("利好板块"):
+        out.append("（今日无消息驱动数据落盘·待补；不编造）")
+        return "\n".join(out)
+
+    boards = [b for b in (md.get("利好板块") or []) if isinstance(b, dict)]
+    # 板块排序：强弱(强>中>弱)、事件多者靠前
+    强弱序 = {"强": 0, "中": 1, "弱": 2}
+    boards.sort(key=lambda b: (强弱序.get(b.get("强弱"), 3),
+                               -len(b.get("关键事件") or [])))
+    国际汇总: list[tuple] = []  # (board, tag, 强弱, [国际事件短句])
+
+    for b in boards:
+        board = _txt(b.get("board"))
+        tag, 强弱 = _txt(b.get("tag")), _txt(b.get("强弱"))
+        events = [e for e in (b.get("关键事件") or []) if isinstance(e, dict)]
+        总数 = len(events)
+        # 防未来守卫
+        events = [e for e in events if _事件在窗(e, as_of)]
+        丢弃 = 总数 - len(events)
+        # 强弱=中 精简：只留 影响大/中
+        is_强 = b.get("强弱") == "强"
+        if not is_强:
+            events = [e for e in events if e.get("影响程度") in ("大", "中")]
+        筛后 = len(events)
+        events.sort(key=_事件排序键)
+        取 = events[:上限]
+        余 = 筛后 - len(取)
+
+        cnt = f"关键事件{总数}条"
+        if 丢弃:
+            cnt += f"·防未来丢弃{丢弃}"
+        if not is_强:
+            cnt += f"·中板块仅取影响大/中{筛后}"
+        cnt += f"·取{len(取)}"
+        if 余 > 0:
+            cnt += f"·余{余}略"
+        out.append(f"\n### {board} —— {tag} · {强弱} ({cnt})")
+        for e in 取:
+            out.append(_事件行(e))
+        # 含义/影响：全部上游现成研判句 + 候选个股，原样组装（render 不编）
+        if b.get("依据"):
+            out.append(f"  含义(上游依据)：{_txt(b.get('依据'))}")
+        if b.get("持续性"):
+            out.append(f"  持续性：{_txt(b.get('持续性'))}")
+        龙头 = _候选文本(b.get("龙头候选"))
+        跟涨 = _候选文本(b.get("跟涨候选"), 带联动=True)
+        out.append(f"  影响(个股指向)：龙头候选 {龙头}；跟涨候选 {跟涨}")
+        if b.get("可靠性综述"):
+            out.append(f"  可靠性：{_txt(b.get('可靠性综述'))}")
+        # 收集国际/宏观事件（用在窗事件·同守卫/中筛口径，汇总求全不受逐卡上限裁剪）
+        国际事件 = [ _txt(e.get("事件")) for e in events if _is_国际(e.get("事件") or "") ]
+        if 国际事件:
+            国际汇总.append((board, tag, 强弱, 国际事件[:5]))
+
+    # 国际/宏观事件汇总
+    out.append(f"\n## 国际/宏观事件汇总(启发式抽取·as_of={_txt(as_of)})")
+    if 国际汇总:
+        for board, tag, 强弱, evs in 国际汇总:
+            摘 = "·".join(s[:32] for s in evs)
+            out.append(f"- {board}({tag}{强弱})：{摘}")
+        out.append("影响：让 LLM 一眼看到当日国际/宏观面系统性利好/利空哪些板块。")
+    else:
+        out.append("（当日各板块关键事件未命中国际/宏观关键词）")
+    return "\n".join(out)
+
+
 def build_package(as_of: str, root: Optional[str] = None, top_n: int = 15,
                   scan_kline: bool = True, n_focus: int = 5) -> dict:
     """决策包：市场定调 + 全板块概览 + 骨架 top_n（每票全部工具浓缩块）。"""
@@ -256,6 +410,8 @@ def render_package(pkg: dict) -> str:
         f"板块轮动：重点主线★ {_txt(ov.get('重点板块'))}；规避 {_txt(ov.get('规避板块池'))}"
         + (f"（{ov.get('重点口径')}）" if ov.get("重点口径") else "")
     )
+    # 市场·国际·板块消息面（消息驱动逐事件研判显性化；市场定调后、全板块概览前）
+    out.append(render_消息面(ov, as_of=ov.get("as_of") or pkg.get("as_of")))
     out.append("\n## 全板块概览(全分析·★重点·浓缩不遗漏)")
     out.append(render_boards(ov))
     skel = pkg.get("骨架") or {}

@@ -9,7 +9,7 @@
 import pytest
 
 from tools.pyramid._common import 格档
-from tools.pyramid.指标词表 import render_词表, render_区间, _num, _pct
+from tools.pyramid.指标词表 import render_词表, render_区间, render_消息面词表, _num, _pct
 from tools.pyramid.tools.valuation_tool import _PE参考档, _PB档, _PEG档
 from tools.pyramid.tools.growth_quality_tool import _增速档, _负债率档
 from tools.pyramid.tools.financial_redflag_tool import _QUALITY档
@@ -86,3 +86,17 @@ def test_词表四面齐全():
     # ROE 无区间（未年化·不设绝对档）——只有定义，无 "档位(全A横截面)"
     roe行 = next(l for l in txt.splitlines() if l.startswith("- ROE"))
     assert "档位(全A横截面)" not in roe行
+
+
+# ── 消息面词表节：方向/可信度/来源/国际标签/风险偏好 定义在位（状态类无区间）──
+def test_消息面词表节():
+    txt = render_消息面词表()
+    assert "消息面词表" in txt
+    for 名 in ("方向", "强弱", "可信度", "影响程度", "执行度", "来源",
+              "国际/宏观标签", "风险偏好/广度/宏观净方向"):
+        assert 名 in txt, f"消息面词表缺条目：{名}"
+    # 状态类无档位 → 不带"档位(全A横截面)"
+    assert "档位(全A横截面)" not in txt
+    # 关键口径句在位（利好/利空/中性 三态、一手/二手 分级）
+    assert "利好/利空/中性" in txt
+    assert "一手" in txt and "二手" in txt
