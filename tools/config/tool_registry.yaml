@@ -118,3 +118,15 @@ tools:
     reuse: data/analysis/<date>/<code>.json 的 events(type∈{减持,权益变动})
     tests: tests/pyramid/test_insider_reduction.py
     note: "大股东减持抛压(负向·消息面·镜像fake_good_news);v1标题级粗判;候选=type∈{减持,权益变动}且as_of前30日内且date≤as_of(防未来);逐条严重度:中性(协议转让/引入战投/业务协同/增持/未减持 或impact利好)不计/高(清仓式或控股股东+大额)/中单条(大额/预披露)/常规;档位(写死)无嫌疑/低/中/高;高走veto清仓式减持;接d2_compose排雷子分(中-25/低-12);只走events不碰holder(股东户数)/fundflow(主力);减持低频多数票窗内0条属正常;v2需新采occ量化占流通%×主体×方式"
+  - name: stock_sentiment
+    塔层: "②消息"
+    面: "消息情绪面"
+    status: done
+    window: Wave2-消息情绪面(个股级)
+    inputs: [as_of, code]
+    outputs: [净情绪档, 净情绪分, 舆情多空, 覆盖率档, 公告事件数, 公告roster, 研报覆盖档, 覆盖机构数, 社媒热度]
+    freshness: sentiment新鲜=fresh；陈旧或净情绪分缺=stale；无json=missing
+    防未来: true
+    reuse: data/analysis/<date>/<code>.json 的 sentiment/events/consensus/ugc
+    tests: tests/pyramid/test_stock_sentiment.py
+    note: "个股级消息情绪面(Wave2首个字段解读工具·口径三段);6条:个股净情绪/情绪三层/情绪样本质量/公司公告事件/一致预期/社媒热度;三档位表写死语义锁(净情绪档强正/正/中性/负/强负·on净情绪分[-0.3/-0.05/0.05/0.3];覆盖率档全/部分/低覆盖·on覆盖率;研报覆盖档高关注/一般/冷门/无覆盖·on覆盖机构数[0/2/9]);净情绪分口径用sentiment原口径原样;不重复sector_context(板块催化)/fake_good_news(假利好price);公告tally剔除{减持,权益变动,解禁}(见insider_reduction基本面治理/unlock_risk资金面筹码)避免双计·增持保留;events近60日窗+防未来drop date>as_of;consensus None→无覆盖待补;ugc源未接入恒NA;不碰d2_package(统筹集成期统一接)"
