@@ -552,16 +552,16 @@
         <div class="t-meta">这张卡先回答三个问题：当天该<b>进攻还是防守</b>、<b>偏大盘还是偏中小盘</b>、<b>哪些板块偏强偏弱</b>——是终选 AI 读候选之前先建立的大盘背景。</div>
 
         <div class="tface">
-          <div class="fh"><span class="fi"></span>一、大盘方向与分歧 <span class="stag tbd">能力落地中·市场层贯通 chip 进行中</span></div>
+          <div class="fh"><span class="fi"></span>一、大盘方向与分歧 <span class="stag now">已在决策包内</span></div>
           <div class="trow"><div class="tl"><span class="nm">个股β基准 proxy（全A等权）</span><span class="cap">中小盘方向锚 · 上行概率分位</span></div><div class="tr">1日 p_up 0.53【方向中性】 · 5日 p_up 0.50【方向中性】<span class="imp"> → 中小盘无系统性顺风，个股要靠自身 α</span></div></div>
           <div class="trow"><div class="tl"><span class="nm">权重股背景 hs300</span><span class="cap">仅作权重β背景 · 不代表个股中位数</span></div><div class="tr">1日 p_up 0.51【方向中性】 · 5日 p_up 0.59 <span class="warn">【上行概率偏高·偏多】</span></div></div>
           <div class="trow"><div class="tl"><span class="nm">分歧标记 触发</span><span class="cap">二八分化/风格背离 · 阈值0.1</span></div><div class="tr"><span class="neg">5日「权重搭台、中小盘偏弱」</span>（hs300 0.59 偏多 vs proxy 0.50 震荡 · 差 0.084 · 方向档背离）<span class="imp"> → 指数偏多≠个股普涨，选股按 proxy 口径、别被权重带偏</span></div></div>
-          <div class="trow"><div class="tl"><span class="nm">因子贡献 proxy·1日</span><span class="cap">composite 模型</span></div><div class="tr">技术 −0.22 / 广度 −0.17 / 消息面 −0.03 / 资金流 0.00<span class="neg"> → 技术+广度双负、拖累方向</span></div></div>
+          <div class="trow"><div class="tl"><span class="nm">因子贡献 proxy</span><span class="cap">归因 p_up 方向 · 数据直取 · 1日+5日</span></div><div class="tr">1日 技术 −0.216 / 广度 −0.168 / 消息面 −0.026 / 资金流 0.000<br>5日 技术 −0.066 / 广度 −0.168 / 消息面 +0.022 / 资金流 0.000<span class="neg"> → 广度两档持续为主要拖累</span>；资金流权重 0（kill）、消息面≈0，佐证真正起作用只技术+广度两维</div></div>
           <div class="trow"><div class="tl"><span class="nm">效力诚实标注</span><span class="cap">2026-09-10 维度贡献研究</span></div><div class="tr">方向命中约 55%·较惯性 +4.8pp 统计边际（显著），<span class="neg">但多空收益价差≈0（无经济 alpha）</span>；每天真正起作用仅技术+广度两维（资金流 kill、消息面降权）。<span class="warn"> → 只当方向参考，勿把高概率读成能赚钱</span></div></div>
         </div>
 
         <div class="tface">
-          <div class="fh"><span class="fi"></span>二、市场广度 · 情绪 · 资金 <span class="stag tbd">能力落地中·市场层贯通 chip 进行中</span></div>
+          <div class="fh"><span class="fi"></span>二、市场广度 · 情绪 · 资金 <span class="stag now">已在决策包内</span></div>
           <div class="trow"><div class="tl"><span class="nm">涨跌广度 净 −0.044</span><span class="cap">全市场 5563 只</span></div><div class="tr">涨 2575 / 跌 2819<span class="neg"> → 跌家略多、广度中性偏弱</span></div></div>
           <div class="trow"><div class="tl"><span class="nm">涨跌停 58 / 6</span><span class="cap">涨停 / 跌停家数</span></div><div class="tr">涨停 58、跌停 6<span class="pos"> → 赚钱效应尚可、未见恐慌</span></div></div>
           <div class="trow"><div class="tl"><span class="nm">均线宽度 站上MA20 28%</span><span class="cap">破 MA20 占 72% · 中位涨幅 −0.07%</span></div><div class="tr">逾七成个股在 MA20 之下<span class="neg"> → 中期结构偏弱、普涨基础不牢</span></div></div>
@@ -581,11 +581,11 @@
         <div class="t-legend">
           <span>档位＝上行概率分位（方向，非涨跌幅）</span>
           <span><span class="pos">■</span> 偏强/利好　<span class="warn">■</span> 需留意　<span class="neg">■</span> 偏弱/利空</span>
-          <span><span class="stag now">已在决策包内</span> 当前实际 prompt 已含　<span class="stag tbd">能力落地中</span> 研判每日已产出，贯通 chip 合入前实际 prompt 尚未读入</span>
+          <span><span class="stag now">已在决策包内</span> 三面均已进实际 prompt（market_forecast 已贯通 · render_大盘定调）</span>
         </div>
       </div>
 
-      <div class="cov-note" style="margin-top:16px"><b>诚实边界：</b>决策包<b>当前已含</b>板块强弱全景（面三）+ 板块消息催化（§04）+ 每只候选四面卡（第 2 层）+ 骨架排序。<b>大盘方向与分歧（面一）、广度/情绪/资金（面二）</b>由 <b>market_forecast</b> 每日已产出，<b style="color:var(--gold)">但代码尚未把它读进决策包</b>——在"市场层贯通 chip"合入前，实际决策包的市场定调仍是<b>降级中性</b>读数；本卡这两面展示的是<b>即将接入</b>的真实产出。面三板块强弱与 §04 消息催化<b>当前已在实际 prompt 内</b>。四份材料喂给 AI 后，AI 只挑选、排序、给纪律，<b>不改任何数字</b>。</div>
+      <div class="cov-note" style="margin-top:16px"><b>决策包当前构成：</b>大盘市场体检卡三面（方向与分歧 / 广度情绪资金 / 板块强弱）+ 板块消息催化（§04）+ 每只候选四面卡（第 2 层）+ 骨架排序，<b>全部已在实际 prompt 内</b>。其中面一/面二由 <b>market_forecast</b> 经 <b>render_大盘定调</b> 贯通接入（值/档位原样传上、不新编），效力诚实标注随之进 prompt。四份材料喂给 AI 后，AI 只挑选、排序、给纪律，<b>不改任何数字</b>。</div>
     </div>
 
     <!-- 层5 AI -->
