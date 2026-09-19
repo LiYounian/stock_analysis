@@ -99,6 +99,7 @@ def _pct(cur: float, prev: float) -> Optional[float]:
 class FakeGoodNewsTool:
     name = "fake_good_news"
     塔层 = "②消息"
+    面 = "消息情绪面"  # 消息真实性·负向排雷
     source = "per-stock events + 主档 K 线 D0/D0+1 价格行为"
 
     def run(self, as_of: str, code: Optional[str] = None, root: Optional[str] = None, **kw) -> ToolResult:

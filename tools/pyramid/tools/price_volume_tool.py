@@ -43,6 +43,7 @@ def _label_vs_ma(pct: float) -> str:
 class PriceVolumeTool:
     name = "price_volume"
     塔层 = "①塔基"
+    面 = "技术面"  # 量价快照（趋势/量能/位置）
     source = "主档 K 线（688/689 amount/close 自校）"
 
     def run(

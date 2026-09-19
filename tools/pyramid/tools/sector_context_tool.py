@@ -163,6 +163,7 @@ def _grade_净催化(
 class SectorContextTool:
     name = "sector_context"
     塔层 = "④宏观"
+    面 = "消息情绪面"  # 板块轮动/净催化/角色/过热拥挤
     source = "code_industry(申万一级) + sector_focus/regime + roster + 主档K线pos60"
 
     def run(self, as_of: str, code: Optional[str] = None, root: Optional[str] = None, **kw) -> ToolResult:

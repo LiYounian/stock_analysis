@@ -158,6 +158,7 @@ def _label(title: str, 映射) -> Optional[str]:
 class InsiderReductionTool:
     name = "insider_reduction"
     塔层 = "②消息"
+    面 = "基本面"  # 大股东减持=自主治理信号→基本面·公司治理（统筹裁决 2026-09-19）
     source = "per-stock json events（type∈{减持,权益变动}·标题级·announcement 采集·约30天窗）"
 
     def run(self, as_of: str, code: Optional[str] = None,

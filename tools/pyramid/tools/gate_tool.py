@@ -32,6 +32,7 @@ def _is_20cm(code: str) -> bool:
 class GateTool:
     name = "gate"
     塔层 = "①塔基"
+    面 = "技术面"  # 可交易性闸门·交易时机
     source = "主档 K 线分层闸门（阈值写死·pyramid_select_v1 口径）"
 
     def run(

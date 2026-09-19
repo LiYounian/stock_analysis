@@ -79,6 +79,7 @@ def _unlock_verdict(占比: Optional[float], 剩余天数: Optional[int],
 class UnlockRiskTool:
     name = "unlock_risk"
     塔层 = "②消息"
+    面 = "资金面"  # 限售解禁=机械筹码供给→资金面·筹码供给（统筹裁决 2026-09-19）
     source = "per-stock json financing.解禁（未来90日次数/占流通pct/下一次{解禁日,披露日,占比}/不可采信次数）"
 
     def run(self, as_of: str, code: Optional[str] = None,
