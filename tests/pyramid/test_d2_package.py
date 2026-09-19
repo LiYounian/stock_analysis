@@ -270,3 +270,126 @@ def test_render_package_含消息面段():
     # 消息面段在 市场定调 之后、全板块概览 之前
     assert txt.index("## 市场定调") < txt.index("## 市场·国际·板块消息面") < txt.index("## 全板块概览")
     assert "{'" not in txt  # 全包仍禁裸 dict
+
+
+# ── 大盘定调段：读 market_forecast·三面齐全 + 效力caveat原样 + 缺数据降级 + 防未来守卫 ──
+def _synth_mf(as_of="2026-09-17"):
+    """合成 market_forecast/v1（对齐 09-17 真实结构）：proxy/hs300 双基准、
+    5日分歧触发、breadth/sentiment/fundflow 快照、含关键诚实约束的 notes。"""
+    return {
+        "schema": "market_forecast/v1", "as_of": as_of, "model": "composite",
+        "选股用β基准": {"默认": "proxy", "背景": "hs300",
+                    "说明": "个股 β 读 proxy(≈中小盘);hs300 仅权重股背景;分歧时以 proxy 为准。"},
+        "分歧标记": {"触发": True, "维度": {
+            "1": {"触发": False, "类型": "一致"},
+            "5": {"触发": True, "类型": "权重搭台中小盘偏弱",
+                  "hs300_p_up": 0.5873, "proxy_p_up": 0.5029,
+                  "hs300_direction": "偏多", "proxy_direction": "震荡", "方向档背离": True},
+        }, "说明": "hs300 与 proxy 背离;勿把权重偏多读成个股偏多。"},
+        "targets": {
+            "hs300": {"name": "沪深300", "as_of": "2026-09-16", "适用范围": "权重股/大盘β",
+                      "horizons": {
+                          "1": {"p_up": 0.5094, "direction": "震荡", "prob_bucket": "方向中性"},
+                          "5": {"p_up": 0.5873, "direction": "偏多", "prob_bucket": "上行概率偏高"},
+                      }},
+            "proxy": {"name": "全A等权代理指数", "as_of": as_of, "适用范围": "个股/中小盘β基准",
+                      "horizons": {
+                          "1": {"p_up": 0.5312, "direction": "震荡", "prob_bucket": "方向中性",
+                                "factor_contrib": {"技术": -0.2165, "广度": -0.1677, "消息面": -0.0256, "资金流": 0.0}},
+                          "5": {"p_up": 0.5029, "direction": "震荡", "prob_bucket": "方向中性",
+                                "factor_contrib": {"技术": -0.0657, "广度": -0.1683, "消息面": 0.0219, "资金流": 0.0}},
+                      }},
+        },
+        "breadth_snapshot": {"total": 5563.0, "adv": 2575.0, "dec": 2819.0,
+                             "limit_up": 58.0, "limit_down": 6.0, "net_adv": -0.0439,
+                             "above_ma20_ratio": 0.2804, "below_ma20_ratio": 0.7194, "median_pct": -0.07},
+        "sentiment_snapshot": {"se_net": 178.0, "se_ratio": 0.918, "se_bull": 58.0, "se_bear": 2.0, "se_n": 69.0},
+        "fundflow_snapshot": {"margin_date": "2026-09-16", "融资余额": 1333197305694.0,
+                              "融资买入额": 89446018949.0, "融资融券余额": 1351858684135.0,
+                              "note": "SSE市场级两融,盘后披露,已滞后至as_of前一交易日(防未来函数)"},
+        "notes": ("档位=上行概率分位(方向口径),不是涨跌幅。⚠️ 整体方向命中~55%,较纯惯性有约 +4.8pp 的"
+                  "统计边际(显著),但多空收益价差≈0(无经济 alpha)。每天真正参与判别的只有技术+广度两维:"
+                  "资金流权重=0(kill-switch),消息面被自动降权到≈0。勿把高概率读成能赚钱。"),
+    }
+
+
+def test_大盘定调_三面齐全():
+    txt = P.render_大盘定调(_synth_mf(), as_of="2026-09-17")
+    assert "### 大盘定调" in txt
+    assert "大盘词表" in txt
+    # 方向面：proxy/hs300 + p_up + 方向档 + 分歧标记
+    assert "方向面" in txt and "proxy" in txt and "hs300" in txt
+    assert "p_up=0.503" in txt and "上行概率偏高" in txt
+    assert "⚑分歧标记[触发·权重搭台中小盘偏弱]" in txt
+    assert "方向档背离=True" in txt
+    # 维度贡献佐证（资金流权重=0 具体化）
+    assert "资金流0.000" in txt
+    # 广度情绪资金面
+    assert "广度情绪资金面" in txt
+    assert "涨2575/跌2819" in txt and "涨停58/跌停6" in txt
+    assert "净广度-0.044(多空均衡)" in txt
+    assert "站上MA20 28.0%" in txt
+    assert "多空net178" in txt
+    assert "融资余额13332亿" in txt
+    # 板块强弱衔接（不重复）
+    assert "板块强弱(衔接·不重复)" in txt
+    # 全程禁裸 dict
+    assert "{'" not in txt
+
+
+def test_大盘定调_效力caveat原样在位():
+    """最关键诚实约束：段尾原样 surface notes 关键短语（防未来有人精简掉即挂）。"""
+    txt = P.render_大盘定调(_synth_mf(), as_of="2026-09-17")
+    assert "⚠️效力诚实标注" in txt
+    assert "无经济 alpha" in txt
+    assert "每天真正参与判别的只有技术+广度两维" in txt
+    assert "勿把高概率读成能赚钱" in txt
+    assert "+4.8pp" in txt
+
+
+def test_大盘定调_缺market_forecast降级():
+    txt = P.render_大盘定调(None, as_of="2026-09-17")
+    assert "缺 market_forecast" in txt
+    assert "降级中性" in txt
+    assert "回退 sector_focus 薄读数" in txt
+
+
+def test_大盘定调_防未来整体丢弃():
+    """mf.as_of 晚于包 as_of → 整份预测丢弃 + 降级中性（不静默读未来）。"""
+    txt = P.render_大盘定调(_synth_mf(as_of="2026-09-20"), as_of="2026-09-17")
+    assert "防未来丢弃" in txt
+    assert "降级中性" in txt
+
+
+def test_大盘定调_防未来单target丢弃():
+    """单基准 as_of 晚于包 as_of → 该基准丢弃、另一基准仍渲（targets 各自守卫）。"""
+    mf = _synth_mf(as_of="2026-09-17")
+    mf["targets"]["hs300"]["as_of"] = "2026-09-18"  # hs300 晚于包
+    txt = P.render_大盘定调(mf, as_of="2026-09-17")
+    assert "hs300" in txt and "晚于" in txt and "防未来丢弃" in txt
+    assert "全A等权代理指数" in txt  # proxy 正常渲
+
+
+def test_render_package_含大盘定调卡():
+    """决策包整体渲染：market_forecast 可用→大盘卡为主读数、降级中性主句让位、板块轮动保留。"""
+    pkg = _synth_pkg()
+    pkg["市场定调"]["market_forecast"] = _synth_mf()
+    txt = P.render_package(pkg)
+    assert "### 大盘定调" in txt
+    assert "⚠️效力诚实标注" in txt
+    # 位置：市场定调 heading < 大盘定调 < 消息面
+    assert txt.index("## 市场定调") < txt.index("### 大盘定调")
+    # 可用时降级中性薄读数主句让位（定调依据仅兜底出现）
+    assert "定调依据：" not in txt
+    # 板块轮动(sector_focus)始终保留
+    assert "板块轮动：" in txt
+    assert "{'" not in txt
+
+
+def test_render_package_缺market_forecast兜底薄读数():
+    """决策包整体渲染：缺 market_forecast → 大盘卡降级 + 保留 sector_focus 薄读数兜底。"""
+    pkg = _synth_pkg()  # _synth_pkg 无 market_forecast
+    txt = P.render_package(pkg)
+    assert "缺 market_forecast" in txt and "降级中性" in txt
+    assert "当前市场风险偏好" in txt  # 兜底薄读数保留
+    assert "定调依据：" in txt

@@ -9,7 +9,7 @@
 import pytest
 
 from tools.pyramid._common import 格档
-from tools.pyramid.指标词表 import render_词表, render_区间, render_消息面词表, _num, _pct
+from tools.pyramid.指标词表 import render_词表, render_区间, render_消息面词表, render_大盘词表, _num, _pct
 from tools.pyramid.tools.valuation_tool import _PE参考档, _PB档, _PEG档
 from tools.pyramid.tools.growth_quality_tool import _增速档, _负债率档
 from tools.pyramid.tools.financial_redflag_tool import _QUALITY档
@@ -100,3 +100,17 @@ def test_消息面词表节():
     # 关键口径句在位（利好/利空/中性 三态、一手/二手 分级）
     assert "利好/利空/中性" in txt
     assert "一手" in txt and "二手" in txt
+
+
+# ── 大盘词表节：方向分位/方向档/分歧标记/净广度/情绪/两融 定义在位（状态类无区间）+ 效力约束进词表 ──
+def test_大盘词表节():
+    txt = render_大盘词表()
+    assert "大盘词表" in txt
+    for 名 in ("方向分位", "方向档", "分歧标记", "净广度", "情绪", "两融"):
+        assert 名 in txt, f"大盘词表缺条目：{名}"
+    # 状态类无档位 → 不带"档位(全A横截面)"
+    assert "档位(全A横截面)" not in txt
+    # 效力条把关键诚实约束带进词表（防未来精简掉·段尾原句仍在）
+    assert "无经济alpha" in txt
+    assert "勿把高概率读成能赚钱" in txt
+    assert "非涨跌幅" in txt  # 方向口径诚实标注
