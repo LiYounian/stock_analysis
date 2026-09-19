@@ -53,3 +53,28 @@ def test_price_volume_数据不足不编造():
     assert res.freshness == "missing"
     assert res.fields.get("数据不足") is True
     assert "人工确认" in res.浓缩块
+
+
+# ── v2 语义锁：区间共性移词表、个股卡口径不重复 + 意味影响化（合成K线·不依赖主仓）──
+def test_v2_口径剔区间_意味影响化(tmp_path):
+    import os as _os
+    import pandas as pd
+    d = _os.path.join(str(tmp_path), "data", "master", "kline")
+    _os.makedirs(d, exist_ok=True)
+    import datetime as _dt
+    base = _dt.date(2026, 8, 1)
+    rows = []
+    for i in range(30):
+        c = 10.0 + i * 0.1
+        rows.append({"date": (base + _dt.timedelta(days=i)).isoformat(),
+                     "open": c, "high": c + 0.2, "low": c - 0.2, "close": c,
+                     "volume": 1000.0 + i * 10, "amount": (1000.0 + i * 10) * c,
+                     "turnover": 3.0, "pct_chg": 1.0})
+    pd.DataFrame(rows).to_parquet(_os.path.join(d, "300999.parquet"))
+    res = get("price_volume").run("2026-08-30", "300999", root=str(tmp_path))
+    assert res.freshness == "fresh"
+    # 区间/口径定义已移词表，个股卡不再重复
+    assert "当日量/前5日均量" not in res.浓缩块
+    assert "近60日[低,高]分位" not in res.浓缩块
+    # 意味段影响化
+    assert "量比:" in res.浓缩块 and "影响：" in res.浓缩块

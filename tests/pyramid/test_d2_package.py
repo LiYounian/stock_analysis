@@ -93,6 +93,16 @@ def test_render_package_无裸dict():
     assert "量价自证=0.3" in txt    # 权重文字化
 
 
+def test_render_package_统一词表在开头():
+    """v2：统一指标词表拼在决策包 prompt 开头（标题后·市场定调前），共性定义喂一次。"""
+    txt = P.render_package(_synth_pkg())
+    assert "## 统一指标词表" in txt
+    assert txt.index("## 统一指标词表") < txt.index("## 市场定调")  # 位置在市场定调前
+    # 词表带关键指标 + 其区间（从档位表现渲）
+    assert "市盈率 PE(TTM)" in txt and "低≤15 / 中≤30" in txt
+    assert "消息覆盖与可信度" in txt
+
+
 def test_render_package_四面板齐全带名():
     """四面结构锁：卡头带股票名 + 四面板头齐全 + 经验尾块。"""
     txt = P.render_package(_synth_pkg())

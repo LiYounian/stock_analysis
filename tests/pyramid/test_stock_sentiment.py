@@ -242,6 +242,51 @@ def test_run_三层原样解读(tmp_path):
     assert "舆情偏空" in r.浓缩块 and "新闻-0.11" in r.浓缩块
 
 
+# ── v2 新语义锁（守则6：锁住 v2 改的"为什么"，防未来重写删掉）──
+def test_v2_样本太少阈值锁定():
+    assert ss.样本太少阈值 == 5
+
+
+def test_v2_消息覆盖与可信度_改名讲人话(tmp_path):
+    """v2 §4：'情绪样本质量'→'消息覆盖与可信度'，口径讲'抓N条·约X%成功打分'。"""
+    _write(tmp_path, "310001", {
+        "sentiment": {"净情绪分": 0.2, "利好数": 3, "利空数": 1, "样本数": 12,
+                      "覆盖率": 1.0, "质量": "ok", "新鲜度": "新鲜", "口径": "三层加权", "三层": {}},
+        "events": [], "consensus": {},
+    })
+    r = _run(tmp_path, "310001")
+    cov = next(it for it in r.字段解读 if it["名"] == "消息覆盖与可信度")
+    assert "情绪样本质量" not in r.浓缩块          # 旧名已弃
+    assert "成功打分" in cov["口径"] and "条" in cov["口径"]
+    assert cov["意味"].startswith("影响：")
+
+
+def test_v2_净情绪三态_样本太少非真中性(tmp_path):
+    """v2 §4：净情绪≈中性 + 样本≤阈值 → 讲'消息太少非缺数据'，不误报真中性。"""
+    _write(tmp_path, "310002", {
+        "sentiment": {"净情绪分": 0.0, "利好数": 0, "利空数": 0, "样本数": 2,
+                      "覆盖率": 0.7, "质量": "ok", "新鲜度": "新鲜", "口径": "三层加权", "三层": {}},
+        "events": [], "consensus": {},
+    })
+    r = _run(tmp_path, "310002")
+    净 = next(it for it in r.字段解读 if it["名"] == "个股净情绪")
+    assert "消息太少" in 净["意味"] and "仅2条" in 净["意味"]
+    assert "不是缺数据" in 净["意味"]
+
+
+def test_v2_净情绪三态_样本足真中性(tmp_path):
+    """v2 §4：净情绪≈中性 + 样本>阈值 → 判'真中性'（区别于样本太少）。"""
+    _write(tmp_path, "310003", {
+        "sentiment": {"净情绪分": 0.0, "利好数": 4, "利空数": 4, "样本数": 30,
+                      "覆盖率": 1.0, "质量": "ok", "新鲜度": "新鲜", "口径": "三层加权", "三层": {}},
+        "events": [], "consensus": {},
+    })
+    r = _run(tmp_path, "310003")
+    净 = next(it for it in r.字段解读 if it["名"] == "个股净情绪")
+    assert "真中性" in 净["意味"]
+    assert "消息太少" not in 净["意味"]
+
+
 # ── 真实数据集成冒烟（无数据则跳过）──
 def test_真实数据冒烟():
     r = get("stock_sentiment").run("2026-09-18", "003006", root=ROOT)

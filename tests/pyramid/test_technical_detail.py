@@ -68,7 +68,7 @@ def test_集中度档位边界():
 def test_macd意味_零轴增强():
     assert "零轴上金叉" in _macd意味("金叉", 0.08)
     assert "零轴下金叉" in _macd意味("金叉", -0.02)
-    assert _macd意味("多头", 0.05) == "柱>0·多头延续"
+    assert _macd意味("多头", 0.05) == "影响：柱>0、多头延续"
     assert _macd意味(None, None) == "数据缺失"
 
 
@@ -136,10 +136,30 @@ def test_kdj中性_boll落盘(tmp_path):
         },
     })
     r = TechnicalDetailTool().run(AS_OF, "T003", root=str(tmp_path))
-    assert "中性区·无超买超卖" in r.浓缩块       # KDJ '-' 意味
+    assert "中性区、无超买超卖信号" in r.浓缩块   # KDJ '-' 意味（v2 影响文案）
     assert "超卖" in r.浓缩块                     # RSI12=25 → 超卖档
     assert "RSI6短线超跌" in r.浓缩块             # RSI6=15<20
     assert "触上轨" in r.浓缩块 and "待补落盘" not in r.浓缩块  # BOLL 落盘则读值
+
+
+# ── v2 语义锁：意味段影响化 + 口径剔除区间共性（区间已进统一词表，不在个股卡重复）──
+def test_v2_口径剔区间_意味影响化(tmp_path):
+    _write_rec(tmp_path, "T004", {
+        "snapshot": {
+            "ma": {"ma5": 10, "ma10": 9.9, "ma20": 9.8, "ma60": 9.5, "排列": "多头排列"},
+            "macd": {"dif": 0.1, "dea": 0.05, "macd": 0.05, "状态": "金叉"},
+            "kdj": {"k": 85, "d": 70, "j": 100, "状态": "超买"},
+            "rsi": {"rsi6": 50, "rsi12": 60, "rsi24": 55},
+        },
+    })
+    r = TechnicalDetailTool().run(AS_OF, "T004", root=str(tmp_path))
+    rsi = next(it for it in r.字段解读 if it["名"] == "RSI")
+    # 区间定义（如"≤20超卖极端"）已移词表，不在个股卡口径重复
+    assert "超卖极端" not in rsi["口径"] and "≤30" not in rsi["口径"]
+    assert rsi["意味"].startswith("影响：")
+    # 状态类意味也影响化
+    ma = next(it for it in r.字段解读 if it["名"] == "均线排列")
+    assert ma["意味"].startswith("影响：") and "多头排列/空头排列" not in ma["口径"]
 
 
 # ── 真数据回归（主仓有 000504 时）：7 条、面=技术面、金叉零轴上、逼近压力 ──

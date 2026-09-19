@@ -112,7 +112,7 @@ def test_金融业负债率例外(tmp_path):
     )
     r = GrowthQualityTool().run(AS_OF, "600011", root=root)
     负债 = next(it for it in r.字段解读 if it["名"] == "负债率")
-    assert "金融业口径" in 负债["口径"] and "勿套档" in 负债["口径"]
+    assert "金融业口径" in 负债["口径"] and "勿套档" in 负债["意味"]  # v2：勿套档 caveat 进意味
 
 
 # ── quality 复用 financial_redflag._QUALITY档（单一口径源）──
@@ -148,7 +148,59 @@ def test_字段缺数据标NA不编(tmp_path):
         assert it["名"] and it["口径"] and it["意味"]
 
 
-# ── 真实票集成：000026 关键档锁 + 财报明细保字段（面=基本面·7 条）──
+# ── v2 语义锁：财报质量→财报质量汇总(综合句) + 意味影响化 + 口径剔区间共性 ──
+def test_v2_财报质量汇总_综合句(tmp_path):
+    root = _write_fake(
+        tmp_path, "600013",
+        fundamental={"营收": 1.19e8, "净利": 1.1e7, "营收增速": 431.0, "净利增速": 600.0,
+                     "ROE": 4.09, "毛利率": 20.46, "净利率": 9.28, "负债率": 63.69,
+                     "每股股利": None},
+        financial={"评级": "中", "quality_score": 56.6, "报告期": "2026-06-30",
+                   "five_dims": {"成长": 100.0, "质量": 30.7, "健康": 77.4,
+                                 "运营": 81.5, "回报": 18.4}},
+    )
+    r = GrowthQualityTool().run(AS_OF, "600013", root=root)
+    汇总 = next(it for it in r.字段解读 if it["名"] == "财报质量汇总")
+    assert "财报质量" not in {it["名"] for it in r.字段解读} - {"财报质量汇总"}  # 旧名已改
+    assert 汇总["意味"].startswith("影响：")
+    # 综合句点出最强/最弱维（成长100最强、回报18.4最弱）
+    assert "成长100最强" in 汇总["意味"] and "回报18.4最弱" in 汇总["意味"]
+    # 增速档进卡的意味影响化、口径只留档名（区间进词表）
+    营收 = next(it for it in r.字段解读 if it["名"] == "营收")
+    assert 营收["口径"] == "高增长" and 营收["意味"].startswith("影响：")
+    assert "≤" not in 营收["口径"]  # 区间不在个股卡口径重复
+
+
+# ── v2 五维逐维锁：dims 存在 → 五维各一行(值+档+影响)；G3 上限=13 ──
+def test_v2_五维逐维展开(tmp_path):
+    root = _write_fake(
+        tmp_path, "600014",
+        fundamental={"营收": 1e9, "净利": 1e8, "营收增速": 431.0, "净利增速": 600.0,
+                     "ROE": 4.09, "毛利率": 20.0, "净利率": 9.0, "负债率": 63.0,
+                     "每股股利": None},
+        financial={"评级": "中", "quality_score": 56.6, "报告期": "2026-06-30",
+                   "利润表摘要": {"归母净利增速": 272.0, "扣非净利增速": 165.0, "营收增速": 474.0},
+                   "five_dims": {"成长": 100.0, "质量": 30.69, "健康": 77.44,
+                                 "运营": 81.5, "回报": 18.38}},
+    )
+    r = GrowthQualityTool().run(AS_OF, "600014", root=root)
+    名集 = {it["名"] for it in r.字段解读}
+    for 维 in ("成长", "质量", "健康", "运营", "回报"):
+        assert 维 in 名集, f"缺五维逐维行 {维}"
+    成长 = next(it for it in r.字段解读 if it["名"] == "成长")
+    assert 成长["值"] == "100.00" and 成长["口径"] == "优" and 成长["意味"].startswith("影响：")
+    回报 = next(it for it in r.字段解读 if it["名"] == "回报")
+    assert 回报["口径"] == "差" and "资本回报低" in 回报["意味"]  # 18.38→差·弱句
+    # 财报增速明细保扣非
+    增速 = next(it for it in r.字段解读 if it["名"] == "财报增速明细")
+    assert "扣非165.0" in 增速["值"]
+    # G3 例外：本工具上限=13，实际 12 行 ≤13 不 raise
+    assert r.max_浓缩块_行 == 13
+    assert len([l for l in r.浓缩块.splitlines() if l.strip()]) <= 13
+    assert "财报明细" not in 名集  # 旧单行五维已拆
+
+
+# ── 真实票集成：000026 关键档锁 + 五维逐维（面=基本面）──
 @pytest.mark.skipif(
     not os.path.exists(os.path.join(DATA_ROOT, "data", "analysis", AS_OF, f"{CODE}.json")),
     reason="需主仓 per-stock json（设 GROWTH_TEST_DATA_ROOT 指回主仓）",
@@ -156,8 +208,11 @@ def test_字段缺数据标NA不编(tmp_path):
 def test_run_真实票():
     r = get("growth_quality").run(AS_OF, CODE, root=DATA_ROOT)
     assert r.面 == "基本面" and r.freshness == "fresh"
-    assert len(r.字段解读) == 7  # 营收/净利/盈利能力/负债率/股利/财报质量/财报明细
+    名集 = {it["名"] for it in r.字段解读}
+    # 五维逐维在卡（dims 存在时）；否则退化为"财报五维"缺行
+    assert ("回报" in 名集) or ("财报五维" in 名集)
     txt = r.to_prompt()
-    assert "净利: " in txt and "高增长" in txt  # 000026 净利增速 43.64% → 高增长
-    assert "财报明细" in txt and "五维" in txt  # five_dims 明细上卡
-    assert "回报维" in txt  # ROE 强弱挂回报维
+    assert "净利: " in txt and "高增长" in txt  # 000026 净利增速 → 高增长
+    assert "财报质量汇总" in txt                 # 汇总行
+    assert "回报维" in txt                       # ROE 强弱挂回报维
+    assert len([l for l in r.浓缩块.splitlines() if l.strip()]) <= 13  # G3 例外上限
