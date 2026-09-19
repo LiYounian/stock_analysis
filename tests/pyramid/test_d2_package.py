@@ -313,7 +313,8 @@ def _synth_mf(as_of="2026-09-17"):
     }
 
 
-def test_大盘定调_三面齐全():
+def test_大盘定调_两面结构():
+    """接口收紧：只产 方向面 + 广度情绪资金面（源自 market_forecast）；板块强弱不产·仅衔接。"""
     txt = P.render_大盘定调(_synth_mf(), as_of="2026-09-17")
     assert "### 大盘定调" in txt
     assert "大盘词表" in txt
@@ -322,8 +323,6 @@ def test_大盘定调_三面齐全():
     assert "p_up=0.503" in txt and "上行概率偏高" in txt
     assert "⚑分歧标记[触发·权重搭台中小盘偏弱]" in txt
     assert "方向档背离=True" in txt
-    # 维度贡献佐证（资金流权重=0 具体化）
-    assert "资金流0.000" in txt
     # 广度情绪资金面
     assert "广度情绪资金面" in txt
     assert "涨2575/跌2819" in txt and "涨停58/跌停6" in txt
@@ -331,10 +330,22 @@ def test_大盘定调_三面齐全():
     assert "站上MA20 28.0%" in txt
     assert "多空net178" in txt
     assert "融资余额13332亿" in txt
-    # 板块强弱衔接（不重复）
-    assert "板块强弱(衔接·不重复)" in txt
+    # 板块强弱不在本卡产出·仅衔接（避免与 render_boards 双源）
+    assert "板块强弱不在本卡产出" in txt
+    assert "#### 板块强弱" not in txt  # 不作为独立产出面
     # 全程禁裸 dict
     assert "{'" not in txt
+
+
+def test_大盘定调_因子贡献归方向面且标clear_target_horizon():
+    """因子贡献归方向面（在广度情绪资金面之前）、标清 target+horizon、资金流权重=0 具体化。"""
+    txt = P.render_大盘定调(_synth_mf(), as_of="2026-09-17")
+    assert "因子贡献" in txt
+    assert "target=proxy" in txt          # 标清 target
+    assert "· 1日 " in txt and "· 5日 " in txt  # 标清 horizon（proxy 双 horizon 都带）
+    assert "资金流0.000" in txt            # 资金流权重=0 具体化佐证效力标注
+    # 归方向面：因子贡献出现在 广度情绪资金面 之前
+    assert txt.index("因子贡献") < txt.index("广度情绪资金面")
 
 
 def test_大盘定调_效力caveat原样在位():
