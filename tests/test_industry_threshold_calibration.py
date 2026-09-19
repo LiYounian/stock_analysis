@@ -30,7 +30,59 @@ CALIBRATED_CONSTS = [
     ("有色金属", "_HI_在建占总资产", 0.13),      # 原 0.20 → p90
     ("电力设备", "_HI_在建占总资产", 0.10),      # 原 0.20 → p90+
     ("食品饮料", "_LO_毛利率", 18.0),           # 原 25.0(命中40%泛滥,把大众品常态误当红旗)→ p22
+    # 研发资本化"注水"红旗(2026-09-20,W4):各行业 开发支出/研发费用 分布 p90 锚定(全A面板 66640 行)。
+    ("电子", "_HI_研发资本化比", 1.5),           # 电子 p90≈1.52
+    ("计算机", "_HI_研发资本化比", 2.7),          # 计算机 p90≈2.68
+    ("通信", "_HI_研发资本化比", 1.7),           # 通信 p90≈1.65(样本薄,保守占位)
+    ("机械设备", "_HI_研发资本化比", 2.3),        # 机械设备 p90≈2.25
+    ("国防军工", "_HI_研发资本化比", 3.5),        # 国防军工 p90≈3.48
+    ("电力设备", "_HI_研发资本化比", 1.7),        # 电力设备 p90≈1.66
+    ("汽车", "_HI_研发资本化比", 4.7),           # 汽车 p90≈4.73(原占位 1.0 命中过泛→上调)
 ]
+
+
+# ── 研发资本化"注水"红旗语义锁(W4;统筹要求:触发→flags 含该旗 + 严重度=中/医药高)──
+# 医药=头号利润质量红旗定"高";其余研发密集行业=粗代理·注水嫌疑非确认,定"中"。
+_研发资本化_行业_严重度 = [
+    ("电子", "研发资本化激进", "中"),
+    ("计算机", "研发资本化激进", "中"),
+    ("通信", "研发资本化激进", "中"),
+    ("机械设备", "研发资本化激进", "中"),
+    ("国防军工", "研发资本化激进", "中"),
+    ("电力设备", "研发资本化激进", "中"),
+    ("汽车", "研发资本化激进", "中"),
+    ("医药生物", "研发过度资本化", "高"),
+]
+
+
+@pytest.mark.parametrize("mod_name,flag_code,expected_sev", _研发资本化_行业_严重度)
+def test_研发资本化_注水红旗_触发与严重度(mod_name, flag_code, expected_sev):
+    """开发支出/研发费用 > 行业阈值 → 触发注水嫌疑红旗,严重度=中(医药高);低于阈值不触发。"""
+    mod = importlib.import_module(f"tools.analysis.financial.industry.{mod_name}")
+    thr = mod._HI_研发资本化比
+    # 命中:比值 = 阈值 + 0.5(开发支出 = (thr+0.5)×研发费用)
+    hit = mod.extra_flags({}, {"利润表": {"研发费用": 1e8},
+                               "资产负债表": {"开发支出": (thr + 0.5) * 1e8}})
+    hits = [f for f in hit if f.get("命中") and f["code"] == flag_code]
+    assert hits, f"{mod_name}:比值 {thr + 0.5} > 阈值 {thr} 应触发 {flag_code}"
+    assert hits[0]["严重度"] == expected_sev, (
+        f"{mod_name}.{flag_code} 严重度应为 {expected_sev}(粗代理·注水嫌疑非确认)")
+    # 不命中:比值 = 阈值 − 0.3(近边界,不误报)
+    miss = mod.extra_flags({}, {"利润表": {"研发费用": 1e8},
+                                "资产负债表": {"开发支出": (thr - 0.3) * 1e8}})
+    assert flag_code not in _codes(miss), f"{mod_name}:比值 {thr - 0.3} < 阈值 {thr} 不应触发"
+
+
+def test_研发资本化_研发费用为零或缺_不误判():
+    """研发费用缺/为0(除零护栏)→ 不触发,不抛异常(所有研发密集行业一致)。"""
+    for mod_name, flag_code, _ in _研发资本化_行业_严重度:
+        mod = importlib.import_module(f"tools.analysis.financial.industry.{mod_name}")
+        # 研发费用=0
+        assert flag_code not in _codes(mod.extra_flags(
+            {}, {"利润表": {"研发费用": 0}, "资产负债表": {"开发支出": 5e8}}))
+        # 研发费用缺失 + 空输入
+        assert flag_code not in _codes(mod.extra_flags({}, {"资产负债表": {"开发支出": 5e8}}))
+        assert isinstance(mod.extra_flags({}, {}), list)
 
 
 @pytest.mark.parametrize("mod_name,const,expected", CALIBRATED_CONSTS)

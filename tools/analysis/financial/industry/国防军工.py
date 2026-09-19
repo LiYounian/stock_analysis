@@ -69,6 +69,10 @@ _HI_应收超营收增速_GAP = 20.0  # 应收增速 领先 营收增速 超此 
 _HI_存货超营收增速_GAP = 25.0  # 存货增速 领先 营收增速 超此 pct → 在产/发出商品积压(交付/确认放缓)
 _LO_研发费用率_pct = 3.0       # 研发费用率 低于此 → 研发投入不足(军工技术壁垒隐忧)
 _LO_毛利率 = 10.0             # 毛利率 低于此 → 定价机制变化/降价压力
+# 研发资本化偏高(注水嫌疑,粗代理):开发支出(资本化研发存量)/研发费用(当期费用化)> 此 → 注水嫌疑。
+# 标定 2026-09-20:国防军工 83票/213期(全A面板,时序锚披露日),开发支出/研发费用 分布 p90≈3.48,
+#   锚 p90 逮本行业内高资本化尾部(命中≈10%);军工研发投入大、资本化占比天然偏高,故阈值取行业 p90(高于其它行业)。
+_HI_研发资本化比 = 3.5
 
 
 def _ratio(a, b):
@@ -84,6 +88,7 @@ def extra_flags(derived: dict, structured: dict) -> list[dict]:
     derived = derived or {}
     利润表 = (structured or {}).get("利润表", {}) if isinstance(structured, dict) else {}
     现金流量表 = (structured or {}).get("现金流量表", {}) if isinstance(structured, dict) else {}
+    资产负债表 = (structured or {}).get("资产负债表", {}) if isinstance(structured, dict) else {}
 
     flags: list[dict] = []
 
@@ -141,5 +146,17 @@ def extra_flags(derived: dict, structured: dict) -> list[dict]:
             and isinstance(CFO, (int, float)) and CFO < 0):
         add("经营现金流恶化", "中", {"归母净利润": 归母, "经营活动现金流量净额": CFO,
                               "NOTE": "账面盈利却经营现金净流出,回款质量存疑"})
+
+    # ⑦ 研发资本化偏高(注水嫌疑)—— 中
+    # 说明:开发支出(资本化研发存量)/研发费用(当期费用化) 作**粗代理**,偏高=把本应费用化的研发挂资产上、
+    #      虚增当期利润(注水嫌疑,非确认);与"研发投入不足"(研发太少)是两个方向的红旗,精确资本化率待正文核。
+    开发支出 = 资产负债表.get("开发支出")
+    研发费用 = 利润表.get("研发费用")
+    if (isinstance(开发支出, (int, float)) and isinstance(研发费用, (int, float))
+            and 研发费用 > 0 and 开发支出 / 研发费用 > _HI_研发资本化比):
+        add("研发资本化激进", "中",
+            {"开发支出": 开发支出, "研发费用": 研发费用,
+             "开发支出比研发费用": round(开发支出 / 研发费用, 4), "阈值": _HI_研发资本化比,
+             "NOTE": "开发支出/研发费用 粗代理,偏高=注水嫌疑非确认,精确资本化率待正文核"})
 
     return flags
