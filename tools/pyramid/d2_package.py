@@ -351,15 +351,18 @@ def render_大盘定调(mf, as_of: Optional[str] = None) -> str:
         if div.get("说明"):
             out.append(f"  分歧口径：{_txt(div.get('说明'))}")
 
-    # 维度贡献（默认基准·5日·数据直取，佐证效力标注：资金流权重=0、消息面≈0）
-    默认tgt = tgts.get(默认) or {}
-    fc = ((默认tgt.get("horizons") or {}).get("5") or {}).get("factor_contrib")
-    if isinstance(fc, dict):
-        out.append(
-            f"- 维度贡献(数据直取·{_txt(默认)}·5日)："
-            + "/".join(f"{k}{_num3(v)}" for k, v in fc.items())
-            + "（佐证效力标注：资金流权重≈0、消息面≈0，真正起作用只技术+广度）"
-        )
+    # 因子贡献（归方向面·对 p_up 方向的归因分解）：分 target×horizon·必须标清取哪档，
+    # 默认基准 proxy 的各 horizon 都带（数据直取·佐证效力标注：资金流权重=0、消息面≈0）
+    默认hz = (tgts.get(默认) or {}).get("horizons") or {}
+    贡献行 = []
+    for h, disp in _大盘horizons显示:
+        fc = (默认hz.get(h) or {}).get("factor_contrib")
+        if isinstance(fc, dict):
+            贡献行.append(f"  · {disp} " + "/".join(f"{k}{_num3(v)}" for k, v in fc.items()))
+    if 贡献行:
+        out.append(f"- 因子贡献(数据直取·归因 p_up 方向·target={_txt(默认)})：")
+        out.extend(贡献行)
+        out.append("  （佐证效力标注：资金流权重≈0、消息面≈0，真正起作用只技术+广度）")
 
     # 广度情绪资金面
     out.append("\n#### 广度情绪资金面")
@@ -390,11 +393,10 @@ def render_大盘定调(mf, as_of: Optional[str] = None) -> str:
         if ff.get("note"):
             out.append(f"  资金口径：{_txt(ff.get('note'))}")
 
-    # 板块强弱衔接（复用全板块概览 + 消息面·不重复）
-    out.append("\n#### 板块强弱(衔接·不重复)")
+    # 板块强弱不在本卡产出（避免与 render_boards 全板块概览双源）·仅衔接一句
     out.append(
-        "- 板块冷热/拥挤/动量分位见下方「全板块概览」；"
-        "消息驱动龙头/催化/谁受什么新闻震动见「市场·国际·板块消息面」段。"
+        "\n> 板块强弱不在本卡产出（避免与「全板块概览」双源）：板块冷热/拥挤/动量分位见"
+        "下方「全板块概览」、消息驱动龙头/催化/谁受什么新闻震动见「市场·国际·板块消息面」段。"
     )
 
     # 效力诚实标注（原样 surface notes·render 绝不编/勿精简）
