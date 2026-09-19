@@ -107,3 +107,54 @@ def test_pe_percentile_源缺则为None(stub, monkeypatch):
     rec = sz.build_record(CODE, AS_OF)
     val = rec.get("valuation") or {}
     assert val.get("pe_percentile") is None, "源无分位 → None，不编"
+
+
+# ────────────────── 两融：采了没进record → 挂顶层 margin 块 + consensus 同款口径戳 ──────────────────
+def _stub_margin(monkeypatch, summary):
+    """把 collectors.margin 的 load/summarize 替换为受控返回（build_record 内 import 该模块）。"""
+    from tools.collectors import margin as mg
+    monkeypatch.setattr(mg, "load_margin", lambda c: ([summary] if summary else []))
+    monkeypatch.setattr(mg, "summarize_asof", lambda recs, asof: (recs[0] if recs else None))
+
+
+def test_margin_落盘_顶层块含口径戳(stub, monkeypatch):
+    monkeypatch.setattr(sz.market, "load_kline_recent", lambda c: None)
+    monkeypatch.setattr(sz.fd, "load_fundamental", lambda c: {})
+    _stub_margin(monkeypatch, {
+        "code": CODE, "date": "2026-09-15", "融资买入额": 1.0e7,
+        "融资余额": 5.0e8, "融券余量": 1000.0, "market": "SZSE",
+        "visible_after_close": True,
+    })
+    rec = sz.build_record(CODE, AS_OF)
+    mb = rec.get("margin")
+    assert mb is not None, "collectors.margin 有数据 → 必进顶层 margin 块"
+    # 采集器归一键透传（工具读取处期望）
+    assert mb["融资余额"] == 5.0e8 and mb["融资买入额"] == 1.0e7 and mb["融券余量"] == 1000.0
+    # consensus 同款口径戳：口径日期 = 记录自带 date，非 as_of；as_of 更晚 → 陈旧
+    assert mb[sz.VINTAGE_DATE] == "2026-09-15" and mb[sz.FRESHNESS] == sz.STALE
+    # provenance 两条轴：布尔有数据 + 口径挂新鲜度
+    assert rec["provenance"]["margin"] is True
+    assert rec["provenance"]["口径"]["margin"]["口径日期"] == "2026-09-15"
+
+
+def test_margin_源缺则为None_provenance假(stub, monkeypatch):
+    monkeypatch.setattr(sz.market, "load_kline_recent", lambda c: None)
+    monkeypatch.setattr(sz.fd, "load_fundamental", lambda c: {})
+    _stub_margin(monkeypatch, None)
+    rec = sz.build_record(CODE, AS_OF)
+    assert rec.get("margin") is None, "无两融记录 → None，不编"
+    assert rec["provenance"]["margin"] is False
+
+
+def test_margin_契约合规(stub, monkeypatch):
+    """带 margin 块的 record 过契约校验（margin 已登记 VINTAGE_BLOCKS/OPTIONAL_TOP）。"""
+    from tools.contracts import record as rc
+    monkeypatch.setattr(sz.market, "load_kline_recent", lambda c: None)
+    monkeypatch.setattr(sz.fd, "load_fundamental", lambda c: {})
+    _stub_margin(monkeypatch, {
+        "code": CODE, "date": "2026-09-15", "融资买入额": 1.0e7,
+        "融资余额": 5.0e8, "融券余量": 1000.0, "market": "SZSE",
+        "visible_after_close": True,
+    })
+    rec = sz.build_record(CODE, AS_OF)
+    assert rc.validate_record(rec) == []

@@ -224,13 +224,32 @@ def test_防未来_换手不取未来行(tmp_path):
     assert it["值"] == "5.00%" and "活跃" in it["意味"]
 
 
-# ── 两融恒 NA·待补落盘（文档化缺口）─────────────────────────────────
-def test_两融待补落盘(tmp_path):
+# ── 两融：顶层 margin 块补落盘后读值；缺块 → NA 不编（不再"待补落盘"）──────────
+def test_两融_无margin块_NA不编(tmp_path):
     root = str(tmp_path)
     _write_pstock(root, "000006", {"fundflow": {}, "tick": {}, "holder": {}})
     _write_code_industry(root, {})
     it = {x["名"]: x for x in get("fund_flow").run(_AS_OF, code="000006", root=root).字段解读}["两融"]
-    assert it["值"] == "NA" and "待补落盘" in it["意味"]
+    assert it["值"] == "NA"
+    assert "待补落盘" not in it["意味"] and "待补落盘" not in it["口径"]  # 缺口已补
+    assert "无 ≤as_of 两融记录" in it["口径"]
+
+
+def test_两融_margin块落盘_读值(tmp_path):
+    root = str(tmp_path)
+    _write_pstock(root, "000009", {
+        "fundflow": {}, "tick": {}, "holder": {},
+        "margin": {"code": "000009", "date": "2026-09-17",
+                   "融资买入额": 19469864.0, "融资余额": 535232838.0,
+                   "融券余量": 123300.0, "market": "SZSE"},
+    })
+    _write_code_industry(root, {})
+    it = {x["名"]: x for x in get("fund_flow").run(_AS_OF, code="000009", root=root).字段解读}["两融"]
+    # 值=融资余额(亿)：535232838/1e8 ≈ 5.35
+    assert it["值"] == "融资余额5.35亿"
+    assert "融资买入0.19亿" in it["口径"] and "融券余量12.3万股" in it["口径"]
+    assert "2026-09-17" in it["口径"]           # 口径日期透传
+    assert "待补落盘" not in it["口径"]
 
 
 # ── 龙虎榜只读状态档 ─────────────────────────────────────────────────
