@@ -484,6 +484,47 @@ def render_消息面(ov: dict, as_of: Optional[str] = None, 上限: int = _事�
     return "\n".join(out)
 
 
+# ── 消息真伪辅证 · 新闻digest（决策包内·紧凑·辨真伪用）──────────────────
+# W3：闭卷 DeepSeek/千问 拿不到工具、无法下钻 news_raw，此 digest 即它们的辨真伪依据；
+# Claude Code 有 SKILL 可再下钻 news_raw 看全量原文/url。两类消费者读同一 digest。
+# 铁律：**只存/渲染极紧凑摘要**（≤3 行：计数 header + 最强 1~2 条标题级线索），
+# 绝不把 news_raw 全量 fields（单票可达 200+ 条·含 url/长摘要）塞进 card 或决策包。
+_DIGEST头 = "【消息真伪辅证·新闻digest】"
+_DIGEST标题截断 = 30
+_DIGEST取条数 = 2  # 最强 1~2 条：非中性(利好/利空)优先、再按时间新→旧
+
+
+def _新闻digest_lines(res) -> list[str]:
+    """news_raw ToolResult → 决策包内紧凑 digest（≤3 行·纯字符串·无 url/长摘要）。
+
+    header：近N条 利好x/利空y/中性z（全量原文在 news_raw；此 digest 即闭卷辨真伪依据）；
+    再列最强 1~2 条：`[标签] 标题(≤30字)｜来源·日期`。三态诚实：无覆盖 / 0 条 各自降级文案。
+    """
+    f = getattr(res, "fields", None) or {}
+    freshness = getattr(res, "freshness", None)
+    n = f.get("条数") or 0
+    if freshness == "missing":
+        return [f"{_DIGEST头}（该票无新闻覆盖·无法辨真伪·人工确认）"]
+    if not n:
+        return [f"{_DIGEST头}（当日 0 条新闻·无消息面辨伪依据）"]
+    好, 空, 中, 未 = f.get("利好", 0), f.get("利空", 0), f.get("中性", 0), f.get("未标注", 0)
+    src = f.get("source_used") or "baidu_news"
+    header = (f"{_DIGEST头}近{n}条 利好{好}/利空{空}/中性{中}"
+              + (f"/未标注{未}" if 未 else "")
+              + f"（全量原文在 news_raw/{src}；此 digest 即闭卷辨真伪依据）")
+    lines = [header]
+    news = f.get("news") or []
+    # 最强序：非中性(利好/利空)优先、组内保 news_raw 已排的时间新→旧
+    非中性 = [it for it in news if isinstance(it, dict) and it.get("标签") in ("利好", "利空")]
+    其余 = [it for it in news if isinstance(it, dict) and it.get("标签") not in ("利好", "利空")]
+    for it in (非中性 + 其余)[:_DIGEST取条数]:
+        标题 = str(it.get("标题") or "")
+        标题 = 标题[:_DIGEST标题截断] + ("…" if len(标题) > _DIGEST标题截断 else "")
+        日期 = str(it.get("时间") or "")[:10]
+        lines.append(f"[{_txt(it.get('标签'))}] {标题}｜{_txt(it.get('来源'))}·{日期}")
+    return lines
+
+
 def build_package(as_of: str, root: Optional[str] = None, top_n: int = 15,
                   scan_kline: bool = True, n_focus: int = 5) -> dict:
     """决策包：市场定调 + 全板块概览 + 骨架 top_n（每票全部工具浓缩块）。"""
@@ -528,6 +569,13 @@ def build_package(as_of: str, root: Optional[str] = None, top_n: int = 15,
                 # 工具异常也归其声明面，保证面板不整块消失、可诊断
                 面 = getattr(tools[t], "面", None) or "基本面"
                 面块.setdefault(面, []).append(f"【{t}】ERR {e}")
+        # 消息真伪辅证 digest：复用 news_raw.fields（不进 tool_names/四面板·下钻-only），
+        # 只存渲染后的 ≤3 行字符串（绝不把全量 news[] 塞进 card，防撑体积/裸 dict）。
+        try:
+            _nres = registry.get("news_raw").run(as_of, code, root=root)
+            新闻digest_lines = _新闻digest_lines(_nres)
+        except Exception as e:
+            新闻digest_lines = [f"{_DIGEST头}（digest 生成异常：{e}·人工确认）"]
         cards.append({
             "code": code,
             "名称": _stock_name(code, names, root, as_of),
@@ -536,6 +584,7 @@ def build_package(as_of: str, root: Optional[str] = None, top_n: int = 15,
             "子分": row.子分,
             "来源标签": row.来源标签,
             "面块": 面块,
+            "新闻digest_lines": 新闻digest_lines,
         })
     return {
         "as_of": as_of,
@@ -628,6 +677,9 @@ def render_package(pkg: dict) -> str:
                 out.extend(blocks)
             else:
                 out.append("（本面暂无工具·待 Wave2 填充）")
+            # 消息面末尾追加 新闻digest（辨真伪辅证·紧凑·已在 build_package 渲成字符串行）
+            if 面attr == "消息情绪面":
+                out.extend(c.get("新闻digest_lines") or [])
         # 经验纪律尾块（跨面）
         exp = 面块.get("经验") or []
         if exp:

@@ -5,6 +5,7 @@ D5：save_package 落 data/analysis/<as_of>/金字塔决策包_*.md，断言文�
 数据无关：market_overview 用 monkeypatch 假 _load；render/save 用合成 pkg。
 """
 import os
+import types
 
 import pytest
 
@@ -270,6 +271,63 @@ def test_render_package_含消息面段():
     # 消息面段在 市场定调 之后、全板块概览 之前
     assert txt.index("## 市场定调") < txt.index("## 市场·国际·板块消息面") < txt.index("## 全板块概览")
     assert "{'" not in txt  # 全包仍禁裸 dict
+
+
+# ── W3 消息真伪辅证 新闻digest：紧凑(计数+最强1~2条·无url/长摘要) + 三态降级 + 落消息面panel ──
+def _fake_news_res(freshness, fields):
+    """仿 news_raw ToolResult：_新闻digest_lines 只用 .fields / .freshness。"""
+    return types.SimpleNamespace(freshness=freshness, fields=fields)
+
+
+def test_新闻digest_紧凑含计数不含url长摘要():
+    res = _fake_news_res("fresh", {
+        "条数": 5, "source_used": "baidu_news",
+        "利好": 3, "利空": 1, "中性": 1, "未标注": 0,
+        "news": [
+            {"标签": "中性", "标题": "例行公告披露", "来源": "交易所", "时间": "2026-09-17 15:00",
+             "url": "http://x/a", "摘要": "很长很长的摘要正文不该进 digest" * 10},
+            {"标签": "利好", "标题": "签下大额海外订单落地放量" + "拖长标题" * 10, "来源": "证券时报",
+             "时间": "2026-09-16 09:30", "url": "http://x/b", "摘要": "长摘要"},
+            {"标签": "利空", "标题": "被立案调查", "来源": "公司公告", "时间": "2026-09-15 18:00",
+             "url": "http://x/c", "摘要": "长摘要"},
+        ],
+    })
+    lines = P._新闻digest_lines(res)
+    assert len(lines) <= 3                       # ≤3 行（header + 最多 2 条）
+    head = lines[0]
+    assert "新闻digest" in head
+    assert "利好3/利空1/中性1" in head           # 计数结构入 header
+    assert "闭卷辨真伪依据" in head              # 措辞对闭卷模型成立（不暗示能下钻）
+    body = "\n".join(lines)
+    assert "http" not in body                    # 不带 url（原文全量仍只在 news_raw.fields）
+    assert "很长很长的摘要正文" not in body       # 不带长摘要
+    # 最强序：非中性(利好/利空)优先 → 中性"例行公告"不入 top2
+    assert "利好" in body and "利空" in body
+    assert "例行公告披露" not in body
+    # 标题截断到 30 字 + 省略号
+    assert "…" in body
+
+
+def test_新闻digest_三态降级():
+    miss = P._新闻digest_lines(_fake_news_res("missing", {"条数": 0, "news": []}))
+    assert len(miss) == 1 and "无新闻覆盖" in miss[0]
+    zero = P._新闻digest_lines(_fake_news_res("fresh", {"条数": 0, "source_used": "news", "news": []}))
+    assert len(zero) == 1 and "0 条新闻" in zero[0]
+
+
+def test_render_package_digest落消息面panel内():
+    pkg = _synth_pkg()
+    pkg["候选卡片"][0]["新闻digest_lines"] = [
+        "【消息真伪辅证·新闻digest】近5条 利好3/利空1/中性1（全量原文在 news_raw/baidu_news；此 digest 即闭卷辨真伪依据）",
+        "[利好] 签下大额海外订单｜证券时报·2026-09-16",
+    ]
+    txt = P.render_package(pkg)
+    assert "【消息真伪辅证·新闻digest】" in txt
+    assert "利好3/利空1/中性1" in txt
+    # 落在【四·消息面】之后、【经验纪律·跨面】之前（消息面 panel 内、非其它面）
+    assert txt.index("【四·消息面】") < txt.index("【消息真伪辅证·新闻digest】") < txt.index("【经验纪律·跨面】")
+    assert "http" not in txt.split("【消息真伪辅证·新闻digest】", 1)[1].split("【经验", 1)[0]
+    assert "{'" not in txt and '{"' not in txt   # 全包仍禁裸 dict
 
 
 # ── 大盘定调段：读 market_forecast·三面齐全 + 效力caveat原样 + 缺数据降级 + 防未来守卫 ──
