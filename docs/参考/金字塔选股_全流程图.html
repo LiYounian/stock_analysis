@@ -1,0 +1,834 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>金字塔选股 · 全流程</title>
+<style>
+  :root{
+    --bg:#080b12; --bg-soft:#0c1019; --card:#0f1420; --card-2:#131a28; --card-3:#171f30;
+    --line:#1c2434; --line-soft:#161d2b;
+    --ink:#eef2f8; --ink-2:#a7b2c6; --ink-3:#6b7688;
+    --accent:#4ea8ff; --accent-soft:#1a2b45;
+    --gold:#f2c55c; --gold-soft:#2a2313;
+    --news:#ff9bb0; --news-soft:#33202a;
+    --green:#59d09a;
+    --mono:"SF Mono",ui-monospace,"JetBrains Mono",Menlo,Consolas,monospace;
+    --sans:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{
+    margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);
+    font-size:15px;line-height:1.65;-webkit-font-smoothing:antialiased;
+    background-image:
+      radial-gradient(900px 500px at 15% -5%,rgba(78,168,255,.06),transparent 60%),
+      radial-gradient(700px 500px at 100% 18%,rgba(242,197,92,.04),transparent 55%);
+    background-attachment:fixed;padding-bottom:120px;
+  }
+  .wrap{max-width:1040px;margin:0 auto;padding:0 28px}
+
+  /* 顶部 */
+  header{padding:68px 28px 30px;max-width:1040px;margin:0 auto}
+  .kicker{font-family:var(--mono);font-size:12px;letter-spacing:3px;color:var(--accent);text-transform:uppercase;margin-bottom:16px}
+  h1{font-size:40px;line-height:1.15;margin:0 0 18px;font-weight:650;letter-spacing:-.5px}
+  h1 .fade{color:var(--ink-3);font-weight:400}
+  .intro{font-size:16px;color:var(--ink-2);max-width:760px;margin:0}
+  .intro b{color:var(--ink);font-weight:600}
+
+  /* 阅读说明 */
+  .howto{margin:34px auto 0;max-width:1040px;display:grid;grid-template-columns:repeat(3,1fr);gap:1px;background:var(--line-soft);border:1px solid var(--line);border-radius:14px;overflow:hidden}
+  .howto .h{background:var(--card);padding:16px 20px}
+  .howto .h .t{font-size:13px;color:var(--ink);font-weight:600;margin-bottom:3px;display:flex;align-items:center;gap:8px}
+  .howto .h .t i{width:8px;height:8px;border-radius:50%;background:var(--accent);display:inline-block;flex:0 0 auto}
+  .howto .h .d{font-size:12.5px;color:var(--ink-3);line-height:1.5}
+
+  /* 区块标题 */
+  section{margin-top:76px}
+  .sec-head{max-width:1040px;margin:0 auto 4px;padding:0 28px}
+  .sec-head .n{font-family:var(--mono);font-size:12px;color:var(--accent);letter-spacing:2px}
+  .sec-head h2{font-size:26px;margin:6px 0 8px;font-weight:620;letter-spacing:-.3px}
+  .sec-head p{font-size:14.5px;color:var(--ink-2);margin:0;max-width:760px}
+  .sec-head p b{color:var(--ink)}
+
+  /* 金字塔 */
+  .pyramid{max-width:1040px;margin:38px auto 0;padding:0 28px}
+  .tier{position:relative;margin:0 auto;background:linear-gradient(180deg,var(--card-2),var(--card));border:1px solid var(--line);border-radius:14px;padding:18px 26px;display:flex;align-items:center;justify-content:space-between;gap:20px;transition:transform .18s ease,border-color .18s ease}
+  .tier:hover{transform:translateY(-2px);border-color:#2a3648}
+  .tier-gap{display:flex;justify-content:center;align-items:center;height:32px}
+  .tier .left{display:flex;align-items:center;gap:16px;min-width:0}
+  .tier .idx{font-family:var(--mono);font-size:13px;color:var(--accent);border:1px solid var(--accent-soft);background:rgba(78,168,255,.06);border-radius:9px;width:34px;height:34px;display:flex;align-items:center;justify-content:center;flex:0 0 auto}
+  .tier .name{font-size:17px;font-weight:620}
+  .tier .name .sub{display:block;font-size:12.5px;color:var(--ink-3);font-weight:400;margin-top:2px}
+  .tier .right{text-align:right;flex:0 0 auto}
+  .tier .count{font-size:26px;font-weight:600;letter-spacing:-.5px;font-variant-numeric:tabular-nums;line-height:1}
+  .tier .count .u{font-size:13px;color:var(--ink-3);font-weight:400;margin-left:4px}
+  .tier .clabel{font-size:11.5px;color:var(--ink-3);margin-top:4px}
+  .w-100{width:100%}.w-88{width:88%}.w-76{width:76%}.w-64{width:64%}.w-52{width:52%}.w-40{width:40%}
+  .tier.apex{border-color:rgba(242,197,92,.5);background:linear-gradient(180deg,#231d0e,#141019)}
+  .tier.apex .idx{color:var(--gold);border-color:rgba(242,197,92,.35);background:rgba(242,197,92,.07)}
+  .tier.apex .count{color:var(--gold)}
+  .tier.base{border-style:dashed}
+  .tier.base .idx{color:var(--ink-3);border-color:var(--line);background:transparent}
+  /* 召回/研判分界标 */
+  .divide-band{max-width:1040px;margin:14px auto 0;padding:0 28px;display:flex;gap:12px;align-items:stretch}
+  .divide-band .db{flex:1;border-radius:12px;padding:12px 18px;border:1px solid var(--line)}
+  .divide-band .db.open{background:rgba(78,168,255,.05);border-color:var(--accent-soft)}
+  .divide-band .db.own{background:rgba(242,197,92,.05);border-color:rgba(242,197,92,.28)}
+  .divide-band .db .lbl{font-size:12px;font-family:var(--mono);letter-spacing:1px;margin-bottom:3px}
+  .divide-band .db.open .lbl{color:var(--accent)}
+  .divide-band .db.own .lbl{color:var(--gold)}
+  .divide-band .db .txt{font-size:12.5px;color:var(--ink-2)}
+
+  /* 关键区分 callout */
+  .callout{max-width:1040px;margin:36px auto 0;padding:0 28px}
+  .callout-inner{border:1px solid var(--line);border-radius:18px;overflow:hidden;background:var(--card)}
+  .callout-cols{display:grid;grid-template-columns:1fr 64px 1fr}
+  .callout-cols .col{padding:24px 26px}
+  .callout-cols .col .tag{font-family:var(--mono);font-size:12px;letter-spacing:1.5px;margin-bottom:10px;display:inline-block;padding:3px 11px;border-radius:20px}
+  .callout-cols .col.a .tag{color:var(--accent);background:rgba(78,168,255,.08);border:1px solid var(--accent-soft)}
+  .callout-cols .col.b .tag{color:var(--gold);background:rgba(242,197,92,.08);border:1px solid rgba(242,197,92,.3)}
+  .callout-cols .col .ct{font-size:16px;font-weight:620;margin-bottom:8px}
+  .callout-cols .col .cd{font-size:13.5px;color:var(--ink-2)}
+  .callout-cols .col .cd .em-a{color:var(--accent);font-weight:600}
+  .callout-cols .col .cd .em-b{color:var(--gold);font-weight:600}
+  .callout-cols .mid{display:flex;flex-direction:column;align-items:center;justify-content:center;background:var(--bg-soft);border-left:1px solid var(--line);border-right:1px solid var(--line)}
+  .callout-cols .mid svg{opacity:.8}
+  .callout-foot{border-top:1px solid var(--line);padding:14px 26px;font-size:13.5px;color:var(--ink);background:var(--bg-soft)}
+  .callout-foot b{color:var(--gold)}
+
+  /* 逐层详解 */
+  .layers{max-width:1040px;margin:38px auto 0;padding:0 28px;display:flex;flex-direction:column;gap:20px}
+  .layer{background:var(--card);border:1px solid var(--line);border-radius:18px;overflow:hidden;position:relative}
+  .layer::before{content:"";position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--accent)}
+  .layer.apex::before{background:var(--gold)}
+  .layer .lh{display:flex;align-items:flex-start;gap:16px;padding:22px 26px 16px}
+  .layer .lh .lidx{font-family:var(--mono);font-size:15px;color:var(--accent);flex:0 0 auto;border:1px solid var(--accent-soft);background:rgba(78,168,255,.06);border-radius:10px;width:40px;height:40px;display:flex;align-items:center;justify-content:center}
+  .layer.apex .lh .lidx{color:var(--gold);border-color:rgba(242,197,92,.3);background:rgba(242,197,92,.06)}
+  .layer .lh .ltitle{font-size:19px;font-weight:620;margin:0}
+  .layer .lh .lid{font-family:var(--mono);font-size:12px;color:var(--ink-3);margin-left:10px;font-weight:400}
+  .layer .lh .ldesc{font-size:14px;color:var(--ink-2);margin:5px 0 0}
+  .io{display:grid;grid-template-columns:1fr 1fr 1fr;border-top:1px solid var(--line-soft)}
+  .io .cell{padding:16px 22px;border-right:1px solid var(--line-soft)}
+  .io .cell:last-child{border-right:none}
+  .io .cell .k{font-size:11.5px;letter-spacing:1.5px;text-transform:uppercase;color:var(--ink-3);font-family:var(--mono);margin-bottom:9px;display:flex;align-items:center;gap:7px}
+  .io .cell .k .arw{color:var(--accent)}
+  .io .cell .v{font-size:13.5px;color:var(--ink);line-height:1.6}
+  .io .cell .v .from{color:var(--ink-3);font-size:12.5px;display:block;margin-top:5px}
+  .io .cell ul{margin:0;padding-left:15px}
+  .io .cell li{margin-bottom:3px}
+  .io .cell li::marker{color:var(--accent)}
+  .io .cell li.faint{color:var(--ink-3)}
+  .io .cell li.faint .exp{font-size:11.5px;color:var(--ink-3)}
+  .badge-exp{font-family:var(--mono);font-size:10px;color:var(--ink-3);border:1px dashed var(--line2,#39466a);border:1px dashed #39466a;border-radius:5px;padding:0 5px;margin-left:6px}
+
+  /* 权重条 */
+  .weights{padding:6px 22px 8px;display:flex;flex-direction:column;gap:9px}
+  .wrow{display:grid;grid-template-columns:120px 1fr 44px;align-items:center;gap:14px}
+  .wrow .wn{font-size:13px;color:var(--ink-2)}
+  .wrow .wbar{height:8px;background:var(--card-2);border-radius:6px;overflow:hidden}
+  .wrow .wbar i{display:block;height:100%;background:linear-gradient(90deg,var(--accent),#8ec9ff);border-radius:6px}
+  .wrow .wp{font-family:var(--mono);font-size:13px;color:var(--ink);text-align:right}
+  .veto-line{margin:10px 22px 18px;font-size:13px;color:var(--ink-2);background:var(--card-2);border:1px solid var(--line);border-radius:10px;padding:11px 16px}
+  .veto-line b{color:var(--ink);font-weight:600}
+  .picks{display:flex;gap:14px;padding:4px 22px 22px;flex-wrap:wrap}
+  .pick{flex:1;min-width:200px;border:1px solid var(--line);border-radius:12px;padding:14px 18px;background:var(--card-2)}
+  .pick .pt{font-size:13px;font-weight:600;margin-bottom:4px}
+  .pick.buy .pt{color:var(--gold)}
+  .pick.avoid .pt{color:#e08a9a}
+  .pick .pd{font-size:12.5px;color:var(--ink-3)}
+
+  /* 示例块 */
+  .example{margin:0 22px 22px;border:1px solid var(--line);border-radius:12px;overflow:hidden;background:var(--bg-soft)}
+  .example .ex-h{padding:9px 16px;font-size:11.5px;font-family:var(--mono);letter-spacing:.5px;color:var(--ink-3);border-bottom:1px solid var(--line);background:var(--card)}
+  .example .ex-h b{color:var(--accent);font-weight:500}
+  .example .ex-b{padding:15px 18px;font-family:var(--mono);font-size:12px;line-height:1.75;color:var(--ink-2);white-space:pre-wrap;overflow-x:auto}
+  .example .ex-b .hl{color:var(--gold)}
+  .example .ex-b .bl{color:var(--accent)}
+  .example .ex-b .gd{color:var(--green)}
+  .example .ex-b .dim{color:var(--ink-3)}
+  .example.calc .ex-b{white-space:normal}
+  .calc-table{width:100%;border-collapse:collapse;font-family:var(--mono);font-size:12px}
+  .calc-table td,.calc-table th{padding:6px 10px;border-bottom:1px solid var(--line-soft);text-align:left}
+  .calc-table th{color:var(--ink-3);font-weight:500;font-size:11px}
+  .calc-table td:last-child,.calc-table th:last-child{text-align:right;color:var(--ink)}
+  .calc-table .tot td{border-bottom:none;border-top:1px solid var(--line);color:var(--gold);font-weight:600;padding-top:9px}
+  .calc-table .sub{color:var(--ink-2)}
+  .example .ex-b .miss{color:#e0879a}
+  /* 覆盖对照 */
+  .coverage{margin:0 22px 8px;display:grid;grid-template-columns:1fr 1fr;gap:14px}
+  .cov{border:1px solid var(--line);border-radius:12px;padding:14px 16px;background:var(--card-2)}
+  .cov h5{margin:0 0 10px;font-size:13px;font-weight:600;display:flex;align-items:center;gap:8px}
+  .cov.has h5{color:var(--green)} .cov.miss h5{color:#e0879a}
+  .cov h5 i{width:8px;height:8px;border-radius:50%;background:currentColor;display:inline-block;flex:0 0 auto}
+  .cov ul{margin:0;padding-left:16px}
+  .cov li{font-size:12.5px;color:var(--ink-2);margin-bottom:6px;line-height:1.5}
+  .cov li b{color:var(--ink);font-weight:600}
+  .cov-note{margin:2px 22px 22px;font-size:12.5px;color:var(--ink-2);background:rgba(224,135,154,.06);border:1px solid rgba(224,135,154,.25);border-radius:10px;padding:11px 15px;line-height:1.6}
+  .cov-note b{color:#e0879a;font-weight:600}
+  @media(max-width:820px){.coverage{grid-template-columns:1fr}}
+  /* 目标态四面卡 */
+  .target{margin:2px 22px 22px;border:1px solid rgba(89,208,154,.32);border-radius:14px;overflow:hidden;background:linear-gradient(180deg,rgba(89,208,154,.045),transparent)}
+  .target .t-head{padding:12px 18px;border-bottom:1px solid var(--line);background:var(--card)}
+  .target .t-head .tt{font-size:14px;font-weight:600;color:var(--green)}
+  .target .t-head .td{font-size:12px;color:var(--ink-3);margin-top:3px}
+  .target .t-meta{padding:10px 18px;font-size:12.5px;color:var(--ink-2);border-bottom:1px solid var(--line-soft);background:rgba(255,255,255,.01)}
+  .target .t-meta b{color:var(--ink)}
+  .tface{border-top:1px solid var(--line-soft);padding:12px 18px}
+  .tface .fh{font-size:13px;font-weight:700;color:var(--ink);letter-spacing:1px;margin-bottom:9px;display:flex;align-items:center;gap:8px}
+  .tface .fh .fi{width:7px;height:7px;border-radius:2px;background:var(--accent)}
+  .trow{display:grid;grid-template-columns:210px 1fr;gap:14px;padding:6px 0;border-top:1px dashed var(--line-soft);align-items:baseline}
+  .tface .trow:first-of-type{border-top:none}
+  .trow .tl{font-size:12.5px}
+  .trow .tl .nm{color:var(--ink);font-weight:600}
+  .trow .tl .cap{display:block;color:var(--ink-3);font-size:11px;margin-top:2px}
+  .trow .tr{font-size:12.5px;color:var(--ink-2)}
+  .trow .tr .imp{color:var(--green)}
+  .stag{font-family:var(--mono);font-size:9.5px;padding:0 6px;border-radius:4px;border:1px solid;margin-left:7px;white-space:nowrap;vertical-align:middle}
+  .stag.now{color:var(--ink-2);border-color:#39466a}
+  .stag.add{color:var(--accent);border-color:var(--accent-soft);background:rgba(78,168,255,.06)}
+  .stag.tbd{color:#e0b15a;border-color:#5a4a1e;background:rgba(242,197,92,.05)}
+  .stag.defer{color:#7d8aa8;border-color:#2a3345;background:rgba(125,138,168,.05)}
+  .t-legend{padding:11px 18px;border-top:1px solid var(--line-soft);font-size:11.5px;color:var(--ink-3);display:flex;gap:16px;flex-wrap:wrap}
+  .t-legend .stag{margin-left:0}
+  @media(max-width:820px){.trow{grid-template-columns:1fr}}
+
+  /* 数据来源 */
+  .feeders{max-width:1040px;margin:38px auto 0;padding:0 28px;display:grid;grid-template-columns:repeat(2,1fr);gap:18px}
+  .feeder{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:20px 22px}
+  .feeder .fh{display:flex;align-items:baseline;justify-content:space-between;gap:12px;margin-bottom:12px}
+  .feeder .fh .fn{font-size:16px;font-weight:620}
+  .feeder .fh .ft{font-family:var(--mono);font-size:12px;color:var(--accent)}
+  .feeder .frow{display:flex;gap:10px;font-size:13px;margin-top:7px;color:var(--ink-2)}
+  .feeder .frow .fk{color:var(--ink-3);flex:0 0 40px;font-size:12.5px}
+  .feeder .frow .fv{color:var(--ink)}
+  .feeder .supply{margin-top:13px;padding-top:12px;border-top:1px solid var(--line-soft);font-size:12.5px;color:var(--ink-3)}
+  .feeder .supply b{color:var(--accent);font-weight:500}
+
+  /* 消息面流 */
+  .newsflow{max-width:1040px;margin:34px auto 0;padding:0 28px}
+  .nf-inner{border:1px solid var(--news-soft);border-radius:18px;background:linear-gradient(180deg,rgba(255,155,176,.04),transparent);overflow:hidden}
+  .nf-steps{display:grid;grid-template-columns:1fr 40px 1fr 40px 1fr;align-items:stretch}
+  .nf-step{padding:20px 22px}
+  .nf-step .ns-k{font-size:11.5px;font-family:var(--mono);letter-spacing:1px;color:var(--news);margin-bottom:8px}
+  .nf-step .ns-t{font-size:15px;font-weight:620;margin-bottom:6px}
+  .nf-step .ns-d{font-size:12.5px;color:var(--ink-2);line-height:1.55}
+  .nf-step .ns-d .tm{font-family:var(--mono);color:var(--ink-3);font-size:11.5px}
+  .nf-arrow{display:flex;align-items:center;justify-content:center;color:var(--news);opacity:.6}
+  .nf-foot{border-top:1px solid var(--news-soft);padding:14px 22px;font-size:12.5px;color:var(--ink-3)}
+  .nf-foot b{color:var(--news);font-weight:500}
+
+  /* 市场·国际·板块消息面 真实产出 */
+  .msgface{max-width:1040px;margin:14px auto 0;padding:0 28px}
+  .mf-card{border:1px solid var(--news-soft);border-radius:18px;background:linear-gradient(180deg,rgba(255,155,176,.035),transparent);overflow:hidden}
+  .mf-lex{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:4px 22px;padding:16px 22px;border-bottom:1px solid var(--news-soft);background:rgba(255,155,176,.02)}
+  .mf-lex .lx{font-size:11.5px;color:var(--ink-2);line-height:1.5}
+  .mf-lex .lx b{color:var(--news);font-weight:600}
+  .mboards{padding:4px 22px}
+  .mboard{border-top:1px solid var(--line-soft);padding:15px 0}
+  .mboard:first-child{border-top:none}
+  .mb-h{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;margin-bottom:8px}
+  .mb-h .bn{font-size:15px;font-weight:650;color:var(--ink)}
+  .mb-h .bt{font-size:11.5px;color:var(--green)}
+  .mb-badge{font-family:var(--mono);font-size:9.5px;padding:1px 7px;border-radius:5px;border:1px solid;vertical-align:middle}
+  .mb-badge.s{color:var(--news);border-color:var(--news-soft);background:rgba(255,155,176,.08)}
+  .mb-badge.m{color:#e0b15a;border-color:#5a4a1e;background:rgba(242,197,92,.05)}
+  .mb-h .cnt{font-family:var(--mono);font-size:10px;color:var(--ink-3);margin-left:auto}
+  .mb-ev{font-size:12px;color:var(--ink-2);line-height:1.6;padding:2px 0 2px 14px;position:relative}
+  .mb-ev::before{content:"";position:absolute;left:2px;top:10px;width:4px;height:4px;border-radius:50%;background:var(--ink-3)}
+  .mb-ev .dt{font-family:var(--mono);font-size:10.5px;color:var(--ink-3);margin-right:5px}
+  .mb-ev .jd{font-family:var(--mono);font-size:10px;color:var(--ink-3);white-space:nowrap}
+  .mb-ev .intl{color:var(--news)}
+  .mb-more{font-size:11px;color:var(--ink-3);padding:3px 0 0 14px}
+  .mb-syn{margin-top:9px;display:grid;grid-template-columns:64px 1fr;gap:4px 12px;font-size:12px}
+  .mb-syn .sk{color:var(--ink-3);font-size:11px}
+  .mb-syn .sv{color:var(--ink-2);line-height:1.55}
+  .mb-syn .sv .lead{color:var(--green);font-weight:500}
+  .mb-syn .sv .fol{color:var(--accent)}
+  .mb-syn .sv .moved{color:var(--ink-3);font-size:11px}
+  .mf-rest{border-top:1px solid var(--line-soft);padding:14px 22px;background:rgba(255,255,255,.012)}
+  .mf-rest .rh{font-size:11.5px;color:var(--ink-3);margin-bottom:8px}
+  .mf-rest .rrow{font-size:12px;color:var(--ink-2);padding:3px 0;line-height:1.55}
+  .mf-rest .rrow .rn{color:var(--ink);font-weight:600}
+  .mf-rest .rrow .rb{font-family:var(--mono);font-size:9.5px;padding:0 6px;border-radius:4px;border:1px solid;margin:0 6px}
+  .mf-rest .rrow .rb.s{color:var(--news);border-color:var(--news-soft)}
+  .mf-rest .rrow .rb.m{color:#e0b15a;border-color:#5a4a1e}
+  .mf-intl{border-top:1px solid var(--news-soft);padding:15px 22px;background:rgba(255,155,176,.035)}
+  .mf-intl .ih{font-size:12.5px;font-weight:600;color:var(--news);margin-bottom:8px;display:flex;align-items:center;gap:7px}
+  .mf-intl .irow{font-size:12px;color:var(--ink-2);padding:3px 0;line-height:1.55}
+  .mf-intl .irow .rn{color:var(--ink);font-weight:600}
+  .mf-intl .ifoot{font-size:11.5px;color:var(--ink-3);margin-top:8px;padding-top:8px;border-top:1px dashed var(--line-soft)}
+  @media(max-width:820px){.mb-syn{grid-template-columns:1fr}.mb-syn .sk{margin-top:6px}}
+
+  /* 闭环 */
+  .loop{max-width:1040px;margin:34px auto 0;padding:0 28px}
+  .loop-inner{background:linear-gradient(180deg,var(--card-2),var(--card));border:1px solid var(--line);border-radius:16px;padding:22px 26px;display:grid;grid-template-columns:1fr 1fr;gap:24px}
+  .loop-inner .li .lt{font-size:15px;font-weight:620;margin:0 0 6px;display:flex;align-items:center;gap:9px}
+  .loop-inner .li .lt i{width:8px;height:8px;border-radius:50%;background:var(--accent)}
+  .loop-inner .li p{font-size:13.5px;color:var(--ink-2);margin:0}
+
+  /* 附录 */
+  .glossary{max-width:1040px;margin:22px auto 0;padding:0 28px}
+  .gtable{background:var(--card);border:1px solid var(--line);border-radius:16px;overflow:hidden}
+  .gtable .grow{display:grid;grid-template-columns:170px 1fr;border-top:1px solid var(--line-soft)}
+  .gtable .grow:first-child{border-top:none}
+  .gtable .grow .gk{padding:13px 20px;font-size:13.5px;font-weight:600;border-right:1px solid var(--line-soft);background:var(--bg-soft)}
+  .gtable .grow .gk .gid{display:block;font-family:var(--mono);font-size:11px;color:var(--ink-3);font-weight:400;margin-top:2px}
+  .gtable .grow .gv{padding:13px 20px;font-size:13px;color:var(--ink-2)}
+  /* 策略表 */
+  .stable{width:100%;border-collapse:collapse;font-size:12.5px;background:var(--card);border:1px solid var(--line);border-radius:16px;overflow:hidden}
+  .stable th,.stable td{text-align:left;padding:11px 14px;border-bottom:1px solid var(--line-soft);vertical-align:top}
+  .stable th{background:var(--bg-soft);color:var(--ink-3);font-weight:600;font-size:11px;letter-spacing:.5px}
+  .stable tr:last-child td{border-bottom:none}
+  .stable .sn{font-weight:600;color:var(--ink)}
+  .stable .scored{font-family:var(--mono);font-size:11px;color:var(--gold);border:1px solid rgba(242,197,92,.3);border-radius:5px;padding:0 6px;white-space:nowrap}
+  .stable .rule{font-family:var(--mono);font-size:11px;color:var(--ink-3);border:1px solid var(--line);border-radius:5px;padding:0 6px;white-space:nowrap}
+  .stable td .cal{color:var(--ink-3);font-size:12px}
+  .subhead{font-size:15px;font-weight:600;color:var(--ink-2);margin:34px auto 12px;padding:0 28px;max-width:1040px}
+
+  footer{max-width:1040px;margin:80px auto 0;padding:24px 28px 0;border-top:1px solid var(--line);color:var(--ink-3);font-size:12.5px;display:flex;justify-content:space-between;flex-wrap:wrap;gap:10px}
+  footer .mono{font-family:var(--mono)}
+  @media(max-width:820px){
+    .io,.callout-cols,.nf-steps,.loop-inner,.feeders,.howto{grid-template-columns:1fr}
+    .callout-cols .mid{display:none}
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="kicker">Pyramid Stock Selection</div>
+  <h1>金字塔选股 · 全流程<br><span class="fade">从全市场五千余只，到每日两三只买入</span></h1>
+  <p class="intro">每个交易日收盘后，系统从全市场<b>约 5,400 只股票</b>出发，经过<b>五个层级</b>逐层收敛，最终由 AI 给出 <b>2–3 只买入建议</b>。
+  本图说明每一层<b>拿到什么、做了什么、产出什么</b>，各层之间的供给关系，并配有真实产出的例子。</p>
+</header>
+
+<div class="howto">
+  <div class="h"><div class="t"><i></i>怎么读这张图</div><div class="d">数据自上而下流动：上面一层的产出，是下面一层的输入。</div></div>
+  <div class="h"><div class="t"><i style="background:var(--gold)"></i>每个环节三段式</div><div class="d">统一分为「输入 — 处理 — 产出」，看清它拿到什么、做什么、给出什么。</div></div>
+  <div class="h"><div class="t"><i style="background:var(--ink-3)"></i>等宽小字与例子</div><div class="d">如 shared_pool，是对应代码模块名，可忽略；带底色的框是真实产出的例子。</div></div>
+</div>
+
+<!-- ============ 01 漏斗总览 ============ -->
+<section>
+  <div class="sec-head">
+    <div class="n">01 / OVERVIEW</div>
+    <h2>五层漏斗总览</h2>
+    <p>右侧数字表示走到这一层时还剩多少只股票。前两层负责<b>广招候选</b>，后三层是<b>金字塔自己的研判</b>——这条分界很关键，下一节专门说明。</p>
+  </div>
+
+  <div class="pyramid">
+    <div class="tier base w-100">
+      <div class="left"><div class="idx">底</div><div class="name">数据基座<span class="sub">全市场股票 + 每只的多维度数据</span></div></div>
+      <div class="right"><div class="count">5,400<span class="u">只</span></div><div class="clabel">全部A股</div></div>
+    </div>
+    <div class="tier-gap"><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M10 3v13M5 11l5 5 5-5" stroke="#4ea8ff" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+
+    <div class="tier w-88">
+      <div class="left"><div class="idx">1</div><div class="name">召回初选<span class="sub">四路来源合并，圈出值得细看的候选（广撒网）</span></div></div>
+      <div class="right"><div class="count">≈600<span class="u">只</span></div><div class="clabel">候选池</div></div>
+    </div>
+    <div class="tier-gap"><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M10 3v13M5 11l5 5 5-5" stroke="#4ea8ff" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+
+    <div class="tier w-76">
+      <div class="left"><div class="idx">2</div><div class="name">逐票浓缩<span class="sub">给每只候选做十项体检，压成一张标准卡片</span></div></div>
+      <div class="right"><div class="count">≈600<span class="u">只</span></div><div class="clabel">已附体检卡</div></div>
+    </div>
+    <div class="tier-gap"><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M10 3v13M5 11l5 5 5-5" stroke="#4ea8ff" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+
+    <div class="tier w-64">
+      <div class="left"><div class="idx">3</div><div class="name">打分排序<span class="sub">五个维度加权评分，高风险的直接淘汰</span></div></div>
+      <div class="right"><div class="count">排序</div><div class="clabel">得出优先级</div></div>
+    </div>
+    <div class="tier-gap"><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M10 3v13M5 11l5 5 5-5" stroke="#4ea8ff" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+
+    <div class="tier w-52">
+      <div class="left"><div class="idx">4</div><div class="name">决策包<span class="sub">取排名最前的一批，配齐全部分析材料</span></div></div>
+      <div class="right"><div class="count">15<span class="u">只</span></div><div class="clabel">进入终选</div></div>
+    </div>
+    <div class="tier-gap"><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M10 3v13M5 11l5 5 5-5" stroke="#f2c55c" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+
+    <div class="tier apex w-40">
+      <div class="left"><div class="idx">5</div><div class="name">AI 精选<span class="sub">三个 AI 在终选名单内定夺</span></div></div>
+      <div class="right"><div class="count">2–3<span class="u">只</span></div><div class="clabel">买入建议</div></div>
+    </div>
+  </div>
+
+  <div class="divide-band">
+    <div class="db open"><div class="lbl">第 1 层 · 广撒网</div><div class="txt">召回不挑来源——各策略、合议、板块成员、自扫全市场，谁选的都先拉进来看一眼。</div></div>
+    <div class="db own"><div class="lbl">第 2–5 层 · 金字塔自证</div><div class="txt">从体检、打分到 AI，全部用原始数据重新判断，不沿用任何来源的结论。</div></div>
+  </div>
+</section>
+
+<!-- ============ 02 关键区分 ============ -->
+<section>
+  <div class="sec-head">
+    <div class="n">02 / A KEY DISTINCTION</div>
+    <h2>“独立”指的是研判独立，不是召回封闭</h2>
+    <p>金字塔的“独立”常被误解为“召回也必须封闭”。其实独立体现在<b>研判</b>：召回可以广纳系统自己的各路信号，但每只票最终都由金字塔<b>用原始数据重新判断</b>。</p>
+  </div>
+
+  <div class="callout">
+    <div class="callout-inner">
+      <div class="callout-cols">
+        <div class="col a">
+          <span class="tag">召回层 · 开放</span>
+          <div class="ct">吸纳一切候选</div>
+          <div class="cd">召回是<span class="em-a">广撒网的入口</span>，把系统自己的四路信号——多个策略的初选、专家合议、热门板块成员、从全市场自扫的票——合并起来。
+          任何一路选中，只等于把这只票“<span class="em-a">拉进来看一眼</span>”。</div>
+        </div>
+        <div class="mid"><svg width="26" height="26" viewBox="0 0 26 26" fill="none"><path d="M4 13h18M16 7l6 6-6 6" stroke="#f2c55c" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+        <div class="col b">
+          <span class="tag">研判层 · 自证</span>
+          <div class="ct">用原始数据重新判断</div>
+          <div class="cd">进入候选池后，金字塔<span class="em-b">用原始数据从头做十项体检、五维打分、一票否决</span>，重新决定这只票行不行。
+          <span class="em-b">绝不继承任何来源的买/卖结论</span>——别的 AI 说“买”，在这里不作数。</div>
+        </div>
+      </div>
+      <div class="callout-foot">金字塔召回<b>只用系统自己的信号，不消费外部 AI 的成品选股</b>（早期接入的 DeepSeek / 千问收盘选股已从召回移除）。独立性由两点保证：研判层用原始数据重算、<b>不继承任何结论</b>；以及始终有一路“<b>从全市场原始 K 线自扫</b>”的召回——不依赖任何人的成品，金字塔也能自己选出票。</div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 03 逐层详解 ============ -->
+<section>
+  <div class="sec-head">
+    <div class="n">03 / HOW EACH LAYER WORKS</div>
+    <h2>逐层详解</h2>
+    <p>每一层都用同一种方式说明：<b>输入</b>（拿到什么、来自哪里）、<b>处理</b>（做了什么）、<b>产出</b>（得到什么、供给谁），并配真实例子。</p>
+  </div>
+
+  <div class="layers">
+
+    <!-- 层1 召回 -->
+    <div class="layer">
+      <div class="lh"><div class="lidx">1</div>
+        <div><div class="ltitle">召回初选<span class="lid">shared_pool</span></div>
+          <div class="ldesc">把四路来源推荐的股票合并成候选池。这一步只做“合并名单”——取并集、去重、剔除风险股（ST），<b>不重新打分、不给任何来源特权</b>。被两路以上同时选中的，记为“共识票”。</div></div></div>
+      <div class="io">
+        <div class="cell"><div class="k"><span class="arw">▸</span>输入 · 四路来源</div>
+          <div class="v"><ul>
+            <li>十个策略各自的初选名单</li>
+            <li>多专家合议推荐的票</li>
+            <li>热门板块里的核心成员</li>
+            <li>从全市场原始 K 线自扫入池 <span class="badge-exp">独立性地基</span></li>
+          </ul><span class="from">不消费外部 AI 的成品选股（DeepSeek / 千问收盘选股已从召回移除）</span></div></div>
+        <div class="cell"><div class="k"><span class="arw">▸</span>处理</div>
+          <div class="v">四路取并集、去重；剔除已被特别处理（ST）的风险股。每一路平权，缺失的来源不计入。</div></div>
+        <div class="cell"><div class="k"><span class="arw">▸</span>产出</div>
+          <div class="v">约 600 只候选，每只带“被哪几路选中”的来源标签。<span class="from">供给：第 2 层逐票浓缩</span></div></div>
+      </div>
+    </div>
+
+    <!-- 层2 逐票浓缩 -->
+    <div class="layer">
+      <div class="lh"><div class="lidx">2</div>
+        <div><div class="ltitle">逐票浓缩<span class="lid">十项分析工具</span></div>
+          <div class="ldesc">对候选池里的<b>每一只股票</b>，运行一组分析工具，把它散落在 K 线、财务、估值、资金、板块、消息里的原始数据，压成一张<b>按四个面组织</b>、每个数字都带口径与解读的“体检卡”。后续打分和 AI 都只读这张卡，不再碰原始数据。下面先看重构前的旧卡（薄）与缺口，再看重构后（A 期已上线）的真实四面卡。</div></div></div>
+      <div class="io">
+        <div class="cell"><div class="k"><span class="arw">▸</span>输入</div>
+          <div class="v">一只候选股 + 它的 K 线、财务、公告、资金流、筹码、解禁、减持、板块、消息等原始数据。</div></div>
+        <div class="cell"><div class="k"><span class="arw">▸</span>处理 · 十项体检</div>
+          <div class="v"><b style="color:var(--ink)">走势</b>：量价表现、买卖闸门、建议价位；<br><b style="color:var(--ink)">环境</b>：板块冷热与角色；<br><b style="color:var(--ink)">风险</b>：假利好、财报暗雷、解禁、减持、经验规则。</div></div>
+        <div class="cell"><div class="k"><span class="arw">▸</span>产出</div>
+          <div class="v">每只一张体检卡，每项结论都标明依据、口径与档位。<span class="from">供给：第 3 层打分、第 5 层 AI</span></div></div>
+      </div>
+      <div class="example">
+        <div class="ex-h">重构前 · A 期上线前的旧卡（逐字摘自 <b>金字塔决策包_top8.md</b> · 代码 301551 · 仅十块，财报/解禁/减持/假利好当日数据缺失）</div>
+        <div class="ex-b"><span class="hl">### 301551　骨架分=74.9　子分[量价93 板块60 策略50 排雷100 宏观70]　来源=板块roster、K线过闸</span>
+<span class="dim">【shared_pool】</span>命中来源: 板块roster/K线过闸（2/4来源·≥2=交叉共识）
+<span class="dim">【price_volume】</span>现价 21.69　涨幅 +3.48%【口径:收盘·较前收】
+量比 1.72【当日量/前5日均量·放量】放量·资金关注度升
+位置pos60 0.65【近60日[低,高]分位·中】中枢区·多空相对均衡
+距60高 -6.9%　vsMA5 +2.4%(站上)　vsMA20 +2.5%(站上)
+<span class="dim">【gate】</span>层级 T1【T1/T2/T3分层闸门·阈值写死】量比1.72≥1.5∧收阳∧站上MA5∧破前高∧未近涨停
+排雷: 涨停未触 近涨停未触 极高位pos60=0.65(≥0.95踢出)
+<span class="dim">【sector_context】</span>板块 通信（申万一级·重点池）focus0.60[中]
+冷热拥挤 过热·拥挤B　角色 龙头·主选　板块内排名 第1/20(按5日涨幅)
+净催化 正[net17·利好5/利空0]（偏利好）　<span class="dim">← 板块级，非个股消息</span>
+<span class="dim">【experience_rules】</span>命中 0 条（总库64·可用0）无适用规则
+<span class="miss">【fake_good_news】[数据缺失] 假利好嫌疑 无嫌疑（events 缺失·不编造）</span>
+<span class="miss">【financial_redflag】[数据缺失]（无 financial 字段·不编造）</span>
+<span class="miss">【unlock_risk】[数据缺失]（无 financing.解禁 字段·不编造）</span>
+<span class="miss">【insider_reduction】[数据缺失]（无 events 字段·不编造）</span>
+<span class="dim">【entry_price】</span>回踩MA5　首入场限价 21.18　加仓 21.18=MA5　止损 21.158(-0.1%)</div>
+      </div>
+      <div class="coverage">
+        <div class="cov has">
+          <h5><i></i>重构前 · 卡里已有</h5>
+          <ul>
+            <li><b>走势（单日）</b>：涨幅、量比放量/缩量、位置分位、是否站上均线</li>
+            <li><b>分层闸门</b>：按走势强弱分 T1/T2/T3</li>
+            <li><b>板块</b>：所属板块冷热、个股角色、板块内 5 日涨幅排名、板块级净催化</li>
+            <li><b>风险排查</b>：假利好、财报、解禁、减持（有数据时）</li>
+            <li><b>入场价位</b>、<b>经验规则</b></li>
+          </ul>
+        </div>
+        <div class="cov has">
+          <h5><i></i>重构后 · A 期已补齐（原缺失项）</h5>
+          <ul>
+            <li><b>PE / PB / PEG</b>：估值维度已接入（PEG 现价×一致预期现算）</li>
+            <li><b>ROE / 毛利 / 净利率 / 营收净利增速明细</b>：已接入基本面</li>
+            <li><b>个股资金流入 / 龙虎榜 / 股东户数 / 换手率</b>：已接入资金面</li>
+            <li><b>个股消息面情绪 / 一致预期</b>：已接入消息面</li>
+            <li><b>竞品</b>＝板块内相对；<b>MACD/KDJ/RSI/筹码/支撑压力/BOLL/PE历史分位/两融</b>均已落盘接入</li>
+            <li><span style="color:var(--green)">A 期已全部转真值</span>；仅 <span style="color:#7d8aa8">后置</span>：PS / 价格形态 / 社媒（需新采新建）</li>
+          </ul>
+        </div>
+      </div>
+      <div class="cov-note"><b>本轮（A 期）已解决：</b>① 上面旧卡里 4 块“数据缺失”反映的深数据只对入选并集采集问题仍在，但<b>“缺数据＝满分”的评分隐患已修</b>（缺数据降中性、不再虚高）。② 四面工具全部接入、缺数据一律诚实报“数据缺失·不编造”、<b>卡片已带股票名称</b>。下面即重构后的真实四面卡。</div>
+
+      <div class="target">
+        <div class="t-head">
+          <div class="tt">重构后 · 四面结构化体检卡（A 期已上线 · 真实产出）</div>
+          <div class="td">按「基本面 / 技术面 / 资金面 / 消息情绪面」分区，每条＝真实数值 +【真实口径/档位（从模块原样传上来，不新编）】+ → 这意味着什么。真实样例票 <b>000504 · as_of 2026-09-17</b>（主仓实跑核验）。</div>
+        </div>
+        <div class="t-meta">A 期已上线：估值 / 成长 / 技术指标 / 资金面(含竞品) / 个股消息情绪 五组工具全部接入四面卡。缺数据一律诚实报「数据缺失·不编造」，且<b>缺数据不再给满分（#6 已修）</b>。</div>
+
+        <div class="tface">
+          <div class="fh"><span class="fi"></span>一、基本面</div>
+          <div class="trow"><div class="tl"><span class="nm">估值 PE(TTM) 66.56</span><span class="cap">高 · PE>60 · 跨市场高估</span></div><div class="tr"><span class="imp">→ 估值偏高</span>，结合 PEG／行业分位看(B期)</div></div>
+          <div class="trow"><div class="tl"><span class="nm">估值 PB 10.13</span><span class="cap">高 · PB>8 · 高溢价</span></div><div class="tr">溢价高，需成长与 ROE 支撑</div></div>
+          <div class="trow"><div class="tl"><span class="nm">估值 PEG(现算) 0.24</span><span class="cap">低估 · PE66.6 ÷ 归母增速272%</span></div><div class="tr"><span class="imp">→ 成长消化估值·便宜</span></div></div>
+          <div class="trow"><div class="tl"><span class="nm">估值 PE 历史分位 87.70</span><span class="cap">极高 · 窗口全历史</span></div><div class="tr"><span class="imp">→ 逼近自身历史估值顶部·减分</span></div></div>
+          <div class="trow"><div class="tl"><span class="nm">市值 28.05 亿</span><span class="cap">口径08-08·报告期滞后</span></div><div class="tr">小市值</div></div>
+          <div class="trow"><div class="tl"><span class="nm">成长 营收1.19亿 +431% · 净利0.11亿 +600%</span><span class="cap">高增长</span></div><div class="tr"><span class="imp">→ 业绩高速增长</span></div></div>
+          <div class="trow"><div class="tl"><span class="nm">盈利 ROE4.09 · 毛利20.46[中] · 净利率9.28[中]</span><span class="cap">ROE一季报未年化·看回报维18.38/百</span></div><div class="tr">盈利能力中等</div></div>
+          <div class="trow"><div class="tl"><span class="nm">负债率 63.69[偏高] · 每股股利 NA</span><span class="cap">偏高(50,70] · 未分红/未披露</span></div><div class="tr">杠杆偏高·无分红回报</div></div>
+          <div class="trow"><div class="tl"><span class="nm">财报质量 中 · quality 56.6 · 排雷 低</span><span class="cap">中危:现金含量不足 · 半年报06-30/披露08-24</span></div><div class="tr"><span class="imp">→ 质量中等</span>；five_dims[成长100/质量30.7/健康77.4/运营81.5/回报18.4]</div></div>
+        </div>
+
+        <div class="tface">
+          <div class="fh"><span class="fi"></span>二、技术面</div>
+          <div class="trow"><div class="tl"><span class="nm">量价 现价9.1 · 涨幅 +10.04%</span><span class="cap">量比2.50[爆量] · pos60=0.84[高]</span></div><div class="tr"><span class="imp">→ 爆量·亢奋或出货存疑；高位·获利抛压偏重</span>（距60高−4.3%/vsMA5+6.7%强站上）</div></div>
+          <div class="trow"><div class="tl"><span class="nm">闸门 踢出</span><span class="cap">涨停不可追（收阳✓站上MA5✓破前高✓·pos60=0.84）</span></div><div class="tr"><span class="imp">→ 当日涨停，不追</span></div></div>
+          <div class="trow"><div class="tl"><span class="nm">均线排列 多头排列</span><span class="cap">MA5/10/20/60 = 8.87/8.73/8.48/8.24</span></div><div class="tr"><span class="imp">→ 多头趋势·技术面加分</span></div></div>
+          <div class="trow"><div class="tl"><span class="nm">MACD 多头</span><span class="cap">dif0.197/dea0.082/柱0.229</span></div><div class="tr"><span class="imp">→ 柱&gt;0·多头延续</span></div></div>
+          <div class="trow"><div class="tl"><span class="nm">KDJ · RSI 超买</span><span class="cap">K74.85/D61.55/J101.44 · RSI 72.56</span></div><div class="tr"><span class="imp">→ 超买·警惕回调</span>（RSI6=81.37 短线过热/RSI24=63.87）</div></div>
+          <div class="trow"><div class="tl"><span class="nm">筹码 获利82% · 集中0.1311</span><span class="cap">普遍获利·套牢17.8%·集中度90较集中</span></div><div class="tr"><span class="imp">→ 高位获利了结压力大</span>（均成8.562&lt;现价·整体获利6.3%·换手缺失降级）</div></div>
+          <div class="trow"><div class="tl"><span class="nm">支撑压力 支撑9.65 / 压力10.12</span><span class="cap">结构位·距支撑3.6%/距压力1.1%/区间位76.6%</span></div><div class="tr"><span class="imp">→ 偏多·逼近压力·上行受阻</span></div></div>
+          <div class="trow"><div class="tl"><span class="nm">入场 首入9.1 · 止损8.403(-7.7%) · 不追高9.1</span><span class="cap">回踩MA5·加仓8.528·程序回填AI不改</span></div><div class="tr">买卖时机与纪律·单调OK</div></div>
+          <div class="trow"><div class="tl"><span class="nm">BOLL 布林带 上9.34 / 中8.48 / 下7.62</span><span class="cap">±2σ 通达信口径 · 破上轨</span></div><div class="tr"><span class="imp">→ 破上轨·短线偏强但乖离大</span></div></div>
+        </div>
+
+        <div class="tface">
+          <div class="fh"><span class="fi"></span>三、资金面 <span style="font-family:var(--mono);font-size:10px;color:var(--ink-3);font-weight:400">[stale·口径日期偏旧已折算]</span></div>
+          <div class="trow"><div class="tl"><span class="nm">主力资金 净占比+6.70% · 净流入+0.04亿 · 连1d</span><span class="cap">强流入>5·折算·口径09-10陈旧</span></div><div class="tr"><span class="imp">→ 主力强流入</span></div></div>
+          <div class="trow"><div class="tl"><span class="nm">主买盘 主买占比50.9% · 大单89笔</span><span class="cap">均衡 (0.45,0.52]</span></div><div class="tr">买卖均衡</div></div>
+          <div class="trow"><div class="tl"><span class="nm">股东户数 环比+22.97% · 连减0期</span><span class="cap">明显分散>10·口径09-09陈旧</span></div><div class="tr"><span class="imp">→ 筹码涣散</span></div></div>
+          <div class="trow"><div class="tl"><span class="nm">换手率 3.80%</span><span class="cap">活跃 (3,7]</span></div><div class="tr">交投活跃</div></div>
+          <div class="trow"><div class="tl"><span class="nm">龙虎榜 近期无上榜</span></div><div class="tr">无游资/机构异动</div></div>
+          <div class="trow"><div class="tl"><span class="nm">竞品 · 板块内相对 NA</span><span class="cap">综合板块无 roster（仅10个申万一级有）</span></div><div class="tr">该票无覆盖（能力已上线）</div></div>
+          <div class="trow"><div class="tl"><span class="nm">两融 NA</span><span class="cap">该票无 ≤as_of 两融记录 · 仅两融标的才有</span></div><div class="tr">非融资融券标的·该维天然缺席（<b>真 NA·非待补</b>）</div></div>
+        </div>
+
+        <div class="tface">
+          <div class="fh"><span class="fi"></span>四、消息情绪面</div>
+          <div class="trow"><div class="tl"><span class="nm">板块 综合 · focus0.48[低] · 净催化 中性[net0]</span><span class="cap">冷热 拐点·拥挤A · 角色 龙头·备选 · 板块内第9/20</span></div><div class="tr">板块关注度低·处拐点；本票板块内相对位置强(pos60=0.84)</div></div>
+          <div class="trow"><div class="tl"><span class="nm">假利好嫌疑 无嫌疑</span><span class="cap">近7日无利好事件锚点</span></div><div class="tr">无兑现走弱迹象</div></div>
+          <div class="trow"><div class="tl"><span class="nm">个股净情绪 0.11</span><span class="cap">正·三层加权 新闻0.5/政策0.3/舆情0.2</span></div><div class="tr"><span class="imp">→ 消息面偏多·小幅加分</span>（利好1/利空0·样本4；新闻0.15/政策0/舆情0）</div></div>
+          <div class="trow"><div class="tl"><span class="nm">消息覆盖与可信度 1.00</span><span class="cap">全覆盖·抓4条·约100%成功打分</span></div><div class="tr">样本4+全覆盖·读数可信度高</div></div>
+          <div class="trow"><div class="tl"><span class="nm">公司公告事件 0</span><span class="cap">近60日按type·已剔除减持/权益/解禁</span></div><div class="tr">无新公告催化</div></div>
+          <div class="trow"><div class="tl"><span class="nm">一致预期 / 研报覆盖 NA</span><span class="cap">无覆盖·待补</span></div><div class="tr">该票无机构覆盖（能力已上线）</div></div>
+          <div class="trow"><div class="tl"><span class="nm">社媒热度 NA</span><span class="cap">源未接入</span></div><div class="tr">数据源未接入 <span class="stag defer">后置</span></div></div>
+        </div>
+
+        <div class="tface">
+          <div class="fh"><span class="fi" style="background:var(--gold)"></span>经验纪律</div>
+          <div class="trow"><div class="tl"><span class="nm">经验规则</span><span class="cap">经验规则库</span></div><div class="tr">命中 0 条（总库64·可用0）·无适用规则</div></div>
+        </div>
+
+        <div class="t-legend">
+          <span>无标签＝A 期已上线·真实值</span>
+          <span><span class="stag defer">后置</span> 社媒(源未接入) / PS / 价格形态(需新采新建)</span>
+          <span>NA ＝ 该票无数据（能力已上线，此票无覆盖，诚实不编）；两融 NA ＝ 非融资融券标的·天然缺席</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- 层3 打分排序 -->
+    <div class="layer">
+      <div class="lh"><div class="lidx">3</div>
+        <div><div class="ltitle">打分排序<span class="lid">d2_compose</span></div>
+          <div class="ldesc">把体检卡上的结论，按五个维度各打一个 0–100 的分，再加权汇总成一个总分（“骨架分”），给候选股排出优先级。触及硬性风险的，直接淘汰、不参与排序。</div></div></div>
+      <div class="weights">
+        <div class="wrow"><div class="wn">走势（量价）</div><div class="wbar"><i style="width:30%"></i></div><div class="wp">30%</div></div>
+        <div class="wrow"><div class="wn">板块角色</div><div class="wbar"><i style="width:25%"></i></div><div class="wp">25%</div></div>
+        <div class="wrow"><div class="wn">策略共识</div><div class="wbar"><i style="width:20%"></i></div><div class="wp">20%</div></div>
+        <div class="wrow"><div class="wn">风险排查</div><div class="wbar"><i style="width:15%"></i></div><div class="wp">15%</div></div>
+        <div class="wrow"><div class="wn">消息催化</div><div class="wbar"><i style="width:10%"></i></div><div class="wp">10%</div></div>
+      </div>
+      <div class="example calc">
+        <div class="ex-h">打分示例（真实排序样例 <b>688175 · 2026-09-17 · 骨架分 77.5</b>）</div>
+        <div class="ex-b">
+          <table class="calc-table">
+            <tr><th>维度</th><th>这只票的档位 → 该维得分</th><th>×权重</th></tr>
+            <tr><td class="sub">走势（量价）</td><td>闸门T1(60) + 放量(25) + 低位(15) = <b style="color:#eef2f8">100</b></td><td>×30% = 30.0</td></tr>
+            <tr><td class="sub">板块角色</td><td>板块龙头(50)，无过热/拥挤惩罚 = <b style="color:#eef2f8">50</b></td><td>×25% = 12.5</td></tr>
+            <tr><td class="sub">策略共识</td><td>被 2 路选中 × 25 = <b style="color:#eef2f8">50</b></td><td>×20% = 10.0</td></tr>
+            <tr><td class="sub">风险排查</td><td>无任何雷，满分 = <b style="color:#eef2f8">100</b></td><td>×15% = 15.0</td></tr>
+            <tr><td class="sub">消息催化</td><td>板块净催化“强正” = <b style="color:#eef2f8">100</b></td><td>×10% = 10.0</td></tr>
+            <tr class="tot"><td>骨架分</td><td>加权求和</td><td>77.5</td></tr>
+          </table>
+        </div>
+      </div>
+      <div class="veto-line"><b>排序规则：</b>按骨架分从高到低；同分时看走势得分，再看代码。&nbsp;&nbsp;<b>一票否决（直接淘汰）：</b>假利好高嫌疑、财报高风险、大额解禁临近、股东清仓式减持、当日已涨停、股价极高位——命中任意一项即剔除。</div>
+    </div>
+
+    <!-- 层4 决策包 -->
+    <div class="layer">
+      <div class="lh"><div class="lidx">4</div>
+        <div><div class="ltitle">决策包<span class="lid">d2_package</span></div>
+          <div class="ldesc">取排名最靠前的约 15 只，连同<b>市场定调</b>（当天整体氛围）、<b>全板块概览</b>（每个板块的冷热）、每只股票的完整体检卡，打包成一份供人和 AI 阅读的决策材料。市场定调与板块概览取自当天的板块研判与市场宽度，不是这一层临时算的。</div></div></div>
+      <div class="example">
+        <div class="ex-h">市场定调 · 真实样例（<b>2026-09-17</b>）</div>
+        <div class="ex-b">广度中性震荡：净广度 −0.04、涨停 58 / 跌停 6、沪深300 震荡、
+风格背离（权重搭台、中小盘偏弱）。外围美联储加息偏空。
+全板块 29 个已扫，主线不集中：<span class="hl">通信</span>（过热·龙头强）、
+<span class="hl">电子</span>（涨停最多但均涨为负 = 分化）、<span class="hl">汽车</span>（过冷但涨停 9 · 异动）。</div>
+      </div>
+      <div class="example" style="border-color:var(--news-soft)">
+        <div class="ex-h" style="border-color:var(--news-soft)">紧接市场定调之后 · <b style="color:var(--news);font-weight:500">市场·国际·板块消息面</b>段</div>
+        <div class="ex-b" style="white-space:normal;color:var(--ink-2)">决策材料里还夹着一段<b style="color:var(--news)">逐板块消息研判</b>：当天哪些板块有实质利好/利空、每条事件的方向/可信/影响/执行/来源、以及龙头与跟涨候选个股——它和逐票四面卡并列，都是喂给终选 AI 的显式变量。<span class="dim">真实产出见 §04 末尾「市场·国际·板块消息面」。</span></div>
+      </div>
+      <div class="example">
+        <div class="ex-h">全板块概览 · 每行一个板块（★=重点板块，摘取两行）</div>
+        <div class="ex-b"><span class="hl">★电子</span>: 正常/拥挤中 　涨停 6 　动量截面 0.6 <span class="dim">〔当日主线：净催化强正〕</span>
+<span class="dim">·电力设备</span>: 过冷/拥挤中 　均涨 −0.09% 　动量截面 0.03</div>
+      </div>
+    </div>
+
+    <!-- 层5 AI -->
+    <div class="layer apex">
+      <div class="lh"><div class="lidx">5</div>
+        <div><div class="ltitle">AI 精选<span class="lid">Claude · DeepSeek · 通义千问</span></div>
+          <div class="ldesc">三个 AI 各自阅读决策材料，在终选名单内定夺。AI 只负责挑选、排序、给出纪律，<b>不改动任何数字</b>（价位、评分都由前面的程序算好）。每个判断都必须引用体检卡上的具体一条依据。</div></div></div>
+      <div class="picks">
+        <div class="pick buy"><div class="pt">2–3 只买入</div><div class="pd">每只附：入场逻辑、支撑依据、持有纪律、退出条件。</div></div>
+        <div class="pick avoid"><div class="pt">2–3 只回避</div><div class="pd">每只说明：为何回避、需要验证什么、什么情况解除。</div></div>
+      </div>
+    </div>
+
+  </div>
+</section>
+
+<!-- ============ 04 消息面 ============ -->
+<section>
+  <div class="sec-head">
+    <div class="n">04 / THE NEWS &amp; POLICY CHAIN</div>
+    <h2>新闻消息在哪儿获取、做了哪些分析</h2>
+    <p>新闻与政策是单独一条原料链：全天在<b>两个时点采集</b>，汇入<b>一个中枢</b>由 AI 判读，再供给金字塔的多个环节。</p>
+  </div>
+  <div class="newsflow">
+    <div class="nf-inner">
+      <div class="nf-steps">
+        <div class="nf-step">
+          <div class="ns-k">① 采集</div>
+          <div class="ns-t">两个时点抓取</div>
+          <div class="ns-d"><span class="tm">14:00</span> 逐板块抓龙头/中军的新闻、公告、板块政策。<br><span class="tm">15:40</span> 对候选股逐票抓新闻、股吧、政策，含东财 7×24 快讯全量流。</div>
+        </div>
+        <div class="nf-arrow"><svg width="22" height="22" viewBox="0 0 22 22" fill="none"><path d="M4 11h13M12 6l5 5-5 5" stroke="#ff9bb0" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+        <div class="nf-step">
+          <div class="ns-k">② 分析</div>
+          <div class="ns-t">AI 判读，汇入中枢</div>
+          <div class="ns-d">每条消息交由 AI 判断<b style="color:var(--ink)">方向</b>（利好/利空）、<b style="color:var(--ink)">强度</b>、<b style="color:var(--ink)">受影响的行业</b>，统一汇总成一个当天的“消息面中枢”。</div>
+        </div>
+        <div class="nf-arrow"><svg width="22" height="22" viewBox="0 0 22 22" fill="none"><path d="M4 11h13M12 6l5 5-5 5" stroke="#ff9bb0" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+        <div class="nf-step">
+          <div class="ns-k">③ 供给</div>
+          <div class="ns-t">喂给金字塔三处</div>
+          <div class="ns-d">打分的<b style="color:var(--ink)">消息催化维度</b>；逐票浓缩的<b style="color:var(--ink)">假利好识别</b>；以及 17:30 的<b style="color:var(--ink)">板块研判</b>。</div>
+        </div>
+      </div>
+      <div class="nf-foot"><b>为什么 7×24 快讯放在收盘时抓？</b>因为选股在收盘后进行、次日才操作，收盘时一次性收全当天消息即可；快讯全量流默认只保留与候选相关的、不逐条调用 AI，以控制成本。</div>
+    </div>
+  </div>
+
+  <div class="subhead" style="margin-top:30px">这条链最终喂给选股 AI 的样子 · <b style="color:var(--news);font-weight:600">市场·国际·板块消息面</b>（2026-09-18 收盘实跑）</div>
+  <div class="msgface">
+    <div class="mf-card">
+      <div class="ex-h" style="padding:11px 22px;font-family:var(--mono);font-size:11.5px;letter-spacing:.5px;color:var(--ink-3);border-bottom:1px solid var(--news-soft);background:var(--card)">决策包 · <b style="color:var(--news);font-weight:500">render_消息面(ov, as_of)</b> · 位于「市场定调」之后、「候选四面卡」之前，与逐票体检卡并列，都是喂给终选 AI 的<b style="color:var(--ink-2);font-weight:400">显式变量</b></div>
+
+      <!-- 词表：先读研判档定义 -->
+      <div class="mf-lex">
+        <div class="lx"><b>方向</b> 利好 / 利空 / 中性 —— 事件对该板块个股的影响方向</div>
+        <div class="lx"><b>强弱</b> 强 / 中 / 弱 —— 板块级催化力度（板块级研判，非逐事件）</div>
+        <div class="lx"><b>可信度</b> 可信 / 存疑 —— 信源与逻辑可靠度</div>
+        <div class="lx"><b>影响程度</b> 大 / 中 / 小 —— 对基本面或情绪的冲击量级</div>
+        <div class="lx"><b>执行度</b> 高 / 中 / 低 —— 落地兑现确定性（政策「研究中」vs「已出台」）</div>
+        <div class="lx"><b>来源</b> 一手（公告/官方）/ 二手（媒体转述）—— 越一手越可信</div>
+        <div class="lx"><b>🌐 国际/宏观</b> 事件文本命中运价/地缘/汇率/关税/加息/长单等 → 归国际宏观（启发式）</div>
+        <div class="lx" style="color:var(--ink-3)">口径贯通不许编：以上 6 档均<b style="color:var(--ink-3)">原样取自消息驱动块</b>；含义/持续性/影响/可靠性用上游现成研判句，本层只排版</div>
+      </div>
+
+      <!-- 板块消息卡：3 个展开示范（强×2 + 中×1），其余 5 板块下方汇总 -->
+      <div class="mboards">
+
+        <div class="mboard">
+          <div class="mb-h"><span class="bn">电子</span><span class="bt">利好</span><span class="mb-badge s">强</span><span class="cnt">关键事件 33 · 取 8 · 余 25 略</span></div>
+          <div class="mb-ev"><span class="dt">09-09</span>长飞光纤涨停，通信设备、CPO 概念股开盘拉升 <span class="jd">〔利好·可信·影响大·执行高·一手〕</span></div>
+          <div class="mb-ev"><span class="dt">09-09</span>工信部正式印发信息通信行业十五五规划，部署 400G 及以上高速传输，推动 100G 光网下沉，3.8 万亿投资助力算网升级 <span class="jd">〔利好·可信·影响大·执行高·一手〕</span></div>
+          <div class="mb-ev"><span class="dt">09-09</span>康宁继 Meta、亚马逊后再与 Verizon 签数十亿美元光纤长单，AI 算力催生光纤景气周期 <span class="jd intl">〔利好·可信·影响大·执行高·一手·🌐国际〕</span></div>
+          <div class="mb-ev"><span class="dt">09-08</span>沪电股份获机构席位净买入 8.88 亿元，32 层及以上 PCB 收入同比 +190.83% <span class="jd">〔利好·可信·影响大·执行高·一手〕</span></div>
+          <div class="mb-ev"><span class="dt">09-08</span>工信部首提适时启动 6G 商用，新一代通信网规划锚定 3.8 万亿投资 <span class="jd">〔利好·可信·影响大·执行中·一手〕</span></div>
+          <div class="mb-ev"><span class="dt">09-07</span>中国移动普通光缆集采顶格落槌，总额 70.998 亿元、涨价 1.15 倍、18 家中标 <span class="jd">〔利好·可信·影响大·执行高·一手〕</span></div>
+          <div class="mb-more">…及沪电股份 1.6T 交换机批量出货等，实跑取前 8 条、余 25 条略。</div>
+          <div class="mb-syn">
+            <div class="sk">含义</div><div class="sv">康宁数十亿美元光纤长单 + 工信部 3.8 万亿 6G 规划构成顶层与国际双重催化，AI 算力驱动 PCB / 存储 / 光模块全链景气上行。</div>
+            <div class="sk">持续性</div><div class="sv">持续利好 · 近两周政策、国际订单、AI 算力需求、龙头业绩与产品突破多条同向叠加，景气度持续强化。</div>
+            <div class="sk">影响</div><div class="sv"><span class="lead">龙头候选</span> 有研硅 688432(已动)、威尔高 301251、致尚科技 301486、依顿电子 603328、奥士康 002913；<span class="fol">跟涨候选</span> 远望谷 002161 <span class="moved">[龙头已动·同板块补涨待接力·位置低 pos60=0.86]</span>、惠科股份 001399 <span class="moved">[pos60=0.45]</span>、国博电子 688375 <span class="moved">[pos60=0.60]</span>。</div>
+            <div class="sk">可靠性</div><div class="sv">一手为主 · 康宁订单、工信部政策、公司公告均权威来源；PCB / 存储景气判断为机构观点需核实。</div>
+          </div>
+        </div>
+
+        <div class="mboard">
+          <div class="mb-h"><span class="bn">医药生物</span><span class="bt">利好</span><span class="mb-badge s">强</span><span class="cnt">关键事件 26 · 取 8 · 余 18 略</span></div>
+          <div class="mb-ev"><span class="dt">09-18</span>十部门联合发布《医药工业发展"十五五"规划》，创新药、疫苗、AI 制药列为重点方向 <span class="jd">〔利好·可信·影响大·执行高·一手〕</span></div>
+          <div class="mb-ev"><span class="dt">09-18</span>疫苗单列为医药"十五五"规划重点方向，mRNA 疫苗获明确支持 <span class="jd">〔利好·可信·影响大·执行高·一手〕</span></div>
+          <div class="mb-ev"><span class="dt">09-17</span>全球科技巨头携巨资入局 AI 制药，Anthropic、Google、字节、百度、英伟达均在列 <span class="jd">〔利好·可信·影响大·执行中·一手〕</span></div>
+          <div class="mb-ev"><span class="dt">09-17</span>全球 CXO 上半年投融资同比增近 60%，新一轮扩产周期或已开启 <span class="jd">〔利好·<b style="color:#e0b15a;font-weight:400">存疑</b>·影响大·执行中·二手〕</span></div>
+          <div class="mb-ev"><span class="dt">09-16</span>翰宇药业替尔泊肽仿制药申请获受理，参与全球首仿竞争 <span class="jd">〔利好·可信·影响大·执行中·一手〕</span></div>
+          <div class="mb-more">…及国家医保谈判密集竞价、GLP-1 三靶点临床受理等，实跑取前 8 条、余 18 条略。</div>
+          <div class="mb-syn">
+            <div class="sk">含义</div><div class="sv">十五五规划重磅落地，创新药 / 疫苗 / AI 制药获顶层设计加持，叠加 CXO 景气数据，板块迎强催化。</div>
+            <div class="sk">持续性</div><div class="sv">持续利好 · 近两日多条重磅政策叠加产业数据同向，十五五规划落地与 CXO 景气回暖形成强共振。</div>
+            <div class="sk">影响</div><div class="sv"><span class="lead">龙头候选</span> 国邦医药 605507(已动)、三力制药 603439(已动)、津药药业 600488、东亚药业 605177、凯莱英 002821；<span class="fol">跟涨候选</span> 南卫股份 603880 <span class="moved">[pos60=0.85]</span>、康惠股份 603139 <span class="moved">[pos60=0.85]</span>、美年健康 002044 <span class="moved">[pos60=0.83]</span>。</div>
+            <div class="sk">可靠性</div><div class="sv">一手政策文件为主，产业数据多为二手转载需核实口径；凯莱英 2500 亿在手订单构成与统计时点待核。</div>
+          </div>
+        </div>
+
+        <div class="mboard">
+          <div class="mb-h"><span class="bn">房地产</span><span class="bt">利好</span><span class="mb-badge m">中</span><span class="cnt">关键事件 14 · 中板块仅取影响大/中 7 · 取 7</span></div>
+          <div class="mb-ev"><span class="dt">09-18</span>十五五规划推动公积金扩容，叠加二手房交易占比破 50%，存量房时代来临，世联行三连板 <span class="jd">〔利好·可信·影响大·执行中·一手〕</span></div>
+          <div class="mb-ev"><span class="dt">09-18</span>我国房地产进入存量时代，绿地控股涨停、世联行回封涨停走出 3 连板 <span class="jd">〔利好·可信·影响大·执行高·一手〕</span></div>
+          <div class="mb-ev"><span class="dt">09-08</span>多地印发住建"十五五"规划提振板块，房地产 ETF 上涨 <span class="jd">〔利好·<b style="color:#e0b15a;font-weight:400">存疑</b>·影响大·执行中·二手〕</span></div>
+          <div class="mb-more">中档板块口径：只渲「影响大/中」事件（14 条筛到 7 条），弱事件不进卡，控制噪声。</div>
+          <div class="mb-syn">
+            <div class="sk">含义</div><div class="sv">十五五公积金扩容与存量房时代确立构成实质性政策利好，板块短期走强。</div>
+            <div class="sk">持续性</div><div class="sv">持续利好 · 近两日多条同向政策与市场数据叠加，推动板块走强。</div>
+            <div class="sk">影响</div><div class="sv"><span class="lead">龙头候选</span> 世联行 002285(已动)、万通发展 600246(已动)、先导基电 600641、*ST 数源 000909、盈新发展 000620；<span class="fol">跟涨候选</span> —。</div>
+            <div class="sk">可靠性</div><div class="sv">一手为主，政策与市场数据来源权威；先导基电氮化镓订单传闻为二手解读需核实。</div>
+          </div>
+        </div>
+
+      </div>
+
+      <!-- 其余 5 个利好板块（同结构，此处压成一行/板块，龙头候选原样） -->
+      <div class="mf-rest">
+        <div class="rh">当日另有 5 个利好板块（同为逐事件研判 + 含义/持续性/影响/可靠性四段，此处压缩为一行 · 龙头候选原样）：</div>
+        <div class="rrow"><span class="rn">非银金融</span><span class="rb s">强</span>29 条 · 取 8 —— 3570 亿注资落地、7 家券商净利翻倍；龙头 瑞达期货 002961、国泰海通 601211、方正证券 601901…</div>
+        <div class="rrow"><span class="rn">交通运输</span><span class="rb s">强</span>20 条 · 取 8 —— 油运运价逼近百万美元/天、招商轮船涨停（🌐 地缘溢价）；龙头 招商轮船 601872、招商公路 001965、XD 圆通速 600233(已动)…</div>
+        <div class="rrow"><span class="rn">综合</span><span class="rb s">强</span>18 条 · 取 8 —— 十部门创新药政策、首款 AI 原创药获批；龙头 药明康德 603259、近岸蛋白 688137、成都先导 688222(已动)…</div>
+        <div class="rrow"><span class="rn">国防军工</span><span class="rb m">中</span>19 条 · 仅取影响大/中 11 · 取 8 —— 商业航天星座组网、中船防务订单排至 2030；龙头 中船防务 600685、航天电子 600879(已动)、航发科技 600391…</div>
+        <div class="rrow"><span class="rn">传媒</span><span class="rb m">中</span>16 条 · 仅取影响大/中 11 · 取 8 —— 文旅五年规划、AI 影视商业化落地；龙头 中视传媒 600088、内蒙新华 603230(已动)、风语筑 603466…</div>
+      </div>
+
+      <!-- 国际/宏观事件汇总 -->
+      <div class="mf-intl">
+        <div class="ih"><span>🌐</span>国际/宏观事件汇总 · 让 AI 一眼看到当日国际面系统性利好/利空哪些板块</div>
+        <div class="irow"><span class="rn">电子（利好·强）</span>康宁再签数十亿美元光纤长单，AI 算力催生光纤景气周期 · 继 Meta / 亚马逊后再与 Verizon 签长单 · PCB 龙头拟砸 2500 万美元认购 H 股</div>
+        <div class="irow"><span class="rn">交通运输（利好·强）</span>TD3C 航线油运运价逼近百万美元/天、招商轮船涨停 · 中东"战争溢价"持续推升海运景气 · 招商轮船 26Q2 归母净利 +233% · 中远海能 +104% · VLCC 运价刷新高位</div>
+        <div class="ifoot">抽取口径：对事件文本启发式识别国际/宏观关键词（运价/地缘/长单/关税/加息…），命中即汇入；非精确分类，供 AI 快速定位系统性催化。</div>
+      </div>
+
+    </div>
+  </div>
+</section>
+
+<!-- ============ 05 原料从哪来 ============ -->
+<section>
+  <div class="sec-head">
+    <div class="n">05 / WHERE THE DATA COMES FROM</div>
+    <h2>原料从哪来</h2>
+    <p>金字塔的原料，由每天几个定时任务准备好。下面是它们分别在<b>什么时间</b>产出<b>什么</b>，供给金字塔的<b>哪一层</b>。</p>
+  </div>
+  <div class="feeders">
+    <div class="feeder">
+      <div class="fh"><div class="fn">收盘数据流水线</div><div class="ft">15:40 · 每交易日</div></div>
+      <div class="frow"><div class="fk">产出</div><div class="fv">全市场 K 线、十个策略的初选名单、每只候选的深度数据、多专家合议结论。</div></div>
+      <div class="supply">供给：<b>召回初选、逐票浓缩</b>（最主要的一份原料，约耗时两小时）</div>
+    </div>
+    <div class="feeder">
+      <div class="fh"><div class="fn">板块每日研判</div><div class="ft">17:30 · 每交易日</div></div>
+      <div class="frow"><div class="fk">产出</div><div class="fv">哪些板块热、哪些冷，每只股票在板块里的角色（龙头/中军/跟随），以及市场定调。</div></div>
+      <div class="supply">供给：<b>召回（板块成员）、打分（板块维度）、决策包（市场定调）</b></div>
+    </div>
+    <div class="feeder">
+      <div class="fh"><div class="fn">板块消息催化</div><div class="ft">14:00 · 每交易日</div></div>
+      <div class="frow"><div class="fk">产出</div><div class="fv">当天各板块的重要利好与利空，经 AI 分级整理（详见上一节“消息面”）。</div></div>
+      <div class="supply">供给：<b>打分（消息催化维度）</b></div>
+    </div>
+    <div class="feeder">
+      <div class="fh"><div class="fn">经验复盘沉淀</div><div class="ft">收盘后 · 每交易日</div></div>
+      <div class="frow"><div class="fk">产出</div><div class="fv">对当日选股的复盘，提炼成可复用的经验规则。</div></div>
+      <div class="supply">供给：<b>逐票浓缩（经验规则项）</b></div>
+    </div>
+  </div>
+  <p class="subhead" style="font-weight:400;color:var(--ink-3);font-size:13.5px;margin-top:26px">
+    另有一个旁路任务“市场宽度”（15:05），统计当天全市场涨跌家数，不参与选股，只用作事后给选股成绩打分时的<b style="color:var(--ink-2);font-weight:500">基准尺子</b>。</p>
+</section>
+
+<!-- ============ 06 闭环 ============ -->
+<section>
+  <div class="sec-head">
+    <div class="n">06 / THE FEEDBACK LOOP</div>
+    <h2>自我校准的闭环</h2>
+    <p>选完不是结束。系统持续记录每次选股的真实表现，并回过头调整打分的权重。</p>
+  </div>
+  <div class="loop">
+    <div class="loop-inner">
+      <div class="li"><div class="lt"><i></i>记分<span style="font-family:var(--mono);font-size:12px;color:var(--ink-3);font-weight:400">d3_score</span></div>
+        <p>跟踪每只买入股票在第 1、3、5 天的实际收益，统计命中率，并与市场基准对比，算出“跑赢大盘多少”。</p></div>
+      <div class="li"><div class="lt"><i style="background:var(--gold)"></i>回测调权<span style="font-family:var(--mono);font-size:12px;color:var(--ink-3);font-weight:400">d2_backtest</span></div>
+        <p>用历史数据检验每个打分维度与真实收益的相关性，为“该加重还是减轻某个维度”提供证据。</p></div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 07 附录 ============ -->
+<section>
+  <div class="sec-head">
+    <div class="n">07 / APPENDIX</div>
+    <h2>名词与清单</h2>
+    <p>正文尽量用了通俗说法，这里补充完整清单与术语解释，供需要深入的读者查阅。</p>
+  </div>
+
+  <div class="subhead">召回用到的十个选股策略 · 输出与分数口径</div>
+  <div class="glossary">
+    <table class="stable">
+      <tr><th style="width:150px">策略</th><th>输出内容</th><th style="width:96px">类型</th><th style="width:230px">分数口径与档位含义</th></tr>
+      <tr><td class="sn">多专家合议</td><td>Top20 排名清单 + 每票归因</td><td><span class="scored">带分</span></td><td>综合分 −1~+1：<b style="color:var(--ink)">≥+0.2 看多 / ≤−0.2 看空 / 其间中性</b>；可信度 0~1，<b style="color:var(--ink)">&lt;0.6 记为低可信</b></td></tr>
+      <tr><td class="sn">最强选股</td><td>入选名单 + 筹码获利率</td><td><span class="rule">规则</span></td><td>入选是规则判定；另附筹码获利率 0~100，<b style="color:var(--ink)">分 &gt;99 / 95–99 / 80–95 / ≤80 四档</b>，&gt;99 提示次日高开回落风险</td></tr>
+      <tr><td class="sn">动量组合</td><td>Top10 排名（动量分/年化/R²）</td><td><span class="scored">带分</span></td><td>动量分 = 年化收益×拟合优度，<span class="cal">无固定量纲，仅用于横截面相对排名</span></td></tr>
+      <tr><td class="sn">半导体多因子</td><td>Top8 排名（综合分+因子值）</td><td><span class="scored">带分</span></td><td>三因子标准分加权，<span class="cal">以 0 为中枢的相对分，无绝对档位，仅排名</span></td></tr>
+      <tr><td class="sn">反转低换手组合</td><td>Top20 排名（复合因子）</td><td><span class="scored">带分</span></td><td>反转+低换手标准分等权，<span class="cal">相对排名，无绝对档位</span></td></tr>
+      <tr><td class="sn">扣非质量</td><td>Top30 排名（综合分+各维）</td><td><span class="scored">带分</span></td><td>五维盈利质量标准分加权，<span class="cal">相对排名，无绝对档位</span></td></tr>
+      <tr><td class="sn">指标条件化状态排序</td><td>1/5/10 日各 Top10 概率榜<span class="gid" style="display:inline;color:var(--ink-3)"> · 收盘默认不启用</span></td><td><span class="scored">带分</span></td><td>上涨概率 0~100（实测多在 45–52%）；<span class="cal">是“状态格”概率、非个股独有，参考性有限</span></td></tr>
+      <tr><td class="sn">放量后缩量回踩</td><td>入选名单 + 量价明细</td><td><span class="rule">规则</span></td><td class="cal">条件全部满足即入选，无分数、无排名</td></tr>
+      <tr><td class="sn">最大范围选股</td><td>入选名单 + 明细</td><td><span class="rule">规则</span></td><td class="cal">条件全部满足即入选，无分数、无排名</td></tr>
+      <tr><td class="sn">量价放量</td><td>入选名单 + 命中的子信号</td><td><span class="rule">规则</span></td><td class="cal">命中任一放量子信号即入选，输出子信号标签，无分数</td></tr>
+    </table>
+  </div>
+
+  <div class="subhead">逐票浓缩用到的十项体检工具</div>
+  <div class="glossary"><div class="gtable">
+    <div class="grow"><div class="gk">量价自证<span class="gid">price_volume</span></div><div class="gv">近期价格与成交量表现——涨了多少、放量还是缩量、离近期高点多远。</div></div>
+    <div class="grow"><div class="gk">分层闸门<span class="gid">gate</span></div><div class="gv">按走势强弱把股票分成三档；当天涨停或股价过高的先排除。</div></div>
+    <div class="grow"><div class="gk">入场价位<span class="gid">entry_price</span></div><div class="gv">由程序给出建议买入价、止损价和不追高上限（AI 不改这些数字）。</div></div>
+    <div class="grow"><div class="gk">板块角色<span class="gid">sector_context</span></div><div class="gv">所在板块当前冷热，以及它在板块里是龙头、中军还是跟随。</div></div>
+    <div class="grow"><div class="gk">召回来源<span class="gid">shared_pool</span></div><div class="gv">标明这只股票是被哪几路来源选进候选池的。</div></div>
+    <div class="grow"><div class="gk">假利好识别<span class="gid">fake_good_news</span></div><div class="gv">识别“利好兑现后反而走弱”“利好后回吐”等疑似假利好的形态。</div></div>
+    <div class="grow"><div class="gk">财报排雷<span class="gid">financial_redflag</span></div><div class="gv">根据财报质量评分，标出财务高风险的股票。</div></div>
+    <div class="grow"><div class="gk">解禁风险<span class="gid">unlock_risk</span></div><div class="gv">临近的限售股解禁压力：还有多少天、占流通盘多大比例。</div></div>
+    <div class="grow"><div class="gk">减持风险<span class="gid">insider_reduction</span></div><div class="gv">大股东或高管近期减持动作，清仓式减持列为高风险。</div></div>
+    <div class="grow"><div class="gk">经验规则<span class="gid">experience_rules</span></div><div class="gv">把历史复盘沉淀的经验，按环节调取相关几条，附出处。</div></div>
+  </div></div>
+</section>
+
+<footer>
+  <div>金字塔选股 · 全流程说明</div>
+  <div class="mono">更新于 2026-09-19 · 四面卡真实产出(000504@09-17) · 市场消息面(09-18实跑)</div>
+</footer>
+
+</body>
+</html>
