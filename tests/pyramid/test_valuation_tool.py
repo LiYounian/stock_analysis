@@ -5,7 +5,7 @@ import pytest
 
 from tools.pyramid.registry import get
 from tools.pyramid.tools.valuation_tool import (
-    _PE参考档, _PB档, _PEG档, _pick_growth, ValuationTool,
+    _PE参考档, _PB档, _PEG档, _PE分位档, _pick_growth, ValuationTool,
 )
 from tools.pyramid._common import 格档, 字段
 import tools.pyramid.tools  # noqa: F401  触发 register
@@ -46,6 +46,18 @@ def test_PEG档位边界():
     assert 格档(1.2, _PEG档)[0] == "合理"
     assert 格档(2.0, _PEG档)[0] == "偏高"
     assert 格档(2.01, _PEG档)[0] == "高估"
+
+
+# ── PE 历史分位档边界锁（极低≤0.2/偏低≤0.4/中位≤0.6/偏高≤0.8/极高）──
+def test_PE分位档位边界():
+    assert 格档(0.10, _PE分位档)[0] == "极低"
+    assert 格档(0.20, _PE分位档)[0] == "极低"
+    assert 格档(0.201, _PE分位档)[0] == "偏低"
+    assert 格档(0.40, _PE分位档)[0] == "偏低"
+    assert 格档(0.60, _PE分位档)[0] == "中位"
+    assert 格档(0.80, _PE分位档)[0] == "偏高"
+    assert 格档(0.801, _PE分位档)[0] == "极高"
+    assert 格档(1.0, _PE分位档)[0] == "极高"
 
 
 # ── PEG 增速源优先级：financial.利润表摘要.归母净利增速 优先，缺则 fundamental.净利增速 ──
@@ -125,6 +137,45 @@ def test_PEG正常现算(tmp_path):
     assert peg["值"] == "1.50" and "偏高" in peg["口径"]
 
 
+# ── PE 历史分位落盘 → 读值出真档位（不再"待补落盘"）；值=分位×100，档位对齐 _PE分位档 ──
+def test_PE历史分位_落盘读值(tmp_path):
+    root = _write_fake(
+        tmp_path, "600003",
+        valuation={"pe_ttm": 30.0, "pb": 2.0, "mktcap_yi": 100.0,
+                   "pe_valid": True, "mode": "PE适用", "basis": "b", "口径提示": "t",
+                   "pe_percentile": 0.68, "pe_percentile_window": None},
+    )
+    r = ValuationTool().run(AS_OF, "600003", root=root)
+    pe分位 = next(it for it in r.字段解读 if it["名"] == "PE历史分位")
+    assert pe分位["值"] == "68.00"          # 0.68×100，round(...,1) 经 _值文
+    assert "偏高" in pe分位["口径"] and "窗口全历史" in pe分位["口径"]
+    assert "待补落盘" not in pe分位["口径"]   # 缺口已补
+
+
+def test_PE历史分位_窗口口径透传(tmp_path):
+    root = _write_fake(
+        tmp_path, "600004",
+        valuation={"pe_ttm": 12.0, "pb": 1.0, "mktcap_yi": 50.0,
+                   "pe_valid": True, "mode": "PE适用", "basis": "b", "口径提示": "t",
+                   "pe_percentile": 0.10, "pe_percentile_window": "近5年"},
+    )
+    r = ValuationTool().run(AS_OF, "600004", root=root)
+    pe分位 = next(it for it in r.字段解读 if it["名"] == "PE历史分位")
+    assert pe分位["值"] == "10.00" and "极低" in pe分位["口径"]
+    assert "窗口近5年" in pe分位["口径"]
+
+
+def test_PE历史分位_源缺标缺失不编(tmp_path):
+    root = _write_fake(
+        tmp_path, "600005",
+        valuation={"pe_ttm": 30.0, "pb": 2.0, "mktcap_yi": 100.0,
+                   "pe_valid": True, "mode": "PE适用", "basis": "b", "口径提示": "t"},
+    )
+    r = ValuationTool().run(AS_OF, "600005", root=root)
+    pe分位 = next(it for it in r.字段解读 if it["名"] == "PE历史分位")
+    assert pe分位["值"] == "NA" and "缺失" in pe分位["口径"]
+
+
 # ── 缺数据：不存在的 code → missing 不编 ──
 def test_缺valuation_missing():
     t = ValuationTool()
@@ -154,7 +205,8 @@ def test_run_真实票():
     assert r.面 == "基本面" and r.freshness == "fresh"
     txt = r.to_prompt()
     assert "PE(TTM)" in txt and "PEG(现算)" in txt
-    assert "待补落盘" in txt  # PE历史分位缺口显式标注
+    # PE历史分位缺口已补落盘：条目恒在（落盘→真档位/未落盘→"缺失"），但绝不再是"待补落盘"
+    assert "PE历史分位" in txt and "待补落盘" not in txt
     # 字段解读结构：每条四段齐全（契约 __post_init__ 已校验，这里再确认非空）
     assert len(r.字段解读) == 5
     for it in r.字段解读:

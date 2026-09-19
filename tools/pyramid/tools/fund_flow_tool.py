@@ -7,7 +7,7 @@
 2026-09-19_体检卡四面重构_口径贯通设计.md §2c/§2d/§3b/§4b（竞品=板块内相对·用户已拍板）。
 
 数据源（防未来·只用 as_of 当日及之前）：
-  - data/analysis/<as_of>/<code>.json 的 fundflow / tick / holder / lhb_veto / financing。
+  - data/analysis/<as_of>/<code>.json 的 fundflow / tick / holder / lhb_veto / financing / margin。
   - 主档 K 线 turnover 列（as_of 当日换手率）；净占比缺失时 amount 折算（口径日期成交额）。
   - config/code_industry.json（code→申万一级·单一真源）+ data/sector_roster/<板块>.json（竞品对照）。
 
@@ -17,7 +17,8 @@
 诚实边界（口径注明）：
   - 净占比 缺失率高（生产实测 ~57%）→ 按同定义折算(净流入/口径日成交额)，口径明标"折算"+新鲜度。
   - 换手率 单表·创业/科创天然偏高，意味段注明。
-  - 两融：financing 无结构化 margin 字段（collectors.margin 采集未落 record）→ 标"待补落盘"，不动 collectors。
+  - 两融：读顶层 margin 块（collectors.margin 补落盘·summarize_asof as-of 摘要）；无历史/截面
+    基线故不套涨跌档，如实报融资余额/融资买入/融券余量 + 口径日期(盘后T+1可用)，缺→NA 不编。
   - 竞品：板块内 = roster 精选成分(~18~20名)池内相对，非全行业；换手对照为 roster 快照口径。
     仅 10 个申万一级有 roster，无 roster / code_industry 未含 → NA 不编。
 """
@@ -309,13 +310,34 @@ def _f_竞品(code: str, sector: Optional[str], turnover: Optional[float],
     )
 
 
-def _f_两融() -> dict:
-    """两融：financing 无结构化 margin 字段（采集未落 record）→ 待补落盘·不动 collectors。"""
+def _f_两融(margin: dict) -> dict:
+    """两融：读顶层 margin 块（collectors.margin 补落盘·as-of 摘要）。缺 → NA 不编。
+
+    融资余额=杠杆多头资金存量；融券余量=融券做空存量（股）。无历史/截面基线，故不套涨跌档，
+    如实报规模 + 口径日期（融资盘后 T+1 可用）。
+    """
+    融资余额 = margin.get("融资余额")
+    融资买入额 = margin.get("融资买入额")
+    融券余量 = margin.get("融券余量")
+    date = margin.get("date")
+    有余额 = isinstance(融资余额, (int, float))
+    有买入 = isinstance(融资买入额, (int, float))
+    if not 有余额 and not 有买入:
+        return 字段(
+            名="两融", 值="NA",
+            口径="两融=collectors.margin 顶层块；该票无 ≤as_of 两融记录",
+            意味="两融维度暂无数据",
+        )
+    余额亿 = round(融资余额 / 1e8, 2) if 有余额 else None
+    买入亿 = round(融资买入额 / 1e8, 2) if 有买入 else None
+    券量万 = round(融券余量 / 1e4, 1) if isinstance(融券余量, (int, float)) else None
+    日注 = f"·口径{str(date)[:10]}(盘后T+1可用)" if date else ""
+    值 = f"融资余额{余额亿}亿" if 有余额 else f"融资买入{买入亿}亿"
     return 字段(
         名="两融",
-        值="NA",
-        口径="两融余额=collectors.margin 已采但未落 record（另一chip补落盘）",
-        意味="两融维度暂缺·待补落盘后接入",
+        值=值,
+        口径=f"融资买入{买入亿}亿·融券余量{券量万}万股{日注}",
+        意味="融资盘=杠杆多头资金存量,规模反映杠杆参与度",
     )
 
 
@@ -324,7 +346,7 @@ class FundFlowTool:
     name = "fund_flow"
     塔层 = "①塔基"  # 资金量能=选股地基（与 price_volume/gate 同族）
     面 = "资金面"
-    source = ("per-stock json fundflow/tick/holder/lhb_veto/financing + 主档K线turnover"
+    source = ("per-stock json fundflow/tick/holder/lhb_veto/financing/margin + 主档K线turnover"
               " + code_industry→sector_roster(竞品板块内相对)")
 
     def run(self, as_of: str, code: Optional[str] = None,
@@ -344,6 +366,7 @@ class FundFlowTool:
         tick = d.get("tick") or {}
         holder = d.get("holder") or {}
         lhb = d.get("lhb_veto") or {}
+        margin = d.get("margin") or {}   # 两融 as-of 摘要（顶层块，补落盘后可读）
         turnover = _turnover_asof(code, as_of, root)
         sector = _code_industry(root).get(code)
 
@@ -354,7 +377,7 @@ class FundFlowTool:
             _f_换手(turnover, code),
             _f_龙虎榜(lhb),
             _f_竞品(code, sector, turnover, root, as_of),
-            _f_两融(),
+            _f_两融(margin),
         ]
         # 机读 fields（供回测/审计；不进 prompt）
         fields: dict[str, Any] = {
@@ -369,6 +392,10 @@ class FundFlowTool:
             "龙虎榜triggered": bool(lhb.get("triggered")),
             "龙虎榜direction": lhb.get("direction"),
             "板块": sector,
+            "两融_融资余额": margin.get("融资余额"),
+            "两融_融资买入额": margin.get("融资买入额"),
+            "两融_融券余量": margin.get("融券余量"),
+            "两融_口径日期": margin.get("date"),
         }
         stale = str(fundflow.get("新鲜度") or "") == "陈旧"
         return ToolResult(

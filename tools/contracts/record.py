@@ -62,7 +62,7 @@ VINTAGE_NOTE = "口径提示"
 MISSING_REASON = "缺失原因"      # 仅 provenance.口径.<维>,且仅当 新鲜度=无数据 时出现
 # 应自证口径日期的块。附加可选:旧记录无这些字段仍合规,只在字段存在且非 null 时校验。
 VINTAGE_BLOCKS = ("snapshot", "valuation", "fundamental", "fundflow",
-                  "chip", "consensus", "holder", "tick")
+                  "chip", "consensus", "holder", "tick", "margin")
 
 # ————————————————————————————————————————————————
 # 约定(类型/量纲统一)
@@ -83,7 +83,7 @@ CONVENTIONS = {
 REQUIRED_TOP = ("schema_version", "meta", "events", "timeseries_refs", "provenance")
 OPTIONAL_TOP = ("snapshot", "valuation", "fundamental", "signals",
                 "prediction", "sentiment", "fundflow", "financial", "financing",
-                "chip", "consensus", "holder", "tick")
+                "margin", "chip", "consensus", "holder", "tick")
 TOP_LEVEL_KEYS = REQUIRED_TOP[:2] + OPTIONAL_TOP + REQUIRED_TOP[2:]
 
 # 口径三字段的统一说明片段(schema 文本里复用,避免 8 个块各写一套、写着写着就不一致)
@@ -101,8 +101,12 @@ RECORD_SCHEMA = {
              "industry": "str|null", "market": "str(A|HK)", "as_of": "date(YYYY-MM-DD)"},
     "snapshot": "null | {close, pct_chg, ma{ma5,ma10,ma20,ma60,排列}, "
                 "macd{dif,dea,macd,状态}, kdj{k,d,j,状态}, rsi{rsi6,rsi12,rsi24}, "
+                "boll{上轨,中轨,下轨,带宽,percent_b,位置∈破上轨/触上轨/中性/触下轨/破下轨/数据不足,"
+                "状态(=位置别名,供工具读),挤压:bool}(BOLL ±2σ 通达信口径;缺则该子键不出现,旧记录兼容), "
                 "bias20, vol_ratio, vol_state, " + _VINTAGE_DOC + "(=最后一根K线bar日)}",
     "valuation": "null | {pe_ttm, pb, mktcap_yi(亿), 报告期, pe_valid:bool, ..., "
+                 "pe_percentile:0~1|null(PE 历史分位=现值 PE(TTM) 在自身历史 PE 序列中的 ≤x 占比;"
+                 "越低越接近自身估值底部), pe_percentile_window:str|null(分位窗口口径,null=全历史), "
                  "报告期滞后:bool(与披露日锚定的 financial.报告期 交叉核对;True=整块估值滞后一个"
                  "报告期,PE/市值按旧报告期口径,量级可能完全不同), " + _VINTAGE_DOC
                  + "(=fundamental raw 命中的分区日)}",
@@ -135,6 +139,11 @@ RECORD_SCHEMA = {
                  "(D·存量融资与解禁固定一问;collectors.equity_financing。**防未来函数**:每条明细带"
                  "`披露日`,只保留 披露日 ≤ as_of 的记录,被剔除条数进 `剔除`(显式降级不静默);"
                  "解禁日本身可以是未来日期——那是已披露的未来安排,不是未来价格。旧记录无此块/null 仍合规)",
+    "margin": "null | {code, date(两融记录交易日 T·盘后披露), 融资买入额, 融资余额, 融券余量, "
+              "market, visible_after_close:bool(盘后披露→T+1 才可用的防未来标记), " + _VINTAGE_DOC
+              + "(=记录自带 date)}"
+              "(两融 as-of 摘要;collectors.margin 已按 code 落库,summarize_asof 取 ≤as_of 最新一日。"
+              "**防未来函数**:融资盘后 T+1 披露,summarize_asof 剔除 date>as_of 的记录;旧记录无此块/null 仍合规)",
     "signals": "null | {trend{评级∈趋势评级,得分,依据[]}, "
                "reversal{拐点标签∈拐点标签,拐点评分,...}, ob_os{verdict∈超买超卖,resonance,per_indicator}}",
     "prediction": "null | {现价, atr, atr_pct, 近三次放量[], 支撑位[], 压力位[], "
@@ -193,7 +202,7 @@ RECORD_SCHEMA = {
                   "**陈旧**(有值但是旧的)严格区分,下游处置不同;「无数据」再由 `缺失原因` 分成"
                   "**未采集**(没落过盘 → 该去补采/查采集失败,是我们的问题)与 **源无数据**"
                   "(落了但源里确实没这票 → 合法降级,补采也没有,别重试烧额度)。维:tech/fundamental/valuation/"
-                  "fundflow/chip/consensus/holder/tick/announcements/financial/financing/sentiment"
+                  "fundflow/chip/consensus/holder/tick/announcements/financial/financing/margin/sentiment"
                   "(sentiment 原样镜像其自身的 采集日期/新鲜度——它有自己的新鲜度窗口策略,"
                   "不用本层的尺子重判,否则一个块会挂两个矛盾结论)。"
                   "向后兼容:既有布尔键类型不变,新信息只挂在 `口径` 下)",

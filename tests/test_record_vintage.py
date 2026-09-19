@@ -271,9 +271,10 @@ def test_只剩源不可得标记的空块_provenance必须报False():
 def test_provenance口径覆盖全部会过期的维():
     """口径子字典必须覆盖所有会过期的维,漏一个就等于那一维继续静默。"""
     assert set(rc.VINTAGE_BLOCKS) <= {
-        "snapshot", "valuation", "fundamental", "fundflow", "chip", "consensus", "holder", "tick"}
+        "snapshot", "valuation", "fundamental", "fundflow", "chip", "consensus", "holder",
+        "tick", "margin"}
     expect = {"tech", "fundamental", "valuation", "fundflow", "chip", "consensus", "holder",
-              "tick", "announcements", "financial", "financing", "sentiment"}
+              "tick", "announcements", "financial", "financing", "margin", "sentiment"}
     import inspect
     src = inspect.getsource(sz.build_record)
     for dim in expect:

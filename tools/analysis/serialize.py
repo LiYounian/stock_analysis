@@ -358,6 +358,17 @@ def build_record(code: str, as_of: str) -> dict:
     except Exception:
         financing_block = None
 
+    # 两融(margin·补落盘):collectors.margin 已按 code 落库(store raw kind=margin),此前有意
+    # 不进 record(见下方口径戳注释),现按 consensus 同款挂进**顶层 margin 块**+_stamp。
+    # 防未来函数:summarize_asof 取 ≤as_of 最新一日(融资盘后 T+1 披露,记录 visible_after_close 已标)。
+    margin_block = None
+    try:
+        from tools.collectors import margin as _margin
+        _mrecs = _safe(lambda: _margin.load_margin(code))
+        margin_block = _safe(lambda: _margin.summarize_asof(_mrecs, as_of)) if _mrecs else None
+    except Exception:
+        margin_block = None
+
     has_tech = "signal" in tech
     snapshot = None
     signals = None
@@ -368,6 +379,12 @@ def build_record(code: str, as_of: str) -> dict:
             "rsi": tech["rsi"], "bias20": tech["bias"]["bias20"],
             "vol_ratio": tech["vol"]["量比"], "vol_state": tech["vol"]["状态"],
         }
+        # BOLL(±2σ 通达信口径):technical.compute 已算 tech["boll"]，此前构造 snapshot 时漏挑。
+        # 源产 `位置`(破上轨/触上轨/中性/触下轨/破下轨)= 状态语义；工具读 `状态`，故加同值别名，
+        # 不动 technical._boll_state。整块随 snapshot 一起盖 price_vintage 口径戳(纯 K线派生)。
+        _boll = tech.get("boll")
+        if isinstance(_boll, dict) and _boll:
+            snapshot["boll"] = {**_boll, "状态": _boll.get("位置")}
         signals = {"trend": tech["signal"], "reversal": tech["reversal"], "ob_os": tech["ob_os"]}
 
     # 情绪面(P2-C,LLM;需先 run.py sentiment 生成,否则 None)
@@ -393,6 +410,10 @@ def build_record(code: str, as_of: str) -> dict:
         valuation_block = {
             "pe_ttm": fund.get("PE_TTM"), "pb": fund.get("PB"),
             "mktcap_yi": fund.get("总市值"), "报告期": fund.get("报告期"), **sw,
+            # PE 历史分位:fundamental._valuation_scalars 已算(现值在整条 PE 序列中的 ≤x 占比,0~1),
+            # 现成于 fund["PE分位"]，此前构造 valuation_block 时漏挑。窗口 None=全历史(默认口径)。
+            "pe_percentile": fund.get("PE分位"),
+            "pe_percentile_window": fund.get("PE分位窗口"),
         }
     fundamental_block = {k: fund.get(k) for k in
                          ("营收", "净利", "营收增速", "净利增速", "ROE", "毛利率", "净利率", "负债率",
@@ -439,8 +460,8 @@ def build_record(code: str, as_of: str) -> dict:
     #   · lhb_veto:走 lhb_asof(list_date < as_of 严格闸门),按构造无法沿用未来/旧值;
     #   · events(公告):每条自带 date,列表无处盖块级戳 → 口径进 provenance.口径;
     #   · signals/prediction/council:纯派生量,口径 = 其输入块的口径,不另立日期(否则两处会打架);
-    #   · margin(两融):当前**不进 record**(只有 collectors.margin + analysis.margin_divergence
-    #     用),没有产出可被误当「今日」,故本轮不处理;若哪天挂进 record,按 consensus 同款处理。
+    #   · margin(两融):现已挂进**顶层 margin 块**,按 consensus 同款盖口径戳——口径日期 = 该两融
+    #     记录自带的 date(盘后 T 披露那天,非分区日),summarize_asof 已做 ≤as_of 防未来过滤。
     price_vintage = _last_bar_date(kdf)
     _stamp(snapshot, price_vintage, as_of, what="价量快照")
     _stamp(flow, flow_vintage, as_of,
@@ -452,6 +473,9 @@ def build_record(code: str, as_of: str) -> dict:
     _stamp(holder_block, holder_vintage, as_of, what="股东户数")
     tick_vintage = _raw_vintage("tick_summary", code, as_of) if tick_block else None
     _stamp(tick_block, tick_vintage, as_of, what="盘口微观结构")
+    # 两融:口径日期 = 该记录自带的 date(盘后 T 披露那天),summarize_asof 已 ≤as_of 防未来。
+    margin_vintage = (margin_block or {}).get("date") if margin_block else None
+    _stamp(margin_block, margin_vintage, as_of, what="两融(融资盘后T+1可用)")
     # 报告期滞后交叉核对:以披露日锚定的 financial 块为参照系(问题②)
     _lag = _period_lag_note((valuation_block or {}).get("报告期"),
                             (financial_block or {}).get("报告期"))
@@ -482,6 +506,7 @@ def build_record(code: str, as_of: str) -> dict:
         "tick": tick_block,             # 盘口微观结构摘要(逐笔;主买占比/净主动买量/大单)
         "lhb_veto": lhb_veto_block,     # 龙虎榜入选否决 as-of 裁决(风控微结构轴;缺→None)
         "financing": financing_block,   # 存量融资与解禁固定一问(存续可转债/定增/解禁;缺→None)
+        "margin": margin_block,         # 两融 as-of 摘要(融资余额/融资买入额/融券余量;缺→None)
         "events": events,
         "timeseries_refs": {
             "kline": f"data/raw/kline/{code}.parquet",
@@ -497,7 +522,7 @@ def build_record(code: str, as_of: str) -> dict:
                        "announcements": len(anns), "fundflow": _has_data(flow),
                        "chip": _has_data(chip_block), "consensus": _has_data(consensus_block),
                        "holder": _has_data(holder_block), "tick": _has_data(tick_block),
-                       "financing": _has_data(financing_block),
+                       "financing": _has_data(financing_block), "margin": _has_data(margin_block),
                        # 情绪打分**质量三态**(不再是隐式布尔/仅镜像新鲜度):取自 B1 的 sentiment.质量
                        # {ok|partial|unknown|missing}。unknown=打分失败(净情绪已置 null,不可信);
                        # missing=无情绪输入;partial=部分层失败;ok=可信。下游据此打置信度折价/门控。
@@ -536,6 +561,10 @@ def build_record(code: str, as_of: str) -> dict:
                                _raw_vintage("equity_financing", code, as_of)
                                if financing_block else None, as_of,
                                dim="financing", code=code),
+                           # 两融口径日期 = 记录自带 date(盘后 T),与块级 _stamp 同源。
+                           "margin": _provenance_dim(
+                               margin_block, margin_vintage, as_of,
+                               dim="margin", code=code),
                            # sentiment 有**自己的**新鲜度窗口策略(SENTIMENT_MAX_STALE_DAYS /
                            # FRESHNESS_MODE),这里原样镜像它的结论,绝不用本模块的尺子重判——
                            # 否则一个块会同时挂两个互相矛盾的新鲜度。
