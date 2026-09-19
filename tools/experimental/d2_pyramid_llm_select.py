@@ -49,8 +49,14 @@ def load_code_names() -> dict:
 # ---------------------------------------------------------------------------
 # 1. 决策包 + 每票结构化字段(骨架分/子分/entry_price/量价/板块)
 # ---------------------------------------------------------------------------
-def collect_package(as_of: str, root: Optional[str], top_n: int) -> dict:
-    """组装决策包 + 每票结构化字段(供回填,不靠解析文本)。"""
+def collect_package(as_of: str, root: Optional[str], top_n: int,
+                    no_digest: bool = False) -> dict:
+    """组装决策包 + 每票结构化字段(供回填,不靠解析文本)。
+
+    no_digest(A/B 只读开关):渲染前清空每张 card 的新闻digest行,
+    使决策包退回 pre-W3-A 无 digest 形态。**不改生产 d2_package**——
+    render_package 的 out.extend(digest or []) 自然渲染空。
+    """
     from tools.pyramid import d2_package as P
     from tools.pyramid import registry
     import tools.pyramid.tools  # noqa: F401
@@ -58,6 +64,11 @@ def collect_package(as_of: str, root: Optional[str], top_n: int) -> dict:
     # canonical 钉死:读同一份 金字塔决策包.canonical.json(缺失时现算+落盘),消除与
     # Claude SKILL 读的 md 之间因底层重跑而起的骨架分漂移;要强制最新走 __main__ --rebuild。
     pkg = P.get_canonical_package(as_of, root=root, top_n=top_n)
+    # A/B 只读:no_digest 时清空返回包(canonical 或现算)里每张 card 的新闻digest行,
+    # 退回 pre-W3-A 无 digest 形态;canonical 包的候选卡片同样带 新闻digest_lines,照常生效。
+    if no_digest:
+        for card in pkg.get("候选卡片") or []:
+            card["新闻digest_lines"] = []
     pkg_text = P.render_package(pkg)
 
     facts = {}
@@ -110,6 +121,31 @@ SYSTEM_PROMPT = """你是金字塔选股流程的"浓缩块合成层"分析师�
   方向档与其"⚠️效力诚实标注",不得把大盘上行概率读成个股必涨、不得把"高概率"读成"能赚钱";
 - 诚实不硬凑:池内够格的买入不足 2~3 只时,如实只给 N 只并说明其余为何不够格,
   不为凑满名额纳入证据不足的票。
+
+诚实边界:本版宏观 regime 用板块净催化代理、财报排雷用假利好+经验代理(专用工具未建),
+不得谎称已覆盖;经验库对多数票命中 0 条属正常,不得据此编造规则。"""
+
+
+# ── A/B 只读对照:pre-W3-B 基线 SYSTEM_PROMPT(= 现状减去"辩证核对"段)──────────
+# 仅供 --baseline-prompt 做效果验证 A/B 用;取自 git dec442f^(W3-B 增补辩证核对段之前),
+# 一字不改地保留当时的闭卷骨架约束,不引用"新闻digest"。现有 SYSTEM_PROMPT 不受影响。
+SYSTEM_PROMPT_BASELINE = """你是金字塔选股流程的"浓缩块合成层"分析师。上游程序已完成两件事:
+①独立全A召回池 → 五基石加权打分 → 得到"骨架排序"(数字全部由程序产出、可复现);
+②对骨架 top-N 每票拼好了全部工具的浓缩块(量价/闸门/板块/经验/假利好/入场价位)。
+
+你的职责是在骨架之上做**受限调整**,把骨架排序落成最终选股。严守边界:
+
+能做:
+- 在给定的骨架 top-N 池**之内**选出 2~3 只买入 + 2~3 只规避;
+- 相对骨架序位做小幅升降(哑铃/降beta/回避高位与过热拥挤的思路);
+- 否决某票并给理由(如浓缩块显示位置过高、板块过热拥挤、财报/假利好隐患、趋势未修复等);
+- 为每只买入写"入场逻辑与纪律""退出条件",为每只规避写"验什么""触发纳入/放弃条件"。
+
+不能做:
+- 不得产出任何价位或分数数字(价位由 entry_price 程序回填、分数由打分程序产出);
+- 不得把 top-N 池**之外**的票加进来(独立召回的边界);
+- 每个买入/规避/否决的判断都必须**引用某工具浓缩块里的具体一行**作为证据,不做无证据主观加塞;
+- 买入与规避名单不得重叠。
 
 诚实边界:本版宏观 regime 用板块净催化代理、财报排雷用假利好+经验代理(专用工具未建),
 不得谎称已覆盖;经验库对多数票命中 0 条属正常,不得据此编造规则。"""
@@ -379,17 +415,24 @@ def main():
     ap.add_argument("--out-md", required=True)
     ap.add_argument("--out-json", default=None)
     ap.add_argument("--dump-raw", default=None, help="落 LLM 原始回复(排查用)")
+    # ── A/B 只读对照开关(默认关=现状加厚 B臂;不改打分/召回/落盘逻辑)──
+    ap.add_argument("--no-digest", action="store_true",
+                    help="A/B:决策包不含新闻digest(退回 pre-W3-A 形态)")
+    ap.add_argument("--baseline-prompt", action="store_true",
+                    help="A/B:用 pre-W3-B 基线 SYSTEM_PROMPT(无辩证核对段)")
     a = ap.parse_args()
 
-    print(f"[1/4] 组装决策包 as_of={a.as_of} top{a.top_n} ...", file=sys.stderr)
-    C = collect_package(a.as_of, a.data_root, a.top_n)
+    print(f"[1/4] 组装决策包 as_of={a.as_of} top{a.top_n} "
+          f"(no_digest={a.no_digest}) ...", file=sys.stderr)
+    C = collect_package(a.as_of, a.data_root, a.top_n, no_digest=a.no_digest)
     pkg, facts, top_codes = C["pkg"], C["facts"], C["top_codes"]
     skel, ov = pkg["骨架"], pkg["市场定调"]
     weights = skel.get("权重", {})
     names = load_code_names()
 
-    print(f"[2/4] 调 {a.provider} 做受限调整 ...", file=sys.stderr)
-    system = SYSTEM_PROMPT
+    system = SYSTEM_PROMPT_BASELINE if a.baseline_prompt else SYSTEM_PROMPT
+    print(f"[2/4] 调 {a.provider} 做受限调整 "
+          f"(prompt={'baseline' if a.baseline_prompt else 'current'}) ...", file=sys.stderr)
     user = build_user_prompt(C["pkg_text"], top_codes)
     text, usage, model_id = call_llm(a.provider, system, user)
     if a.dump_raw:
