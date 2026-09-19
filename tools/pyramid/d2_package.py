@@ -8,9 +8,11 @@
 """
 from __future__ import annotations
 
-from typing import Optional
+from typing import Callable, Optional
+import hashlib
 import json
 import os
+from datetime import datetime
 
 from tools.pyramid.指标词表 import render_词表, render_消息面词表, render_大盘词表  # v2：统一指标词表·喂 prompt 开头一次
 
@@ -593,6 +595,128 @@ def build_package(as_of: str, root: Optional[str] = None, top_n: int = 15,
         "候选卡片": cards,
         "top_n": top_n,
     }
+
+
+# ── 决策包 canonical 钉死（消症状:多快照漂移）────────────────────────────
+# 背景:build_package 每次现算;两条消费线(Claude SKILL 读/生成 金字塔决策包_top<N>.md、
+# d2_pyramid_llm_select.collect_package→build_package)在不同时刻各算各的,底层输入若在两次
+# 之间被重跑刷新,就会算出不同骨架分 → 同一 as_of 的 md 与 DeepSeek/千问 json 对不上号。
+# 根治:落一份 canonical 钉死包,所有消费方读同一份;并内嵌输入指纹,底层漂移时告警(不自动重算)。
+_CANONICAL_NAME = "金字塔决策包.canonical.json"
+_CANONICAL_SCHEMA = "pyramid_package_canonical_v1"
+
+
+def _analysis_dir(root: Optional[str], as_of: str) -> str:
+    base = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    return os.path.join(root or base, "data", "analysis", as_of)
+
+
+def _inputs_fingerprint(root: Optional[str], as_of: str) -> str:
+    """对 data/analysis/<as_of>/*.json(排除 canonical 自身)算稳定指纹。
+
+    sha256 over 排序后 (相对名, size, sha1(内容)) —— 底层任一输入 json 内容/尺寸变化即变。
+    best-effort:目录缺失/读失败返 ""(空指纹不参与漂移判定,不误报)。
+    """
+    d = _analysis_dir(root, as_of)
+    try:
+        entries = []
+        for name in sorted(os.listdir(d)):
+            if not name.endswith(".json") or name == _CANONICAL_NAME:
+                continue
+            p = os.path.join(d, name)
+            if not os.path.isfile(p):
+                continue
+            with open(p, "rb") as f:
+                content = f.read()
+            entries.append((name, len(content), hashlib.sha1(content).hexdigest()))
+        entries.sort()
+        h = hashlib.sha256()
+        for name, size, sha1 in entries:
+            h.update(f"{name}\0{size}\0{sha1}\n".encode("utf-8"))
+        return h.hexdigest()
+    except Exception:
+        return ""
+
+
+def _package_to_jsonable(pkg: dict) -> dict:
+    """把 pkg 转成可 json 序列化:骨架的 排序/排雷否决 是 row 对象列表,落盘前替成 [None]*n。
+
+    已核实全部消费方(render_package、d2_pyramid_llm_select.render_md)对这两个列表**只读 len**,
+    计数另有 排序票数/否决票数/池规模 等标量键(build_skeleton 显式产出,JSON 可存),故置 None
+    不丢任何被消费的信息;reload 后 render_package 用 len([None]*n)=n 仍得正确张数。
+    """
+    out = dict(pkg)
+    skel = pkg.get("骨架")
+    if isinstance(skel, dict):
+        skel2 = dict(skel)
+        for k in ("排序", "排雷否决"):
+            v = skel2.get(k)
+            if isinstance(v, list):
+                skel2[k] = [None] * len(v)
+        out["骨架"] = skel2
+    return out
+
+
+def _atomic_write_json(path: str, obj: dict, log: Callable[[str], None] = print) -> bool:
+    """原子落盘(tmp + os.replace),避免并发消费方读到半截文件。失败 best-effort 不外溢。"""
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        tmp = path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(obj, f, ensure_ascii=False, indent=2)
+        os.replace(tmp, path)
+        return True
+    except Exception as e:
+        log(f"!! canonical 决策包落盘失败:{e}")
+        try:
+            if os.path.exists(tmp):
+                os.remove(tmp)
+        except OSError:
+            pass
+        return False
+
+
+def get_canonical_package(as_of: str, root: Optional[str] = None, top_n: int = 15,
+                          rebuild: bool = False, log: Callable[[str], None] = print,
+                          **build_kwargs) -> dict:
+    """决策包 canonical 钉死入口:所有消费方走这里,读/生成同一份 金字塔决策包.canonical.json。
+
+    - 文件存在 且 top_n 匹配 且 非 rebuild → 直接读它返回(钉死,消除多快照漂移);
+      读时算当前输入指纹与内嵌 meta 不符 → log 告警「底层已漂,仍用钉死包(生成于X),要最新加 --rebuild」
+      但**不自动重算**(钉死语义:一天内所有消费方看同一份)。
+    - 缺失 / rebuild=True / top_n 不符 → build_package 现算 + 盖 _canonical 元 + 原子落盘 + 返回。
+    """
+    path = os.path.join(_analysis_dir(root, as_of), _CANONICAL_NAME)
+
+    if not rebuild and os.path.isfile(path):
+        pkg = None
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                pkg = json.load(f)
+        except Exception as e:
+            log(f"!! 读 canonical 决策包失败({e})·改现算重建")
+            pkg = None
+        if isinstance(pkg, dict) and pkg.get("top_n") == top_n:
+            meta = pkg.get("_canonical") or {}
+            cur = _inputs_fingerprint(root, as_of)
+            old = meta.get("输入指纹")
+            if cur and old and cur != old:
+                log(f"⚠️底层输入已漂(指纹 {old[:12]}→{cur[:12]}),仍用钉死决策包"
+                    f"(生成于 {meta.get('生成时间')});要最新请加 --rebuild")
+            return pkg
+        if isinstance(pkg, dict):
+            log(f"canonical top_n={pkg.get('top_n')} 与请求 {top_n} 不符·重建")
+
+    pkg = build_package(as_of, root=root, top_n=top_n, **build_kwargs)
+    pkg = _package_to_jsonable(pkg)
+    pkg["_canonical"] = {
+        "schema": _CANONICAL_SCHEMA,
+        "生成时间": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "输入指纹": _inputs_fingerprint(root, as_of),
+        "top_n": top_n,
+    }
+    _atomic_write_json(path, pkg, log=log)
+    return pkg
 
 
 def _sub_txt(subs) -> str:
