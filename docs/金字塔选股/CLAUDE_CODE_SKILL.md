@@ -31,9 +31,9 @@ description: 金字塔选股·Claude Code 合成路径:读金字塔决策包→�
 - ④宏观/板块：`sector_context`(板块/冷热拥挤/RS分位/角色/板块内排名/净催化)
 - 经验：`experience_rules`(命中经验规则；可带 `--stage 召回|排雷|排序|价位|择时|通则` 按环节查)
 
-> W1 交付后新增（用前先 `list` 确认已注册 `●`，未注册就退回读原文，见第二节）：
-> - `news_raw`：按 code 查新闻原文条目（title/source/publish_time/benefit_label/abstract/url），供**查证消息来源、辨真假利好**。
-> - `market_forecast`：查当日大盘定调（β基准/上行概率分位/分歧标记/广度情绪资金快照/效力 caveat）。
+> 消息面/宏观查证工具（**已可用**，`list` 可见 `●`）：
+> - `news_raw`（②消息）：按 code 查新闻原文条目（title/source/publish_time/benefit_label/abstract/url）。默认吐浓缩块（总条数+利好/利空/中性计数+最近 5 条），加 `--json` **dump 全量含 url/source** 到 `fields`，供**查证消息来源、辨真假利好**。
+> - `market_forecast`（④宏观）：查当日大盘定调（选股用β基准 proxy / 上行概率分位 / 分歧标记 / 广度情绪资金快照 / 维度贡献 / 效力诚实 caveat）。
 
 ### 2. 通用能力
 - **Read**：读本地成果原文（第二节的固定地点），尤其决策包 md、per-stock json、新闻原文。
@@ -55,7 +55,7 @@ description: 金字塔选股·Claude Code 合成路径:读金字塔决策包→�
 | **市场综合研判** | `data/analysis/<D>/market_daily.md` | 宏观+大盘档+重点/规避板块的消息面综合背景 |
 | **板块聚焦** | `data/analysis/<D>/sector_focus.json`、`sector_regime.json` | 风险偏好/宏观情景/重点板块池（作板块结构与催化战场背景） |
 | **板块催化原文** | `data/sector_news/catalyst_<D>.json`、`analyzed/<板块>.json` | 板块方向/强弱/可信度/来源/关键事件（查证板块级利好真伪） |
-| **个股新闻原文** | `data/raw/<D>/baidu_news/<code>.json`、`news/<code>.json` | 逐条 title/source/publish_time/benefit_label/abstract/url。**辩证查证的物质基础**：看来源、看是否兑现、辨真假利好。优先用 `news_raw` 工具，未注册则 Read 此文件 |
+| **个股新闻原文** | `data/raw/<D>/baidu_news/<code>.json`、`news/<code>.json` | 逐条 title/source/publish_time/benefit_label/abstract/url。**辩证查证的物质基础**：看来源、看是否兑现、辨真假利好。优先用 `news_raw` 工具（加 `--json` 取全量 url/source）；也可直接 Read 此文件 |
 
 ---
 
