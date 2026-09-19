@@ -268,3 +268,38 @@ def test_金融业负债率不透行业档(tmp_path):
     负债 = next(it for it in r.字段解读 if it["名"] == "负债率")
     assert "金融业口径" in 负债["口径"] and "勿套档" in 负债["意味"]
     assert "本行业" not in 负债["口径"]
+
+
+# ── 缺口三①:通用兜底口径明标(行业专家=null 但有 quality/五维 → 打标'通用测算',非数据缺失)──
+def test_通用兜底_明标通用口径(tmp_path):
+    """行业专家=null(如综合类 000504)但已算出 quality/five_dims:财报质量汇总打标'通用口径'+
+    意味标'五维为通用测算,非数据缺失',避免体检卡'显糙'被误读成缺数据。"""
+    root = _write_fake(
+        tmp_path, "600040",
+        fundamental={"营收": 1e9, "净利": 1e8, "营收增速": 5.0, "净利增速": 5.0,
+                     "ROE": 4.0, "毛利率": 20.0, "净利率": 9.0, "负债率": 60.0, "每股股利": None},
+        financial={"行业专家": None, "评级": "中", "quality_score": 55.0,
+                   "报告期": "2026-06-30", "five_dims": {"成长": 50, "质量": 40, "健康": 60,
+                                                       "运营": 55, "回报": 30}},
+    )
+    r = GrowthQualityTool().run(AS_OF, "600040", root=root)
+    汇总 = next(it for it in r.字段解读 if it["名"] == "财报质量汇总")
+    assert "通用口径(无行业专属专家)" in 汇总["口径"]
+    assert "通用测算" in 汇总["意味"] and "非数据缺失" in 汇总["意味"]
+    assert r.fields.get("通用兜底") is True and r.fields.get("行业专家") is None
+
+
+def test_行业命中_不打通用兜底标(tmp_path):
+    """行业专家命中(如电子)→ 不打通用兜底标(行为不变)。"""
+    root = _write_fake(
+        tmp_path, "600041",
+        fundamental={"营收": 1e9, "净利": 1e8, "营收增速": 5.0, "净利增速": 5.0,
+                     "ROE": 4.0, "毛利率": 20.0, "净利率": 9.0, "负债率": 60.0, "每股股利": None},
+        financial={"行业专家": "电子", "评级": "中", "quality_score": 55.0,
+                   "报告期": "2026-06-30", "five_dims": {"成长": 50, "质量": 40, "健康": 60,
+                                                       "运营": 55, "回报": 30}},
+    )
+    r = GrowthQualityTool().run(AS_OF, "600041", root=root)
+    汇总 = next(it for it in r.字段解读 if it["名"] == "财报质量汇总")
+    assert "通用口径" not in 汇总["口径"] and "通用测算" not in 汇总["意味"]
+    assert r.fields.get("通用兜底") is False

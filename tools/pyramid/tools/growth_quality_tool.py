@@ -236,12 +236,18 @@ class GrowthQualityTool:
         报告期 = fin.get("报告期")
         报告类型 = fin.get("报告类型") or _报告类型(报告期)
         披露日 = fin.get("披露日")
+        # 缺口三①:行业专家=null → 通用兜底(五维/quality 为通用测算,非行业专属阈值)。
+        # 明确打标,避免"通用兜底"被误读成"数据缺失/显糙"(如综合类 000504)。改展示不改模型。
+        行业专家 = fin.get("行业专家")
+        通用兜底 = bool((isinstance(quality, (int, float)) or 评级) and not 行业专家)
+        兜底档注 = "·通用口径(无行业专属专家)" if 通用兜底 else ""
+        兜底意味 = "；五维/quality 为**通用测算**,非本行业专属阈值(该行业暂无专家,非数据缺失)" if 通用兜底 else ""
         if isinstance(quality, (int, float)) or 评级:
             q档, _ = 格档(quality, _QUALITY档) if isinstance(quality, (int, float)) else ("NA", "")
             items.append(字段(
                 "财报质量汇总", f"{评级}·quality{quality}",
-                f"{q档}·{报告类型}{报告期}·披露{披露日}",
-                f"影响：{_五维综合(dims, q档)}",
+                f"{q档}·{报告类型}{报告期}·披露{披露日}{兜底档注}",
+                f"影响：{_五维综合(dims, q档)}{兜底意味}",
             ))
         else:
             items.append(字段("财报质量汇总", None, "无 financial 评级/quality",
@@ -284,6 +290,8 @@ class GrowthQualityTool:
                 "评级": 评级, "quality_score": quality, "报告期": 报告期,
                 "报告类型": 报告类型, "披露日": 披露日,
                 "five_dims": dims, "利润表摘要": 摘要, "回报维": 回报维,
+                "行业专家": 行业专家, "通用兜底": 通用兜底,   # 缺口三①:通用兜底口径标记(展示层据此提示)
+                "行业评分档": 行业档 or None,                # 缺口二:透传源(便于 web/下游复用)
             },
             freshness="fresh", 防未来=True, source=self.source, 面=self.面,
         )
