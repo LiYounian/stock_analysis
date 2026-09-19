@@ -170,10 +170,19 @@ def build_package(as_of: str, root: Optional[str] = None, top_n: int = 15,
 
     # shared_pool 不逐票重扫（每次 scan_kline 要 14s）；卡头用骨架已存的来源标签直接渲染。
     # 四面重排：各工具块按其 .面 分组，d2_package 只按面板顺序排版（拼装层不写口径）。
-    tool_names = ["price_volume", "gate", "entry_price",
-                  "financial_redflag", "insider_reduction",
-                  "unlock_risk", "sector_context",
-                  "fake_good_news", "experience_rules"]
+    # 按四面分组排列（面板分组仍由各工具 .面 决定；此处顺序决定同面板内块序）。
+    tool_names = [
+        # 基本面
+        "financial_redflag", "insider_reduction", "valuation", "growth_quality",
+        # 技术面
+        "price_volume", "gate", "entry_price", "technical_detail",
+        # 资金面
+        "unlock_risk", "fund_flow",
+        # 消息情绪面
+        "sector_context", "fake_good_news", "stock_sentiment",
+        # 经验纪律（跨面·尾块）
+        "experience_rules",
+    ]
     tools = {t: registry.get(t) for t in tool_names}
     names = _load_names(root)
 
