@@ -3,9 +3,9 @@
 给定 as_of + code，产出该票所在**申万一级板块**的环境浓缩块（每票 6 字段）：
   1. 板块      — 申万一级（现状快照标签）+ 是否重点池
   2. 冷热拥挤  — sector_regime 冷热标签 + 拥挤档（档位写死）
-  3. RS分位    — 个股 pos60（近60日区间分位，主档 K 线实测）
+  3. RS分位    — 个股 pos60（近60日区间分位，主档 K 线实测）；与⑤同属「同类走势(板块内 peer)」维度
   4. 角色      — roster 龙头/中军/补涨先锋/弹性股（缺则无角色档）
-  5. 板块内排名 — 该票在其板块角色池内按 5 日涨幅的排名（未进池则不可算）
+  5. 板块内排名 — 该票在其板块角色池内按 5 日涨幅的排名（未进池则不可算）；「同类走势」显式标签见输出块
   6. 净催化    — 板块净催化方向（重点池新闻净催化 / 消息驱动），档位 强正/正/中性/负/强负
 
 数据铁律（与 _common 同源）：
@@ -234,13 +234,14 @@ class SectorContextTool:
             line_冷热 = "冷热拥挤: missing（regime/focus 无该板块）"
 
         # 3 RS分位（个股 pos60，主档 K 线实测）——共性"pos60是什么"进词表，此处只讲板块内相对位
+        # 与「板块内排名」同属「同类走势(板块内 peer)」维度：RS=相对强度、排名=按5日涨幅
         df = load_kline(code, as_of, root=root, min_bars=2)
         rs = pos60(df) if df is not None else None
         if rs is not None:
             rs档, _ = 格档(rs, _RS档)
-            line_rs = f"RS分位: pos60={rs:.2f}【{rs档}】影响：板块内近60日相对位置{rs档}"
+            line_rs = f"同类走势·RS分位: pos60={rs:.2f}【{rs档}】影响：板块内近60日相对位置{rs档}"
         else:
-            line_rs = "RS分位: missing（主档K线不足/缺失）"
+            line_rs = "同类走势·RS分位: missing（主档K线不足/缺失）"
 
         # 4 角色
         role, 选级, pool = _find_role(sector, code, root)
@@ -251,9 +252,10 @@ class SectorContextTool:
         else:
             line_角色 = "角色: 无角色档（该板块无roster）"
 
-        # 5 板块内排名
+        # 5 板块内排名（同类走势·按5日涨幅）
         rank = _rank_in_pool(code, pool)
-        line_排名 = f"板块内排名: {rank}" if rank else "板块内排名: 无（未进角色池·全成分排名不可算）"
+        line_排名 = (f"同类走势·板块内排名: {rank}" if rank
+                    else "同类走势·板块内排名: 无（未进角色池·全成分排名不可算）")
 
         # 6 净催化
         net = focus_entry.get("新闻净催化") if focus_entry else None

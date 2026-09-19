@@ -108,6 +108,8 @@ def test_集成_三票语义锁():
     # 浓缩块恰 6 行（6 字段），且不含裸 json
     lines = [ln for ln in r1.浓缩块.splitlines() if ln.strip()]
     assert len(lines) == 6 and "{" not in r1.浓缩块
+    # 命名对齐全流程图HTML：同类走势(板块内peer)=RS分位+板块内排名 显式标签在位
+    assert "同类走势·RS分位" in r1.浓缩块 and "同类走势·板块内排名" in r1.浓缩块
 
     r2 = tool.run(AS_OF, "600995", root=root)
     assert r2.fields["板块"] == "公用事业"
