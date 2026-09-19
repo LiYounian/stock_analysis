@@ -12,6 +12,8 @@ from typing import Optional
 import json
 import os
 
+from tools.pyramid.指标词表 import render_词表  # v2：统一指标词表·喂 prompt 开头一次
+
 
 def _load(root: Optional[str], as_of: str, fname: str):
     base = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -230,6 +232,8 @@ def render_package(pkg: dict) -> str:
     ov = pkg.get("市场定调") or {}
     out = []
     out.append(f"# 金字塔决策包 · as_of={pkg.get('as_of')}")
+    # v2：统一指标词表——共性定义/全档位区间喂一次，下方个股卡只给「值+档+本股影响」不重复
+    out.append("\n" + render_词表())
     # §8 市场定调改描述性输入：主句 + 上游依据整句(原样·不编) + 板块轮动一句
     out.append("\n## 市场定调")
     广度 = ov.get("广度档")

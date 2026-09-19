@@ -155,8 +155,10 @@ def test_净占比折算(tmp_path):
     it = {x["名"]: x for x in get("fund_flow").run(_AS_OF, code="000003", root=root).字段解读}["主力资金"]
     assert "净占比+10.00%" in it["值"]
     assert "折算(净流入/当日成交额)" in it["口径"]
-    assert "主力强流入" in it["意味"]
+    assert it["意味"].startswith("影响：") and "主力大幅净买入" in it["意味"]  # 强流入→影响文案
     assert "连续净流入持续" in it["意味"]  # 3天=持续
+    # v2：区间定义已移词表，个股卡口径不再重复
+    assert "强流出≤-5" not in it["口径"]
 
 
 def test_净占比有值不折算(tmp_path):
@@ -167,7 +169,7 @@ def test_净占比有值不折算(tmp_path):
     _write_code_industry(root, {})
     it = {x["名"]: x for x in get("fund_flow").run(_AS_OF, code="000004", root=root).字段解读}["主力资金"]
     assert "净占比+2.00%" in it["值"] and "折算" not in it["口径"]
-    assert "主力流入" in it["意味"]
+    assert "主力净流入" in it["意味"]  # 流入→影响文案
 
 
 # ── 竞品·板块内相对：rank/档/vs龙头/vs板均 计算 ──────────────────────

@@ -55,6 +55,34 @@ _PE分位档 = [
     (float("inf"), "极高", "分位>80%·逼近自身历史估值顶部区"),
 ]
 
+# ── v2 意味模板：按档给「本股本值的含义/影响」（共性定义已进统一词表，此处只讲影响）──
+_PE影响 = {
+    "低": "估值低、加分项，需结合成长确认非价值陷阱",
+    "中": "估值合理、中性",
+    "偏高": "偏贵、轻度压估值分，需结合 PEG/行业分位看",
+    "高": "单看偏贵、压估值分，需结合下方 PEG/行业分位合并看",
+}
+_PB影响 = {
+    "破净": "破净、有账面安全边际，但需查是否资产减值/周期底",
+    "低": "净资产溢价温和、估值面友好",
+    "中": "净资产溢价中等、中性",
+    "偏高": "净资产溢价偏高，重资产股需警惕",
+    "高": "净资产溢价高，对轻资产成长股参考弱、权重低",
+}
+_PEG影响 = {
+    "低估": "高增速消化了高 PE，估值面转正向——贵得有支撑、加分",
+    "合理": "估值与成长匹配、中性偏正",
+    "偏高": "估值略超成长、轻度减分",
+    "高估": "估值未被成长消化、减分",
+}
+_PE分位影响 = {
+    "极低": "处自身历史估值底部、估值面加分",
+    "偏低": "低于自身多数时期、偏正",
+    "中位": "自身估值中枢、中性",
+    "偏高": "高于自身多数时期、偏谨慎",
+    "极高": "逼近自身历史估值顶部、减分",
+}
+
 
 def _pstock_path(root: Optional[str], as_of: str, code: str) -> str:
     return os.path.join(data_root(root), "data", "analysis", as_of, f"{code}.json")
@@ -120,72 +148,72 @@ class ValuationTool:
         # ── PE(TTM)：pe_valid & mode==PE适用 才套档，否则原样传 basis ──
         pe适用 = bool(pe_valid) and (mode == "PE适用")
         if pe适用 and isinstance(pe, (int, float)):
-            档, 解 = 格档(pe, _PE参考档)
+            档, _ = 格档(pe, _PE参考档)
             items.append(字段(
-                "PE(TTM)", pe, f"{档}·{解}",
-                "跨市场粗档,真估值结合 PEG+行业分位(B期);" + basis,
+                "PE(TTM)", pe, 档,
+                "影响：" + _PE影响.get(档, "结合 PEG/行业分位看"),
             ))
         else:
             items.append(字段(
                 "PE(TTM)", pe if isinstance(pe, (int, float)) else None,
                 f"不适用(mode={mode},pe_valid={pe_valid})",
-                "PE 口径不适用,看 PB/PEG;" + basis,
+                f"影响：PE 口径不适用，改看 PB/PEG（{basis}）",
             ))
 
         # ── PB ──
         if isinstance(pb, (int, float)):
-            档, 解 = 格档(pb, _PB档)
-            items.append(字段("PB", pb, f"{档}·{解}", "市净率反映净资产溢价程度"))
+            档, _ = 格档(pb, _PB档)
+            items.append(字段("PB", pb, 档, "影响：" + _PB影响.get(档, "参考净资产溢价")))
         else:
-            items.append(字段("PB", None, "PB 缺失", "无 PB 数据"))
+            items.append(字段("PB", None, "PB 缺失", "影响：无 PB 数据、该维缺席"))
 
         # ── PEG(现算) = pe_ttm ÷ 净利增速(%) ──
         增速, 增速源 = _pick_growth(fund, fin)
         if not (pe适用 and isinstance(pe, (int, float))):
             items.append(字段(
-                "PEG(现算)", None, "PEG 不适用(PE 口径不适用)",
-                "PE 不适用,PEG 无意义,看 PB",
+                "PEG(现算)", None, "不适用(PE 口径不适用)",
+                "影响：PE 不适用、PEG 无意义，看 PB",
             ))
         elif 增速 is None:
             items.append(字段(
-                "PEG(现算)", None, "PEG 缺失(净利增速缺)", "无净利增速,无法现算 PEG",
+                "PEG(现算)", None, "缺失(净利增速缺)", "影响：无净利增速、无法现算 PEG",
             ))
         elif 增速 <= 0:
             items.append(字段(
                 "PEG(现算)", "不适用",
                 f"增速≤0·PEG失效(增速{增速:.1f}%,{增速源})",
-                "净利下滑/亏损,PEG 无意义,估值需另判",
+                "影响：净利下滑/亏损、PEG 失效，估值需另判",
             ))
         else:
             peg = pe / 增速
-            档, 解 = 格档(peg, _PEG档)
+            档, _ = 格档(peg, _PEG档)
             items.append(字段(
                 "PEG(现算)", round(peg, 2),
                 f"{档}·pe{pe:.1f}÷增速{增速:.1f}%({增速源})",
-                解,
+                "影响：" + _PEG影响.get(档, "结合 PE 看"),
             ))
 
         # ── PE 历史分位：从 valuation.pe_percentile 读（0~1=现值在自身历史 PE 序列中的 ≤x 占比）──
         pe分位 = val.get("pe_percentile")
         pe分位窗口 = val.get("pe_percentile_window")
         if isinstance(pe分位, (int, float)):
-            档, 解 = 格档(pe分位, _PE分位档)
+            档, _ = 格档(pe分位, _PE分位档)
             窗口注 = f"窗口{pe分位窗口}" if pe分位窗口 else "窗口全历史"
             items.append(字段(
-                "PE历史分位", round(pe分位 * 100, 1), f"{档}·{解}·{窗口注}",
-                "自身历史估值区间对比,越低越接近自身估值底部",
+                "PE历史分位", round(pe分位 * 100, 1), f"{档}·{窗口注}",
+                "影响：" + _PE分位影响.get(档, "参考自身历史估值区间"),
             ))
         else:
             items.append(字段(
                 "PE历史分位", None, "缺失(pe_percentile 未落盘或无历史 PE 序列)",
-                "暂无自身历史估值区间对比",
+                "影响：暂无自身历史估值区间对比、该维缺席",
             ))
 
         # ── 市值 / 估值口径(滞后新鲜度)──
         items.append(字段(
             "市值/估值口径", mktcap if isinstance(mktcap, (int, float)) else None,
             f"市值(亿)·口径日期{口径日期}·{'报告期滞后' if 报告期滞后 else '报告期最新'}",
-            口径提示,
+            f"影响：{'口径滞后、估值读数时效打折' if 报告期滞后 else '口径最新'}；{口径提示}",
         ))
 
         return ToolResult(

@@ -88,6 +88,30 @@ _竞品档 = [
     (float("inf"), "尾部", "换手居板块尾部"),
 ]
 
+# ── v2 影响模板（共性区间定义已进统一词表，此处只讲本股本值影响）──
+_净占比影响 = {
+    "强流出": "主力大幅流出、资金面减分", "流出": "主力净流出、偏负",
+    "中性": "主力进出均衡、中性", "流入": "主力净流入、资金面加分",
+    "强流入": "主力大幅净买入、资金面强加分",
+}
+_主买影响 = {
+    "弱": "卖压主导、盘口偏弱", "均衡": "买卖均衡、中性",
+    "偏强": "买盘偏强、小幅加分", "强": "买盘主导、加分",
+}
+_户数影响 = {
+    "明显集中": "筹码明显集中、利好", "集中": "筹码集中、偏正",
+    "平稳": "筹码基本平稳、中性", "分散": "散户增多、偏负",
+    "明显分散": "筹码涣散、缺主力锁仓、减分",
+}
+_换手影响 = {
+    "过低": "交投清淡、关注不足", "正常": "换手正常、中性",
+    "活跃": "交投活跃、流动性好", "过热炒作": "换手过高、炒作/接力风险、需谨慎",
+}
+_竞品影响 = {
+    "龙头级": "换手居板块前列、板块领涨候选、加分", "前排": "换手居板块前排、偏正",
+    "中游": "换手居板块中游、中性", "尾部": "换手居板块尾部、偏弱",
+}
+
 
 # ── 数据装配 ─────────────────────────────────────────────────────────
 def _pstock_path(root: Optional[str], as_of: str, code: str) -> str:
@@ -185,31 +209,33 @@ def _f_主力(fundflow: dict, code: str, as_of: str, root: Optional[str]) -> dic
         if amt:
             z = ni / amt * 100.0
             折算注 = "·折算(净流入/当日成交额)"
-    档, 释 = 格档(float(z), _净占比档) if isinstance(z, (int, float)) else ("NA", "净占比缺且不可折算")
-    d档, d释 = 格档(int(days), _连续天数档) if isinstance(days, (int, float)) else ("NA", "")
+    档, _ = 格档(float(z), _净占比档) if isinstance(z, (int, float)) else ("NA", "")
+    d档, _ = 格档(int(days), _连续天数档) if isinstance(days, (int, float)) else ("NA", "")
     z_txt = f"净占比{z:+.2f}%" if isinstance(z, (int, float)) else "净占比NA"
     ni_txt = f"净流入{ni / _亿:+.2f}亿" if isinstance(ni, (int, float)) else "净流入NA"
     days_txt = f"连{int(days)}d" if isinstance(days, (int, float)) else "连NA"
-    新鲜注 = f"·口径{str(口径日)[:10]}陈旧" if stale else ""
+    新鲜注 = f"·口径{str(口径日)[:10]}陈旧、时效打折" if stale else ""
+    影响 = (f"{_净占比影响.get(档, '')}；连续净流入{d档}" if 档 != "NA"
+          else f"净占比缺、仅净流入参考；连续净流入{d档}")
     return 字段(
         名="主力资金",
         值=f"{z_txt}·{ni_txt}·{days_txt}",
-        口径=f"强流出≤-5/流出/中性(-1,1]/流入/强流入>5(%){折算注}{新鲜注}",
-        意味=f"主力{档}·{释}；连续净流入{d档}" if 档 != "NA" else f"主力净占比缺·仅净流入参考；连续净流入{d档}",
+        口径=f"主力净占比%{折算注}{新鲜注}",
+        意味=f"影响：{影响}",
     )
 
 
 def _f_主买(tick: dict) -> dict:
     mb = tick.get("主买占比")
     大单 = tick.get("大单笔数")
-    档, 释 = 格档(float(mb), _主买占比档) if isinstance(mb, (int, float)) else ("NA", "主买占比缺")
+    档, _ = 格档(float(mb), _主买占比档) if isinstance(mb, (int, float)) else ("NA", "")
     mb_txt = f"主买占比{mb * 100:.1f}%" if isinstance(mb, (int, float)) else "主买占比NA"
     大单_txt = f"·大单{int(大单)}笔" if isinstance(大单, (int, float)) else ""
     return 字段(
         名="主买盘",
         值=f"{mb_txt}{大单_txt}",
-        口径="弱≤0.45/均衡(0.45,0.52]/偏强(0.52,0.56]/强>0.56(主动买占比)",
-        意味=f"盘中主动买盘{档}·{释}" if 档 != "NA" else "主买占比缺·盘口强弱不可判",
+        口径="主动买占比",
+        意味=f"影响：{_主买影响.get(档, '')}" if 档 != "NA" else "影响：主买占比缺、盘口强弱不可判",
     )
 
 
@@ -218,28 +244,30 @@ def _f_户数(holder: dict) -> dict:
     ls = holder.get("连续减少期数")
     stale = str(holder.get("新鲜度") or "") == "陈旧"
     口径日 = holder.get("口径日期")
-    档, 释 = 格档(float(hb), _户数环比档) if isinstance(hb, (int, float)) else ("NA", "户数环比缺")
-    l档, l释 = 格档(int(ls), _连减期数档) if isinstance(ls, (int, float)) else ("NA", "")
+    档, _ = 格档(float(hb), _户数环比档) if isinstance(hb, (int, float)) else ("NA", "")
+    l档, _ = 格档(int(ls), _连减期数档) if isinstance(ls, (int, float)) else ("NA", "")
     hb_txt = f"户数环比{hb:+.2f}%" if isinstance(hb, (int, float)) else "户数环比NA"
     ls_txt = f"·连减{int(ls)}期" if isinstance(ls, (int, float)) else ""
     新鲜注 = f"·口径{str(口径日)[:10]}陈旧" if stale else ""
+    影响 = (f"{_户数影响.get(档, '')}" + (f"、连减{l档}" if l档 != "NA" else "") if 档 != "NA"
+          else "户数环比缺、筹码集中度不可判")
     return 字段(
         名="股东户数",
         值=f"{hb_txt}{ls_txt}",
-        口径=f"负=筹码集中：明显集中≤-10/集中/平稳(-3,3]/分散/明显分散>10(%){新鲜注}",
-        意味=f"筹码{档}·{释}" + (f"；{l档}" if l档 != "NA" else "") if 档 != "NA" else "户数环比缺·筹码集中度不可判",
+        口径=f"户数环比%·负=筹码集中{新鲜注}",
+        意味=f"影响：{影响}",
     )
 
 
 def _f_换手(turnover: Optional[float], code: str) -> dict:
-    档, 释 = 格档(float(turnover), _换手率档) if isinstance(turnover, (int, float)) else ("NA", "K线换手缺")
+    档, _ = 格档(float(turnover), _换手率档) if isinstance(turnover, (int, float)) else ("NA", "")
     t_txt = f"{turnover:.2f}%" if isinstance(turnover, (int, float)) else "NA"
     板注 = "·创业/科创天然偏高" if code.startswith(("30", "688", "689")) else ""
     return 字段(
         名="换手率",
         值=t_txt,
-        口径=f"过低≤1/正常(1,3]/活跃(3,7]/过热炒作>7(%·as_of当日){板注}",
-        意味=f"交投{档}·{释}" if 档 != "NA" else "换手缺·活跃度不可判",
+        口径=f"as_of当日{板注}",
+        意味=f"影响：{_换手影响.get(档, '')}" if 档 != "NA" else "影响：换手缺、活跃度不可判",
     )
 
 
@@ -264,8 +292,8 @@ def _f_龙虎榜(lhb: dict) -> dict:
     return 字段(
         名="龙虎榜",
         值=f"{档}{n_txt}{nbr_txt}",
-        口径="状态档(只读·不重算veto)：近期无上榜/净买上榜/净卖上榜/龙虎榜否决候选",
-        意味=释,
+        口径="状态(只读·不重算veto)",
+        意味=f"影响：{释}",
     )
 
 
@@ -275,12 +303,12 @@ def _f_竞品(code: str, sector: Optional[str], turnover: Optional[float],
     if not sector:
         return 字段(名="竞品·板块内相对", 值="NA",
                    口径="code_industry.json 未含该票·无法解析申万一级",
-                   意味="板块归属缺·竞品相对不可算")
+                   意味="影响：板块归属缺、竞品相对不可算")
     pool, lead, 更新日 = _roster_pool(sector, root)
     if not pool:
         return 字段(名="竞品·板块内相对", 值="NA",
                    口径=f"{sector} 无 sector_roster（仅10个申万一级有roster）",
-                   意味="该板块无roster·竞品相对不可算")
+                   意味="影响：该板块无roster、竞品相对不可算(能力已上线、仅此票缺底料)")
     tt = pool.get(code)
     源注 = "roster快照"
     if tt is None:
@@ -289,7 +317,7 @@ def _f_竞品(code: str, sector: Optional[str], turnover: Optional[float],
     if tt is None:
         return 字段(名="竞品·板块内相对", 值="NA",
                    口径=f"{sector} roster成分{len(pool)}名·目标换手缺",
-                   意味="目标换手缺·板块内相对不可算")
+                   意味="影响：目标换手缺、板块内相对不可算")
     vals = list(pool.values())
     if code not in pool:
         vals = vals + [tt]
@@ -305,8 +333,8 @@ def _f_竞品(code: str, sector: Optional[str], turnover: Optional[float],
     return 字段(
         名="竞品·板块内相对",
         值=f"第{rank}/{n}【{档}】{lead_txt}{avg_txt}",
-        口径=f"按换手降序rank：龙头级≤20%/前排/中游/尾部>70%；板块内=roster精选{len(pool)}名非全行业·换手{源注}{鲜注}",
-        意味=f"换手活跃度板块{档}·{释}",
+        口径=f"按换手降序rank·板块内=roster精选{len(pool)}名非全行业·换手{源注}{鲜注}",
+        意味=f"影响：{_竞品影响.get(档, 释)}",
     )
 
 
@@ -326,7 +354,7 @@ def _f_两融(margin: dict) -> dict:
         return 字段(
             名="两融", 值="NA",
             口径="两融=collectors.margin 顶层块；该票无 ≤as_of 两融记录",
-            意味="两融维度暂无数据",
+            意味="影响：两融维度暂无数据、该维缺席",
         )
     余额亿 = round(融资余额 / 1e8, 2) if 有余额 else None
     买入亿 = round(融资买入额 / 1e8, 2) if 有买入 else None
@@ -337,7 +365,7 @@ def _f_两融(margin: dict) -> dict:
         名="两融",
         值=值,
         口径=f"融资买入{买入亿}亿·融券余量{券量万}万股{日注}",
-        意味="融资盘=杠杆多头资金存量,规模反映杠杆参与度",
+        意味="影响：杠杆多头资金参与度参考（无历史/截面基线、不套涨跌档）",
     )
 
 

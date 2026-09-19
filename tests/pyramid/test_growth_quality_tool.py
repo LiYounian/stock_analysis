@@ -112,7 +112,7 @@ def test_金融业负债率例外(tmp_path):
     )
     r = GrowthQualityTool().run(AS_OF, "600011", root=root)
     负债 = next(it for it in r.字段解读 if it["名"] == "负债率")
-    assert "金融业口径" in 负债["口径"] and "勿套档" in 负债["口径"]
+    assert "金融业口径" in 负债["口径"] and "勿套档" in 负债["意味"]  # v2：勿套档 caveat 进意味
 
 
 # ── quality 复用 financial_redflag._QUALITY档（单一口径源）──
@@ -146,6 +146,29 @@ def test_字段缺数据标NA不编(tmp_path):
     # 契约保证：所有条目口径/意味非空（不空编）
     for it in r.字段解读:
         assert it["名"] and it["口径"] and it["意味"]
+
+
+# ── v2 语义锁：财报质量→财报质量汇总(综合句) + 意味影响化 + 口径剔区间共性 ──
+def test_v2_财报质量汇总_综合句(tmp_path):
+    root = _write_fake(
+        tmp_path, "600013",
+        fundamental={"营收": 1.19e8, "净利": 1.1e7, "营收增速": 431.0, "净利增速": 600.0,
+                     "ROE": 4.09, "毛利率": 20.46, "净利率": 9.28, "负债率": 63.69,
+                     "每股股利": None},
+        financial={"评级": "中", "quality_score": 56.6, "报告期": "2026-06-30",
+                   "five_dims": {"成长": 100.0, "质量": 30.7, "健康": 77.4,
+                                 "运营": 81.5, "回报": 18.4}},
+    )
+    r = GrowthQualityTool().run(AS_OF, "600013", root=root)
+    汇总 = next(it for it in r.字段解读 if it["名"] == "财报质量汇总")
+    assert "财报质量" not in {it["名"] for it in r.字段解读} - {"财报质量汇总"}  # 旧名已改
+    assert 汇总["意味"].startswith("影响：")
+    # 综合句点出最强/最弱维（成长100最强、回报18.4最弱）
+    assert "成长100最强" in 汇总["意味"] and "回报18.4最弱" in 汇总["意味"]
+    # 增速档进卡的意味影响化、口径只留档名（区间进词表）
+    营收 = next(it for it in r.字段解读 if it["名"] == "营收")
+    assert 营收["口径"] == "高增长" and 营收["意味"].startswith("影响：")
+    assert "≤" not in 营收["口径"]  # 区间不在个股卡口径重复
 
 
 # ── 真实票集成：000026 关键档锁 + 财报明细保字段（面=基本面·7 条）──

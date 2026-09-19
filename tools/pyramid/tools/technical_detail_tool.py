@@ -47,18 +47,38 @@ RSI12档 = [
     (1e9, "分散", "筹码分散·涣散"),
 ]
 
-# 状态类意味表（原样键控序列化器已算的状态；口径段=枚举域，意味=解读）——
+# 状态类意味表（v2：只讲影响，共性定义"排列/KDJ是什么"进统一词表）——
 _MA排列意味 = {
-    "多头排列": "MA5≥10≥20≥60·多头趋势",
-    "空头排列": "MA5≤10≤20≤60·空头趋势",
-    "纠缠": "均线纠缠·方向未明",
-    "数据不足": "K线不足·排列不可判",
+    "多头排列": "影响：多头趋势、技术面加分",
+    "空头排列": "影响：空头趋势、技术面减分",
+    "纠缠": "影响：方向未明、中性",
+    "数据不足": "影响：K线不足、排列不可判",
 }
 _KDJ意味 = {
-    "超买": "K>80·高位派发风险",
-    "超卖": "K<20·超跌反弹条件",
-    "-": "中性区·无超买超卖",
-    "数据不足": "K线不足·KDJ不可判",
+    "超买": "影响：高位派发风险、择时谨慎",
+    "超卖": "影响：超跌反弹条件、择时偏机会",
+    "-": "影响：中性区、无超买超卖信号",
+    "数据不足": "影响：K线不足、KDJ不可判",
+}
+# ── v2 影响模板（共性定义进词表，此处只讲本股本值影响）──
+_RSI影响 = {
+    "超卖极端": "极端超卖、反弹动能积聚、偏机会",
+    "超卖": "超卖、具反弹条件",
+    "中性": "强弱均衡、择时中性",
+    "超买": "超买、警惕回调",
+    "超买极端": "极端超买、回调压力大、减分",
+}
+_获利盘影响 = {
+    "普遍套牢": "底部、上方抛压轻、偏机会",
+    "套牢为主": "多数账户套牢、反弹有解套压力",
+    "获利为主": "多数账户获利、需防获利了结",
+    "普遍获利": "高位、获利了结压力大、减分",
+}
+_集中度影响 = {
+    "高度集中": "筹码高度集中、主力控盘/惜售",
+    "较集中": "筹码较集中",
+    "一般": "筹码分布一般",
+    "分散": "筹码分散、涣散",
 }
 
 
@@ -79,14 +99,14 @@ def _macd意味(状态: Optional[str], dif: Optional[float]) -> str:
         return "数据缺失"
     水上 = isinstance(dif, (int, float)) and dif > 0
     if 状态 == "金叉":
-        return "零轴上金叉·多头动能强" if 水上 else "零轴下金叉·反弹初期需确认"
+        return "影响：零轴上金叉、多头动能强" if 水上 else "影响：零轴下金叉、反弹初期需确认"
     if 状态 == "死叉":
-        return "零轴下死叉·空头加速" if not 水上 else "零轴上死叉·高位转弱"
+        return "影响：零轴下死叉、空头加速" if not 水上 else "影响：零轴上死叉、高位转弱"
     if 状态 == "多头":
-        return "柱>0·多头延续"
+        return "影响：柱>0、多头延续"
     if 状态 == "空头":
-        return "柱<0·空头延续"
-    return "状态未明"
+        return "影响：柱<0、空头延续"
+    return "影响：状态未明"
 
 
 class TechnicalDetailTool:
@@ -127,8 +147,8 @@ class TechnicalDetailTool:
         ma值 = "/".join("NA" if v is None else f"{v:g}" for v in (ma5, ma10, ma20, ma60))
         items.append(字段(
             "均线排列", 排列 if 排列 else None,
-            f"MA5/10/20/60={ma值}·多头排列/空头排列/纠缠",
-            _MA排列意味.get(排列, "数据缺失"),
+            f"MA5/10/20/60={ma值}",
+            _MA排列意味.get(排列, "影响：数据缺失"),
         ))
 
         # ── 2. MACD（状态原样 + dif 零轴增强意味）──
@@ -138,7 +158,7 @@ class TechnicalDetailTool:
         items.append(字段(
             "MACD", macd状态 if macd状态 else None,
             f"dif={dif if dif is not None else 'NA'}/dea={dea if dea is not None else 'NA'}"
-            f"/柱={bar if bar is not None else 'NA'}·金叉/死叉/多头/空头",
+            f"/柱={bar if bar is not None else 'NA'}",
             _macd意味(macd状态, dif),
         ))
 
@@ -149,25 +169,27 @@ class TechnicalDetailTool:
         items.append(字段(
             "KDJ", kdj状态 if kdj状态 else None,
             f"K={k if k is not None else 'NA'}/D={d if d is not None else 'NA'}"
-            f"/J={j if j is not None else 'NA'}·超买K>80/超卖K<20/-中性",
-            _KDJ意味.get(kdj状态, "数据缺失"),
+            f"/J={j if j is not None else 'NA'}",
+            _KDJ意味.get(kdj状态, "影响：数据缺失"),
         ))
 
         # ── 4. RSI（本工具供档，阈值对齐 strategy canonical；主档 RSI12，RSI6/24 附注）──
         rsi = snap.get("rsi") or {}
         rsi6, rsi12, rsi24 = (_fnum(rsi.get(x)) for x in ("rsi6", "rsi12", "rsi24"))
-        rsi12档, rsi12解 = 格档(rsi12, RSI12档)
+        rsi12档, _ = 格档(rsi12, RSI12档)
         rsi6提示 = ""
         if rsi6 is not None:
             if rsi6 > 80:
-                rsi6提示 = "·RSI6短线过热"
+                rsi6提示 = "、RSI6短线过热"
             elif rsi6 < 20:
-                rsi6提示 = "·RSI6短线超跌"
+                rsi6提示 = "、RSI6短线超跌"
         items.append(字段(
             "RSI", rsi12,
-            f"RSI12·≤20超卖极端/≤30超卖/≤70中性/≤80超买/>80极端"
-            f"(RSI6={rsi6 if rsi6 is not None else 'NA'}/RSI24={rsi24 if rsi24 is not None else 'NA'})",
-            (f"{rsi12档}·{rsi12解}{rsi6提示}" if rsi12 is not None else "数据缺失"),
+            (f"{rsi12档}·RSI6={rsi6 if rsi6 is not None else 'NA'}"
+             f"/RSI24={rsi24 if rsi24 is not None else 'NA'}") if rsi12 is not None
+            else "RSI12缺失",
+            (f"影响：{_RSI影响.get(rsi12档, '参考强弱')}{rsi6提示}" if rsi12 is not None
+             else "影响：数据缺失"),
         ))
 
         # ── 5. 筹码（获利盘 + 集中度90 合一·全A分位口径；降级不隐瞒）──
@@ -177,24 +199,24 @@ class TechnicalDetailTool:
         现价 = _fnum(chip.get("现价"), 3) if chip else None
         降级 = bool(chip.get("降级")) if chip else False
         if 获利比例 is not None or 集中度 is not None:
-            获档, 获解 = 格档(获利比例, 获利盘档)
-            集档, 集解 = 格档(集中度, 集中度档)
+            获档, _ = 格档(获利比例, 获利盘档)
+            集档, _ = 格档(集中度, 集中度档)
             套牢 = None if 获利比例 is None else round((1 - 获利比例) * 100, 1)
             获pct = "NA" if 获利比例 is None else f"{获利比例 * 100:.0f}%"
             成本注 = ""
             if 均成 is not None and 现价:
                 盈 = (现价 / 均成 - 1) * 100
-                成本注 = f"·均成{均成}{'<' if 盈 >= 0 else '>'}现价{现价}整体{'获利' if 盈 >= 0 else '套牢'}{abs(盈):.1f}%"
+                成本注 = f"、均成{均成}{'<' if 盈 >= 0 else '>'}现价{现价}整体{'获利' if 盈 >= 0 else '套牢'}{abs(盈):.1f}%"
             套牢注 = "" if 套牢 is None else f"·套牢盘{套牢}%"
-            意味 = (f"{获解}{成本注}；{集解}"
-                    + ("·(筹码估算降级·换手缺失)" if 降级 else ""))
+            意味 = (f"影响：{_获利盘影响.get(获档, '')}{成本注}；{_集中度影响.get(集档, '')}"
+                    + ("（筹码估算降级·换手缺失、可信度打折）" if 降级 else ""))
             items.append(字段(
                 "筹码", f"获利{获pct}/集中{集中度 if 集中度 is not None else 'NA'}",
-                f"获利盘·{获档}(全A分位){套牢注}；集中度90·{集档}(越小越集中·全A分位)",
+                f"获利盘·{获档}{套牢注}；集中度90·{集档}",
                 意味,
             ))
         else:
-            items.append(字段("筹码", None, "获利盘/集中度90·全A分位标定", "筹码数据缺失"))
+            items.append(字段("筹码", None, "获利盘/集中度90缺失", "影响：筹码数据缺失、该维缺席"))
 
         # ── 6. 结构支撑压力（prediction.结构位 原样贯通 + 逼近派生档）──
         结构 = (pred.get("结构位") or {}) if pred else {}
@@ -212,7 +234,7 @@ class TechnicalDetailTool:
                 逼近.append("逼近支撑·支撑待验")
             支文 = (支撑[0] if isinstance(支撑, list) and 支撑 else "NA")
             压文 = (压力[0] if isinstance(压力, list) and 压力 else "NA")
-            意味 = (f"{趋势 or '趋势未明'}"
+            意味 = (f"影响：{趋势 or '趋势未明'}"
                     + ("·" + "/".join(逼近) if 逼近 else "·区间运行"))
             items.append(字段(
                 "支撑压力", f"支撑{支文}/压力{压文}",
@@ -221,7 +243,7 @@ class TechnicalDetailTool:
                 意味,
             ))
         else:
-            items.append(字段("支撑压力", None, "prediction.结构位·支撑/压力/距离", "结构支撑压力数据缺失"))
+            items.append(字段("支撑压力", None, "prediction.结构位缺失", "影响：结构支撑压力数据缺失、该维缺席"))
 
         # ── 7. BOLL（snapshot 未落盘·恒待补，本工具不动序列化器）──
         boll = snap.get("boll")
@@ -231,12 +253,13 @@ class TechnicalDetailTool:
             下 = _fnum(boll.get("下轨") or boll.get("lower"))
             items.append(字段(
                 "BOLL", f"上{上}/中{中}/下{下}",
-                "上中下轨±2σ(通达信口径)", boll.get("状态") or "已落盘",
+                f"±2σ通达信口径·{boll.get('状态') or '已落盘'}",
+                f"影响：{boll.get('状态') or '轨道位置参考'}",
             ))
         else:
             items.append(字段(
-                "BOLL", None, "上中下轨±2σ·snapshot未落盘",
-                "待补落盘(另路chip补·本工具不动技术序列化器)",
+                "BOLL", None, "snapshot未落盘",
+                "影响：待补落盘(另路chip补·本工具不动技术序列化器)",
             ))
 
         fresh = "fresh"

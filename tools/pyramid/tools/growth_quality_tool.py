@@ -54,6 +54,45 @@ _净利率档 = [
     (float("inf"), "很厚", "净利率>30%(跨行业粗参考)"),
 ]
 
+# ── v2 影响模板（共性区间定义已进统一词表，此处只讲本股本值影响）──
+_增速影响 = {
+    "衰退": "大幅下滑、成长面重减分",
+    "下滑": "负增长、成长面减分",
+    "平稳": "温和增长、中性",
+    "增长": "较快增长、成长面加分",
+    "高增长": "爆发式增长、成长面强加分(注意低基数)",
+}
+_负债影响 = {
+    "低": "杠杆很轻、财务稳健、加分",
+    "中": "杠杆适中、中性",
+    "偏高": "杠杆偏高、财务稳健性小幅减分",
+    "高": "高杠杆、财务风险、减分",
+}
+# ── 财报五维逐维影响（按 _QUALITY档 档名分强/中/弱三档取句）──
+_五维强弱句 = {
+    "成长": ("营收利润增长强劲、成长动能强项", "成长温和、中性", "成长乏力、增长趋势弱"),
+    "质量": ("盈利含金量高、扣非质量扎实", "盈利质量中等", "盈利含金量偏低、扣非质量存疑、短板"),
+    "健康": ("资产负债/现金流安全", "财务健康中等", "资产负债/现金流承压"),
+    "运营": ("周转与经营效率良好", "运营效率中等", "周转与经营效率偏弱"),
+    "回报": ("资本回报高、赚钱效率强", "资本回报中等", "资本回报低、赚钱效率弱"),
+}
+
+
+def _维bucket(档: str) -> int:
+    """_QUALITY档 档名 → 强弱句索引：优/良=0(强)，中=1，弱/差=2(弱)。"""
+    return 0 if 档 in ("优", "良") else (1 if 档 == "中" else 2)
+
+
+def _五维综合(dims: dict, q档: str) -> str:
+    """从 five_dims 合成一句：最强维/最弱维 + 综合质量档（财报质量汇总·意味段）。"""
+    有效 = {k: v for k, v in (dims or {}).items() if isinstance(v, (int, float))}
+    if not 有效:
+        return f"综合财报质量{q档}"
+    强 = max(有效, key=有效.get)
+    弱 = min(有效, key=有效.get)
+    追高 = "、追高谨慎" if q档 in ("弱", "差", "中") and 有效.get("质量", 100) <= 50 else ""
+    return f"{强}{有效[强]:g}最强、{弱}{有效[弱]:g}最弱，综合质量{q档}{追高}"
+
 
 def _pstock_path(root: Optional[str], as_of: str, code: str) -> str:
     return os.path.join(data_root(root), "data", "analysis", as_of, f"{code}.json")
@@ -78,12 +117,12 @@ def _亿(v) -> Optional[float]:
 def _增速文(名: str, 金额亿: Optional[float], 增速) -> dict:
     """营收/净利一条：值='X亿 增速+Y%'，档来自 _增速档，缺则 NA。"""
     if isinstance(增速, (int, float)):
-        档, 解 = 格档(float(增速), _增速档)
+        档, _ = 格档(float(增速), _增速档)
         额 = f"{金额亿}亿" if 金额亿 is not None else "NA"
-        return 字段(名, f"{额} 增速{增速:+.2f}%", f"{档}·{解}",
-                   f"{名}{档}" if 金额亿 is not None else f"{名}{档}(额缺)")
+        return 字段(名, f"{额} 增速{增速:+.2f}%", 档,
+                   f"影响：{_增速影响.get(档, '')}" + ("" if 金额亿 is not None else "(额缺)"))
     额 = f"{金额亿}亿" if 金额亿 is not None else None
-    return 字段(名, 额, "增速缺失", f"无{名}增速")
+    return 字段(名, 额, "增速缺失", f"影响：无{名}增速、成长不可判")
 
 
 class GrowthQualityTool:
@@ -142,26 +181,27 @@ class GrowthQualityTool:
         items.append(字段(
             "盈利能力", "/".join(vals) if vals else None,
             f"ROE={roe类型}未年化·不可比年化15%; 毛利/净利率跨行业粗参考",
-            f"盈利回报强弱看 {回报文}(financial.five_dims 口径)",
+            f"影响：当前口径盈利效率一般、强弱以下方'回报'维为准（{回报文}）",
         ))
 
         # ── 负债率（金融/地产例外）──
         负债 = fund.get("负债率")
         金融口径 = bool(fin.get("金融业口径"))
         if isinstance(负债, (int, float)):
-            d档, d解 = 格档(float(负债), _负债率档)
-            例外 = "·金融业口径(高杠杆属常态,勿套档)" if 金融口径 else ""
-            items.append(字段("负债率", 负债, f"{d档}·{d解}{例外}",
-                             "杠杆水平" + ("(金融业例外)" if 金融口径 else "")))
+            d档, _ = 格档(float(负债), _负债率档)
+            例外 = "·金融业口径" if 金融口径 else ""
+            影响 = _负债影响.get(d档, "") + ("（金融业高杠杆属常态、勿套档）" if 金融口径 else "")
+            items.append(字段("负债率", 负债, f"{d档}{例外}", f"影响：{影响}"))
         else:
-            items.append(字段("负债率", None, "负债率缺失", "无负债率数据"))
+            items.append(字段("负债率", None, "负债率缺失", "影响：无负债率数据、该维缺席"))
 
         # ── 每股股利（无档）──
         股利 = fund.get("每股股利")
         items.append(字段(
             "每股股利", 股利 if isinstance(股利, (int, float)) else None,
-            "每股现金分红(元)·None=未分红/未披露",
-            "分红回报" if isinstance(股利, (int, float)) else "无分红或未披露",
+            "每股现金分红(元)",
+            "影响：分红回报有贡献" if isinstance(股利, (int, float))
+            else "影响：无分红/未披露、分红回报无贡献(成长股常态)",
         ))
 
         # ── 财报质量（复用 _QUALITY档）──
@@ -171,15 +211,15 @@ class GrowthQualityTool:
         报告类型 = fin.get("报告类型") or _报告类型(报告期)
         披露日 = fin.get("披露日")
         if isinstance(quality, (int, float)) or 评级:
-            q档, q解 = 格档(quality, _QUALITY档) if isinstance(quality, (int, float)) else ("NA", "")
+            q档, _ = 格档(quality, _QUALITY档) if isinstance(quality, (int, float)) else ("NA", "")
             items.append(字段(
-                "财报质量", f"{评级}·quality{quality}",
-                f"{q档}(80/65/50/35 档·复用 financial_redflag 口径)",
-                f"报告期{报告期}·{报告类型}·披露{披露日}" + (f"·{q解}" if q解 else ""),
+                "财报质量汇总", f"{评级}·quality{quality}",
+                f"{q档}·{报告类型}{报告期}·披露{披露日}",
+                f"影响：{_五维综合(dims, q档)}",
             ))
         else:
-            items.append(字段("财报质量", None, "无 financial 评级/quality",
-                             "该票未进深度财报采集"))
+            items.append(字段("财报质量汇总", None, "无 financial 评级/quality",
+                             "影响：该票未进深度财报采集"))
 
         # ── 财报明细（five_dims 五维 + 利润表摘要增速，保字段明细）──
         摘要 = fin.get("利润表摘要") or {}
