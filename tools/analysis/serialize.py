@@ -368,6 +368,12 @@ def build_record(code: str, as_of: str) -> dict:
             "rsi": tech["rsi"], "bias20": tech["bias"]["bias20"],
             "vol_ratio": tech["vol"]["量比"], "vol_state": tech["vol"]["状态"],
         }
+        # BOLL(±2σ 通达信口径):technical.compute 已算 tech["boll"]，此前构造 snapshot 时漏挑。
+        # 源产 `位置`(破上轨/触上轨/中性/触下轨/破下轨)= 状态语义；工具读 `状态`，故加同值别名，
+        # 不动 technical._boll_state。整块随 snapshot 一起盖 price_vintage 口径戳(纯 K线派生)。
+        _boll = tech.get("boll")
+        if isinstance(_boll, dict) and _boll:
+            snapshot["boll"] = {**_boll, "状态": _boll.get("位置")}
         signals = {"trend": tech["signal"], "reversal": tech["reversal"], "ob_os": tech["ob_os"]}
 
     # 情绪面(P2-C,LLM;需先 run.py sentiment 生成,否则 None)
@@ -393,6 +399,10 @@ def build_record(code: str, as_of: str) -> dict:
         valuation_block = {
             "pe_ttm": fund.get("PE_TTM"), "pb": fund.get("PB"),
             "mktcap_yi": fund.get("总市值"), "报告期": fund.get("报告期"), **sw,
+            # PE 历史分位:fundamental._valuation_scalars 已算(现值在整条 PE 序列中的 ≤x 占比,0~1),
+            # 现成于 fund["PE分位"]，此前构造 valuation_block 时漏挑。窗口 None=全历史(默认口径)。
+            "pe_percentile": fund.get("PE分位"),
+            "pe_percentile_window": fund.get("PE分位窗口"),
         }
     fundamental_block = {k: fund.get(k) for k in
                          ("营收", "净利", "营收增速", "净利增速", "ROE", "毛利率", "净利率", "负债率",

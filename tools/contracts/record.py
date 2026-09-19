@@ -101,8 +101,12 @@ RECORD_SCHEMA = {
              "industry": "str|null", "market": "str(A|HK)", "as_of": "date(YYYY-MM-DD)"},
     "snapshot": "null | {close, pct_chg, ma{ma5,ma10,ma20,ma60,排列}, "
                 "macd{dif,dea,macd,状态}, kdj{k,d,j,状态}, rsi{rsi6,rsi12,rsi24}, "
+                "boll{上轨,中轨,下轨,带宽,percent_b,位置∈破上轨/触上轨/中性/触下轨/破下轨/数据不足,"
+                "状态(=位置别名,供工具读),挤压:bool}(BOLL ±2σ 通达信口径;缺则该子键不出现,旧记录兼容), "
                 "bias20, vol_ratio, vol_state, " + _VINTAGE_DOC + "(=最后一根K线bar日)}",
     "valuation": "null | {pe_ttm, pb, mktcap_yi(亿), 报告期, pe_valid:bool, ..., "
+                 "pe_percentile:0~1|null(PE 历史分位=现值 PE(TTM) 在自身历史 PE 序列中的 ≤x 占比;"
+                 "越低越接近自身估值底部), pe_percentile_window:str|null(分位窗口口径,null=全历史), "
                  "报告期滞后:bool(与披露日锚定的 financial.报告期 交叉核对;True=整块估值滞后一个"
                  "报告期,PE/市值按旧报告期口径,量级可能完全不同), " + _VINTAGE_DOC
                  + "(=fundamental raw 命中的分区日)}",

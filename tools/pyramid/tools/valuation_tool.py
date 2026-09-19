@@ -2,14 +2,15 @@
 
 读 per-stock json 的 `valuation`（pe_ttm/pb/mktcap_yi/pe_valid/mode/basis/口径提示）
 + `fundamental`/`financial`（PEG 现算取净利增速），产出四面契约的**基本面·估值**条目：
-PE(TTM) / PB / PEG(现算) / PE历史分位(待补落盘) / 市值口径。
+PE(TTM) / PB / PEG(现算) / PE历史分位 / 市值口径。
 
 口径贯通：所有档位来自本文件档位表常量，拼装层零加工（设计 2026-09-19 §1b/§2c/§4.2）。
 - PE 是**跨市场粗档·非行业调整**——真估值看 PEG + 行业分位(B期)；`pe_valid=False` 或
   `mode≠PE适用`(如金融股/亏损) 不套档，原样传 valuation.basis。
 - PEG=pe_ttm÷净利增速(%)；增速优先 financial.利润表摘要.归母净利增速(报告期更新)，
   缺→fallback fundamental.净利增速，值段注明报告期；**增速≤0 → PEG 失效不套档**。
-- PE 历史分位 json 未落盘 → 标"待补落盘"，不动序列化器（属另一条 chip 的活）。
+- PE 历史分位读 valuation.pe_percentile（0~1，现值在自身历史 PE 序列中的 ≤x 占比，
+  窗口=pe_percentile_window，None=全历史）；缺字段 → 标"缺失"不编。
 
 缺 valuation → missing 不编。档位写死 + 语义锁测试。研究模拟，非投资建议。
 """
@@ -44,6 +45,14 @@ _PEG档 = [
     (1.2, "合理", "PEG∈(0.8,1.2]·估值与成长匹配(Lynch基准1)"),
     (2.0, "偏高", "PEG∈(1.2,2]·估值略超成长"),
     (float("inf"), "高估", "PEG>2·估值未被成长消化"),
+]
+# ── PE 历史分位档（现值在自身历史 PE 序列中的 ≤x 占比，0~1）──
+_PE分位档 = [
+    (0.20, "极低", "分位≤20%·自身历史估值底部区"),
+    (0.40, "偏低", "分位∈(20%,40%]·低于自身多数时期"),
+    (0.60, "中位", "分位∈(40%,60%]·自身估值中枢"),
+    (0.80, "偏高", "分位∈(60%,80%]·高于自身多数时期"),
+    (float("inf"), "极高", "分位>80%·逼近自身历史估值顶部区"),
 ]
 
 
@@ -156,11 +165,21 @@ class ValuationTool:
                 解,
             ))
 
-        # ── PE 历史分位：json 未落盘 → 待补 ──
-        items.append(字段(
-            "PE历史分位", None, "待补落盘(serializer 未拷入 json)",
-            "暂无自身历史估值区间对比,留 B 期补",
-        ))
+        # ── PE 历史分位：从 valuation.pe_percentile 读（0~1=现值在自身历史 PE 序列中的 ≤x 占比）──
+        pe分位 = val.get("pe_percentile")
+        pe分位窗口 = val.get("pe_percentile_window")
+        if isinstance(pe分位, (int, float)):
+            档, 解 = 格档(pe分位, _PE分位档)
+            窗口注 = f"窗口{pe分位窗口}" if pe分位窗口 else "窗口全历史"
+            items.append(字段(
+                "PE历史分位", round(pe分位 * 100, 1), f"{档}·{解}·{窗口注}",
+                "自身历史估值区间对比,越低越接近自身估值底部",
+            ))
+        else:
+            items.append(字段(
+                "PE历史分位", None, "缺失(pe_percentile 未落盘或无历史 PE 序列)",
+                "暂无自身历史估值区间对比",
+            ))
 
         # ── 市值 / 估值口径(滞后新鲜度)──
         items.append(字段(
