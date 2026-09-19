@@ -85,6 +85,48 @@ def test_排雷_经验硬命中扣分():
     assert C.子分_排雷({"嫌疑档": "无嫌疑"}, exp) == 85  # 100 - 15
 
 
+# ── #6 缺数据中性化锁（未深采≠查证干净）────────────────────────
+def test_排雷_缺数据档序_无嫌疑0小于missing小于低小于中():
+    """每维扣分严格单调：无嫌疑(0) < missing(中性) < 低 < 中。锁死"缺数据不给满分、又轻于确诊风险"。"""
+    for 表, 无, mis, 低, 中 in [
+        (C._财报档_扣, "无嫌疑", "missing", "低", "中"),
+        (C._解禁档_扣, "无嫌疑", "missing", "低", "中"),
+        (C._减持档_扣, "无嫌疑", "missing", "低", "中"),
+    ]:
+        assert 表[无] == 0 < 表[mis] < 表[低] < 表[中]
+
+
+def test_排雷_all_missing小于三维查证干净():
+    """核心语义：三维全缺数据的票 排雷子分 < 三维查证干净(无嫌疑)的票，且都 < 满分只差在缺数据。"""
+    fake = {"嫌疑档": "无嫌疑"}; exp = {"命中规则": []}
+    all_missing = C.子分_排雷(
+        fake, exp,
+        fin={"嫌疑档": "missing"}, unlock={"解禁嫌疑档": "missing"}, reduce={"减持嫌疑档": "missing"})
+    all_clean = C.子分_排雷(
+        fake, exp,
+        fin={"嫌疑档": "无嫌疑"}, unlock={"解禁嫌疑档": "无嫌疑"}, reduce={"减持嫌疑档": "无嫌疑"})
+    assert all_missing < all_clean == 100
+    assert all_missing < 100
+
+
+def test_排雷_None缺参不扣_区分缺数据():
+    """缺参(调用方省略某维=None) ≠ 缺数据(工具显式 missing)：None 不触发中性惩罚。"""
+    fake = {"嫌疑档": "无嫌疑"}; exp = {"命中规则": []}
+    # 三维全省略 → 仍满分（if 守卫跳过）
+    assert C.子分_排雷(fake, exp) == 100
+    assert C.子分_排雷(fake, exp, fin=None, unlock=None, reduce=None) == 100
+    # 显式 missing 才扣
+    assert C.子分_排雷(fake, exp, fin={"嫌疑档": "missing"}) == 92  # 100 - 8
+
+
+def test_排雷_缺数据数值锁_100降到81():
+    """数值锁：假利好无嫌疑 + 三维全 missing → 100 - 8(财) - 5(解) - 6(减) = 81。改动量级即报警。"""
+    got = C.子分_排雷(
+        {"嫌疑档": "无嫌疑"}, {"命中规则": []},
+        fin={"嫌疑档": "missing"}, unlock={"解禁嫌疑档": "missing"}, reduce={"减持嫌疑档": "missing"})
+    assert got == 81
+
+
 def test_宏观催化_档位():
     assert C.子分_宏观催化({"净催化档": "强正"}) == 100
     assert C.子分_宏观催化({"净催化档": "中性"}) == 40
