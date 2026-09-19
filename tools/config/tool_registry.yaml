@@ -118,3 +118,27 @@ tools:
     reuse: data/analysis/<date>/<code>.json 的 events(type∈{减持,权益变动})
     tests: tests/pyramid/test_insider_reduction.py
     note: "大股东减持抛压(负向·消息面·镜像fake_good_news);v1标题级粗判;候选=type∈{减持,权益变动}且as_of前30日内且date≤as_of(防未来);逐条严重度:中性(协议转让/引入战投/业务协同/增持/未减持 或impact利好)不计/高(清仓式或控股股东+大额)/中单条(大额/预披露)/常规;档位(写死)无嫌疑/低/中/高;高走veto清仓式减持;接d2_compose排雷子分(中-25/低-12);只走events不碰holder(股东户数)/fundflow(主力);减持低频多数票窗内0条属正常;v2需新采occ量化占流通%×主体×方式"
+  - name: valuation
+    塔层: "③塔身"
+    status: done
+    window: Wave2-估值成长(基本面)
+    面: 基本面
+    inputs: [as_of, code]
+    outputs: [PE(TTM)档, PB档, PEG现算档, PE历史分位(待补落盘), 市值/估值口径]
+    freshness: 有valuation=fresh；无=missing
+    防未来: true
+    reuse: data/analysis/<date>/<code>.json 的 valuation + fundamental/financial(PEG增速)
+    tests: tests/pyramid/test_valuation_tool.py
+    note: "四面契约·基本面·估值;字段解读=口径三段(名/值/口径/意味);PE跨市场粗档(亏损/低≤15/中≤30/偏高≤60/高)且pe_valid=False或mode≠PE适用不套档原样传basis;PB(破净≤1/低≤2/中≤4/偏高≤8/高);PEG现算=pe_ttm÷净利增速%(优先financial.利润表摘要.归母净利增速→fallback fundamental.净利增速,增速≤0失效不套档,Lynch基准1:低估≤0.8/合理≤1.2/偏高≤2/高估);PE历史分位json未落盘标待补;档位语义锁_PE参考档/_PB档/_PEG档"
+  - name: growth_quality
+    塔层: "③塔身"
+    status: done
+    window: Wave2-估值成长(基本面)
+    面: 基本面
+    inputs: [as_of, code]
+    outputs: [营收+增速档, 净利+增速档, 盈利能力(ROE/毛利/净利率), 负债率档, 每股股利, 财报质量, 财报明细(five_dims+利润表摘要)]
+    freshness: 有fundamental=fresh；无=missing
+    防未来: true
+    reuse: data/analysis/<date>/<code>.json 的 fundamental + financial(评级/quality/five_dims/利润表摘要)
+    tests: tests/pyramid/test_growth_quality_tool.py
+    note: "四面契约·基本面·成长盈利+财报明细;字段解读=口径三段;增速档营收/净利共用(衰退≤-20/下滑≤0/平稳≤15/增长≤30/高增长);负债率(低≤30/中≤50/偏高≤70/高,金融业口径标例外不套档);毛利/净利率跨行业粗参考;ROE报告期未年化不设年化绝对档→原始值+未年化口径+强弱挂financial.five_dims.回报(方案a统筹拍板);quality复用financial_redflag._QUALITY档单一口径源;five_dims/利润表摘要保明细不重出排雷嫌疑(避免与financial_redflag双读);档位语义锁_增速档/_负债率档/_毛利率档/_净利率档"
