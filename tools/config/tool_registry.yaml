@@ -154,3 +154,15 @@ tools:
     reuse: data/analysis/<date>/<code>.json 的 fundamental + financial(评级/quality/five_dims/利润表摘要)
     tests: tests/pyramid/test_growth_quality_tool.py
     note: "四面契约·基本面·成长盈利+财报明细;字段解读=口径三段;增速档营收/净利共用(衰退≤-20/下滑≤0/平稳≤15/增长≤30/高增长);负债率(低≤30/中≤50/偏高≤70/高,金融业口径标例外不套档);毛利/净利率跨行业粗参考;ROE报告期未年化不设年化绝对档→原始值+未年化口径+强弱挂financial.five_dims.回报(方案a统筹拍板);quality复用financial_redflag._QUALITY档单一口径源;five_dims/利润表摘要保明细不重出排雷嫌疑(避免与financial_redflag双读);档位语义锁_增速档/_负债率档/_毛利率档/_净利率档"
+  - name: technical_detail
+    塔层: "①塔基"
+    面: 技术面
+    status: done
+    window: Wave2(技术面·指标明细)
+    inputs: [as_of, code]
+    outputs: [排列, MACD状态, KDJ状态, RSI12, RSI12档, 获利比例, 集中度90, 筹码降级, 距支撑pct, 距压力pct, 趋势, BOLL落盘]
+    freshness: 有snapshot=fresh(snapshot.新鲜度≠新鲜则stale)；无=missing
+    防未来: true
+    reuse: data/analysis/<date>/<code>.json 的 snapshot(ma/macd/kdj/rsi)/chip/prediction.结构位
+    tests: tests/pyramid/test_technical_detail.py
+    note: "补price_volume未上全的技术指标明细·不重复量价(现价/量比/pos60/vsMA归price_volume,入场/止损止盈/持有期归entry_price);状态类(MA排列/MACD状态/KDJ状态)原样用technical.py序列化器,RSI12档阈值=strategy.THRESHOLDS.超买超卖.RSI12 canonical单一真源(测试锁死20/30/70/80);chip获利比例&集中度90按全A分位标定;BOLL snapshot未落盘恒标待补(不动序列化器);字段解读→浓缩块自动派生≤8行(实取7条)"
