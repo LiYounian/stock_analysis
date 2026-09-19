@@ -89,7 +89,22 @@ def _in_semi_universe(code: str) -> bool:
     return code in _SEMI_UNIVERSE_CACHE
 
 
-def _industry_key(code: str, industry: str | None = None) -> str | None:
+def _formal_sw_rescue(code: str, as_of: str | None) -> str | None:
+    """时变正式行业(申万一级,严格按 as_of,防未来)——仅作专家路由的**回退救援源**。
+
+    经 collectors.industry_history.industry_at(code, as_of) 取当时证监会门类再 to_sw 对齐;
+    严格 date<=as_of(不回填现状,无未来函数)。任何失败/无记录 → None(不误路由)。
+    """
+    from tools.analysis.financial import disambiguate as dis_mod
+    try:
+        sw, _raw = dis_mod._formal_sw_at(code, as_of)
+        return sw
+    except Exception:                                       # noqa: BLE001
+        return None
+
+
+def _industry_key(code: str, industry: str | None = None,
+                  as_of: str | None = None) -> str | None:
     """解析该票申万一级行业名(行业财报专家路由用)。
 
     优先用传入 industry(record.meta.industry),否则先查申万二级 801081 半导体池成分
@@ -101,6 +116,13 @@ def _industry_key(code: str, industry: str | None = None) -> str | None:
     (C35)等。board_membership 数据落地后 board_of 不再恒 None,若仍把 board_of 排在半导体池
     之前,这 60/178 只 CSRC 口径不落电子的半导体票会被误路由到 计算机/机械设备。故半导体池
     成分**先于** board_of 命中电子专家(仍让上游显式 industry 最优先,不覆盖人工池细分口径)。
+
+    **回退救援(bug 修复 2026-09-20)**:board_of 的 code_industry 离线映射对部分票给出的是
+    「综合/商贸零售」等**无专家覆盖**的证监会门类(如 CXO 医药票 300725/301230/688710/301060
+    被挂到「综合」),而时变正式行业(industry_history,严格 as_of)更准=「医药卫生→医药生物」。
+    故:当上面链路落到的行业**无专家**、而时变正式行业**有专家**时,救援到时变正式行业。
+    仅在"当前无专家 且 formal 有专家"时才改写——board 已命中专家(如 300504→电子)或 formal 亦无
+    专家(如 000504→工业→None、综合)时,行为不变,不引入全域路由重排风险。
     """
     from tools.analysis import industry_map
     sw = industry_map.to_sw(industry) if industry else None
@@ -112,6 +134,11 @@ def _industry_key(code: str, industry: str | None = None) -> str | None:
             sw = industry_map.to_sw(board.board_of(code) or "")
         except Exception:                                   # noqa: BLE001
             sw = None
+    # 回退救援:当前落点无专家、时变正式行业有专家 → 采用时变正式(防未来;不改已命中专家的票)
+    if get_expert(sw) is None:
+        formal = _formal_sw_rescue(code, as_of)
+        if formal and get_expert(formal) is not None:
+            sw = formal
     return sw
 
 
@@ -226,7 +253,7 @@ def analyze(code: str, as_of: str | None = None, persist: bool = True,
     # 金融业判定:行业名(池/board)优先,结构信号(无营业成本+无存货)兜底,任一命中即金融业
     is_fin = _is_financial(code, industry) or _is_financial_structural(periods_raw)
     # 行业财报专家路由:命中 → 用其五维区间/权重/跳过红旗/专属红旗;无 → 通用兜底
-    key = _industry_key(code, industry)
+    key = _industry_key(code, industry, as_of=as_of)
     exp = get_expert(key)
     exp_specs = exp.dimension_specs() if exp else None
     exp_weights = exp.weights() if exp else None

@@ -44,7 +44,41 @@ def test_board_of_none_non_semi_abstains(monkeypatch):
     from tools.collectors import board
     monkeypatch.setattr(board, "board_of", lambda c: None)
     monkeypatch.setattr(az, "_in_semi_universe", lambda c: False)
+    monkeypatch.setattr(az, "_formal_sw_rescue", lambda c, a: None)   # 无时变正式记录
     assert az._industry_key("999999") is None
+
+
+# ——— 回退救援(bug 修复 2026-09-20):board 落到无专家行业、时变正式行业有专家 → 救援 ———
+def test_formal_rescue_when_board_lands_no_expert(monkeypatch):
+    """board→综合(无专家)但时变正式行业→医药生物(有专家):救援到医药生物。
+
+    锁住 CXO 医药票(300725/301230/688710/301060)因 code_industry 挂『综合/商贸零售』而
+    漏路由医药专家的 bug——时变正式(industry_history,严格 as_of,防未来)更准且有专家时采用。
+    """
+    from tools.collectors import board
+    monkeypatch.setattr(board, "board_of", lambda c: "综合")      # to_sw(综合)=综合,无专家
+    monkeypatch.setattr(az, "_in_semi_universe", lambda c: False)
+    monkeypatch.setattr(az, "_formal_sw_rescue", lambda c, a: "医药生物")
+    assert az._industry_key("300725", as_of="2026-09-18") == "医药生物"
+
+
+def test_no_rescue_when_board_already_has_expert(monkeypatch):
+    """board→电子(有专家):不触发救援,保持电子(如 300504),不因 formal 更粗而被改写。"""
+    from tools.collectors import board
+    monkeypatch.setattr(board, "board_of", lambda c: "电子")
+    monkeypatch.setattr(az, "_in_semi_universe", lambda c: False)
+    # 即便 formal 给出无专家的『制造业』,电子已命中专家 → 不改写
+    monkeypatch.setattr(az, "_formal_sw_rescue", lambda c, a: "制造业")
+    assert az._industry_key("300504", as_of="2026-09-18") == "电子"
+
+
+def test_no_rescue_when_formal_also_no_expert(monkeypatch):
+    """board→综合(无专家)且时变正式亦无专家(→None):保持综合(如 000504,诚实通用兜底)。"""
+    from tools.collectors import board
+    monkeypatch.setattr(board, "board_of", lambda c: "综合")
+    monkeypatch.setattr(az, "_in_semi_universe", lambda c: False)
+    monkeypatch.setattr(az, "_formal_sw_rescue", lambda c, a: None)
+    assert az._industry_key("000504", as_of="2026-09-18") == "综合"
 
 
 # ———————————— ② 金融业特判触发(银行/非银)————————————
