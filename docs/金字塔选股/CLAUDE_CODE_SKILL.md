@@ -48,7 +48,7 @@ description: 金字塔选股·Claude Code 合成路径:读金字塔决策包→�
 
 | 成果 | 固定地点 | 里面有什么 / 怎么用 |
 |---|---|---|
-| **金字塔决策包** | `data/analysis/<D>/金字塔决策包_top<N>.md` | 你的**唯一选股入口**：大盘定调 + 全板块概览 + 骨架 top-N 每票全工具浓缩块。没有就生成：`python -m tools.pyramid.d2_package --as-of <D> --top-n 15` |
+| **金字塔决策包** | `data/analysis/<D>/金字塔决策包_top<N>.md` | 你的**唯一选股入口**：大盘定调 + 全板块概览 + 骨架 top-N 每票全工具浓缩块。没有就生成：`python -m tools.pyramid.d2_package --as-of <D> --top-n 15`。**包已 canonical 钉死**（`金字塔决策包.canonical.json`）：你读的 md 与 DeepSeek/千问读的是同一份，底层重跑也不漂；确需重算最新数据再加 `--rebuild`。 |
 | **per-stock 数据** | `data/analysis/<D>/<code>.json` | 单票估值/财报/资金/情绪/事件等结构化块（registry 工具的底层原料，需看原文时读它） |
 | **经验规则库** | `data/analysis/经验规则库.json` | 结构化经验规则（规则/环节/状态/证据/首见版本）；优先用 `experience_rules` 工具查，别整读散文 |
 | **大盘定调** | `data/analysis/<D>/market_forecast.json` | 沪深300 T+1/T+5 上行概率分位+方向+分歧标记+广度/情绪/资金快照+效力 caveat（作 β 背景，非硬门控） |

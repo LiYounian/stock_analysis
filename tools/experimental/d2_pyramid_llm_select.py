@@ -55,7 +55,9 @@ def collect_package(as_of: str, root: Optional[str], top_n: int) -> dict:
     from tools.pyramid import registry
     import tools.pyramid.tools  # noqa: F401
 
-    pkg = P.build_package(as_of, root=root, top_n=top_n)
+    # canonical 钉死:读同一份 金字塔决策包.canonical.json(缺失时现算+落盘),消除与
+    # Claude SKILL 读的 md 之间因底层重跑而起的骨架分漂移;要强制最新走 __main__ --rebuild。
+    pkg = P.get_canonical_package(as_of, root=root, top_n=top_n)
     pkg_text = P.render_package(pkg)
 
     facts = {}

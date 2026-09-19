@@ -836,8 +836,12 @@ if __name__ == "__main__":
     p.add_argument("--top-n", type=int, default=15)
     p.add_argument("--out", default=None, help="显式输出路径（不给则默认落 data/analysis/<as_of>/）")
     p.add_argument("--no-save", action="store_true", help="不落盘（仅打印）")
+    p.add_argument("--rebuild", action="store_true",
+                   help="强制重算并覆盖 canonical 钉死包（默认读已钉死的同一份，消除多快照漂移）")
     a = p.parse_args()
-    pkg = build_package(a.as_of, root=a.data_root, top_n=a.top_n)
+    # canonical 钉死:默认读 金字塔决策包.canonical.json(缺失则现算+落盘);--rebuild 强制最新。
+    # 保存的 md 从 canonical 渲染,与 DeepSeek/千问 读的同一份对齐。
+    pkg = get_canonical_package(a.as_of, root=a.data_root, top_n=a.top_n, rebuild=a.rebuild)
     txt = render_package(pkg)
     if a.out:
         with open(a.out, "w", encoding="utf-8") as f:
