@@ -30,6 +30,9 @@ def main(argv=None) -> int:
     p_tool.add_argument("--data-root", default=None)
     p_tool.add_argument("--method", default=None, help="entry_price 入场方式(可选)")
     p_tool.add_argument("--stage", default=None, help="experience_rules 作用环节(召回/排雷/排序/价位/择时,可选)")
+    p_tool.add_argument("--json", action="store_true",
+                        help="dump 机读全量 fields 为 json(而非只印浓缩块);"
+                             "下钻工具(如 news_raw 的 url/source/摘要)靠它拿全量")
 
     args = p.parse_args(argv)
     _load_all_tools()
@@ -57,7 +60,16 @@ def main(argv=None) -> int:
             print(str(e), file=sys.stderr)
             return 2
         res = tool.run(args.as_of, args.code, **kw)
-        print(res.to_prompt())
+        if args.json:
+            # 机读全量:浓缩块是给人/LLM 扫的 ≤8 行摘要,下钻(url/source/摘要/大盘全量结构)靠 fields
+            import json as _json
+            print(_json.dumps({
+                "name": res.name, "塔层": res.塔层, "as_of": res.as_of, "code": res.code,
+                "面": res.面, "freshness": res.freshness, "防未来": res.防未来,
+                "source": res.source, "浓缩块": res.浓缩块, "fields": res.fields,
+            }, ensure_ascii=False, indent=1))
+        else:
+            print(res.to_prompt())
         return 0
     return 1
 
